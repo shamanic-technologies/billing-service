@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
+import { resolve, dirname } from "path";
 import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { db } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
@@ -10,6 +12,8 @@ import checkoutRoutes from "./routes/checkout.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { registerAllAppKeys } from "./lib/key-client.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = process.env.PORT || 3012;
@@ -26,10 +30,11 @@ app.use(express.json());
 // Public routes
 app.use(healthRoutes);
 
-// Serve OpenAPI spec
+// Serve OpenAPI spec (resolve relative to dist/ → ../openapi.json in Docker)
+const openapiPath = resolve(__dirname, "..", "openapi.json");
 app.get("/openapi.json", (_req, res) => {
   try {
-    const spec = readFileSync("openapi.json", "utf-8");
+    const spec = readFileSync(openapiPath, "utf-8");
     res.type("application/json").send(spec);
   } catch {
     res.status(404).json({ error: "OpenAPI spec not found" });
