@@ -7,6 +7,7 @@ export async function cleanTestData() {
 
 export async function insertTestAccount(data: {
   orgId: string;
+  appId?: string;
   stripeCustomerId?: string;
   billingMode?: string;
   creditBalanceCents?: number;
@@ -18,6 +19,7 @@ export async function insertTestAccount(data: {
     .insert(billingAccounts)
     .values({
       orgId: data.orgId,
+      appId: data.appId ?? "testapp",
       stripeCustomerId: data.stripeCustomerId ?? null,
       billingMode: data.billingMode ?? "trial",
       creditBalanceCents: data.creditBalanceCents ?? 200,

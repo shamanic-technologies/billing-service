@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 describe("Stripe webhooks", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
+  const webhookAppId = "testapp";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -25,7 +26,7 @@ describe("Stripe webhooks", () => {
 
   it("rejects requests without stripe-signature", async () => {
     const res = await request(app)
-      .post("/v1/webhooks/stripe")
+      .post(`/v1/webhooks/stripe/${webhookAppId}`)
       .set("Content-Type", "application/json")
       .send(JSON.stringify({ type: "test" }));
 
@@ -39,7 +40,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post("/v1/webhooks/stripe")
+      .post(`/v1/webhooks/stripe/${webhookAppId}`)
       .set("Content-Type", "application/json")
       .set("stripe-signature", "invalid_sig")
       .send(JSON.stringify({ type: "test" }));
@@ -70,7 +71,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post("/v1/webhooks/stripe")
+      .post(`/v1/webhooks/stripe/${webhookAppId}`)
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "checkout.session.completed" }));
@@ -110,7 +111,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post("/v1/webhooks/stripe")
+      .post(`/v1/webhooks/stripe/${webhookAppId}`)
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "payment_intent.succeeded" }));
@@ -134,7 +135,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post("/v1/webhooks/stripe")
+      .post(`/v1/webhooks/stripe/${webhookAppId}`)
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "some.unknown.event" }));

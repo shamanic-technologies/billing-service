@@ -7,6 +7,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 describe("Credits deduction endpoint", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
+  const appId = "testapp";
   const userId = "00000000-0000-0000-0000-000000000002";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
@@ -123,6 +124,7 @@ describe("Credits deduction endpoint", () => {
     // Balance should be: 3 (original) + 2000 (reload) - 5 (deduction) = 1998
     expect(res.body.balance_cents).toBe(1998);
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
+      appId,
       "cus_123",
       "pm_123",
       2000,

@@ -1,7 +1,8 @@
 import { vi } from "vitest";
 import * as stripeLib from "../../src/lib/stripe.js";
+import * as keyClient from "../../src/lib/key-client.js";
 
-/** Default mock implementations for all Stripe operations. */
+/** Default mock implementations for all Stripe operations + key-service. */
 export function setupStripeMocks() {
   const mocks = {
     createCustomer: vi.fn().mockResolvedValue({
@@ -28,7 +29,11 @@ export function setupStripeMocks() {
       amount: 2000,
     }),
     constructWebhookEvent: vi.fn(),
+    resolveAppKey: vi.fn().mockResolvedValue("sk_test_mock_key"),
   };
+
+  // Mock key-service so Stripe never actually calls it
+  vi.spyOn(keyClient, "resolveAppKey").mockImplementation(mocks.resolveAppKey);
 
   vi.spyOn(stripeLib, "createCustomer").mockImplementation(mocks.createCustomer);
   vi.spyOn(stripeLib, "createBalanceTransaction").mockImplementation(
