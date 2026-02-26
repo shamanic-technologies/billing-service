@@ -13,6 +13,7 @@ export const billingAccounts = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
+    appId: text("app_id").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
     billingMode: text("billing_mode").notNull().default("trial"),
     creditBalanceCents: integer("credit_balance_cents").notNull().default(200),
@@ -27,7 +28,7 @@ export const billingAccounts = pgTable(
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_billing_accounts_org_id").on(table.orgId),
+    uniqueIndex("idx_billing_accounts_org_app").on(table.orgId, table.appId),
     index("idx_billing_accounts_stripe_customer").on(table.stripeCustomerId),
   ]
 );

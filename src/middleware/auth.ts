@@ -23,5 +23,10 @@ export function requireOrgHeaders(
     res.status(400).json({ error: "x-org-id header is required" });
     return;
   }
+  const appId = req.headers["x-app-id"] as string;
+  if (!appId) {
+    res.status(400).json({ error: "x-app-id header is required" });
+    return;
+  }
   next();
 }

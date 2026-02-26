@@ -1,38 +1,48 @@
 import Stripe from "stripe";
 import { resolveAppKey } from "./key-client.js";
 
-let stripeInstance: Stripe | null = null;
-let cachedWebhookSecret: string | null = null;
+// Per-app Stripe instance cache (each app has its own Stripe account)
+const stripeInstances = new Map<string, Stripe>();
+const webhookSecrets = new Map<string, string>();
 
-async function getStripe(): Promise<Stripe> {
-  if (!stripeInstance) {
-    const key = await resolveAppKey("stripe");
-    stripeInstance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
+// Test override — applies to all apps
+let testStripeInstance: Stripe | null = null;
+
+async function getStripe(appId: string): Promise<Stripe> {
+  if (testStripeInstance) return testStripeInstance;
+
+  let instance = stripeInstances.get(appId);
+  if (!instance) {
+    const key = await resolveAppKey("stripe", appId);
+    instance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
+    stripeInstances.set(appId, instance);
   }
-  return stripeInstance;
+  return instance;
 }
 
-/** Override Stripe instance (for tests). */
+/** Override Stripe instance for all apps (tests only). */
 export function setStripeInstance(mock: Stripe): void {
-  stripeInstance = mock;
+  testStripeInstance = mock;
 }
 
 // --- Customer ---
 
 export async function createCustomer(
+  appId: string,
   orgId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.create({
-    metadata: { org_id: orgId, ...metadata },
+    metadata: { org_id: orgId, app_id: appId, ...metadata },
   });
 }
 
 export async function getCustomer(
+  appId: string,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.retrieve(
     stripeCustomerId
   ) as Promise<Stripe.Customer>;
@@ -49,12 +59,13 @@ export async function getCustomer(
  * and negative `amountCents` for credits (decreases balance towards negative).
  */
 export async function createBalanceTransaction(
+  appId: string,
   stripeCustomerId: string,
   amountCents: number,
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.createBalanceTransaction(stripeCustomerId, {
     amount: amountCents,
     currency: "usd",
@@ -64,10 +75,11 @@ export async function createBalanceTransaction(
 }
 
 export async function listBalanceTransactions(
+  appId: string,
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.listBalanceTransactions(stripeCustomerId, {
     limit,
   });
@@ -76,12 +88,13 @@ export async function listBalanceTransactions(
 // --- Checkout ---
 
 export async function createCheckoutSession(
+  appId: string,
   stripeCustomerId: string,
   successUrl: string,
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
@@ -109,12 +122,13 @@ export async function createCheckoutSession(
 // --- Payment (auto-reload) ---
 
 export async function chargePaymentMethod(
+  appId: string,
   stripeCustomerId: string,
   paymentMethodId: string,
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.paymentIntents.create({
     amount: amountCents,
     currency: "usd",
@@ -130,12 +144,15 @@ export async function chargePaymentMethod(
 // --- Webhook ---
 
 export async function constructWebhookEvent(
+  appId: string,
   payload: Buffer,
   signature: string
 ): Promise<Stripe.Event> {
-  if (!cachedWebhookSecret) {
-    cachedWebhookSecret = await resolveAppKey("stripe-webhook");
+  let secret = webhookSecrets.get(appId);
+  if (!secret) {
+    secret = await resolveAppKey("stripe-webhook", appId);
+    webhookSecrets.set(appId, secret);
   }
-  const stripe = await getStripe();
-  return stripe.webhooks.constructEvent(payload, signature, cachedWebhookSecret);
+  const stripe = await getStripe(appId);
+  return stripe.webhooks.constructEvent(payload, signature, secret);
 }

@@ -7,6 +7,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 describe("Checkout endpoint", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
+  const appId = "testapp";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -39,6 +40,7 @@ describe("Checkout endpoint", () => {
     expect(res.body.url).toContain("checkout.stripe.com");
     expect(res.body.session_id).toBe("cs_mock_session");
     expect(stripeMocks.createCheckoutSession).toHaveBeenCalledWith(
+      appId,
       "cus_123",
       "https://app.example.com/success",
       "https://app.example.com/cancel",

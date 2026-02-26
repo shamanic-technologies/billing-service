@@ -37,15 +37,18 @@ export async function registerAppKey(
   }
 }
 
-/** Resolve an app-level secret from key-service at runtime. */
-export async function resolveAppKey(provider: string): Promise<string> {
+/** Resolve an app-level secret from key-service at runtime.
+ *  @param provider - key provider (e.g. "stripe", "stripe-webhook")
+ *  @param appId - which app registered the key (defaults to billing-service's own)
+ */
+export async function resolveAppKey(provider: string, appId: string = APP_ID): Promise<string> {
   const config = getKeyServiceConfig();
   if (!config) {
     throw new Error(`KEY_SERVICE not configured — cannot resolve ${provider}`);
   }
 
   const res = await fetch(
-    `${config.url}/internal/app-keys/${encodeURIComponent(provider)}/decrypt?appId=${encodeURIComponent(APP_ID)}`,
+    `${config.url}/internal/app-keys/${encodeURIComponent(provider)}/decrypt?appId=${encodeURIComponent(appId)}`,
     {
       headers: { "x-api-key": config.apiKey },
     }
@@ -53,7 +56,7 @@ export async function resolveAppKey(provider: string): Promise<string> {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`Failed to resolve ${provider} key: ${res.status} ${body}`);
+    throw new Error(`Failed to resolve ${provider} key for app ${appId}: ${res.status} ${body}`);
   }
 
   const data = (await res.json()) as { key: string };
