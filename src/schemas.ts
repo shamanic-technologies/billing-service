@@ -23,6 +23,7 @@ export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     orgId: z.string().uuid(),
+    appId: z.string(),
     billingMode: BillingModeSchema,
     creditBalanceCents: z.number().int(),
     reloadAmountCents: z.number().int().nullable(),
@@ -110,6 +111,12 @@ export const TransactionsResponseSchema = z
 
 // --- OpenAPI Path Registrations ---
 
+const protectedHeaders = z.object({
+  "x-api-key": z.string(),
+  "x-org-id": z.string().uuid(),
+  "x-app-id": z.string(),
+});
+
 registry.registerPath({
   method: "get",
   path: "/health",
@@ -134,10 +141,7 @@ registry.registerPath({
   path: "/v1/accounts",
   summary: "Get or create billing account for org",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
   },
   responses: {
     200: {
@@ -156,10 +160,7 @@ registry.registerPath({
   path: "/v1/accounts/balance",
   summary: "Quick balance check from DB cache",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
   },
   responses: {
     200: {
@@ -174,10 +175,7 @@ registry.registerPath({
   path: "/v1/accounts/transactions",
   summary: "Get credit transaction history from Stripe",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
   },
   responses: {
     200: {
@@ -192,10 +190,7 @@ registry.registerPath({
   path: "/v1/accounts/mode",
   summary: "Switch billing mode",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
     body: {
       content: { "application/json": { schema: UpdateModeRequestSchema } },
     },
@@ -217,10 +212,7 @@ registry.registerPath({
   path: "/v1/credits/deduct",
   summary: "Deduct credits from org balance",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
     body: {
       content: { "application/json": { schema: DeductRequestSchema } },
     },
@@ -238,10 +230,7 @@ registry.registerPath({
   path: "/v1/checkout-sessions",
   summary: "Create Stripe Checkout session for PAYG setup",
   request: {
-    headers: z.object({
-      "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-    }),
+    headers: protectedHeaders,
     body: {
       content: {
         "application/json": { schema: CreateCheckoutRequestSchema },
@@ -258,8 +247,13 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/webhooks/stripe",
-  summary: "Stripe webhook handler",
+  path: "/v1/webhooks/stripe/{appId}",
+  summary: "Stripe webhook handler (per-app)",
+  request: {
+    params: z.object({
+      appId: z.string(),
+    }),
+  },
   responses: {
     200: { description: "Webhook processed" },
     400: { description: "Invalid signature" },

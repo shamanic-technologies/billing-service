@@ -31,6 +31,9 @@
             "type": "string",
             "format": "uuid"
           },
+          "appId": {
+            "type": "string"
+          },
           "billingMode": {
             "$ref": "#/components/schemas/BillingMode"
           },
@@ -58,6 +61,7 @@
         "required": [
           "id",
           "orgId",
+          "appId",
           "billingMode",
           "creditBalanceCents",
           "reloadAmountCents",
@@ -311,6 +315,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -357,6 +369,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -393,6 +413,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -428,6 +456,14 @@
             },
             "required": true,
             "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
             "in": "header"
           }
         ],
@@ -484,6 +520,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -529,6 +573,14 @@
             "required": true,
             "name": "x-org-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-app-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -554,9 +606,19 @@
         }
       }
     },
-    "/v1/webhooks/stripe": {
+    "/v1/webhooks/stripe/{appId}": {
       "post": {
-        "summary": "Stripe webhook handler",
+        "summary": "Stripe webhook handler (per-app)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "appId",
+            "in": "path"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Webhook processed"

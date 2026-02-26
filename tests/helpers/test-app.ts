@@ -34,10 +34,11 @@ export function createTestApp() {
   return app;
 }
 
-export function getAuthHeaders(orgId = "00000000-0000-0000-0000-000000000001") {
+export function getAuthHeaders(orgId = "00000000-0000-0000-0000-000000000001", appId = "testapp") {
   return {
     "X-API-Key": "test-api-key",
     "x-org-id": orgId,
+    "x-app-id": appId,
     "Content-Type": "application/json",
   };
 }

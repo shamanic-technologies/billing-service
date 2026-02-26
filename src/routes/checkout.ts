@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders } from "../middleware/auth.js";
@@ -12,6 +12,7 @@ const router = Router();
 router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
+    const appId = req.headers["x-app-id"] as string;
     const parsed = CreateCheckoutRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -20,51 +21,54 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     }
 
     const { success_url, cancel_url, reload_amount_cents } = parsed.data;
+    const filter = and(eq(billingAccounts.orgId, orgId), eq(billingAccounts.appId, appId));
 
     // Get or create billing account
     let [account] = await db
       .select()
       .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
+      .where(filter)
       .limit(1);
 
     if (!account) {
       // Auto-create account with Stripe customer
-      const stripeCustomer = await createCustomer(orgId);
+      const stripeCustomer = await createCustomer(appId, orgId);
 
       const [created] = await db
         .insert(billingAccounts)
         .values({
           orgId,
+          appId,
           stripeCustomerId: stripeCustomer.id,
           billingMode: "trial",
           creditBalanceCents: 200,
         })
-        .onConflictDoNothing({ target: billingAccounts.orgId })
+        .onConflictDoNothing()
         .returning();
 
       account = created || (await db
         .select()
         .from(billingAccounts)
-        .where(eq(billingAccounts.orgId, orgId))
+        .where(filter)
         .limit(1)
       )[0];
     }
 
     if (!account.stripeCustomerId) {
       // Account exists but no Stripe customer — create one
-      const stripeCustomer = await createCustomer(orgId);
+      const stripeCustomer = await createCustomer(appId, orgId);
       [account] = await db
         .update(billingAccounts)
         .set({
           stripeCustomerId: stripeCustomer.id,
           updatedAt: new Date(),
         })
-        .where(eq(billingAccounts.orgId, orgId))
+        .where(filter)
         .returning();
     }
 
     const session = await createCheckoutSession(
+      appId,
       account.stripeCustomerId!,
       success_url,
       cancel_url,
@@ -78,7 +82,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         reloadAmountCents: reload_amount_cents,
         updatedAt: new Date(),
       })
-      .where(eq(billingAccounts.orgId, orgId));
+      .where(filter);
 
     res.json({
       url: session.url,

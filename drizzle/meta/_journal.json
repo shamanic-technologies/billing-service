@@ -8,6 +8,13 @@
       "when": 1772092502460,
       "tag": "0000_conscious_pet_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1772094826171,
+      "tag": "0001_slow_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }

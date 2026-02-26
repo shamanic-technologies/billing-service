@@ -10,10 +10,11 @@ import type Stripe from "stripe";
 
 const router = Router();
 
-// POST /v1/webhooks/stripe — Stripe webhook handler
+// POST /v1/webhooks/stripe/:appId — Stripe webhook handler (per-app)
 // NOTE: This route uses express.raw() body parser (mounted before express.json() in index.ts)
-router.post("/v1/webhooks/stripe", async (req, res) => {
+router.post("/v1/webhooks/stripe/:appId", async (req, res) => {
   try {
+    const appId = req.params.appId;
     const signature = req.headers["stripe-signature"] as string;
     if (!signature) {
       res.status(400).json({ error: "Missing stripe-signature header" });
@@ -22,7 +23,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
 
     let event: Stripe.Event;
     try {
-      event = await constructWebhookEvent(req.body as Buffer, signature);
+      event = await constructWebhookEvent(appId, req.body as Buffer, signature);
     } catch (err) {
       console.error("Webhook signature verification failed:", err);
       res.status(400).json({ error: "Invalid signature" });
@@ -32,6 +33,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
     switch (event.type) {
       case "checkout.session.completed": {
         await handleCheckoutCompleted(
+          appId,
           event.data.object as Stripe.Checkout.Session
         );
         break;
@@ -61,7 +63,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
   }
 });
 
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
+async function handleCheckoutCompleted(appId: string, session: Stripe.Checkout.Session) {
   const customerId = session.customer as string;
   if (!customerId) return;
 
@@ -79,7 +81,6 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 
   // Extract payment method from the session
-  // The payment_method field may be on the session object depending on Stripe API version
   const sessionAny = session as unknown as Record<string, unknown>;
   const paymentMethodId = (sessionAny.payment_method as string) ?? null;
 
@@ -91,6 +92,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // Credit the balance with the reload amount
   if (reloadAmountCents && account.stripeCustomerId) {
     await createBalanceTransaction(
+      appId,
       account.stripeCustomerId,
       -reloadAmountCents,
       "Initial reload credit"

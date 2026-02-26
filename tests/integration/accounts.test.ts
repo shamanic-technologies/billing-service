@@ -7,6 +7,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 describe("Accounts endpoints", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
+  const appId = "testapp";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -28,11 +29,13 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.orgId).toBe(orgId);
+      expect(res.body.appId).toBe(appId);
       expect(res.body.billingMode).toBe("trial");
       expect(res.body.creditBalanceCents).toBe(200);
       expect(res.body.hasPaymentMethod).toBe(false);
-      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(orgId);
+      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(appId, orgId);
       expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
+        appId,
         "cus_mock123",
         -200,
         "Trial credit: $2.00"
@@ -58,7 +61,7 @@ describe("Accounts endpoints", () => {
     it("returns 401 without API key", async () => {
       const res = await request(app)
         .get("/v1/accounts")
-        .set({ "x-org-id": orgId });
+        .set({ "x-org-id": orgId, "x-app-id": appId });
 
       expect(res.status).toBe(401);
     });
@@ -66,7 +69,15 @@ describe("Accounts endpoints", () => {
     it("returns 400 without x-org-id header", async () => {
       const res = await request(app)
         .get("/v1/accounts")
-        .set({ "X-API-Key": "test-api-key" });
+        .set({ "X-API-Key": "test-api-key", "x-app-id": appId });
+
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 without x-app-id header", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set({ "X-API-Key": "test-api-key", "x-org-id": orgId });
 
       expect(res.status).toBe(400);
     });
