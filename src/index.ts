@@ -9,6 +9,7 @@ import creditsRoutes from "./routes/credits.js";
 import checkoutRoutes from "./routes/checkout.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { requireApiKey } from "./middleware/auth.js";
+import { registerAllAppKeys } from "./lib/key-client.js";
 
 const app = express();
 const PORT = process.env.PORT || 3012;
@@ -51,6 +52,9 @@ if (process.env.NODE_ENV !== "test") {
   migrate(db, { migrationsFolder: "./drizzle" })
     .then(() => {
       console.log("Migrations complete");
+      return registerAllAppKeys();
+    })
+    .then(() => {
       app.listen(Number(PORT), "::", () => {
         console.log(`Billing service running on port ${PORT}`);
       });

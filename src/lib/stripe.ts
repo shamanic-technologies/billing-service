@@ -1,11 +1,12 @@
 import Stripe from "stripe";
+import { resolveAppKey } from "./key-client.js";
 
 let stripeInstance: Stripe | null = null;
+let cachedWebhookSecret: string | null = null;
 
-function getStripe(): Stripe {
+async function getStripe(): Promise<Stripe> {
   if (!stripeInstance) {
-    const key = process.env.STRIPE_SECRET_KEY;
-    if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
+    const key = await resolveAppKey("stripe");
     stripeInstance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
   }
   return stripeInstance;
@@ -22,7 +23,8 @@ export async function createCustomer(
   orgId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return getStripe().customers.create({
+  const stripe = await getStripe();
+  return stripe.customers.create({
     metadata: { org_id: orgId, ...metadata },
   });
 }
@@ -30,7 +32,8 @@ export async function createCustomer(
 export async function getCustomer(
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  return getStripe().customers.retrieve(
+  const stripe = await getStripe();
+  return stripe.customers.retrieve(
     stripeCustomerId
   ) as Promise<Stripe.Customer>;
 }
@@ -51,7 +54,8 @@ export async function createBalanceTransaction(
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  return getStripe().customers.createBalanceTransaction(stripeCustomerId, {
+  const stripe = await getStripe();
+  return stripe.customers.createBalanceTransaction(stripeCustomerId, {
     amount: amountCents,
     currency: "usd",
     description,
@@ -63,7 +67,8 @@ export async function listBalanceTransactions(
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return getStripe().customers.listBalanceTransactions(stripeCustomerId, {
+  const stripe = await getStripe();
+  return stripe.customers.listBalanceTransactions(stripeCustomerId, {
     limit,
   });
 }
@@ -76,7 +81,8 @@ export async function createCheckoutSession(
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  return getStripe().checkout.sessions.create({
+  const stripe = await getStripe();
+  return stripe.checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
     payment_method_types: ["card"],
@@ -108,7 +114,8 @@ export async function chargePaymentMethod(
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  return getStripe().paymentIntents.create({
+  const stripe = await getStripe();
+  return stripe.paymentIntents.create({
     amount: amountCents,
     currency: "usd",
     customer: stripeCustomerId,
@@ -122,11 +129,13 @@ export async function chargePaymentMethod(
 
 // --- Webhook ---
 
-export function constructWebhookEvent(
+export async function constructWebhookEvent(
   payload: Buffer,
   signature: string
-): Stripe.Event {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) throw new Error("STRIPE_WEBHOOK_SECRET not configured");
-  return getStripe().webhooks.constructEvent(payload, signature, secret);
+): Promise<Stripe.Event> {
+  if (!cachedWebhookSecret) {
+    cachedWebhookSecret = await resolveAppKey("stripe-webhook");
+  }
+  const stripe = await getStripe();
+  return stripe.webhooks.constructEvent(payload, signature, cachedWebhookSecret);
 }
