@@ -1,22 +1,23 @@
 import Stripe from "stripe";
 import { resolveAppKey } from "./key-client.js";
 
-// Single Stripe instance — billing-service owns the Stripe account,
-// appId from requests is only used as metadata for tenant tracking.
-let stripeInstance: Stripe | null = null;
-let webhookSecretCache: string | null = null;
+// Per-app Stripe instance cache (each app has its own Stripe key)
+const stripeInstances = new Map<string, Stripe>();
+const webhookSecrets = new Map<string, string>();
 
-// Test override
+// Test override — applies to all apps
 let testStripeInstance: Stripe | null = null;
 
-async function getStripe(): Promise<Stripe> {
+async function getStripe(appId: string): Promise<Stripe> {
   if (testStripeInstance) return testStripeInstance;
 
-  if (!stripeInstance) {
-    const key = await resolveAppKey("stripe");
-    stripeInstance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
+  let instance = stripeInstances.get(appId);
+  if (!instance) {
+    const key = await resolveAppKey("stripe", appId);
+    instance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
+    stripeInstances.set(appId, instance);
   }
-  return stripeInstance;
+  return instance;
 }
 
 /** Override Stripe instance for all apps (tests only). */
@@ -31,7 +32,7 @@ export async function createCustomer(
   orgId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.create({
     metadata: { org_id: orgId, app_id: appId, ...metadata },
   });
@@ -41,7 +42,7 @@ export async function getCustomer(
   appId: string,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.retrieve(
     stripeCustomerId
   ) as Promise<Stripe.Customer>;
@@ -64,7 +65,7 @@ export async function createBalanceTransaction(
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.createBalanceTransaction(stripeCustomerId, {
     amount: amountCents,
     currency: "usd",
@@ -78,7 +79,7 @@ export async function listBalanceTransactions(
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.customers.listBalanceTransactions(stripeCustomerId, {
     limit,
   });
@@ -93,7 +94,7 @@ export async function createCheckoutSession(
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
@@ -127,7 +128,7 @@ export async function chargePaymentMethod(
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  const stripe = await getStripe();
+  const stripe = await getStripe(appId);
   return stripe.paymentIntents.create({
     amount: amountCents,
     currency: "usd",
@@ -147,9 +148,15 @@ export async function constructWebhookEvent(
   payload: Buffer,
   signature: string
 ): Promise<Stripe.Event> {
-  if (!webhookSecretCache) {
-    webhookSecretCache = await resolveAppKey("stripe-webhook");
+  let secret = webhookSecrets.get(appId);
+  if (!secret) {
+    secret = await resolveAppKey("stripe-webhook", appId, {
+      service: "billing",
+      method: "POST",
+      path: "/v1/webhooks/stripe",
+    });
+    webhookSecrets.set(appId, secret);
   }
-  const stripe = await getStripe();
-  return stripe.webhooks.constructEvent(payload, signature, webhookSecretCache);
+  const stripe = await getStripe(appId);
+  return stripe.webhooks.constructEvent(payload, signature, secret);
 }

@@ -1,25 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as keyClient from "../../src/lib/key-client.js";
 
 describe("Stripe key resolution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.resetModules();
   });
 
-  it("resolves Stripe key using billing-service appId, not the caller appId", async () => {
-    const spy = vi.spyOn(keyClient, "resolveAppKey").mockResolvedValue("sk_test_mock");
+  it("resolves Stripe key using the caller appId (per-app)", async () => {
+    const mockResolve = vi.fn().mockResolvedValue("sk_test_mock");
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolveAppKey: mockResolve,
+    }));
 
-    // Use setStripeInstance to bypass real Stripe init
-    const { setStripeInstance, createCustomer } = await import("../../src/lib/stripe.js");
-    const mockStripe = {
-      customers: { create: vi.fn().mockResolvedValue({ id: "cus_new", metadata: {} }) },
-    };
-    setStripeInstance(mockStripe as any);
+    const { createCustomer } = await import("../../src/lib/stripe.js");
 
-    await createCustomer("sales-cold-emails", "org-123");
+    try {
+      await createCustomer("sales-cold-emails", "org-123");
+    } catch {
+      // Stripe constructor may throw with mock key — that's fine
+    }
 
-    // resolveAppKey should NOT be called with the caller's appId
-    expect(spy).not.toHaveBeenCalledWith("stripe", "sales-cold-emails");
+    // resolveAppKey is called with the caller's appId, not "billing-service"
+    expect(mockResolve).toHaveBeenCalledWith("stripe", "sales-cold-emails");
   });
 });
 
