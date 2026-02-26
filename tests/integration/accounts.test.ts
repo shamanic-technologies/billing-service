@@ -81,6 +81,17 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(400);
     });
+
+    it("auto-creates account for any appId (not just billing-service)", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId, "sales-cold-emails"));
+
+      expect(res.status).toBe(200);
+      expect(res.body.appId).toBe("sales-cold-emails");
+      expect(res.body.billingMode).toBe("trial");
+      expect(res.body.creditBalanceCents).toBe(200);
+    });
   });
 
   describe("GET /v1/accounts/balance", () => {
