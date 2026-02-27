@@ -19,7 +19,6 @@ export const BillingModeSchema = z
 
 export const KeySourceSchema = z
   .enum(["app", "byok", "platform"])
-  .default("app")
   .openapi("KeySource");
 
 // --- Account ---
@@ -121,7 +120,7 @@ const protectedHeaders = z.object({
   "x-org-id": z.string().uuid(),
   "x-app-id": z.string(),
   "x-user-id": z.string().uuid().optional(),
-  "x-key-source": KeySourceSchema.optional(),
+  "x-key-source": KeySourceSchema,
 });
 
 registry.registerPath({

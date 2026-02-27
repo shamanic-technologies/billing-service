@@ -37,16 +37,13 @@ export function createTestApp() {
 export function getAuthHeaders(
   orgId = "00000000-0000-0000-0000-000000000001",
   appId = "testapp",
-  keySource?: "app" | "byok" | "platform"
+  keySource: "app" | "byok" | "platform" = "app"
 ) {
-  const headers: Record<string, string> = {
+  return {
     "X-API-Key": "test-api-key",
     "x-org-id": orgId,
     "x-app-id": appId,
+    "x-key-source": keySource,
     "Content-Type": "application/json",
   };
-  if (keySource) {
-    headers["x-key-source"] = keySource;
-  }
-  return headers;
 }

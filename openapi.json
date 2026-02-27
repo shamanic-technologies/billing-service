@@ -88,8 +88,7 @@
           "app",
           "byok",
           "platform"
-        ],
-        "default": "app"
+        ]
       },
       "BalanceResponse": {
         "type": "object",
@@ -346,7 +345,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
@@ -427,7 +426,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
@@ -488,7 +487,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
@@ -559,7 +558,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
@@ -639,7 +638,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
@@ -719,7 +718,7 @@
             "schema": {
               "$ref": "#/components/schemas/KeySource"
             },
-            "required": false,
+            "required": true,
             "name": "x-key-source",
             "in": "header"
           }
