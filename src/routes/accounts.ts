@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders, getKeySourceInfo } from "../middleware/auth.js";
 import {
   UpdateModeRequestSchema,
   BillingModeSchema,
@@ -40,6 +40,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const appId = req.headers["x-app-id"] as string;
+    const keySourceInfo = getKeySourceInfo(req);
 
     // Try to find existing account
     const existing = await db
@@ -54,11 +55,11 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     }
 
     // Auto-create: Stripe customer + $2 trial credit
-    const stripeCustomer = await createCustomer(appId, orgId);
+    const stripeCustomer = await createCustomer(keySourceInfo, orgId);
 
     // Credit $2 (negative amount = credit in Stripe)
     await createBalanceTransaction(
-      appId,
+      keySourceInfo,
       stripeCustomer.id,
       -200,
       "Trial credit: $2.00"
@@ -135,6 +136,7 @@ router.get(
     try {
       const orgId = req.headers["x-org-id"] as string;
       const appId = req.headers["x-app-id"] as string;
+      const keySourceInfo = getKeySourceInfo(req);
 
       const [account] = await db
         .select()
@@ -152,7 +154,7 @@ router.get(
         return;
       }
 
-      const result = await listBalanceTransactions(appId, account.stripeCustomerId);
+      const result = await listBalanceTransactions(keySourceInfo, account.stripeCustomerId);
 
       const transactions = result.data.map((txn) => ({
         id: txn.id,

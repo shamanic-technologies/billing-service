@@ -2,12 +2,13 @@ import { Router } from "express";
 import { eq, and, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, type BillingAccount } from "../db/schema.js";
-import { requireOrgHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders, getKeySourceInfo } from "../middleware/auth.js";
 import { DeductRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
   isStripeAuthError,
+  type KeySourceInfo,
 } from "../lib/stripe.js";
 
 const router = Router();
@@ -17,6 +18,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const appId = req.headers["x-app-id"] as string;
+    const keySourceInfo = getKeySourceInfo(req);
     const parsed = DeductRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -82,7 +84,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           try {
             // Charge the saved payment method
             await chargePaymentMethod(
-              appId,
+              keySourceInfo,
               account.stripe_customer_id,
               account.stripe_payment_method_id,
               account.reload_amount_cents,
@@ -91,7 +93,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
             // Credit the Stripe balance
             await createBalanceTransaction(
-              appId,
+              keySourceInfo,
               account.stripe_customer_id,
               -account.reload_amount_cents,
               "Auto-reload credit"
@@ -141,7 +143,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       // Fire Stripe balance transaction async (non-blocking)
       if (account.stripe_customer_id) {
         createBalanceTransaction(
-          appId,
+          keySourceInfo,
           account.stripe_customer_id,
           amount_cents, // positive = deduction in Stripe
           description,
@@ -167,8 +169,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         // Fire auto-reload async (non-blocking)
         (async () => {
           try {
-            await chargePaymentMethod(appId, customerId, pmId, reloadAmount, "Auto-reload");
-            await createBalanceTransaction(appId, customerId, -reloadAmount, "Auto-reload credit");
+            await chargePaymentMethod(keySourceInfo, customerId, pmId, reloadAmount, "Auto-reload");
+            await createBalanceTransaction(keySourceInfo, customerId, -reloadAmount, "Auto-reload credit");
             await db
               .update(billingAccounts)
               .set({

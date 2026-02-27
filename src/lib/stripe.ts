@@ -1,21 +1,46 @@
 import Stripe from "stripe";
-import { resolveAppKey } from "./key-client.js";
+import { resolveAppKey, resolveKey, type KeySource } from "./key-client.js";
 
-// Per-app Stripe instance cache (each app has its own Stripe key)
+// --- Key source info type ---
+
+export type KeySourceInfo =
+  | { keySource: "app"; appId: string }
+  | { keySource: "byok"; orgId: string }
+  | { keySource: "platform" };
+
+function cacheKey(info: KeySourceInfo): string {
+  switch (info.keySource) {
+    case "app": return `app:${info.appId}`;
+    case "byok": return `byok:${info.orgId}`;
+    case "platform": return "platform";
+  }
+}
+
+function resolveOpts(info: KeySourceInfo): { appId?: string; orgId?: string } {
+  switch (info.keySource) {
+    case "app": return { appId: info.appId };
+    case "byok": return { orgId: info.orgId };
+    case "platform": return {};
+  }
+}
+
+// --- Stripe instance cache (keyed by keySource:identifier) ---
+
 const stripeInstances = new Map<string, Stripe>();
 const webhookSecrets = new Map<string, string>();
 
-// Test override — applies to all apps
+// Test override — applies to all key sources
 let testStripeInstance: Stripe | null = null;
 
-async function getStripe(appId: string): Promise<Stripe> {
+async function getStripe(info: KeySourceInfo): Promise<Stripe> {
   if (testStripeInstance) return testStripeInstance;
 
-  let instance = stripeInstances.get(appId);
+  const ck = cacheKey(info);
+  let instance = stripeInstances.get(ck);
   if (!instance) {
-    const key = await resolveAppKey("stripe", appId);
+    const key = await resolveKey("stripe", info.keySource, resolveOpts(info));
     instance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
-    stripeInstances.set(appId, instance);
+    stripeInstances.set(ck, instance);
   }
   return instance;
 }
@@ -25,15 +50,16 @@ async function getStripe(appId: string): Promise<Stripe> {
  * If the Stripe key is expired/invalid, evicts the cached instance and retries
  * once with a freshly resolved key from key-service.
  */
-async function withAuthRetry<T>(appId: string, fn: (stripe: Stripe) => Promise<T>): Promise<T> {
-  const stripe = await getStripe(appId);
+async function withAuthRetry<T>(info: KeySourceInfo, fn: (stripe: Stripe) => Promise<T>): Promise<T> {
+  const stripe = await getStripe(info);
   try {
     return await fn(stripe);
   } catch (err) {
     if (isStripeAuthError(err)) {
-      console.warn(`Stripe auth error for app ${appId} — evicting cached key and retrying`);
-      stripeInstances.delete(appId);
-      const freshStripe = await getStripe(appId);
+      const ck = cacheKey(info);
+      console.warn(`Stripe auth error for ${ck} — evicting cached key and retrying`);
+      stripeInstances.delete(ck);
+      const freshStripe = await getStripe(info);
       return fn(freshStripe);
     }
     throw err;
@@ -45,7 +71,7 @@ export function isStripeAuthError(err: unknown): boolean {
   return err instanceof Stripe.errors.StripeAuthenticationError;
 }
 
-/** Override Stripe instance for all apps (tests only). */
+/** Override Stripe instance for all key sources (tests only). */
 export function setStripeInstance(mock: Stripe): void {
   testStripeInstance = mock;
 }
@@ -53,22 +79,22 @@ export function setStripeInstance(mock: Stripe): void {
 // --- Customer ---
 
 export async function createCustomer(
-  appId: string,
+  info: KeySourceInfo,
   orgId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.customers.create({
-      metadata: { org_id: orgId, app_id: appId, ...metadata },
+      metadata: { org_id: orgId, key_source: info.keySource, ...metadata },
     })
   );
 }
 
 export async function getCustomer(
-  appId: string,
+  info: KeySourceInfo,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.customers.retrieve(stripeCustomerId) as Promise<Stripe.Customer>
   );
 }
@@ -84,13 +110,13 @@ export async function getCustomer(
  * and negative `amountCents` for credits (decreases balance towards negative).
  */
 export async function createBalanceTransaction(
-  appId: string,
+  info: KeySourceInfo,
   stripeCustomerId: string,
   amountCents: number,
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.customers.createBalanceTransaction(stripeCustomerId, {
       amount: amountCents,
       currency: "usd",
@@ -101,11 +127,11 @@ export async function createBalanceTransaction(
 }
 
 export async function listBalanceTransactions(
-  appId: string,
+  info: KeySourceInfo,
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.customers.listBalanceTransactions(stripeCustomerId, {
       limit,
     })
@@ -115,13 +141,13 @@ export async function listBalanceTransactions(
 // --- Checkout ---
 
 export async function createCheckoutSession(
-  appId: string,
+  info: KeySourceInfo,
   stripeCustomerId: string,
   successUrl: string,
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "payment",
@@ -150,13 +176,13 @@ export async function createCheckoutSession(
 // --- Payment (auto-reload) ---
 
 export async function chargePaymentMethod(
-  appId: string,
+  info: KeySourceInfo,
   stripeCustomerId: string,
   paymentMethodId: string,
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  return withAuthRetry(appId, (stripe) =>
+  return withAuthRetry(info, (stripe) =>
     stripe.paymentIntents.create({
       amount: amountCents,
       currency: "usd",
@@ -170,7 +196,7 @@ export async function chargePaymentMethod(
   );
 }
 
-// --- Webhook ---
+// --- Webhook (always uses app key source) ---
 
 export async function constructWebhookEvent(
   appId: string,
@@ -186,6 +212,7 @@ export async function constructWebhookEvent(
     });
     webhookSecrets.set(appId, secret);
   }
-  const stripe = await getStripe(appId);
+  const info: KeySourceInfo = { keySource: "app", appId };
+  const stripe = await getStripe(info);
   return stripe.webhooks.constructEvent(payload, signature, secret);
 }

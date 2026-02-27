@@ -40,7 +40,7 @@ describe("Checkout endpoint", () => {
     expect(res.body.url).toContain("checkout.stripe.com");
     expect(res.body.session_id).toBe("cs_mock_session");
     expect(stripeMocks.createCheckoutSession).toHaveBeenCalledWith(
-      appId,
+      { keySource: "app", appId },
       "cus_123",
       "https://app.example.com/success",
       "https://app.example.com/cancel",
@@ -61,6 +61,31 @@ describe("Checkout endpoint", () => {
     expect(res.status).toBe(200);
     expect(stripeMocks.createCustomer).toHaveBeenCalled();
     expect(stripeMocks.createCheckoutSession).toHaveBeenCalled();
+  });
+
+  it("uses platform KeySourceInfo when x-key-source is platform", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId, appId, "platform"))
+      .send({
+        success_url: "https://app.example.com/success",
+        cancel_url: "https://app.example.com/cancel",
+        reload_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.createCheckoutSession).toHaveBeenCalledWith(
+      { keySource: "platform" },
+      "cus_123",
+      "https://app.example.com/success",
+      "https://app.example.com/cancel",
+      2000
+    );
   });
 
   it("validates request body", async () => {
