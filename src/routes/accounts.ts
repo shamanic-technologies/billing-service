@@ -11,6 +11,7 @@ import {
   createCustomer,
   createBalanceTransaction,
   listBalanceTransactions,
+  isStripeAuthError,
 } from "../lib/stripe.js";
 
 const router = Router();
@@ -90,6 +91,10 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     res.json(formatAccount(account));
   } catch (err) {
     console.error("Error getting/creating account:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -160,6 +165,10 @@ router.get(
       res.json({ transactions, has_more: result.has_more });
     } catch (err) {
       console.error("Error listing transactions:", err);
+      if (isStripeAuthError(err)) {
+        res.status(502).json({ error: "Payment provider authentication failed" });
+        return;
+      }
       res.status(500).json({ error: "Internal server error" });
     }
   }

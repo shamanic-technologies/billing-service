@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
-import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import { setupStripeMocks, createStripeAuthError } from "../helpers/mock-stripe.js";
 
 describe("Accounts endpoints", () => {
   const app = createTestApp();
@@ -92,6 +92,19 @@ describe("Accounts endpoints", () => {
       expect(res.body.billingMode).toBe("trial");
       expect(res.body.creditBalanceCents).toBe(200);
     });
+
+    it("returns 502 when Stripe key is expired", async () => {
+      stripeMocks.createCustomer.mockRejectedValue(
+        createStripeAuthError("Expired API Key provided")
+      );
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("Payment provider authentication failed");
+    });
   });
 
   describe("GET /v1/accounts/balance", () => {
@@ -178,6 +191,20 @@ describe("Accounts endpoints", () => {
       expect(res.body.transactions).toHaveLength(2);
       expect(res.body.transactions[0].type).toBe("deduction");
       expect(res.body.transactions[1].type).toBe("credit");
+    });
+
+    it("returns 502 when Stripe key is expired", async () => {
+      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
+      stripeMocks.listBalanceTransactions.mockRejectedValue(
+        createStripeAuthError("Expired API Key provided")
+      );
+
+      const res = await request(app)
+        .get("/v1/accounts/transactions")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("Payment provider authentication failed");
     });
   });
 

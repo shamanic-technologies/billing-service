@@ -1,6 +1,15 @@
 import { vi } from "vitest";
+import Stripe from "stripe";
 import * as stripeLib from "../../src/lib/stripe.js";
 import * as keyClient from "../../src/lib/key-client.js";
+
+/** Create a StripeAuthenticationError for testing. */
+export function createStripeAuthError(message = "Expired API Key provided"): Stripe.errors.StripeAuthenticationError {
+  return new Stripe.errors.StripeAuthenticationError({
+    message,
+    type: "invalid_request_error",
+  });
+}
 
 /** Default mock implementations for all Stripe operations + key-service. */
 export function setupStripeMocks() {
@@ -30,6 +39,9 @@ export function setupStripeMocks() {
     }),
     constructWebhookEvent: vi.fn(),
     resolveAppKey: vi.fn().mockResolvedValue("sk_test_mock_key"),
+    isStripeAuthError: vi.fn().mockImplementation(
+      (err: unknown) => err instanceof Stripe.errors.StripeAuthenticationError
+    ),
   };
 
   // Mock key-service so Stripe never actually calls it
@@ -50,6 +62,9 @@ export function setupStripeMocks() {
   );
   vi.spyOn(stripeLib, "constructWebhookEvent").mockImplementation(
     mocks.constructWebhookEvent
+  );
+  vi.spyOn(stripeLib, "isStripeAuthError").mockImplementation(
+    mocks.isStripeAuthError
   );
 
   return mocks;

@@ -20,6 +20,31 @@ async function getStripe(appId: string): Promise<Stripe> {
   return instance;
 }
 
+/**
+ * Wraps a Stripe API call with retry-on-auth-error logic.
+ * If the Stripe key is expired/invalid, evicts the cached instance and retries
+ * once with a freshly resolved key from key-service.
+ */
+async function withAuthRetry<T>(appId: string, fn: (stripe: Stripe) => Promise<T>): Promise<T> {
+  const stripe = await getStripe(appId);
+  try {
+    return await fn(stripe);
+  } catch (err) {
+    if (isStripeAuthError(err)) {
+      console.warn(`Stripe auth error for app ${appId} — evicting cached key and retrying`);
+      stripeInstances.delete(appId);
+      const freshStripe = await getStripe(appId);
+      return fn(freshStripe);
+    }
+    throw err;
+  }
+}
+
+/** Check if an error is a Stripe authentication error (expired/invalid key). */
+export function isStripeAuthError(err: unknown): boolean {
+  return err instanceof Stripe.errors.StripeAuthenticationError;
+}
+
 /** Override Stripe instance for all apps (tests only). */
 export function setStripeInstance(mock: Stripe): void {
   testStripeInstance = mock;
@@ -32,20 +57,20 @@ export async function createCustomer(
   orgId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe(appId);
-  return stripe.customers.create({
-    metadata: { org_id: orgId, app_id: appId, ...metadata },
-  });
+  return withAuthRetry(appId, (stripe) =>
+    stripe.customers.create({
+      metadata: { org_id: orgId, app_id: appId, ...metadata },
+    })
+  );
 }
 
 export async function getCustomer(
   appId: string,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  const stripe = await getStripe(appId);
-  return stripe.customers.retrieve(
-    stripeCustomerId
-  ) as Promise<Stripe.Customer>;
+  return withAuthRetry(appId, (stripe) =>
+    stripe.customers.retrieve(stripeCustomerId) as Promise<Stripe.Customer>
+  );
 }
 
 // --- Customer Balance ---
@@ -65,13 +90,14 @@ export async function createBalanceTransaction(
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  const stripe = await getStripe(appId);
-  return stripe.customers.createBalanceTransaction(stripeCustomerId, {
-    amount: amountCents,
-    currency: "usd",
-    description,
-    metadata,
-  });
+  return withAuthRetry(appId, (stripe) =>
+    stripe.customers.createBalanceTransaction(stripeCustomerId, {
+      amount: amountCents,
+      currency: "usd",
+      description,
+      metadata,
+    })
+  );
 }
 
 export async function listBalanceTransactions(
@@ -79,10 +105,11 @@ export async function listBalanceTransactions(
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  const stripe = await getStripe(appId);
-  return stripe.customers.listBalanceTransactions(stripeCustomerId, {
-    limit,
-  });
+  return withAuthRetry(appId, (stripe) =>
+    stripe.customers.listBalanceTransactions(stripeCustomerId, {
+      limit,
+    })
+  );
 }
 
 // --- Checkout ---
@@ -94,29 +121,30 @@ export async function createCheckoutSession(
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  const stripe = await getStripe(appId);
-  return stripe.checkout.sessions.create({
-    customer: stripeCustomerId,
-    mode: "payment",
-    payment_method_types: ["card"],
-    line_items: [
-      {
-        price_data: {
-          currency: "usd",
-          product_data: { name: "Credit Reload" },
-          unit_amount: reloadAmountCents,
+  return withAuthRetry(appId, (stripe) =>
+    stripe.checkout.sessions.create({
+      customer: stripeCustomerId,
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: { name: "Credit Reload" },
+            unit_amount: reloadAmountCents,
+          },
+          quantity: 1,
         },
-        quantity: 1,
+      ],
+      payment_intent_data: {
+        setup_future_usage: "off_session",
+        metadata: { type: "initial_reload" },
       },
-    ],
-    payment_intent_data: {
-      setup_future_usage: "off_session",
-      metadata: { type: "initial_reload" },
-    },
-    success_url: successUrl,
-    cancel_url: cancelUrl,
-    metadata: { reload_amount_cents: String(reloadAmountCents) },
-  });
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      metadata: { reload_amount_cents: String(reloadAmountCents) },
+    })
+  );
 }
 
 // --- Payment (auto-reload) ---
@@ -128,17 +156,18 @@ export async function chargePaymentMethod(
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  const stripe = await getStripe(appId);
-  return stripe.paymentIntents.create({
-    amount: amountCents,
-    currency: "usd",
-    customer: stripeCustomerId,
-    payment_method: paymentMethodId,
-    off_session: true,
-    confirm: true,
-    description,
-    metadata: { type: "auto_reload" },
-  });
+  return withAuthRetry(appId, (stripe) =>
+    stripe.paymentIntents.create({
+      amount: amountCents,
+      currency: "usd",
+      customer: stripeCustomerId,
+      payment_method: paymentMethodId,
+      off_session: true,
+      confirm: true,
+      description,
+      metadata: { type: "auto_reload" },
+    })
+  );
 }
 
 // --- Webhook ---

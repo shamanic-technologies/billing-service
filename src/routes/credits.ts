@@ -7,6 +7,7 @@ import { DeductRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
+  isStripeAuthError,
 } from "../lib/stripe.js";
 
 const router = Router();
@@ -197,6 +198,10 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("Error deducting credits:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
