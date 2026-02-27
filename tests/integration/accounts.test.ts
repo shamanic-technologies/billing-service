@@ -133,6 +133,19 @@ describe("Accounts endpoints", () => {
       );
     });
 
+    it("returns 400 when x-key-source is missing", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set({
+          "X-API-Key": "test-api-key",
+          "x-org-id": orgId,
+          "x-app-id": appId,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("x-key-source header is required");
+    });
+
     it("returns 400 for invalid x-key-source", async () => {
       const res = await request(app)
         .get("/v1/accounts")

@@ -32,7 +32,11 @@ export function requireOrgHeaders(
     res.status(400).json({ error: "x-app-id header is required" });
     return;
   }
-  const keySource = (req.headers["x-key-source"] as string) || "app";
+  const keySource = req.headers["x-key-source"] as string;
+  if (!keySource) {
+    res.status(400).json({ error: "x-key-source header is required" });
+    return;
+  }
   if (!VALID_KEY_SOURCES.has(keySource)) {
     res.status(400).json({ error: `Invalid x-key-source: ${keySource}. Must be one of: app, byok, platform` });
     return;
@@ -42,7 +46,7 @@ export function requireOrgHeaders(
 
 /** Extract KeySourceInfo from request headers. Call after requireOrgHeaders. */
 export function getKeySourceInfo(req: Request): KeySourceInfo {
-  const keySource = ((req.headers["x-key-source"] as string) || "app") as KeySource;
+  const keySource = req.headers["x-key-source"] as KeySource;
   const appId = req.headers["x-app-id"] as string;
   const orgId = req.headers["x-org-id"] as string;
 
