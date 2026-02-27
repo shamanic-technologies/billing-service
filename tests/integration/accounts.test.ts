@@ -33,9 +33,12 @@ describe("Accounts endpoints", () => {
       expect(res.body.billingMode).toBe("trial");
       expect(res.body.creditBalanceCents).toBe(200);
       expect(res.body.hasPaymentMethod).toBe(false);
-      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(appId, orgId);
+      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
+        { keySource: "app", appId },
+        orgId
+      );
       expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-        appId,
+        { keySource: "app", appId },
         "cus_mock123",
         -200,
         "Trial credit: $2.00"
@@ -104,6 +107,42 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(502);
       expect(res.body.error).toBe("Payment provider authentication failed");
+    });
+
+    it("passes byok KeySourceInfo when x-key-source is byok", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId, appId, "byok"));
+
+      expect(res.status).toBe(200);
+      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
+        { keySource: "byok", orgId },
+        orgId
+      );
+    });
+
+    it("passes platform KeySourceInfo when x-key-source is platform", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId, appId, "platform"));
+
+      expect(res.status).toBe(200);
+      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
+        { keySource: "platform" },
+        orgId
+      );
+    });
+
+    it("returns 400 for invalid x-key-source", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set({
+          ...getAuthHeaders(orgId),
+          "x-key-source": "invalid",
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("Invalid x-key-source");
     });
   });
 

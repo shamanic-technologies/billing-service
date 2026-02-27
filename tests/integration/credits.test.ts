@@ -124,7 +124,7 @@ describe("Credits deduction endpoint", () => {
     // Balance should be: 3 (original) + 2000 (reload) - 5 (deduction) = 1998
     expect(res.body.balance_cents).toBe(1998);
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
-      appId,
+      { keySource: "app", appId },
       "cus_123",
       "pm_123",
       2000,
@@ -183,6 +183,35 @@ describe("Credits deduction endpoint", () => {
       .send({ amount_cents: -5 });
 
     expect(res.status).toBe(400);
+  });
+
+  it("uses byok KeySourceInfo when x-key-source is byok", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 200,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId, appId, "byok"))
+      .send({
+        amount_cents: 5,
+        description: "test deduction",
+        app_id: "testapp",
+        user_id: userId,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Async Stripe balance transaction should use byok key source
+    expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
+      { keySource: "byok", orgId },
+      "cus_123",
+      5,
+      "test deduction",
+      { app_id: "testapp", user_id: userId }
+    );
   });
 
   it("handles multiple sequential deductions correctly", async () => {

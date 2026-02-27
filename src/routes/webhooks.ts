@@ -5,6 +5,7 @@ import { billingAccounts } from "../db/schema.js";
 import {
   constructWebhookEvent,
   createBalanceTransaction,
+  type KeySourceInfo,
 } from "../lib/stripe.js";
 import type Stripe from "stripe";
 
@@ -89,10 +90,11 @@ async function handleCheckoutCompleted(appId: string, session: Stripe.Checkout.S
     ? parseInt(session.metadata.reload_amount_cents, 10)
     : account.reloadAmountCents;
 
-  // Credit the balance with the reload amount
+  // Credit the balance with the reload amount (webhooks always use app key source)
+  const keySourceInfo: KeySourceInfo = { keySource: "app", appId };
   if (reloadAmountCents && account.stripeCustomerId) {
     await createBalanceTransaction(
-      appId,
+      keySourceInfo,
       account.stripeCustomerId,
       -reloadAmountCents,
       "Initial reload credit"

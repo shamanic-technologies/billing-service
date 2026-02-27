@@ -82,6 +82,15 @@
           "error"
         ]
       },
+      "KeySource": {
+        "type": "string",
+        "enum": [
+          "app",
+          "byok",
+          "platform"
+        ],
+        "default": "app"
+      },
       "BalanceResponse": {
         "type": "object",
         "properties": {
@@ -332,6 +341,14 @@
             "required": false,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
+            "in": "header"
           }
         ],
         "responses": {
@@ -405,6 +422,14 @@
             "required": false,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
+            "in": "header"
           }
         ],
         "responses": {
@@ -457,6 +482,14 @@
             },
             "required": false,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
             "in": "header"
           }
         ],
@@ -520,6 +553,14 @@
             },
             "required": false,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
             "in": "header"
           }
         ],
@@ -593,6 +634,14 @@
             "required": false,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -664,6 +713,14 @@
             },
             "required": false,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/KeySource"
+            },
+            "required": false,
+            "name": "x-key-source",
             "in": "header"
           }
         ],
