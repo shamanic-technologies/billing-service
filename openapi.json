@@ -354,6 +354,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Payment provider authentication failed (e.g. expired Stripe key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -457,6 +467,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TransactionsResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Payment provider authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -594,6 +614,16 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Payment provider authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -653,6 +683,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CheckoutResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Payment provider authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

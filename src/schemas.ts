@@ -153,6 +153,10 @@ registry.registerPath({
       description: "Unauthorized",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    502: {
+      description: "Payment provider authentication failed (e.g. expired Stripe key)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
 
@@ -182,6 +186,10 @@ registry.registerPath({
     200: {
       description: "Transaction list",
       content: { "application/json": { schema: TransactionsResponseSchema } },
+    },
+    502: {
+      description: "Payment provider authentication failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });
@@ -223,6 +231,10 @@ registry.registerPath({
       description: "Deduction result",
       content: { "application/json": { schema: DeductResponseSchema } },
     },
+    502: {
+      description: "Payment provider authentication failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
 
@@ -242,6 +254,10 @@ registry.registerPath({
     200: {
       description: "Checkout session URL",
       content: { "application/json": { schema: CheckoutResponseSchema } },
+    },
+    502: {
+      description: "Payment provider authentication failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });

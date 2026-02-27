@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
-import { createCustomer, createCheckoutSession } from "../lib/stripe.js";
+import { createCustomer, createCheckoutSession, isStripeAuthError } from "../lib/stripe.js";
 
 const router = Router();
 
@@ -90,6 +90,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     });
   } catch (err) {
     console.error("Error creating checkout session:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
