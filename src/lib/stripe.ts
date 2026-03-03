@@ -1,25 +1,22 @@
 import Stripe from "stripe";
-import { resolveProviderKey } from "./key-client.js";
+import { resolvePlatformKey } from "./key-client.js";
 
-// --- Stripe instance cache (keyed by org) ---
+// --- Single Stripe instance (platform key is global) ---
 
-const stripeInstances = new Map<string, Stripe>();
-const webhookSecrets = new Map<string, string>();
+let cachedStripe: Stripe | null = null;
+let cachedWebhookSecret: string | null = null;
 
-// Test override — applies to all key sources
+// Test override
 let testStripeInstance: Stripe | null = null;
 
-async function getStripe(orgId: string, userId: string): Promise<Stripe> {
+async function getStripe(): Promise<Stripe> {
   if (testStripeInstance) return testStripeInstance;
 
-  const ck = `org:${orgId}`;
-  let instance = stripeInstances.get(ck);
-  if (!instance) {
-    const { key } = await resolveProviderKey("stripe", orgId, userId);
-    instance = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
-    stripeInstances.set(ck, instance);
+  if (!cachedStripe) {
+    const { key } = await resolvePlatformKey("stripe");
+    cachedStripe = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
   }
-  return instance;
+  return cachedStripe;
 }
 
 /**
@@ -27,16 +24,15 @@ async function getStripe(orgId: string, userId: string): Promise<Stripe> {
  * If the Stripe key is expired/invalid, evicts the cached instance and retries
  * once with a freshly resolved key from key-service.
  */
-async function withAuthRetry<T>(orgId: string, userId: string, fn: (stripe: Stripe) => Promise<T>): Promise<T> {
-  const stripe = await getStripe(orgId, userId);
+async function withAuthRetry<T>(fn: (stripe: Stripe) => Promise<T>): Promise<T> {
+  const stripe = await getStripe();
   try {
     return await fn(stripe);
   } catch (err) {
     if (isStripeAuthError(err)) {
-      const ck = `org:${orgId}`;
-      console.warn(`Stripe auth error for ${ck} — evicting cached key and retrying`);
-      stripeInstances.delete(ck);
-      const freshStripe = await getStripe(orgId, userId);
+      console.warn("Stripe auth error — evicting cached platform key and retrying");
+      cachedStripe = null;
+      const freshStripe = await getStripe();
       return fn(freshStripe);
     }
     throw err;
@@ -48,7 +44,7 @@ export function isStripeAuthError(err: unknown): boolean {
   return err instanceof Stripe.errors.StripeAuthenticationError;
 }
 
-/** Override Stripe instance for all key sources (tests only). */
+/** Override Stripe instance for tests. */
 export function setStripeInstance(mock: Stripe): void {
   testStripeInstance = mock;
 }
@@ -60,7 +56,7 @@ export async function createCustomer(
   userId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.customers.create({
       metadata: { org_id: orgId, ...metadata },
     })
@@ -72,7 +68,7 @@ export async function getCustomer(
   userId: string,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.customers.retrieve(stripeCustomerId) as Promise<Stripe.Customer>
   );
 }
@@ -95,7 +91,7 @@ export async function createBalanceTransaction(
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.customers.createBalanceTransaction(stripeCustomerId, {
       amount: amountCents,
       currency: "usd",
@@ -111,7 +107,7 @@ export async function listBalanceTransactions(
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.customers.listBalanceTransactions(stripeCustomerId, {
       limit,
     })
@@ -128,7 +124,7 @@ export async function createCheckoutSession(
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "payment",
@@ -164,7 +160,7 @@ export async function chargePaymentMethod(
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  return withAuthRetry(orgId, userId, (stripe) =>
+  return withAuthRetry((stripe) =>
     stripe.paymentIntents.create({
       amount: amountCents,
       currency: "usd",
@@ -185,16 +181,14 @@ export async function constructWebhookEvent(
   payload: Buffer,
   signature: string
 ): Promise<Stripe.Event> {
-  let secret = webhookSecrets.get(orgId);
-  if (!secret) {
-    const result = await resolveProviderKey("stripe-webhook", orgId, "system", {
+  if (!cachedWebhookSecret) {
+    const result = await resolvePlatformKey("stripe-webhook", {
       service: "billing",
       method: "POST",
       path: "/v1/webhooks/stripe",
     });
-    secret = result.key;
-    webhookSecrets.set(orgId, secret);
+    cachedWebhookSecret = result.key;
   }
-  const stripe = await getStripe(orgId, "system");
-  return stripe.webhooks.constructEvent(payload, signature, secret);
+  const stripe = await getStripe();
+  return stripe.webhooks.constructEvent(payload, signature, cachedWebhookSecret);
 }
