@@ -88,6 +88,19 @@ describe("Accounts endpoints", () => {
       expect(res.body.error).toBe("x-user-id header is required");
     });
 
+    it("returns 400 without x-run-id header", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set({
+          "X-API-Key": "test-api-key",
+          "x-org-id": orgId,
+          "x-user-id": userId,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("x-run-id header is required");
+    });
+
     it("returns 502 when Stripe key is expired", async () => {
       stripeMocks.createCustomer.mockRejectedValue(
         createStripeAuthError("Expired API Key provided")

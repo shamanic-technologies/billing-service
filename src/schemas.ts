@@ -112,6 +112,7 @@ const protectedHeaders = z.object({
   "x-api-key": z.string(),
   "x-org-id": z.string().uuid(),
   "x-user-id": z.string().uuid(),
+  "x-run-id": z.string().uuid(),
 });
 
 registry.registerPath({

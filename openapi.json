@@ -310,6 +310,15 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -375,6 +384,15 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -419,6 +437,15 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
             "in": "header"
           }
         ],
@@ -474,6 +501,15 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
             "in": "header"
           }
         ],
@@ -539,6 +575,15 @@
             "required": true,
             "name": "x-user-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -602,6 +647,15 @@
             },
             "required": true,
             "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
             "in": "header"
           }
         ],

@@ -36,12 +36,14 @@ export function createTestApp() {
 
 export function getAuthHeaders(
   orgId = "00000000-0000-0000-0000-000000000001",
-  userId = "00000000-0000-0000-0000-000000000099"
+  userId = "00000000-0000-0000-0000-000000000099",
+  runId = "00000000-0000-0000-0000-000000000aaa"
 ) {
   return {
     "X-API-Key": "test-api-key",
     "x-org-id": orgId,
     "x-user-id": userId,
+    "x-run-id": runId,
     "Content-Type": "application/json",
   };
 }
