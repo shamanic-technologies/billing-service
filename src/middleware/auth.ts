@@ -28,5 +28,10 @@ export function requireOrgHeaders(
     res.status(400).json({ error: "x-user-id header is required" });
     return;
   }
+  const runId = req.headers["x-run-id"] as string;
+  if (!runId) {
+    res.status(400).json({ error: "x-run-id header is required" });
+    return;
+  }
   next();
 }
