@@ -5,17 +5,16 @@ import { billingAccounts } from "../db/schema.js";
 import {
   constructWebhookEvent,
   createBalanceTransaction,
-  type KeySourceInfo,
 } from "../lib/stripe.js";
 import type Stripe from "stripe";
 
 const router = Router();
 
-// POST /v1/webhooks/stripe/:appId — Stripe webhook handler (per-app)
+// POST /v1/webhooks/stripe/:orgId — Stripe webhook handler (per-org)
 // NOTE: This route uses express.raw() body parser (mounted before express.json() in index.ts)
-router.post("/v1/webhooks/stripe/:appId", async (req, res) => {
+router.post("/v1/webhooks/stripe/:orgId", async (req, res) => {
   try {
-    const appId = req.params.appId;
+    const orgId = req.params.orgId;
     const signature = req.headers["stripe-signature"] as string;
     if (!signature) {
       res.status(400).json({ error: "Missing stripe-signature header" });
@@ -24,7 +23,7 @@ router.post("/v1/webhooks/stripe/:appId", async (req, res) => {
 
     let event: Stripe.Event;
     try {
-      event = await constructWebhookEvent(appId, req.body as Buffer, signature);
+      event = await constructWebhookEvent(orgId, req.body as Buffer, signature);
     } catch (err) {
       console.error("Webhook signature verification failed:", err);
       res.status(400).json({ error: "Invalid signature" });
@@ -34,7 +33,7 @@ router.post("/v1/webhooks/stripe/:appId", async (req, res) => {
     switch (event.type) {
       case "checkout.session.completed": {
         await handleCheckoutCompleted(
-          appId,
+          orgId,
           event.data.object as Stripe.Checkout.Session
         );
         break;
@@ -64,7 +63,7 @@ router.post("/v1/webhooks/stripe/:appId", async (req, res) => {
   }
 });
 
-async function handleCheckoutCompleted(appId: string, session: Stripe.Checkout.Session) {
+async function handleCheckoutCompleted(orgId: string, session: Stripe.Checkout.Session) {
   const customerId = session.customer as string;
   if (!customerId) return;
 
@@ -90,11 +89,11 @@ async function handleCheckoutCompleted(appId: string, session: Stripe.Checkout.S
     ? parseInt(session.metadata.reload_amount_cents, 10)
     : account.reloadAmountCents;
 
-  // Credit the balance with the reload amount (webhooks always use app key source)
-  const keySourceInfo: KeySourceInfo = { keySource: "app", appId };
+  // Credit the balance with the reload amount
   if (reloadAmountCents && account.stripeCustomerId) {
     await createBalanceTransaction(
-      keySourceInfo,
+      orgId,
+      "system",
       account.stripeCustomerId,
       -reloadAmountCents,
       "Initial reload credit"

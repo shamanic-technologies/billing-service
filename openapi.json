@@ -31,9 +31,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "appId": {
-            "type": "string"
-          },
           "billingMode": {
             "$ref": "#/components/schemas/BillingMode"
           },
@@ -61,7 +58,6 @@
         "required": [
           "id",
           "orgId",
-          "appId",
           "billingMode",
           "creditBalanceCents",
           "reloadAmountCents",
@@ -80,14 +76,6 @@
         },
         "required": [
           "error"
-        ]
-      },
-      "KeySource": {
-        "type": "string",
-        "enum": [
-          "app",
-          "byok",
-          "platform"
         ]
       },
       "BalanceResponse": {
@@ -215,21 +203,11 @@
           "description": {
             "type": "string",
             "minLength": 1
-          },
-          "app_id": {
-            "type": "string",
-            "minLength": 1
-          },
-          "user_id": {
-            "type": "string",
-            "format": "uuid"
           }
         },
         "required": [
           "amount_cents",
-          "description",
-          "app_id",
-          "user_id"
+          "description"
         ]
       },
       "CheckoutResponse": {
@@ -326,27 +304,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -407,27 +369,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -468,27 +414,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -539,27 +469,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -619,27 +533,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -699,27 +597,11 @@
           },
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-app-id",
-            "in": "header"
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid"
             },
-            "required": false,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/KeySource"
-            },
             "required": true,
-            "name": "x-key-source",
+            "name": "x-user-id",
             "in": "header"
           }
         ],
@@ -756,16 +638,17 @@
         }
       }
     },
-    "/v1/webhooks/stripe/{appId}": {
+    "/v1/webhooks/stripe/{orgId}": {
       "post": {
-        "summary": "Stripe webhook handler (per-app)",
+        "summary": "Stripe webhook handler (per-org)",
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "format": "uuid"
             },
             "required": true,
-            "name": "appId",
+            "name": "orgId",
             "in": "path"
           }
         ],

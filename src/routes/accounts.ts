@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders, getKeySourceInfo } from "../middleware/auth.js";
+import { requireOrgHeaders } from "../middleware/auth.js";
 import {
   UpdateModeRequestSchema,
   BillingModeSchema,
@@ -20,7 +20,6 @@ function formatAccount(account: typeof billingAccounts.$inferSelect) {
   return {
     id: account.id,
     orgId: account.orgId,
-    appId: account.appId,
     billingMode: account.billingMode,
     creditBalanceCents: account.creditBalanceCents,
     reloadAmountCents: account.reloadAmountCents,
@@ -31,22 +30,17 @@ function formatAccount(account: typeof billingAccounts.$inferSelect) {
   };
 }
 
-function accountFilter(orgId: string, appId: string) {
-  return and(eq(billingAccounts.orgId, orgId), eq(billingAccounts.appId, appId));
-}
-
 // GET /v1/accounts — get or auto-create billing account
 router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const appId = req.headers["x-app-id"] as string;
-    const keySourceInfo = getKeySourceInfo(req);
+    const userId = req.headers["x-user-id"] as string;
 
     // Try to find existing account
     const existing = await db
       .select()
       .from(billingAccounts)
-      .where(accountFilter(orgId, appId))
+      .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
     if (existing.length > 0) {
@@ -55,11 +49,12 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     }
 
     // Auto-create: Stripe customer + $2 trial credit
-    const stripeCustomer = await createCustomer(keySourceInfo, orgId);
+    const stripeCustomer = await createCustomer(orgId, userId);
 
     // Credit $2 (negative amount = credit in Stripe)
     await createBalanceTransaction(
-      keySourceInfo,
+      orgId,
+      userId,
       stripeCustomer.id,
       -200,
       "Trial credit: $2.00"
@@ -70,7 +65,6 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
       .insert(billingAccounts)
       .values({
         orgId,
-        appId,
         stripeCustomerId: stripeCustomer.id,
         billingMode: "trial",
         creditBalanceCents: 200,
@@ -83,7 +77,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
       const [refetched] = await db
         .select()
         .from(billingAccounts)
-        .where(accountFilter(orgId, appId))
+        .where(eq(billingAccounts.orgId, orgId))
         .limit(1);
       res.json(formatAccount(refetched));
       return;
@@ -104,12 +98,11 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
 router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const appId = req.headers["x-app-id"] as string;
 
     const [account] = await db
       .select()
       .from(billingAccounts)
-      .where(accountFilter(orgId, appId))
+      .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
     if (!account) {
@@ -135,13 +128,12 @@ router.get(
   async (req, res) => {
     try {
       const orgId = req.headers["x-org-id"] as string;
-      const appId = req.headers["x-app-id"] as string;
-      const keySourceInfo = getKeySourceInfo(req);
+      const userId = req.headers["x-user-id"] as string;
 
       const [account] = await db
         .select()
         .from(billingAccounts)
-        .where(accountFilter(orgId, appId))
+        .where(eq(billingAccounts.orgId, orgId))
         .limit(1);
 
       if (!account) {
@@ -154,7 +146,7 @@ router.get(
         return;
       }
 
-      const result = await listBalanceTransactions(keySourceInfo, account.stripeCustomerId);
+      const result = await listBalanceTransactions(orgId, userId, account.stripeCustomerId);
 
       const transactions = result.data.map((txn) => ({
         id: txn.id,
@@ -192,7 +184,6 @@ function classifyTransaction(
 router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const appId = req.headers["x-app-id"] as string;
     const parsed = UpdateModeRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -205,7 +196,7 @@ router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
     const [account] = await db
       .select()
       .from(billingAccounts)
-      .where(accountFilter(orgId, appId))
+      .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
     if (!account) {
@@ -245,7 +236,7 @@ router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
     const [updated] = await db
       .update(billingAccounts)
       .set(updateData)
-      .where(accountFilter(orgId, appId))
+      .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
     res.json(formatAccount(updated));

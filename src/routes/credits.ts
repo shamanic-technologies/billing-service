@@ -1,14 +1,13 @@
 import { Router } from "express";
-import { eq, and, sql as rawSql } from "drizzle-orm";
+import { eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, type BillingAccount } from "../db/schema.js";
-import { requireOrgHeaders, getKeySourceInfo } from "../middleware/auth.js";
+import { billingAccounts } from "../db/schema.js";
+import { requireOrgHeaders } from "../middleware/auth.js";
 import { DeductRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
   isStripeAuthError,
-  type KeySourceInfo,
 } from "../lib/stripe.js";
 
 const router = Router();
@@ -17,8 +16,7 @@ const router = Router();
 router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const appId = req.headers["x-app-id"] as string;
-    const keySourceInfo = getKeySourceInfo(req);
+    const userId = req.headers["x-user-id"] as string;
     const parsed = DeductRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -26,7 +24,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const { amount_cents, description, app_id, user_id } = parsed.data;
+    const { amount_cents, description } = parsed.data;
 
     // Use Drizzle transaction with FOR UPDATE lock to prevent double-spend
     const result = await db.transaction(async (tx) => {
@@ -34,7 +32,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       const rows = await tx.execute<{
         id: string;
         org_id: string;
-        app_id: string;
         stripe_customer_id: string | null;
         billing_mode: string;
         credit_balance_cents: number;
@@ -42,13 +39,12 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         reload_threshold_cents: number | null;
         stripe_payment_method_id: string | null;
       }>(
-        rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} AND app_id = ${appId} FOR UPDATE`
+        rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 
       const account = (rows as unknown as Array<{
         id: string;
         org_id: string;
-        app_id: string;
         stripe_customer_id: string | null;
         billing_mode: string;
         credit_balance_cents: number;
@@ -71,7 +67,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       }
 
       let currentBalance = account.credit_balance_cents;
-      const filter = and(eq(billingAccounts.orgId, orgId), eq(billingAccounts.appId, appId));
+      const filter = eq(billingAccounts.orgId, orgId);
 
       // If insufficient balance, try auto-reload for PAYG
       if (currentBalance < amount_cents) {
@@ -84,7 +80,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           try {
             // Charge the saved payment method
             await chargePaymentMethod(
-              keySourceInfo,
+              orgId,
+              userId,
               account.stripe_customer_id,
               account.stripe_payment_method_id,
               account.reload_amount_cents,
@@ -93,7 +90,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
             // Credit the Stripe balance
             await createBalanceTransaction(
-              keySourceInfo,
+              orgId,
+              userId,
               account.stripe_customer_id,
               -account.reload_amount_cents,
               "Auto-reload credit"
@@ -143,11 +141,12 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       // Fire Stripe balance transaction async (non-blocking)
       if (account.stripe_customer_id) {
         createBalanceTransaction(
-          keySourceInfo,
+          orgId,
+          userId,
           account.stripe_customer_id,
           amount_cents, // positive = deduction in Stripe
           description,
-          { app_id, user_id }
+          { user_id: userId }
         ).catch((err) => {
           console.error("Stripe balance transaction failed (async):", err);
         });
@@ -169,15 +168,15 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         // Fire auto-reload async (non-blocking)
         (async () => {
           try {
-            await chargePaymentMethod(keySourceInfo, customerId, pmId, reloadAmount, "Auto-reload");
-            await createBalanceTransaction(keySourceInfo, customerId, -reloadAmount, "Auto-reload credit");
+            await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload");
+            await createBalanceTransaction(orgId, userId, customerId, -reloadAmount, "Auto-reload credit");
             await db
               .update(billingAccounts)
               .set({
                 creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${reloadAmount}`,
                 updatedAt: new Date(),
               })
-              .where(and(eq(billingAccounts.orgId, orgId), eq(billingAccounts.appId, appId)));
+              .where(eq(billingAccounts.orgId, orgId));
           } catch (err) {
             console.error("Async auto-reload failed:", err);
           }

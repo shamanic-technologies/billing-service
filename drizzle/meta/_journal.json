@@ -15,6 +15,13 @@
       "when": 1772094826171,
       "tag": "0001_slow_dreadnoughts",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772697600000,
+      "tag": "0002_remove_app_id",
+      "breakpoints": true
     }
   ]
 }
