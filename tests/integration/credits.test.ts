@@ -7,8 +7,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 describe("Credits deduction endpoint", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
-  const appId = "testapp";
-  const userId = "00000000-0000-0000-0000-000000000002";
+  const userId = "00000000-0000-0000-0000-000000000099";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -35,8 +34,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 5,
         description: "anthropic-sonnet-4.5 tokens",
-        app_id: "mcpfactory",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
@@ -62,8 +59,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 5,
         description: "test deduction",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
@@ -85,8 +80,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 100,
         description: "should not deduct",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
@@ -115,8 +108,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 5,
         description: "test deduction with reload",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
@@ -124,7 +115,8 @@ describe("Credits deduction endpoint", () => {
     // Balance should be: 3 (original) + 2000 (reload) - 5 (deduction) = 1998
     expect(res.body.balance_cents).toBe(1998);
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
-      { keySource: "app", appId },
+      orgId,
+      userId,
       "cus_123",
       "pm_123",
       2000,
@@ -153,8 +145,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 5,
         description: "test deduction",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
@@ -169,8 +159,6 @@ describe("Credits deduction endpoint", () => {
       .send({
         amount_cents: 5,
         description: "test",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(404);
@@ -185,7 +173,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(400);
   });
 
-  it("uses byok KeySourceInfo when x-key-source is byok", async () => {
+  it("passes userId from header to Stripe metadata", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -194,23 +182,22 @@ describe("Credits deduction endpoint", () => {
 
     const res = await request(app)
       .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId, appId, "byok"))
+      .set(getAuthHeaders(orgId))
       .send({
         amount_cents: 5,
         description: "test deduction",
-        app_id: "testapp",
-        user_id: userId,
       });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    // Async Stripe balance transaction should use byok key source
+    // Async Stripe balance transaction should include userId in metadata
     expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-      { keySource: "byok", orgId },
+      orgId,
+      userId,
       "cus_123",
       5,
       "test deduction",
-      { app_id: "testapp", user_id: userId }
+      { user_id: userId }
     );
   });
 
@@ -225,8 +212,6 @@ describe("Credits deduction endpoint", () => {
     const body = {
       amount_cents: 10,
       description: "test",
-      app_id: "testapp",
-      user_id: userId,
     };
 
     const res1 = await request(app).post("/v1/credits/deduct").set(headers).send(body);

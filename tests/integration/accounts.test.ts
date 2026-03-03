@@ -7,7 +7,7 @@ import { setupStripeMocks, createStripeAuthError } from "../helpers/mock-stripe.
 describe("Accounts endpoints", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
-  const appId = "testapp";
+  const userId = "00000000-0000-0000-0000-000000000099";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -29,16 +29,17 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.orgId).toBe(orgId);
-      expect(res.body.appId).toBe(appId);
       expect(res.body.billingMode).toBe("trial");
       expect(res.body.creditBalanceCents).toBe(200);
       expect(res.body.hasPaymentMethod).toBe(false);
+      expect(res.body).not.toHaveProperty("appId");
       expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
-        { keySource: "app", appId },
-        orgId
+        orgId,
+        userId
       );
       expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-        { keySource: "app", appId },
+        orgId,
+        userId,
         "cus_mock123",
         -200,
         "Trial credit: $2.00"
@@ -64,7 +65,7 @@ describe("Accounts endpoints", () => {
     it("returns 401 without API key", async () => {
       const res = await request(app)
         .get("/v1/accounts")
-        .set({ "x-org-id": orgId, "x-app-id": appId });
+        .set({ "x-org-id": orgId, "x-user-id": userId });
 
       expect(res.status).toBe(401);
     });
@@ -72,28 +73,19 @@ describe("Accounts endpoints", () => {
     it("returns 400 without x-org-id header", async () => {
       const res = await request(app)
         .get("/v1/accounts")
-        .set({ "X-API-Key": "test-api-key", "x-app-id": appId });
+        .set({ "X-API-Key": "test-api-key", "x-user-id": userId });
 
       expect(res.status).toBe(400);
+      expect(res.body.error).toBe("x-org-id header is required");
     });
 
-    it("returns 400 without x-app-id header", async () => {
+    it("returns 400 without x-user-id header", async () => {
       const res = await request(app)
         .get("/v1/accounts")
         .set({ "X-API-Key": "test-api-key", "x-org-id": orgId });
 
       expect(res.status).toBe(400);
-    });
-
-    it("auto-creates account for any appId (not just billing-service)", async () => {
-      const res = await request(app)
-        .get("/v1/accounts")
-        .set(getAuthHeaders(orgId, "sales-cold-emails"));
-
-      expect(res.status).toBe(200);
-      expect(res.body.appId).toBe("sales-cold-emails");
-      expect(res.body.billingMode).toBe("trial");
-      expect(res.body.creditBalanceCents).toBe(200);
+      expect(res.body.error).toBe("x-user-id header is required");
     });
 
     it("returns 502 when Stripe key is expired", async () => {
@@ -107,55 +99,6 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(502);
       expect(res.body.error).toBe("Payment provider authentication failed");
-    });
-
-    it("passes byok KeySourceInfo when x-key-source is byok", async () => {
-      const res = await request(app)
-        .get("/v1/accounts")
-        .set(getAuthHeaders(orgId, appId, "byok"));
-
-      expect(res.status).toBe(200);
-      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
-        { keySource: "byok", orgId },
-        orgId
-      );
-    });
-
-    it("passes platform KeySourceInfo when x-key-source is platform", async () => {
-      const res = await request(app)
-        .get("/v1/accounts")
-        .set(getAuthHeaders(orgId, appId, "platform"));
-
-      expect(res.status).toBe(200);
-      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
-        { keySource: "platform" },
-        orgId
-      );
-    });
-
-    it("returns 400 when x-key-source is missing", async () => {
-      const res = await request(app)
-        .get("/v1/accounts")
-        .set({
-          "X-API-Key": "test-api-key",
-          "x-org-id": orgId,
-          "x-app-id": appId,
-        });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("x-key-source header is required");
-    });
-
-    it("returns 400 for invalid x-key-source", async () => {
-      const res = await request(app)
-        .get("/v1/accounts")
-        .set({
-          ...getAuthHeaders(orgId),
-          "x-key-source": "invalid",
-        });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain("Invalid x-key-source");
     });
   });
 

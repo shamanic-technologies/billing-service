@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders, getKeySourceInfo } from "../middleware/auth.js";
+import { requireOrgHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import { createCustomer, createCheckoutSession, isStripeAuthError } from "../lib/stripe.js";
 
@@ -12,8 +12,7 @@ const router = Router();
 router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const appId = req.headers["x-app-id"] as string;
-    const keySourceInfo = getKeySourceInfo(req);
+    const userId = req.headers["x-user-id"] as string;
     const parsed = CreateCheckoutRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -22,7 +21,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     }
 
     const { success_url, cancel_url, reload_amount_cents } = parsed.data;
-    const filter = and(eq(billingAccounts.orgId, orgId), eq(billingAccounts.appId, appId));
+    const filter = eq(billingAccounts.orgId, orgId);
 
     // Get or create billing account
     let [account] = await db
@@ -33,13 +32,12 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     if (!account) {
       // Auto-create account with Stripe customer
-      const stripeCustomer = await createCustomer(keySourceInfo, orgId);
+      const stripeCustomer = await createCustomer(orgId, userId);
 
       const [created] = await db
         .insert(billingAccounts)
         .values({
           orgId,
-          appId,
           stripeCustomerId: stripeCustomer.id,
           billingMode: "trial",
           creditBalanceCents: 200,
@@ -57,7 +55,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     if (!account.stripeCustomerId) {
       // Account exists but no Stripe customer — create one
-      const stripeCustomer = await createCustomer(keySourceInfo, orgId);
+      const stripeCustomer = await createCustomer(orgId, userId);
       [account] = await db
         .update(billingAccounts)
         .set({
@@ -69,7 +67,8 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     }
 
     const session = await createCheckoutSession(
-      keySourceInfo,
+      orgId,
+      userId,
       account.stripeCustomerId!,
       success_url,
       cancel_url,

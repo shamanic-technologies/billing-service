@@ -7,85 +7,74 @@ describe("Stripe key resolution", () => {
     vi.resetModules();
   });
 
-  it("resolves Stripe key via resolveKey with KeySourceInfo (app)", async () => {
-    const mockResolveKey = vi.fn().mockResolvedValue("sk_test_mock");
+  it("resolves Stripe key via resolveProviderKey with orgId and userId", async () => {
+    const mockResolveProviderKey = vi.fn().mockResolvedValue({
+      key: "sk_test_mock",
+      keySource: "platform",
+    });
     vi.doMock("../../src/lib/key-client.js", () => ({
-      resolveAppKey: vi.fn(),
-      resolveKey: mockResolveKey,
+      resolveProviderKey: mockResolveProviderKey,
     }));
 
     const { createCustomer } = await import("../../src/lib/stripe.js");
 
     try {
-      await createCustomer({ keySource: "app", appId: "sales-cold-emails" }, "org-123");
+      await createCustomer("org-123", "user-456");
     } catch {
       // Stripe constructor may throw with mock key — that's fine
     }
 
-    expect(mockResolveKey).toHaveBeenCalledWith(
-      "stripe", "app", { appId: "sales-cold-emails" }
+    expect(mockResolveProviderKey).toHaveBeenCalledWith(
+      "stripe", "org-123", "user-456"
     );
   });
 
-  it("resolves Stripe key via resolveKey with KeySourceInfo (byok)", async () => {
-    const mockResolveKey = vi.fn().mockResolvedValue("sk_byok_mock");
+  it("caches Stripe instance by orgId", async () => {
+    const mockResolveProviderKey = vi.fn().mockResolvedValue({
+      key: "sk_test_cached",
+      keySource: "platform",
+    });
     vi.doMock("../../src/lib/key-client.js", () => ({
-      resolveAppKey: vi.fn(),
-      resolveKey: mockResolveKey,
+      resolveProviderKey: mockResolveProviderKey,
     }));
+
+    // Mock Stripe constructor to avoid real API calls that trigger auth errors
+    const mockCreate = vi.fn().mockResolvedValue({ id: "cus_mock", object: "customer" });
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { customers: { create: mockCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
 
     const { createCustomer } = await import("../../src/lib/stripe.js");
 
-    try {
-      await createCustomer({ keySource: "byok", orgId: "org-uuid" }, "org-uuid");
-    } catch {
-      // Expected
-    }
+    await createCustomer("org-123", "user-456");
+    await createCustomer("org-123", "user-456");
 
-    expect(mockResolveKey).toHaveBeenCalledWith(
-      "stripe", "byok", { orgId: "org-uuid" }
-    );
-  });
-
-  it("resolves Stripe key via resolveKey with KeySourceInfo (platform)", async () => {
-    const mockResolveKey = vi.fn().mockResolvedValue("sk_platform_mock");
-    vi.doMock("../../src/lib/key-client.js", () => ({
-      resolveAppKey: vi.fn(),
-      resolveKey: mockResolveKey,
-    }));
-
-    const { createCustomer } = await import("../../src/lib/stripe.js");
-
-    try {
-      await createCustomer({ keySource: "platform" }, "org-123");
-    } catch {
-      // Expected
-    }
-
-    expect(mockResolveKey).toHaveBeenCalledWith(
-      "stripe", "platform", {}
-    );
+    // Key should be resolved only once (cached)
+    expect(mockResolveProviderKey).toHaveBeenCalledTimes(1);
   });
 
   it("evicts cached Stripe instance on auth error and retries with fresh key", async () => {
-    const mockResolveKey = vi.fn()
-      .mockResolvedValueOnce("sk_expired_key")
-      .mockResolvedValueOnce("sk_fresh_key");
+    const mockResolveProviderKey = vi.fn()
+      .mockResolvedValueOnce({ key: "sk_expired_key", keySource: "platform" })
+      .mockResolvedValueOnce({ key: "sk_fresh_key", keySource: "platform" });
     vi.doMock("../../src/lib/key-client.js", () => ({
-      resolveAppKey: vi.fn(),
-      resolveKey: mockResolveKey,
+      resolveProviderKey: mockResolveProviderKey,
     }));
 
     const { createCustomer } = await import("../../src/lib/stripe.js");
 
     try {
-      await createCustomer({ keySource: "app", appId: "test-app" }, "org-123");
+      await createCustomer("org-123", "user-456");
     } catch {
       // Expected — mock key can't actually reach Stripe
     }
 
-    // Key was resolved at least once (may be twice if the error triggers a retry)
-    expect(mockResolveKey).toHaveBeenCalledWith("stripe", "app", { appId: "test-app" });
+    // Key was resolved at least once
+    expect(mockResolveProviderKey).toHaveBeenCalledWith("stripe", "org-123", "user-456");
   });
 });
 

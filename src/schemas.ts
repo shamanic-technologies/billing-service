@@ -17,17 +17,12 @@ export const BillingModeSchema = z
   .enum(["trial", "byok", "payg"])
   .openapi("BillingMode");
 
-export const KeySourceSchema = z
-  .enum(["app", "byok", "platform"])
-  .openapi("KeySource");
-
 // --- Account ---
 
 export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     orgId: z.string().uuid(),
-    appId: z.string(),
     billingMode: BillingModeSchema,
     creditBalanceCents: z.number().int(),
     reloadAmountCents: z.number().int().nullable(),
@@ -44,8 +39,6 @@ export const DeductRequestSchema = z
   .object({
     amount_cents: z.number().int().positive(),
     description: z.string().min(1),
-    app_id: z.string().min(1),
-    user_id: z.string().uuid(),
   })
   .openapi("DeductRequest");
 
@@ -118,9 +111,7 @@ export const TransactionsResponseSchema = z
 const protectedHeaders = z.object({
   "x-api-key": z.string(),
   "x-org-id": z.string().uuid(),
-  "x-app-id": z.string(),
-  "x-user-id": z.string().uuid().optional(),
-  "x-key-source": KeySourceSchema,
+  "x-user-id": z.string().uuid(),
 });
 
 registry.registerPath({
@@ -269,11 +260,11 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/webhooks/stripe/{appId}",
-  summary: "Stripe webhook handler (per-app)",
+  path: "/v1/webhooks/stripe/{orgId}",
+  summary: "Stripe webhook handler (per-org)",
   request: {
     params: z.object({
-      appId: z.string(),
+      orgId: z.string().uuid(),
     }),
   },
   responses: {

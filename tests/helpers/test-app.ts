@@ -36,14 +36,12 @@ export function createTestApp() {
 
 export function getAuthHeaders(
   orgId = "00000000-0000-0000-0000-000000000001",
-  appId = "testapp",
-  keySource: "app" | "byok" | "platform" = "app"
+  userId = "00000000-0000-0000-0000-000000000099"
 ) {
   return {
     "X-API-Key": "test-api-key",
     "x-org-id": orgId,
-    "x-app-id": appId,
-    "x-key-source": keySource,
+    "x-user-id": userId,
     "Content-Type": "application/json",
   };
 }

@@ -5,90 +5,46 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import the module — it will pick up the stubbed fetch
-import { resolveAppKey, resolveByokKey, resolvePlatformKey, resolveKey } from "../../src/lib/key-client.js";
+import { resolveProviderKey } from "../../src/lib/key-client.js";
 
-describe("resolveAppKey", () => {
+describe("resolveProviderKey", () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  it("sends x-caller-service, x-caller-method, x-caller-path headers", async () => {
+  it("sends correct URL with orgId and userId query params", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test_123" }),
+      json: () => Promise.resolve({ key: "sk_test_123", keySource: "platform" }),
     });
 
-    await resolveAppKey("stripe", "sales-cold-emails", {
+    const result = await resolveProviderKey("stripe", "org-uuid-abc", "user-uuid-123", {
       service: "billing",
       method: "GET",
       path: "/v1/accounts",
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("/internal/app-keys/stripe/decrypt?appId=sales-cold-emails"),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          "x-caller-service": "billing",
-          "x-caller-method": "GET",
-          "x-caller-path": "/v1/accounts",
-        }),
-      })
-    );
+    expect(result).toEqual({ key: "sk_test_123", keySource: "platform" });
+    const url = mockFetch.mock.calls[0][0] as string;
+    expect(url).toContain("/keys/stripe/decrypt?");
+    expect(url).toContain("orgId=org-uuid-abc");
+    expect(url).toContain("userId=user-uuid-123");
   });
 
-  it("uses default caller context when none provided", async () => {
+  it("sends x-caller-service, x-caller-method, x-caller-path headers", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test_456" }),
+      json: () => Promise.resolve({ key: "sk_test_123", keySource: "org" }),
     });
 
-    await resolveAppKey("stripe", "my-app");
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("appId=my-app"),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          "x-caller-service": "billing",
-          "x-caller-method": "GET",
-          "x-caller-path": "/v1/accounts",
-        }),
-      })
-    );
-  });
-
-  it("throws when key-service returns error", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: () => Promise.resolve("Key not found"),
-    });
-
-    await expect(resolveAppKey("stripe", "unknown-app")).rejects.toThrow(
-      "Failed to resolve stripe key for app unknown-app: 404"
-    );
-  });
-});
-
-describe("resolveByokKey", () => {
-  beforeEach(() => {
-    mockFetch.mockReset();
-  });
-
-  it("sends correct URL with orgId and caller headers", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ key: "sk_byok_123" }),
-    });
-
-    const key = await resolveByokKey("stripe", "org-uuid-abc", {
+    await resolveProviderKey("stripe", "org-123", "user-456", {
       service: "billing",
       method: "POST",
       path: "/v1/credits/deduct",
     });
 
-    expect(key).toBe("sk_byok_123");
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("/internal/keys/stripe/decrypt?orgId=org-uuid-abc"),
+      expect.any(String),
       expect.objectContaining({
         headers: expect.objectContaining({
           "x-caller-service": "billing",
@@ -99,49 +55,24 @@ describe("resolveByokKey", () => {
     );
   });
 
-  it("throws when key-service returns error", async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: () => Promise.resolve("Key not found"),
-    });
-
-    await expect(resolveByokKey("stripe", "org-unknown")).rejects.toThrow(
-      "Failed to resolve stripe BYOK key for org org-unknown: 404"
-    );
-  });
-});
-
-describe("resolvePlatformKey", () => {
-  beforeEach(() => {
-    mockFetch.mockReset();
-  });
-
-  it("sends correct URL with no appId/orgId query param", async () => {
+  it("uses default caller context when none provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_platform_123" }),
+      json: () => Promise.resolve({ key: "sk_test_456", keySource: "platform" }),
     });
 
-    const key = await resolvePlatformKey("stripe", {
-      service: "billing",
-      method: "GET",
-      path: "/v1/accounts",
-    });
+    await resolveProviderKey("stripe", "org-123", "user-456");
 
-    expect(key).toBe("sk_platform_123");
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("/internal/platform-keys/stripe/decrypt"),
+      expect.any(String),
       expect.objectContaining({
         headers: expect.objectContaining({
           "x-caller-service": "billing",
+          "x-caller-method": "GET",
+          "x-caller-path": "/v1/accounts",
         }),
       })
     );
-    // No query params
-    const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).not.toContain("appId=");
-    expect(url).not.toContain("orgId=");
   });
 
   it("throws when key-service returns error", async () => {
@@ -151,48 +82,48 @@ describe("resolvePlatformKey", () => {
       text: () => Promise.resolve("Key not found"),
     });
 
-    await expect(resolvePlatformKey("stripe")).rejects.toThrow(
-      "Failed to resolve stripe platform key: 404"
+    await expect(resolveProviderKey("stripe", "org-unknown", "user-123")).rejects.toThrow(
+      "Failed to resolve stripe key for org org-unknown: 404"
     );
   });
-});
 
-describe("resolveKey (dispatcher)", () => {
-  beforeEach(() => {
-    mockFetch.mockReset();
+  it("returns keySource 'org' when org key is used", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_resolved" }),
+      json: () => Promise.resolve({ key: "sk_org_key", keySource: "org" }),
     });
+
+    const result = await resolveProviderKey("stripe", "org-123", "user-456");
+    expect(result.keySource).toBe("org");
   });
 
-  it("dispatches to app-keys path for keySource 'app'", async () => {
-    await resolveKey("stripe", "app", { appId: "my-app" });
+  it("encodes provider name in URL", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ key: "whsec_123", keySource: "platform" }),
+    });
+
+    await resolveProviderKey("stripe-webhook", "org-123", "user-456");
+
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain("/internal/app-keys/stripe/decrypt?appId=my-app");
+    expect(url).toContain("/keys/stripe-webhook/decrypt?");
   });
 
-  it("dispatches to byok path for keySource 'byok'", async () => {
-    await resolveKey("stripe", "byok", { orgId: "org-123" });
-    const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain("/internal/keys/stripe/decrypt?orgId=org-123");
-  });
+  it("sends x-api-key header", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ key: "sk_test", keySource: "platform" }),
+    });
 
-  it("dispatches to platform path for keySource 'platform'", async () => {
-    await resolveKey("stripe", "platform", {});
-    const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain("/internal/platform-keys/stripe/decrypt");
-  });
+    await resolveProviderKey("stripe", "org-123", "user-456");
 
-  it("throws when keySource is 'app' but appId is missing", async () => {
-    await expect(resolveKey("stripe", "app", {})).rejects.toThrow(
-      "appId is required for keySource 'app'"
-    );
-  });
-
-  it("throws when keySource is 'byok' but orgId is missing", async () => {
-    await expect(resolveKey("stripe", "byok", {})).rejects.toThrow(
-      "orgId is required for keySource 'byok'"
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-api-key": "test-key-service-key",
+        }),
+      })
     );
   });
 });
