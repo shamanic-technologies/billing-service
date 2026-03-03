@@ -4,9 +4,9 @@ export interface CallerContext {
   path: string;
 }
 
-export interface KeyResolution {
+export interface PlatformKeyResponse {
+  provider: string;
   key: string;
-  keySource: "platform" | "org";
 }
 
 const DEFAULT_CALLER: CallerContext = {
@@ -22,21 +22,18 @@ function getKeyServiceConfig() {
   return { url, apiKey };
 }
 
-/** Resolve a provider key from key-service. Returns the key and its source (platform or org). */
-export async function resolveProviderKey(
+/** Resolve a platform key from key-service. Platform keys are global — no orgId/userId needed. */
+export async function resolvePlatformKey(
   provider: string,
-  orgId: string,
-  userId: string,
   caller: CallerContext = DEFAULT_CALLER
-): Promise<KeyResolution> {
+): Promise<PlatformKeyResponse> {
   const config = getKeyServiceConfig();
   if (!config) {
     throw new Error(`KEY_SERVICE not configured — cannot resolve ${provider}`);
   }
 
-  const params = new URLSearchParams({ orgId, userId });
   const res = await fetch(
-    `${config.url}/keys/${encodeURIComponent(provider)}/decrypt?${params}`,
+    `${config.url}/keys/platform/${encodeURIComponent(provider)}/decrypt`,
     {
       headers: {
         "x-api-key": config.apiKey,
@@ -50,10 +47,9 @@ export async function resolveProviderKey(
   if (!res.ok) {
     const body = await res.text();
     throw new Error(
-      `Failed to resolve ${provider} key for org ${orgId}: ${res.status} ${body}`
+      `Failed to resolve platform key for ${provider}: ${res.status} ${body}`
     );
   }
 
-  const data = (await res.json()) as KeyResolution;
-  return data;
+  return (await res.json()) as PlatformKeyResponse;
 }

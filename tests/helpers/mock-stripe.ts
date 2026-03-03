@@ -38,9 +38,9 @@ export function setupStripeMocks() {
       amount: 2000,
     }),
     constructWebhookEvent: vi.fn(),
-    resolveProviderKey: vi.fn().mockResolvedValue({
+    resolvePlatformKey: vi.fn().mockResolvedValue({
+      provider: "stripe",
       key: "sk_test_mock_key",
-      keySource: "platform",
     }),
     isStripeAuthError: vi.fn().mockImplementation(
       (err: unknown) => err instanceof Stripe.errors.StripeAuthenticationError
@@ -48,7 +48,7 @@ export function setupStripeMocks() {
   };
 
   // Mock key-service so Stripe never actually calls it
-  vi.spyOn(keyClient, "resolveProviderKey").mockImplementation(mocks.resolveProviderKey);
+  vi.spyOn(keyClient, "resolvePlatformKey").mockImplementation(mocks.resolvePlatformKey);
 
   vi.spyOn(stripeLib, "createCustomer").mockImplementation(mocks.createCustomer);
   vi.spyOn(stripeLib, "createBalanceTransaction").mockImplementation(

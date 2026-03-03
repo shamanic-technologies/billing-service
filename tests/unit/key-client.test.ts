@@ -5,39 +5,38 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 // Now import the module — it will pick up the stubbed fetch
-import { resolveProviderKey } from "../../src/lib/key-client.js";
+import { resolvePlatformKey } from "../../src/lib/key-client.js";
 
-describe("resolveProviderKey", () => {
+describe("resolvePlatformKey", () => {
   beforeEach(() => {
     mockFetch.mockReset();
   });
 
-  it("sends correct URL with orgId and userId query params", async () => {
+  it("calls GET /keys/platform/{provider}/decrypt with no query params", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test_123", keySource: "platform" }),
+      json: () => Promise.resolve({ provider: "stripe", key: "sk_test_123" }),
     });
 
-    const result = await resolveProviderKey("stripe", "org-uuid-abc", "user-uuid-123", {
+    const result = await resolvePlatformKey("stripe", {
       service: "billing",
       method: "GET",
       path: "/v1/accounts",
     });
 
-    expect(result).toEqual({ key: "sk_test_123", keySource: "platform" });
+    expect(result).toEqual({ provider: "stripe", key: "sk_test_123" });
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain("/keys/stripe/decrypt?");
-    expect(url).toContain("orgId=org-uuid-abc");
-    expect(url).toContain("userId=user-uuid-123");
+    expect(url).toContain("/keys/platform/stripe/decrypt");
+    expect(url).not.toContain("?"); // no query params
   });
 
   it("sends x-caller-service, x-caller-method, x-caller-path headers", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test_123", keySource: "org" }),
+      json: () => Promise.resolve({ provider: "stripe", key: "sk_test_123" }),
     });
 
-    await resolveProviderKey("stripe", "org-123", "user-456", {
+    await resolvePlatformKey("stripe", {
       service: "billing",
       method: "POST",
       path: "/v1/credits/deduct",
@@ -58,10 +57,10 @@ describe("resolveProviderKey", () => {
   it("uses default caller context when none provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test_456", keySource: "platform" }),
+      json: () => Promise.resolve({ provider: "stripe", key: "sk_test_456" }),
     });
 
-    await resolveProviderKey("stripe", "org-123", "user-456");
+    await resolvePlatformKey("stripe");
 
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
@@ -82,40 +81,30 @@ describe("resolveProviderKey", () => {
       text: () => Promise.resolve("Key not found"),
     });
 
-    await expect(resolveProviderKey("stripe", "org-unknown", "user-123")).rejects.toThrow(
-      "Failed to resolve stripe key for org org-unknown: 404"
+    await expect(resolvePlatformKey("stripe")).rejects.toThrow(
+      "Failed to resolve platform key for stripe: 404"
     );
-  });
-
-  it("returns keySource 'org' when org key is used", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ key: "sk_org_key", keySource: "org" }),
-    });
-
-    const result = await resolveProviderKey("stripe", "org-123", "user-456");
-    expect(result.keySource).toBe("org");
   });
 
   it("encodes provider name in URL", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "whsec_123", keySource: "platform" }),
+      json: () => Promise.resolve({ provider: "stripe-webhook", key: "whsec_123" }),
     });
 
-    await resolveProviderKey("stripe-webhook", "org-123", "user-456");
+    await resolvePlatformKey("stripe-webhook");
 
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toContain("/keys/stripe-webhook/decrypt?");
+    expect(url).toContain("/keys/platform/stripe-webhook/decrypt");
   });
 
   it("sends x-api-key header", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ key: "sk_test", keySource: "platform" }),
+      json: () => Promise.resolve({ provider: "stripe", key: "sk_test" }),
     });
 
-    await resolveProviderKey("stripe", "org-123", "user-456");
+    await resolvePlatformKey("stripe");
 
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
