@@ -4,6 +4,11 @@ export interface CallerContext {
   path: string;
 }
 
+export interface IdentityContext {
+  orgId: string;
+  userId: string;
+}
+
 export interface PlatformKeyResponse {
   provider: string;
   key: string;
@@ -22,9 +27,10 @@ function getKeyServiceConfig() {
   return { url, apiKey };
 }
 
-/** Resolve a platform key from key-service. Platform keys are global — no orgId/userId needed. */
+/** Resolve a platform key from key-service. Forwards identity headers required by key-service. */
 export async function resolvePlatformKey(
   provider: string,
+  identity: IdentityContext,
   caller: CallerContext = DEFAULT_CALLER
 ): Promise<PlatformKeyResponse> {
   const config = getKeyServiceConfig();
@@ -37,6 +43,8 @@ export async function resolvePlatformKey(
     {
       headers: {
         "x-api-key": config.apiKey,
+        "x-org-id": identity.orgId,
+        "x-user-id": identity.userId,
         "x-caller-service": caller.service,
         "x-caller-method": caller.method,
         "x-caller-path": caller.path,

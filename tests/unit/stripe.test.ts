@@ -7,7 +7,7 @@ describe("Stripe platform key resolution", () => {
     vi.resetModules();
   });
 
-  it("resolves Stripe key via resolvePlatformKey (no orgId/userId)", async () => {
+  it("resolves Stripe key via resolvePlatformKey with identity context", async () => {
     const mockResolvePlatformKey = vi.fn().mockResolvedValue({
       provider: "stripe",
       key: "sk_test_mock",
@@ -24,7 +24,10 @@ describe("Stripe platform key resolution", () => {
       // Stripe constructor may throw with mock key — that's fine
     }
 
-    expect(mockResolvePlatformKey).toHaveBeenCalledWith("stripe");
+    expect(mockResolvePlatformKey).toHaveBeenCalledWith(
+      "stripe",
+      { orgId: "org-123", userId: "user-456" }
+    );
   });
 
   it("caches Stripe instance (single platform key)", async () => {
@@ -71,8 +74,46 @@ describe("Stripe platform key resolution", () => {
       // Expected — mock key can't actually reach Stripe
     }
 
-    // Key was resolved at least once
-    expect(mockResolvePlatformKey).toHaveBeenCalledWith("stripe");
+    // Key was resolved with identity context
+    expect(mockResolvePlatformKey).toHaveBeenCalledWith(
+      "stripe",
+      { orgId: "org-123", userId: "user-456" }
+    );
+  });
+
+  it("webhook uses orgId and 'system' userId for identity context", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe-webhook",
+      key: "whsec_test",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    // Mock Stripe constructor
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return {
+          customers: { create: vi.fn() },
+          webhooks: {
+            constructEvent: vi.fn().mockReturnValue({ type: "test", data: {} }),
+          },
+        };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { constructWebhookEvent } = await import("../../src/lib/stripe.js");
+
+    await constructWebhookEvent("org-webhook", Buffer.from("{}"), "sig_test");
+
+    // Webhook secret resolution should use orgId from param and "system" userId
+    expect(mockResolvePlatformKey).toHaveBeenCalledWith(
+      "stripe-webhook",
+      { orgId: "org-webhook", userId: "system" },
+      { service: "billing", method: "POST", path: "/v1/webhooks/stripe" }
+    );
   });
 });
 

@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { resolvePlatformKey } from "./key-client.js";
+import { resolvePlatformKey, type IdentityContext } from "./key-client.js";
 
 // --- Single Stripe instance (platform key is global) ---
 
@@ -9,11 +9,11 @@ let cachedWebhookSecret: string | null = null;
 // Test override
 let testStripeInstance: Stripe | null = null;
 
-async function getStripe(): Promise<Stripe> {
+async function getStripe(identity: IdentityContext): Promise<Stripe> {
   if (testStripeInstance) return testStripeInstance;
 
   if (!cachedStripe) {
-    const { key } = await resolvePlatformKey("stripe");
+    const { key } = await resolvePlatformKey("stripe", identity);
     cachedStripe = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
   }
   return cachedStripe;
@@ -24,15 +24,15 @@ async function getStripe(): Promise<Stripe> {
  * If the Stripe key is expired/invalid, evicts the cached instance and retries
  * once with a freshly resolved key from key-service.
  */
-async function withAuthRetry<T>(fn: (stripe: Stripe) => Promise<T>): Promise<T> {
-  const stripe = await getStripe();
+async function withAuthRetry<T>(identity: IdentityContext, fn: (stripe: Stripe) => Promise<T>): Promise<T> {
+  const stripe = await getStripe(identity);
   try {
     return await fn(stripe);
   } catch (err) {
     if (isStripeAuthError(err)) {
       console.warn("Stripe auth error — evicting cached platform key and retrying");
       cachedStripe = null;
-      const freshStripe = await getStripe();
+      const freshStripe = await getStripe(identity);
       return fn(freshStripe);
     }
     throw err;
@@ -56,7 +56,7 @@ export async function createCustomer(
   userId: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.customers.create({
       metadata: { org_id: orgId, ...metadata },
     })
@@ -68,7 +68,7 @@ export async function getCustomer(
   userId: string,
   stripeCustomerId: string
 ): Promise<Stripe.Customer> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.customers.retrieve(stripeCustomerId) as Promise<Stripe.Customer>
   );
 }
@@ -91,7 +91,7 @@ export async function createBalanceTransaction(
   description: string,
   metadata?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.customers.createBalanceTransaction(stripeCustomerId, {
       amount: amountCents,
       currency: "usd",
@@ -107,7 +107,7 @@ export async function listBalanceTransactions(
   stripeCustomerId: string,
   limit = 50
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.customers.listBalanceTransactions(stripeCustomerId, {
       limit,
     })
@@ -124,7 +124,7 @@ export async function createCheckoutSession(
   cancelUrl: string,
   reloadAmountCents: number
 ): Promise<Stripe.Checkout.Session> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "payment",
@@ -160,7 +160,7 @@ export async function chargePaymentMethod(
   amountCents: number,
   description: string
 ): Promise<Stripe.PaymentIntent> {
-  return withAuthRetry((stripe) =>
+  return withAuthRetry({ orgId, userId }, (stripe) =>
     stripe.paymentIntents.create({
       amount: amountCents,
       currency: "usd",
@@ -181,14 +181,16 @@ export async function constructWebhookEvent(
   payload: Buffer,
   signature: string
 ): Promise<Stripe.Event> {
+  // Webhook calls come from Stripe, not from users — use "system" as userId
+  const identity: IdentityContext = { orgId, userId: "system" };
   if (!cachedWebhookSecret) {
-    const result = await resolvePlatformKey("stripe-webhook", {
+    const result = await resolvePlatformKey("stripe-webhook", identity, {
       service: "billing",
       method: "POST",
       path: "/v1/webhooks/stripe",
     });
     cachedWebhookSecret = result.key;
   }
-  const stripe = await getStripe();
+  const stripe = await getStripe(identity);
   return stripe.webhooks.constructEvent(payload, signature, cachedWebhookSecret);
 }
