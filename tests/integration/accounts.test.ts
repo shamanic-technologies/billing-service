@@ -35,14 +35,41 @@ describe("Accounts endpoints", () => {
       expect(res.body).not.toHaveProperty("appId");
       expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
         orgId,
-        userId
+        userId,
+        undefined,
+        {}
       );
       expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
         orgId,
         userId,
         "cus_mock123",
         -200,
-        "Trial credit: $2.00"
+        "Trial credit: $2.00",
+        undefined,
+        {}
+      );
+    });
+
+    it("forwards workflow headers to downstream calls", async () => {
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set({
+          ...getAuthHeaders(orgId),
+          "x-campaign-id": "camp_42",
+          "x-brand-id": "brand_7",
+          "x-workflow-name": "onboarding-flow",
+        });
+
+      expect(res.status).toBe(200);
+      expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
+        orgId,
+        userId,
+        undefined,
+        {
+          "x-campaign-id": "camp_42",
+          "x-brand-id": "brand_7",
+          "x-workflow-name": "onboarding-flow",
+        }
       );
     });
 

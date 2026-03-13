@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { DeductRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
@@ -17,6 +17,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const parsed = DeductRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -85,7 +86,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               account.stripe_customer_id,
               account.stripe_payment_method_id,
               account.reload_amount_cents,
-              "Auto-reload"
+              "Auto-reload",
+              wfHeaders
             );
 
             // Credit the Stripe balance
@@ -94,7 +96,9 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               userId,
               account.stripe_customer_id,
               -account.reload_amount_cents,
-              "Auto-reload credit"
+              "Auto-reload credit",
+              undefined,
+              wfHeaders
             );
 
             // Update local cache
@@ -146,7 +150,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           account.stripe_customer_id,
           amount_cents, // positive = deduction in Stripe
           description,
-          { user_id: userId }
+          { user_id: userId },
+          wfHeaders
         ).catch((err) => {
           console.error("Stripe balance transaction failed (async):", err);
         });
@@ -168,8 +173,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         // Fire auto-reload async (non-blocking)
         (async () => {
           try {
-            await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload");
-            await createBalanceTransaction(orgId, userId, customerId, -reloadAmount, "Auto-reload credit");
+            await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload", wfHeaders);
+            await createBalanceTransaction(orgId, userId, customerId, -reloadAmount, "Auto-reload credit", undefined, wfHeaders);
             await db
               .update(billingAccounts)
               .set({

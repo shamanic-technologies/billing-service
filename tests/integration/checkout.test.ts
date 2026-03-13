@@ -45,7 +45,8 @@ describe("Checkout endpoint", () => {
       "cus_123",
       "https://app.example.com/success",
       "https://app.example.com/cancel",
-      2000
+      2000,
+      {}
     );
   });
 

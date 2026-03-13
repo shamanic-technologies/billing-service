@@ -7,6 +7,7 @@ export interface CallerContext {
 export interface IdentityContext {
   orgId: string;
   userId: string;
+  workflowHeaders?: Record<string, string>;
 }
 
 export interface PlatformKeyResponse {
@@ -48,6 +49,7 @@ export async function resolvePlatformKey(
         "x-caller-service": caller.service,
         "x-caller-method": caller.method,
         "x-caller-path": caller.path,
+        ...identity.workflowHeaders,
       },
     }
   );

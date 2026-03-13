@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import {
   UpdateModeRequestSchema,
   BillingModeSchema,
@@ -35,6 +35,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
     // Try to find existing account
     const existing = await db
@@ -49,7 +50,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     }
 
     // Auto-create: Stripe customer + $2 trial credit
-    const stripeCustomer = await createCustomer(orgId, userId);
+    const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
 
     // Credit $2 (negative amount = credit in Stripe)
     await createBalanceTransaction(
@@ -57,7 +58,9 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
       userId,
       stripeCustomer.id,
       -200,
-      "Trial credit: $2.00"
+      "Trial credit: $2.00",
+      undefined,
+      wfHeaders
     );
 
     // Insert with ON CONFLICT for race condition safety
@@ -129,6 +132,7 @@ router.get(
     try {
       const orgId = req.headers["x-org-id"] as string;
       const userId = req.headers["x-user-id"] as string;
+      const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
       const [account] = await db
         .select()
@@ -146,7 +150,7 @@ router.get(
         return;
       }
 
-      const result = await listBalanceTransactions(orgId, userId, account.stripeCustomerId);
+      const result = await listBalanceTransactions(orgId, userId, account.stripeCustomerId, 50, wfHeaders);
 
       const transactions = result.data.map((txn) => ({
         id: txn.id,
