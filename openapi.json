@@ -319,6 +319,33 @@
             "required": true,
             "name": "x-run-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "responses": {
@@ -393,6 +420,33 @@
             "required": true,
             "name": "x-run-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "responses": {
@@ -446,6 +500,33 @@
             },
             "required": true,
             "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],
@@ -510,6 +591,33 @@
             },
             "required": true,
             "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],
@@ -584,6 +692,33 @@
             "required": true,
             "name": "x-run-id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -656,6 +791,33 @@
             },
             "required": true,
             "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
             "in": "header"
           }
         ],

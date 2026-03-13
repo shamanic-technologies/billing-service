@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { requireOrgHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import { createCustomer, createCheckoutSession, isStripeAuthError } from "../lib/stripe.js";
 
@@ -13,6 +13,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const parsed = CreateCheckoutRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
@@ -32,7 +33,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     if (!account) {
       // Auto-create account with Stripe customer
-      const stripeCustomer = await createCustomer(orgId, userId);
+      const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
 
       const [created] = await db
         .insert(billingAccounts)
@@ -55,7 +56,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     if (!account.stripeCustomerId) {
       // Account exists but no Stripe customer — create one
-      const stripeCustomer = await createCustomer(orgId, userId);
+      const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
       [account] = await db
         .update(billingAccounts)
         .set({
@@ -72,7 +73,8 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       account.stripeCustomerId!,
       success_url,
       cancel_url,
-      reload_amount_cents
+      reload_amount_cents,
+      wfHeaders
     );
 
     // Store the reload amount for when checkout completes

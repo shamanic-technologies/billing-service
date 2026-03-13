@@ -120,7 +120,8 @@ describe("Credits deduction endpoint", () => {
       "cus_123",
       "pm_123",
       2000,
-      "Auto-reload"
+      "Auto-reload",
+      {}
     );
   });
 
@@ -197,7 +198,44 @@ describe("Credits deduction endpoint", () => {
       "cus_123",
       5,
       "test deduction",
-      { user_id: userId }
+      { user_id: userId },
+      {}
+    );
+  });
+
+  it("forwards workflow headers to Stripe calls", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 200,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set({
+        ...getAuthHeaders(orgId),
+        "x-campaign-id": "camp_42",
+        "x-brand-id": "brand_7",
+        "x-workflow-name": "outreach-flow",
+      })
+      .send({
+        amount_cents: 5,
+        description: "test deduction",
+      });
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
+      orgId,
+      userId,
+      "cus_123",
+      5,
+      "test deduction",
+      { user_id: userId },
+      {
+        "x-campaign-id": "camp_42",
+        "x-brand-id": "brand_7",
+        "x-workflow-name": "outreach-flow",
+      }
     );
   });
 

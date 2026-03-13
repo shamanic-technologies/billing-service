@@ -119,6 +119,34 @@ describe("resolvePlatformKey", () => {
     expect(url).toContain("/keys/platform/stripe-webhook/decrypt");
   });
 
+  it("forwards workflow headers to key-service", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ provider: "stripe", key: "sk_test" }),
+    });
+
+    await resolvePlatformKey("stripe", {
+      orgId: "org-123",
+      userId: "user-456",
+      workflowHeaders: {
+        "x-campaign-id": "camp_42",
+        "x-brand-id": "brand_7",
+        "x-workflow-name": "outreach-flow",
+      },
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-campaign-id": "camp_42",
+          "x-brand-id": "brand_7",
+          "x-workflow-name": "outreach-flow",
+        }),
+      })
+    );
+  });
+
   it("sends x-api-key header", async () => {
     mockFetch.mockResolvedValue({
       ok: true,

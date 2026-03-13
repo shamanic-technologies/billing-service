@@ -1,5 +1,29 @@
 import { Request, Response, NextFunction } from "express";
 
+export interface WorkflowHeaders {
+  campaignId?: string;
+  brandId?: string;
+  workflowName?: string;
+}
+
+/** Extract optional workflow-tracking headers injected by workflow-service. */
+export function getWorkflowHeaders(req: Request): WorkflowHeaders {
+  return {
+    campaignId: req.headers["x-campaign-id"] as string | undefined,
+    brandId: req.headers["x-brand-id"] as string | undefined,
+    workflowName: req.headers["x-workflow-name"] as string | undefined,
+  };
+}
+
+/** Build a header record for forwarding workflow headers to downstream services. */
+export function forwardWorkflowHeaders(wf: WorkflowHeaders): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (wf.campaignId) headers["x-campaign-id"] = wf.campaignId;
+  if (wf.brandId) headers["x-brand-id"] = wf.brandId;
+  if (wf.workflowName) headers["x-workflow-name"] = wf.workflowName;
+  return headers;
+}
+
 export function requireApiKey(
   req: Request,
   res: Response,

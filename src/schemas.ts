@@ -113,6 +113,9 @@ const protectedHeaders = z.object({
   "x-org-id": z.string().uuid(),
   "x-user-id": z.string().uuid(),
   "x-run-id": z.string().uuid(),
+  "x-campaign-id": z.string().optional().openapi({ description: "Campaign ID injected by workflow-service" }),
+  "x-brand-id": z.string().optional().openapi({ description: "Brand ID injected by workflow-service" }),
+  "x-workflow-name": z.string().optional().openapi({ description: "Workflow name injected by workflow-service" }),
 });
 
 registry.registerPath({

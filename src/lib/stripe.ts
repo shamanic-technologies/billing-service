@@ -9,6 +9,10 @@ let cachedWebhookSecret: string | null = null;
 // Test override
 let testStripeInstance: Stripe | null = null;
 
+function buildIdentity(orgId: string, userId: string, workflowHeaders?: Record<string, string>): IdentityContext {
+  return { orgId, userId, workflowHeaders };
+}
+
 async function getStripe(identity: IdentityContext): Promise<Stripe> {
   if (testStripeInstance) return testStripeInstance;
 
@@ -54,9 +58,10 @@ export function setStripeInstance(mock: Stripe): void {
 export async function createCustomer(
   orgId: string,
   userId: string,
-  metadata?: Record<string, string>
+  metadata?: Record<string, string>,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.customers.create({
       metadata: { org_id: orgId, ...metadata },
     })
@@ -66,9 +71,10 @@ export async function createCustomer(
 export async function getCustomer(
   orgId: string,
   userId: string,
-  stripeCustomerId: string
+  stripeCustomerId: string,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.Customer> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.customers.retrieve(stripeCustomerId) as Promise<Stripe.Customer>
   );
 }
@@ -89,9 +95,10 @@ export async function createBalanceTransaction(
   stripeCustomerId: string,
   amountCents: number,
   description: string,
-  metadata?: Record<string, string>
+  metadata?: Record<string, string>,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.CustomerBalanceTransaction> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.customers.createBalanceTransaction(stripeCustomerId, {
       amount: amountCents,
       currency: "usd",
@@ -105,9 +112,10 @@ export async function listBalanceTransactions(
   orgId: string,
   userId: string,
   stripeCustomerId: string,
-  limit = 50
+  limit = 50,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.customers.listBalanceTransactions(stripeCustomerId, {
       limit,
     })
@@ -122,9 +130,10 @@ export async function createCheckoutSession(
   stripeCustomerId: string,
   successUrl: string,
   cancelUrl: string,
-  reloadAmountCents: number
+  reloadAmountCents: number,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.Checkout.Session> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "payment",
@@ -158,9 +167,10 @@ export async function chargePaymentMethod(
   stripeCustomerId: string,
   paymentMethodId: string,
   amountCents: number,
-  description: string
+  description: string,
+  workflowHeaders?: Record<string, string>
 ): Promise<Stripe.PaymentIntent> {
-  return withAuthRetry({ orgId, userId }, (stripe) =>
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.paymentIntents.create({
       amount: amountCents,
       currency: "usd",
