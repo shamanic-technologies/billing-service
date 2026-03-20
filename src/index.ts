@@ -8,6 +8,7 @@ import { db } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
 import accountsRoutes from "./routes/accounts.js";
 import creditsRoutes from "./routes/credits.js";
+import provisionsRoutes from "./routes/provisions.js";
 import checkoutRoutes from "./routes/checkout.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { requireApiKey } from "./middleware/auth.js";
@@ -44,6 +45,7 @@ app.get("/openapi.json", (_req, res) => {
 app.use(requireApiKey);
 app.use(accountsRoutes);
 app.use(creditsRoutes);
+app.use(provisionsRoutes);
 app.use(checkoutRoutes);
 
 // 404 handler

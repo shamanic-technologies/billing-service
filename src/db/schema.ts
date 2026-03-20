@@ -34,3 +34,32 @@ export const billingAccounts = pgTable(
 
 export type BillingAccount = typeof billingAccounts.$inferSelect;
 export type NewBillingAccount = typeof billingAccounts.$inferInsert;
+
+export const creditProvisions = pgTable(
+  "credit_provisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    runId: uuid("run_id"),
+    amountCents: integer("amount_cents").notNull(),
+    status: text("status").notNull().default("pending"),
+    description: text("description"),
+    campaignId: text("campaign_id"),
+    brandId: text("brand_id"),
+    workflowName: text("workflow_name"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("idx_credit_provisions_org_id").on(table.orgId),
+    index("idx_credit_provisions_status").on(table.status),
+  ]
+);
+
+export type CreditProvision = typeof creditProvisions.$inferSelect;
+export type NewCreditProvision = typeof creditProvisions.$inferInsert;

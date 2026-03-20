@@ -3,6 +3,7 @@ import cors from "cors";
 import healthRoutes from "../../src/routes/health.js";
 import accountsRoutes from "../../src/routes/accounts.js";
 import creditsRoutes from "../../src/routes/credits.js";
+import provisionsRoutes from "../../src/routes/provisions.js";
 import checkoutRoutes from "../../src/routes/checkout.js";
 import webhookRoutes from "../../src/routes/webhooks.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
@@ -25,6 +26,7 @@ export function createTestApp() {
   app.use(requireApiKey);
   app.use(accountsRoutes);
   app.use(creditsRoutes);
+  app.use(provisionsRoutes);
   app.use(checkoutRoutes);
 
   app.use((_req: express.Request, res: express.Response) => {
