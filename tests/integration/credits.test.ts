@@ -263,9 +263,10 @@ describe("Credits deduction endpoint", () => {
   });
 });
 
-describe("Credits check endpoint", () => {
+describe("Credits authorize endpoint", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
+  const userId = "00000000-0000-0000-0000-000000000099";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -287,7 +288,7 @@ describe("Credits check endpoint", () => {
     });
 
     const res = await request(app)
-      .post("/v1/credits/check")
+      .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
       .send({ required_cents: 100 });
 
@@ -299,7 +300,7 @@ describe("Credits check endpoint", () => {
     });
   });
 
-  it("returns sufficient: false when balance is insufficient", async () => {
+  it("returns sufficient: false when balance is insufficient (trial, no reload)", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -307,7 +308,7 @@ describe("Credits check endpoint", () => {
     });
 
     const res = await request(app)
-      .post("/v1/credits/check")
+      .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
       .send({ required_cents: 100 });
 
@@ -319,6 +320,67 @@ describe("Credits check endpoint", () => {
     });
   });
 
+  it("auto-reloads for PAYG and returns sufficient after reload", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      billingMode: "payg",
+      creditBalanceCents: 50,
+      reloadAmountCents: 2000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: 100 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      sufficient: true,
+      balance_cents: 2050, // 50 + 2000 reload
+      billing_mode: "payg",
+    });
+    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
+      orgId,
+      userId,
+      "cus_123",
+      "pm_123",
+      2000,
+      "Auto-reload",
+      {}
+    );
+  });
+
+  it("returns sufficient: false when PAYG auto-reload fails", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      billingMode: "payg",
+      creditBalanceCents: 50,
+      reloadAmountCents: 2000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    stripeMocks.chargePaymentMethod.mockRejectedValue(
+      new Error("Card declined")
+    );
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: 100 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      sufficient: false,
+      balance_cents: 50,
+      billing_mode: "payg",
+    });
+  });
+
   it("always returns sufficient for BYOK mode", async () => {
     await insertTestAccount({
       orgId,
@@ -327,7 +389,7 @@ describe("Credits check endpoint", () => {
     });
 
     const res = await request(app)
-      .post("/v1/credits/check")
+      .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
       .send({ required_cents: 9999 });
 
@@ -341,7 +403,7 @@ describe("Credits check endpoint", () => {
 
   it("returns 404 for unknown org", async () => {
     const res = await request(app)
-      .post("/v1/credits/check")
+      .post("/v1/credits/authorize")
       .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
       .send({ required_cents: 100 });
 
@@ -350,7 +412,7 @@ describe("Credits check endpoint", () => {
 
   it("validates request body", async () => {
     const res = await request(app)
-      .post("/v1/credits/check")
+      .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
       .send({ required_cents: -5 });
 

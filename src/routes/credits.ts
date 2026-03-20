@@ -3,7 +3,7 @@ import { eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { DeductRequestSchema, CheckRequestSchema } from "../schemas.js";
+import { DeductRequestSchema, AuthorizeRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
@@ -228,14 +228,14 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// POST /v1/credits/check — pre-execution balance check (service-to-service)
-router.post("/v1/credits/check", requireOrgHeaders, async (req, res) => {
+// POST /v1/credits/authorize — synchronous pre-execution authorization with auto-reload attempt
+router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
-    const parsed = CheckRequestSchema.safeParse(req.body);
+    const parsed = AuthorizeRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
@@ -244,32 +244,115 @@ router.post("/v1/credits/check", requireOrgHeaders, async (req, res) => {
 
     const { required_cents } = parsed.data;
 
-    const [account] = await db
-      .select()
-      .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
-      .limit(1);
+    const result = await db.transaction(async (tx) => {
+      const rows = await tx.execute<{
+        id: string;
+        org_id: string;
+        stripe_customer_id: string | null;
+        billing_mode: string;
+        credit_balance_cents: number;
+        reload_amount_cents: number | null;
+        reload_threshold_cents: number | null;
+        stripe_payment_method_id: string | null;
+      }>(
+        rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
+      );
 
-    if (!account) {
-      res.status(404).json({ error: "Billing account not found" });
+      const account = (rows as unknown as Array<{
+        id: string;
+        org_id: string;
+        stripe_customer_id: string | null;
+        billing_mode: string;
+        credit_balance_cents: number;
+        reload_amount_cents: number | null;
+        reload_threshold_cents: number | null;
+        stripe_payment_method_id: string | null;
+      }>)[0];
+
+      if (!account) {
+        return { error: "Billing account not found" as const, status: 404 as const };
+      }
+
+      // BYOK — always sufficient, no credit tracking
+      if (account.billing_mode === "byok") {
+        return {
+          sufficient: true as const,
+          balance_cents: null,
+          billing_mode: "byok" as const,
+        };
+      }
+
+      let currentBalance = account.credit_balance_cents;
+
+      // If insufficient, try synchronous auto-reload for PAYG
+      if (currentBalance < required_cents) {
+        if (
+          account.billing_mode === "payg" &&
+          account.stripe_payment_method_id &&
+          account.stripe_customer_id &&
+          account.reload_amount_cents
+        ) {
+          try {
+            await chargePaymentMethod(
+              orgId,
+              userId,
+              account.stripe_customer_id,
+              account.stripe_payment_method_id,
+              account.reload_amount_cents,
+              "Auto-reload",
+              wfHeaders
+            );
+
+            await createBalanceTransaction(
+              orgId,
+              userId,
+              account.stripe_customer_id,
+              -account.reload_amount_cents,
+              "Auto-reload credit",
+              undefined,
+              wfHeaders
+            );
+
+            currentBalance += account.reload_amount_cents;
+            await tx
+              .update(billingAccounts)
+              .set({
+                creditBalanceCents: currentBalance,
+                updatedAt: new Date(),
+              })
+              .where(eq(billingAccounts.orgId, orgId));
+          } catch (reloadErr) {
+            console.error("Auto-reload failed during authorize:", reloadErr);
+            return {
+              sufficient: false as const,
+              balance_cents: currentBalance,
+              billing_mode: account.billing_mode as "trial" | "payg",
+              _emailEvent: "credits-reload-failed" as const,
+            };
+          }
+        }
+      }
+
+      const sufficient = currentBalance >= required_cents;
+
+      return {
+        sufficient: sufficient as boolean,
+        balance_cents: currentBalance,
+        billing_mode: account.billing_mode as "trial" | "byok" | "payg",
+        _emailEvent: sufficient ? null : "credits-depleted" as const,
+      };
+    });
+
+    if ("error" in result && result.error) {
+      res.status(result.status as number).json({ error: result.error });
       return;
     }
 
-    // BYOK — always sufficient, no credit tracking
-    if (account.billingMode === "byok") {
-      res.json({
-        sufficient: true,
-        balance_cents: null,
-        billing_mode: "byok",
-      });
-      return;
-    }
-
-    const sufficient = account.creditBalanceCents >= required_cents;
-
-    if (!sufficient) {
+    // Fire-and-forget email notification
+    const emailEvent = "_emailEvent" in result ? result._emailEvent : null;
+    if (emailEvent) {
       sendEmail({
-        eventType: "credits-depleted",
+        eventType: emailEvent,
         orgId,
         userId,
         runId,
@@ -277,13 +360,15 @@ router.post("/v1/credits/check", requireOrgHeaders, async (req, res) => {
       });
     }
 
-    res.json({
-      sufficient,
-      balance_cents: account.creditBalanceCents,
-      billing_mode: account.billingMode,
-    });
+    // Strip internal fields
+    const { _emailEvent, ...response } = result as Record<string, unknown>;
+    res.json(response);
   } catch (err) {
-    console.error("Error checking credits:", err);
+    console.error("Error authorizing credits:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
     res.status(500).json({ error: "Internal server error" });
   }
 });

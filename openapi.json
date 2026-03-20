@@ -248,7 +248,7 @@
           "reload_amount_cents"
         ]
       },
-      "CheckResponse": {
+      "AuthorizeResponse": {
         "type": "object",
         "properties": {
           "sufficient": {
@@ -268,7 +268,7 @@
           "billing_mode"
         ]
       },
-      "CheckRequest": {
+      "AuthorizeRequest": {
         "type": "object",
         "properties": {
           "required_cents": {
@@ -1007,9 +1007,9 @@
         }
       }
     },
-    "/v1/credits/check": {
+    "/v1/credits/authorize": {
       "post": {
-        "summary": "Pre-execution balance check (service-to-service). Sends depleted email if insufficient.",
+        "summary": "Synchronous pre-execution authorization. Attempts auto-reload if insufficient (PAYG). Sends email on failure.",
         "parameters": [
           {
             "schema": {
@@ -1078,24 +1078,34 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CheckRequest"
+                "$ref": "#/components/schemas/AuthorizeRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Balance check result",
+            "description": "Authorization result",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckResponse"
+                  "$ref": "#/components/schemas/AuthorizeResponse"
                 }
               }
             }
           },
           "404": {
             "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Payment provider authentication failed",
             "content": {
               "application/json": {
                 "schema": {

@@ -95,22 +95,22 @@ export const CancelProvisionResponseSchema = z
   })
   .openapi("CancelProvisionResponse");
 
-// --- Check ---
+// --- Authorize ---
 
-export const CheckRequestSchema = z
+export const AuthorizeRequestSchema = z
   .object({
     required_cents: z.number().int().positive(),
     description: z.string().optional(),
   })
-  .openapi("CheckRequest");
+  .openapi("AuthorizeRequest");
 
-export const CheckResponseSchema = z
+export const AuthorizeResponseSchema = z
   .object({
     sufficient: z.boolean(),
     balance_cents: z.number().int().nullable(),
     billing_mode: BillingModeSchema,
   })
-  .openapi("CheckResponse");
+  .openapi("AuthorizeResponse");
 
 // --- Mode ---
 
@@ -325,21 +325,25 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/credits/check",
-  summary: "Pre-execution balance check (service-to-service). Sends depleted email if insufficient.",
+  path: "/v1/credits/authorize",
+  summary: "Synchronous pre-execution authorization. Attempts auto-reload if insufficient (PAYG). Sends email on failure.",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: CheckRequestSchema } },
+      content: { "application/json": { schema: AuthorizeRequestSchema } },
     },
   },
   responses: {
     200: {
-      description: "Balance check result",
-      content: { "application/json": { schema: CheckResponseSchema } },
+      description: "Authorization result",
+      content: { "application/json": { schema: AuthorizeResponseSchema } },
     },
     404: {
       description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Payment provider authentication failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
