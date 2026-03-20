@@ -269,10 +269,22 @@ describe("Credits authorize endpoint", () => {
   const userId = "00000000-0000-0000-0000-000000000099";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
 
+  const authorizeBody = {
+    items: [
+      { costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 },
+      { costName: "anthropic-sonnet-4-5-tokens-output", quantity: 500 },
+    ],
+    description: "content-generation — claude-sonnet-4-5",
+  };
+
   beforeEach(async () => {
     vi.restoreAllMocks();
     stripeMocks = setupStripeMocks();
     await cleanTestData();
+
+    // Mock costs-client to return deterministic prices
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(100);
   });
 
   afterAll(async () => {
@@ -290,13 +302,14 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: 100 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: true,
       balance_cents: 500,
       billing_mode: "trial",
+      required_cents: 100,
     });
   });
 
@@ -310,13 +323,14 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: 100 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: false,
       balance_cents: 50,
       billing_mode: "trial",
+      required_cents: 100,
     });
   });
 
@@ -334,13 +348,14 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: 100 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: true,
-      balance_cents: 2050, // 50 + 2000 reload
+      balance_cents: 2050,
       billing_mode: "payg",
+      required_cents: 100,
     });
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
       orgId,
@@ -371,13 +386,14 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: 100 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: false,
       balance_cents: 50,
       billing_mode: "payg",
+      required_cents: 100,
     });
   });
 
@@ -391,13 +407,14 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: 9999 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: true,
       balance_cents: null,
       billing_mode: "byok",
+      required_cents: 100,
     });
   });
 
@@ -405,17 +422,38 @@ describe("Credits authorize endpoint", () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
-      .send({ required_cents: 100 });
+      .send(authorizeBody);
 
     expect(res.status).toBe(404);
   });
 
-  it("validates request body", async () => {
+  it("validates request body — rejects empty items", async () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders(orgId))
-      .send({ required_cents: -5 });
+      .send({ items: [] });
 
     expect(res.status).toBe(400);
+  });
+
+  it("returns 502 when costs-service is unavailable", async () => {
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockRejectedValue(
+      new Error("COSTS_SERVICE not configured")
+    );
+
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 500,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("costs-service");
   });
 });
