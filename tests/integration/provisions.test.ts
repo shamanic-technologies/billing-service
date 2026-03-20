@@ -1,0 +1,309 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import request from "supertest";
+import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
+import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
+import { setupStripeMocks } from "../helpers/mock-stripe.js";
+
+describe("Credit provision endpoints", () => {
+  const app = createTestApp();
+  const orgId = "00000000-0000-0000-0000-000000000001";
+  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    stripeMocks = setupStripeMocks();
+    await cleanTestData();
+  });
+
+  afterAll(async () => {
+    await cleanTestData();
+    await closeDb();
+  });
+
+  describe("POST /v1/credits/provision", () => {
+    it("provisions credits and deducts from balance", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "estimated cost" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.provision_id).toBeDefined();
+      expect(res.body.balance_cents).toBe(400);
+      expect(res.body.billing_mode).toBe("trial");
+      expect(res.body.depleted).toBe(false);
+    });
+
+    it("allows negative balance on provision", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 50,
+      });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 200, description: "large task" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.balance_cents).toBe(-150);
+      expect(res.body.depleted).toBe(true);
+    });
+
+    it("bypasses balance for BYOK mode", async () => {
+      await insertTestAccount({
+        orgId,
+        billingMode: "byok",
+        creditBalanceCents: 0,
+      });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 500, description: "byok task" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.balance_cents).toBeNull();
+      expect(res.body.billing_mode).toBe("byok");
+    });
+
+    it("returns 404 for unknown org", async () => {
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
+        .send({ amount_cents: 100, description: "test" });
+
+      expect(res.status).toBe(404);
+    });
+
+    it("stores workflow headers in provision record", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set({
+          ...getAuthHeaders(orgId),
+          "x-campaign-id": "camp_42",
+          "x-brand-id": "brand_7",
+          "x-workflow-name": "outreach-flow",
+        })
+        .send({ amount_cents: 50, description: "tracked provision" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.provision_id).toBeDefined();
+    });
+
+    it("validates request body", async () => {
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: -5 });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /v1/credits/provision/:id/confirm", () => {
+    it("confirms a pending provision with no adjustment", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      const provisionId = provRes.body.provision_id;
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provisionId}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("confirmed");
+      expect(res.body.original_amount_cents).toBe(100);
+      expect(res.body.final_amount_cents).toBe(100);
+      expect(res.body.adjustment_cents).toBe(0);
+      expect(res.body.balance_cents).toBe(400);
+    });
+
+    it("adjusts balance when actual cost is lower", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      // Balance is now 400. Confirm with actual 60 → credit back 40 → balance 440
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.provision_id}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 60 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.adjustment_cents).toBe(40);
+      expect(res.body.final_amount_cents).toBe(60);
+      expect(res.body.balance_cents).toBe(440);
+    });
+
+    it("adjusts balance when actual cost is higher", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      // Balance is now 400. Confirm with actual 150 → deduct 50 more → balance 350
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.provision_id}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 150 });
+
+      expect(res.status).toBe(200);
+      expect(res.body.adjustment_cents).toBe(-50);
+      expect(res.body.final_amount_cents).toBe(150);
+      expect(res.body.balance_cents).toBe(350);
+    });
+
+    it("returns 409 for already confirmed provision", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      const provisionId = provRes.body.provision_id;
+
+      await request(app)
+        .post(`/v1/credits/provision/${provisionId}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provisionId}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(409);
+    });
+
+    it("returns 404 for unknown provision", async () => {
+      await insertTestAccount({ orgId });
+
+      const res = await request(app)
+        .post("/v1/credits/provision/00000000-0000-0000-0000-000000000999/confirm")
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /v1/credits/provision/:id/cancel", () => {
+    it("cancels a pending provision and re-credits balance", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      // Balance is now 400. Cancel → re-credit 100 → balance 500
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.provision_id}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("cancelled");
+      expect(res.body.refunded_cents).toBe(100);
+      expect(res.body.balance_cents).toBe(500);
+    });
+
+    it("returns 409 for already cancelled provision", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      const provisionId = provRes.body.provision_id;
+
+      await request(app)
+        .post(`/v1/credits/provision/${provisionId}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provisionId}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      expect(res.status).toBe(409);
+    });
+
+    it("cannot cancel a confirmed provision", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "test" });
+
+      await request(app)
+        .post(`/v1/credits/provision/${provRes.body.provision_id}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.provision_id}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      expect(res.status).toBe(409);
+    });
+  });
+});

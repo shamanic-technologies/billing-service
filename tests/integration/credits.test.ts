@@ -18,7 +18,6 @@ describe("Credits deduction endpoint", () => {
 
   afterAll(async () => {
     await cleanTestData();
-    await closeDb();
   });
 
   it("deducts credits successfully", async () => {
@@ -45,7 +44,7 @@ describe("Credits deduction endpoint", () => {
     });
   });
 
-  it("returns depleted when insufficient balance (trial)", async () => {
+  it("allows negative balance when insufficient (trial)", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -62,9 +61,9 @@ describe("Credits deduction endpoint", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(false);
+    expect(res.body.success).toBe(true);
     expect(res.body.depleted).toBe(true);
-    expect(res.body.balance_cents).toBe(3);
+    expect(res.body.balance_cents).toBe(-2);
   });
 
   it("bypasses deduction for BYOK mode", async () => {
@@ -125,7 +124,7 @@ describe("Credits deduction endpoint", () => {
     );
   });
 
-  it("returns depleted when PAYG auto-reload fails", async () => {
+  it("deducts into negative when PAYG auto-reload fails", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -149,8 +148,9 @@ describe("Credits deduction endpoint", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(false);
+    expect(res.body.success).toBe(true);
     expect(res.body.depleted).toBe(true);
+    expect(res.body.balance_cents).toBe(-2);
   });
 
   it("returns 404 for unknown org", async () => {
@@ -260,5 +260,100 @@ describe("Credits deduction endpoint", () => {
 
     const res3 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
     expect(res3.body.balance_cents).toBe(70);
+  });
+});
+
+describe("Credits check endpoint", () => {
+  const app = createTestApp();
+  const orgId = "00000000-0000-0000-0000-000000000001";
+  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    stripeMocks = setupStripeMocks();
+    await cleanTestData();
+  });
+
+  afterAll(async () => {
+    await cleanTestData();
+    await closeDb();
+  });
+
+  it("returns sufficient: true when balance covers required amount", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 500,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/check")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: 100 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      sufficient: true,
+      balance_cents: 500,
+      billing_mode: "trial",
+    });
+  });
+
+  it("returns sufficient: false when balance is insufficient", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 50,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/check")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: 100 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      sufficient: false,
+      balance_cents: 50,
+      billing_mode: "trial",
+    });
+  });
+
+  it("always returns sufficient for BYOK mode", async () => {
+    await insertTestAccount({
+      orgId,
+      billingMode: "byok",
+      creditBalanceCents: 0,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/check")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: 9999 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      sufficient: true,
+      balance_cents: null,
+      billing_mode: "byok",
+    });
+  });
+
+  it("returns 404 for unknown org", async () => {
+    const res = await request(app)
+      .post("/v1/credits/check")
+      .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
+      .send({ required_cents: 100 });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("validates request body", async () => {
+    const res = await request(app)
+      .post("/v1/credits/check")
+      .set(getAuthHeaders(orgId))
+      .send({ required_cents: -5 });
+
+    expect(res.status).toBe(400);
   });
 });

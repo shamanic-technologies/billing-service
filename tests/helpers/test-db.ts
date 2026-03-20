@@ -1,7 +1,8 @@
 import { db, sql } from "../../src/db/index.js";
-import { billingAccounts } from "../../src/db/schema.js";
+import { billingAccounts, creditProvisions } from "../../src/db/schema.js";
 
 export async function cleanTestData() {
+  await db.delete(creditProvisions);
   await db.delete(billingAccounts);
 }
 

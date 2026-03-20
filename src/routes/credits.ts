@@ -3,20 +3,22 @@ import { eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { DeductRequestSchema } from "../schemas.js";
+import { DeductRequestSchema, CheckRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
   isStripeAuthError,
 } from "../lib/stripe.js";
+import { sendEmail } from "../lib/email-client.js";
 
 const router = Router();
 
-// POST /v1/credits/deduct — deduct credits from org balance
+// POST /v1/credits/deduct — deduct credits from org balance (allows negative balances)
 router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const parsed = DeductRequestSchema.safeParse(req.body);
 
@@ -69,6 +71,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
       let currentBalance = account.credit_balance_cents;
       const filter = eq(billingAccounts.orgId, orgId);
+      let reloadFailed = false;
 
       // If insufficient balance, try auto-reload for PAYG
       if (currentBalance < amount_cents) {
@@ -79,7 +82,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           account.reload_amount_cents
         ) {
           try {
-            // Charge the saved payment method
             await chargePaymentMethod(
               orgId,
               userId,
@@ -90,7 +92,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               wfHeaders
             );
 
-            // Credit the Stripe balance
             await createBalanceTransaction(
               orgId,
               userId,
@@ -101,7 +102,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               wfHeaders
             );
 
-            // Update local cache
             currentBalance += account.reload_amount_cents;
             await tx
               .update(billingAccounts)
@@ -112,27 +112,12 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               .where(filter);
           } catch (reloadErr) {
             console.error("Auto-reload failed:", reloadErr);
-            return {
-              success: false as const,
-              balance_cents: currentBalance,
-              billing_mode: account.billing_mode as "trial" | "byok" | "payg",
-              depleted: true as const,
-            };
+            reloadFailed = true;
           }
-        }
-
-        // Still insufficient after potential reload
-        if (currentBalance < amount_cents) {
-          return {
-            success: false as const,
-            balance_cents: currentBalance,
-            billing_mode: account.billing_mode as "trial" | "byok" | "payg",
-            depleted: true as const,
-          };
         }
       }
 
-      // Deduct from DB
+      // Always deduct, even if it results in a negative balance
       const newBalance = currentBalance - amount_cents;
       await tx
         .update(billingAccounts)
@@ -148,7 +133,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           orgId,
           userId,
           account.stripe_customer_id,
-          amount_cents, // positive = deduction in Stripe
+          amount_cents,
           description,
           { user_id: userId },
           wfHeaders
@@ -157,10 +142,11 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         });
       }
 
-      // Check if post-deduction balance is below threshold and PAYG — trigger reload
+      // Check if post-deduction balance is below threshold and PAYG — trigger async reload
       const threshold = account.reload_threshold_cents ?? 200;
       if (
         newBalance < threshold &&
+        !reloadFailed &&
         account.billing_mode === "payg" &&
         account.stripe_payment_method_id &&
         account.stripe_customer_id &&
@@ -170,7 +156,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         const customerId = account.stripe_customer_id;
         const pmId = account.stripe_payment_method_id;
 
-        // Fire auto-reload async (non-blocking)
         (async () => {
           try {
             await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload", wfHeaders);
@@ -184,6 +169,13 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               .where(eq(billingAccounts.orgId, orgId));
           } catch (err) {
             console.error("Async auto-reload failed:", err);
+            sendEmail({
+              eventType: "credits-reload-failed",
+              orgId,
+              userId,
+              runId,
+              workflowHeaders: wfHeaders,
+            });
           }
         })();
       }
@@ -192,7 +184,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         success: true as const,
         balance_cents: newBalance,
         billing_mode: account.billing_mode as "trial" | "byok" | "payg",
-        depleted: false as const,
+        depleted: newBalance <= 0,
+        _reloadFailed: reloadFailed,
       };
     });
 
@@ -201,13 +194,96 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    res.json(result);
+    // Post-transaction emails
+    const reloadFailed = "_reloadFailed" in result && result._reloadFailed;
+    if (reloadFailed) {
+      sendEmail({
+        eventType: "credits-reload-failed",
+        orgId,
+        userId,
+        runId,
+        workflowHeaders: wfHeaders,
+      });
+    }
+    if (result.depleted) {
+      sendEmail({
+        eventType: "credits-depleted",
+        orgId,
+        userId,
+        runId,
+        workflowHeaders: wfHeaders,
+      });
+    }
+
+    // Strip internal fields from response
+    const { _reloadFailed, ...response } = result as Record<string, unknown>;
+    res.json(response);
   } catch (err) {
     console.error("Error deducting credits:", err);
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;
     }
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /v1/credits/check — pre-execution balance check (service-to-service)
+router.post("/v1/credits/check", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+    const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const parsed = CheckRequestSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    const { required_cents } = parsed.data;
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    // BYOK — always sufficient, no credit tracking
+    if (account.billingMode === "byok") {
+      res.json({
+        sufficient: true,
+        balance_cents: null,
+        billing_mode: "byok",
+      });
+      return;
+    }
+
+    const sufficient = account.creditBalanceCents >= required_cents;
+
+    if (!sufficient) {
+      sendEmail({
+        eventType: "credits-depleted",
+        orgId,
+        userId,
+        runId,
+        workflowHeaders: wfHeaders,
+      });
+    }
+
+    res.json({
+      sufficient,
+      balance_cents: account.creditBalanceCents,
+      billing_mode: account.billingMode,
+    });
+  } catch (err) {
+    console.error("Error checking credits:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

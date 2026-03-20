@@ -51,6 +51,67 @@ export const DeductResponseSchema = z
   })
   .openapi("DeductResponse");
 
+// --- Provision ---
+
+export const ProvisionRequestSchema = z
+  .object({
+    amount_cents: z.number().int().positive(),
+    description: z.string().min(1),
+  })
+  .openapi("ProvisionRequest");
+
+export const ProvisionResponseSchema = z
+  .object({
+    provision_id: z.string().uuid(),
+    balance_cents: z.number().int().nullable(),
+    billing_mode: BillingModeSchema,
+    depleted: z.boolean(),
+  })
+  .openapi("ProvisionResponse");
+
+export const ConfirmProvisionRequestSchema = z
+  .object({
+    actual_amount_cents: z.number().int().positive().optional(),
+  })
+  .openapi("ConfirmProvisionRequest");
+
+export const ConfirmProvisionResponseSchema = z
+  .object({
+    provision_id: z.string().uuid(),
+    status: z.literal("confirmed"),
+    original_amount_cents: z.number().int(),
+    final_amount_cents: z.number().int(),
+    adjustment_cents: z.number().int(),
+    balance_cents: z.number().int().nullable(),
+  })
+  .openapi("ConfirmProvisionResponse");
+
+export const CancelProvisionResponseSchema = z
+  .object({
+    provision_id: z.string().uuid(),
+    status: z.literal("cancelled"),
+    refunded_cents: z.number().int(),
+    balance_cents: z.number().int().nullable(),
+  })
+  .openapi("CancelProvisionResponse");
+
+// --- Check ---
+
+export const CheckRequestSchema = z
+  .object({
+    required_cents: z.number().int().positive(),
+    description: z.string().optional(),
+  })
+  .openapi("CheckRequest");
+
+export const CheckResponseSchema = z
+  .object({
+    sufficient: z.boolean(),
+    balance_cents: z.number().int().nullable(),
+    billing_mode: BillingModeSchema,
+  })
+  .openapi("CheckResponse");
+
 // --- Mode ---
 
 export const UpdateModeRequestSchema = z
@@ -257,6 +318,105 @@ registry.registerPath({
     },
     502: {
       description: "Payment provider authentication failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/check",
+  summary: "Pre-execution balance check (service-to-service). Sends depleted email if insufficient.",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: { "application/json": { schema: CheckRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Balance check result",
+      content: { "application/json": { schema: CheckResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/provision",
+  summary: "Provision credits (deduct immediately, confirm or cancel later)",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: { "application/json": { schema: ProvisionRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Provision created",
+      content: { "application/json": { schema: ProvisionResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Payment provider authentication failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/provision/{id}/confirm",
+  summary: "Confirm a pending provision, optionally adjusting for actual cost",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      content: { "application/json": { schema: ConfirmProvisionRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Provision confirmed",
+      content: { "application/json": { schema: ConfirmProvisionResponseSchema } },
+    },
+    404: {
+      description: "Provision not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Provision already confirmed or cancelled",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/provision/{id}/cancel",
+  summary: "Cancel a pending provision, re-crediting the provisioned amount",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Provision cancelled",
+      content: { "application/json": { schema: CancelProvisionResponseSchema } },
+    },
+    404: {
+      description: "Provision not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Provision already confirmed or cancelled",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
