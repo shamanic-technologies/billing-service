@@ -10,6 +10,7 @@ import {
   isStripeAuthError,
 } from "../lib/stripe.js";
 import { sendEmail } from "../lib/email-client.js";
+import { resolveRequiredCents } from "../lib/costs-client.js";
 
 const router = Router();
 
@@ -229,6 +230,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 });
 
 // POST /v1/credits/authorize — synchronous pre-execution authorization with auto-reload attempt
+// Resolves prices from costs-service, then checks balance.
 router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -242,7 +244,22 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const { required_cents } = parsed.data;
+    const { items } = parsed.data;
+
+    // Resolve prices from costs-service (outside transaction — read-only, no lock needed)
+    let requiredCents: number;
+    try {
+      requiredCents = await resolveRequiredCents(items, {
+        "x-org-id": orgId,
+        "x-user-id": userId,
+        "x-run-id": runId,
+        ...wfHeaders,
+      });
+    } catch (costErr) {
+      console.error("Failed to resolve prices from costs-service:", costErr);
+      res.status(502).json({ error: "Failed to resolve prices from costs-service" });
+      return;
+    }
 
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute<{
@@ -279,13 +296,14 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
           sufficient: true as const,
           balance_cents: null,
           billing_mode: "byok" as const,
+          required_cents: requiredCents,
         };
       }
 
       let currentBalance = account.credit_balance_cents;
 
       // If insufficient, try synchronous auto-reload for PAYG
-      if (currentBalance < required_cents) {
+      if (currentBalance < requiredCents) {
         if (
           account.billing_mode === "payg" &&
           account.stripe_payment_method_id &&
@@ -327,18 +345,20 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
               sufficient: false as const,
               balance_cents: currentBalance,
               billing_mode: account.billing_mode as "trial" | "payg",
+              required_cents: requiredCents,
               _emailEvent: "credits-reload-failed" as const,
             };
           }
         }
       }
 
-      const sufficient = currentBalance >= required_cents;
+      const sufficient = currentBalance >= requiredCents;
 
       return {
         sufficient: sufficient as boolean,
         balance_cents: currentBalance,
         billing_mode: account.billing_mode as "trial" | "byok" | "payg",
+        required_cents: requiredCents,
         _emailEvent: sufficient ? null : "credits-depleted" as const,
       };
     });

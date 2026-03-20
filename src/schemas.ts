@@ -97,9 +97,16 @@ export const CancelProvisionResponseSchema = z
 
 // --- Authorize ---
 
+export const AuthorizeCostItemSchema = z
+  .object({
+    costName: z.string().min(1),
+    quantity: z.number().int().positive(),
+  })
+  .openapi("AuthorizeCostItem");
+
 export const AuthorizeRequestSchema = z
   .object({
-    required_cents: z.number().int().positive(),
+    items: z.array(AuthorizeCostItemSchema).min(1),
     description: z.string().optional(),
   })
   .openapi("AuthorizeRequest");
@@ -109,6 +116,7 @@ export const AuthorizeResponseSchema = z
     sufficient: z.boolean(),
     balance_cents: z.number().int().nullable(),
     billing_mode: BillingModeSchema,
+    required_cents: z.number().int(),
   })
   .openapi("AuthorizeResponse");
 
