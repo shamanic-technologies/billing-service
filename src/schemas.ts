@@ -350,6 +350,10 @@ registry.registerPath({
   method: "post",
   path: "/v1/credits/deduct",
   summary: "Deduct credits from org balance",
+  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
+    "If the balance is insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
+    "that covers the deficit (e.g. $10 reload unit, $37 deduction with $2 balance → charges 4x $10 = $40). " +
+    "Always deducts, even if it results in a negative balance.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -372,6 +376,8 @@ registry.registerPath({
   method: "post",
   path: "/v1/checkout-sessions",
   summary: "Create Stripe Checkout session to add payment method and credits",
+  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
+    "Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-reload.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -395,7 +401,12 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/credits/authorize",
-  summary: "Synchronous pre-execution authorization. Attempts auto-reload if configured. Sends email on failure.",
+  summary: "Synchronous pre-execution authorization with auto-reload",
+  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
+    "Resolves prices from costs-service, then checks balance. " +
+    "If insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
+    "that covers the required amount (e.g. $10 reload unit, $37 required with $2 balance → charges 4x $10 = $40). " +
+    "Sends email notification on reload failure or credit depletion.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -407,12 +418,8 @@ registry.registerPath({
       description: "Authorization result",
       content: { "application/json": { schema: AuthorizeResponseSchema } },
     },
-    404: {
-      description: "Billing account not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
     502: {
-      description: "Payment provider authentication failed",
+      description: "Payment provider or costs-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -422,6 +429,10 @@ registry.registerPath({
   method: "post",
   path: "/v1/credits/provision",
   summary: "Provision credits (deduct immediately, confirm or cancel later)",
+  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
+    "Deducts amount immediately and creates a pending provision. " +
+    "If the post-deduction balance drops below reload_threshold_cents and auto-reload is configured, " +
+    "triggers an async reload.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -432,10 +443,6 @@ registry.registerPath({
     200: {
       description: "Provision created",
       content: { "application/json": { schema: ProvisionResponseSchema } },
-    },
-    404: {
-      description: "Billing account not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
       description: "Payment provider authentication failed",
