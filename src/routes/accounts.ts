@@ -10,6 +10,7 @@ import {
   listBalanceTransactions,
   isStripeAuthError,
 } from "../lib/stripe.js";
+import { findOrCreateAccount } from "../lib/account.js";
 
 const router = Router();
 
@@ -34,54 +35,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     const userId = req.headers["x-user-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
-    // Try to find existing account
-    const existing = await db
-      .select()
-      .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
-      .limit(1);
-
-    if (existing.length > 0) {
-      res.json(formatAccount(existing[0]));
-      return;
-    }
-
-    // Auto-create: Stripe customer + $2 trial credit
-    const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
-
-    // Credit $2 (negative amount = credit in Stripe)
-    await createBalanceTransaction(
-      orgId,
-      userId,
-      stripeCustomer.id,
-      -200,
-      "Trial credit: $2.00",
-      undefined,
-      wfHeaders
-    );
-
-    // Insert with ON CONFLICT for race condition safety
-    const [account] = await db
-      .insert(billingAccounts)
-      .values({
-        orgId,
-        stripeCustomerId: stripeCustomer.id,
-        creditBalanceCents: 200,
-      })
-      .onConflictDoNothing()
-      .returning();
-
-    // If conflict (another request created it), re-fetch
-    if (!account) {
-      const [refetched] = await db
-        .select()
-        .from(billingAccounts)
-        .where(eq(billingAccounts.orgId, orgId))
-        .limit(1);
-      res.json(formatAccount(refetched));
-      return;
-    }
-
+    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
     res.json(formatAccount(account));
   } catch (err) {
     console.error("Error getting/creating account:", err);

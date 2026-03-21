@@ -10,6 +10,7 @@ import {
   isStripeAuthError,
 } from "../lib/stripe.js";
 import { sendEmail } from "../lib/email-client.js";
+import { findOrCreateAccount } from "../lib/account.js";
 
 const router = Router();
 
@@ -29,6 +30,9 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
     }
 
     const { amount_cents, description } = parsed.data;
+
+    // Ensure account exists (auto-create with $2 trial credit if new)
+    await findOrCreateAccount(orgId, userId, fwdHeaders);
 
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute<{
