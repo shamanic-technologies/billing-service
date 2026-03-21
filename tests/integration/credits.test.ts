@@ -39,17 +39,15 @@ describe("Credits deduction endpoint", () => {
     expect(res.body).toEqual({
       success: true,
       balance_cents: 195,
-      billing_mode: "trial",
       depleted: false,
     });
   });
 
-  it("allows negative balance when insufficient (trial)", async () => {
+  it("allows negative balance when insufficient", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
       creditBalanceCents: 3,
-      billingMode: "trial",
     });
 
     const res = await request(app)
@@ -66,35 +64,10 @@ describe("Credits deduction endpoint", () => {
     expect(res.body.balance_cents).toBe(-2);
   });
 
-  it("bypasses deduction for BYOK mode", async () => {
-    await insertTestAccount({
-      orgId,
-      billingMode: "byok",
-      creditBalanceCents: 0,
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({
-        amount_cents: 100,
-        description: "should not deduct",
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      success: true,
-      balance_cents: null,
-      billing_mode: "byok",
-      depleted: false,
-    });
-  });
-
-  it("auto-reloads for PAYG when insufficient balance", async () => {
+  it("auto-reloads when insufficient balance and auto-reload configured", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "payg",
       creditBalanceCents: 3,
       reloadAmountCents: 2000,
       reloadThresholdCents: 200,
@@ -124,11 +97,10 @@ describe("Credits deduction endpoint", () => {
     );
   });
 
-  it("deducts into negative when PAYG auto-reload fails", async () => {
+  it("deducts into negative when auto-reload fails", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "payg",
       creditBalanceCents: 3,
       reloadAmountCents: 2000,
       reloadThresholdCents: 200,
@@ -191,7 +163,6 @@ describe("Credits deduction endpoint", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    // Async Stripe balance transaction should include userId in metadata
     expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
       orgId,
       userId,
@@ -308,12 +279,11 @@ describe("Credits authorize endpoint", () => {
     expect(res.body).toEqual({
       sufficient: true,
       balance_cents: 500,
-      billing_mode: "trial",
       required_cents: 100,
     });
   });
 
-  it("returns sufficient: false when balance is insufficient (trial, no reload)", async () => {
+  it("returns sufficient: false when balance is insufficient (no auto-reload)", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -329,16 +299,14 @@ describe("Credits authorize endpoint", () => {
     expect(res.body).toEqual({
       sufficient: false,
       balance_cents: 50,
-      billing_mode: "trial",
       required_cents: 100,
     });
   });
 
-  it("auto-reloads for PAYG and returns sufficient after reload", async () => {
+  it("auto-reloads and returns sufficient after reload", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "payg",
       creditBalanceCents: 50,
       reloadAmountCents: 2000,
       reloadThresholdCents: 200,
@@ -354,7 +322,6 @@ describe("Credits authorize endpoint", () => {
     expect(res.body).toEqual({
       sufficient: true,
       balance_cents: 2050,
-      billing_mode: "payg",
       required_cents: 100,
     });
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
@@ -368,11 +335,10 @@ describe("Credits authorize endpoint", () => {
     );
   });
 
-  it("returns sufficient: false when PAYG auto-reload fails", async () => {
+  it("returns sufficient: false when auto-reload fails", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "payg",
       creditBalanceCents: 50,
       reloadAmountCents: 2000,
       reloadThresholdCents: 200,
@@ -392,28 +358,6 @@ describe("Credits authorize endpoint", () => {
     expect(res.body).toEqual({
       sufficient: false,
       balance_cents: 50,
-      billing_mode: "payg",
-      required_cents: 100,
-    });
-  });
-
-  it("always returns sufficient for BYOK mode", async () => {
-    await insertTestAccount({
-      orgId,
-      billingMode: "byok",
-      creditBalanceCents: 0,
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/authorize")
-      .set(getAuthHeaders(orgId))
-      .send(authorizeBody);
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      sufficient: true,
-      balance_cents: null,
-      billing_mode: "byok",
       required_cents: 100,
     });
   });

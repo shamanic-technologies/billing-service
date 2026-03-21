@@ -35,5 +35,14 @@ beforeAll(async () => {
   `;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_org_id" ON "credit_provisions" USING btree ("org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_status" ON "credit_provisions" USING btree ("status")`;
+
+  // Drop billing_mode column if it still exists (migration 0004)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE billing_accounts DROP COLUMN IF EXISTS billing_mode;
+    EXCEPTION WHEN undefined_column THEN
+      NULL;
+    END $$
+  `;
 });
 afterAll(() => console.log("Test suite complete."));

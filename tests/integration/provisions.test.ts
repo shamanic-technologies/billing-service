@@ -36,7 +36,6 @@ describe("Credit provision endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.provision_id).toBeDefined();
       expect(res.body.balance_cents).toBe(400);
-      expect(res.body.billing_mode).toBe("trial");
       expect(res.body.depleted).toBe(false);
     });
 
@@ -55,23 +54,6 @@ describe("Credit provision endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.balance_cents).toBe(-150);
       expect(res.body.depleted).toBe(true);
-    });
-
-    it("bypasses balance for BYOK mode", async () => {
-      await insertTestAccount({
-        orgId,
-        billingMode: "byok",
-        creditBalanceCents: 0,
-      });
-
-      const res = await request(app)
-        .post("/v1/credits/provision")
-        .set(getAuthHeaders(orgId))
-        .send({ amount_cents: 500, description: "byok task" });
-
-      expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBeNull();
-      expect(res.body.billing_mode).toBe("byok");
     });
 
     it("returns 404 for unknown org", async () => {

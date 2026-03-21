@@ -40,7 +40,6 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         .values({
           orgId,
           stripeCustomerId: stripeCustomer.id,
-          billingMode: "trial",
           creditBalanceCents: 200,
         })
         .onConflictDoNothing()

@@ -12,14 +12,6 @@
   ],
   "components": {
     "schemas": {
-      "BillingMode": {
-        "type": "string",
-        "enum": [
-          "trial",
-          "byok",
-          "payg"
-        ]
-      },
       "BillingAccount": {
         "type": "object",
         "properties": {
@@ -30,9 +22,6 @@
           "orgId": {
             "type": "string",
             "format": "uuid"
-          },
-          "billingMode": {
-            "$ref": "#/components/schemas/BillingMode"
           },
           "creditBalanceCents": {
             "type": "integer"
@@ -48,6 +37,9 @@
           "hasPaymentMethod": {
             "type": "boolean"
           },
+          "hasAutoReload": {
+            "type": "boolean"
+          },
           "createdAt": {
             "type": "string"
           },
@@ -58,11 +50,11 @@
         "required": [
           "id",
           "orgId",
-          "billingMode",
           "creditBalanceCents",
           "reloadAmountCents",
           "reloadThresholdCents",
           "hasPaymentMethod",
+          "hasAutoReload",
           "createdAt",
           "updatedAt"
         ]
@@ -84,16 +76,12 @@
           "balance_cents": {
             "type": "integer"
           },
-          "billing_mode": {
-            "$ref": "#/components/schemas/BillingMode"
-          },
           "depleted": {
             "type": "boolean"
           }
         },
         "required": [
           "balance_cents",
-          "billing_mode",
           "depleted"
         ]
       },
@@ -148,16 +136,9 @@
           "has_more"
         ]
       },
-      "UpdateModeRequest": {
+      "UpdateAutoReloadRequest": {
         "type": "object",
         "properties": {
-          "mode": {
-            "type": "string",
-            "enum": [
-              "byok",
-              "payg"
-            ]
-          },
           "reload_amount_cents": {
             "type": "integer",
             "minimum": 0,
@@ -169,7 +150,7 @@
           }
         },
         "required": [
-          "mode"
+          "reload_amount_cents"
         ]
       },
       "PortalSessionResponse": {
@@ -202,11 +183,7 @@
             "type": "boolean"
           },
           "balance_cents": {
-            "type": "integer",
-            "nullable": true
-          },
-          "billing_mode": {
-            "$ref": "#/components/schemas/BillingMode"
+            "type": "integer"
           },
           "depleted": {
             "type": "boolean"
@@ -215,7 +192,6 @@
         "required": [
           "success",
           "balance_cents",
-          "billing_mode",
           "depleted"
         ]
       },
@@ -282,11 +258,7 @@
             "type": "boolean"
           },
           "balance_cents": {
-            "type": "integer",
-            "nullable": true
-          },
-          "billing_mode": {
-            "$ref": "#/components/schemas/BillingMode"
+            "type": "integer"
           },
           "required_cents": {
             "type": "integer"
@@ -295,7 +267,6 @@
         "required": [
           "sufficient",
           "balance_cents",
-          "billing_mode",
           "required_cents"
         ]
       },
@@ -343,11 +314,7 @@
             "format": "uuid"
           },
           "balance_cents": {
-            "type": "integer",
-            "nullable": true
-          },
-          "billing_mode": {
-            "$ref": "#/components/schemas/BillingMode"
+            "type": "integer"
           },
           "depleted": {
             "type": "boolean"
@@ -356,7 +323,6 @@
         "required": [
           "provision_id",
           "balance_cents",
-          "billing_mode",
           "depleted"
         ]
       },
@@ -758,9 +724,9 @@
         }
       }
     },
-    "/v1/accounts/mode": {
+    "/v1/accounts/auto-reload": {
       "patch": {
-        "summary": "Switch billing mode",
+        "summary": "Configure auto-reload settings (requires payment method)",
         "parameters": [
           {
             "schema": {
@@ -829,7 +795,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateModeRequest"
+                "$ref": "#/components/schemas/UpdateAutoReloadRequest"
               }
             }
           }
@@ -846,7 +812,106 @@
             }
           },
           "400": {
-            "description": "Invalid transition",
+            "description": "Payment method required or invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Disable auto-reload",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow name injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-name",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated account with auto-reload disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingAccount"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1080,7 +1145,7 @@
     },
     "/v1/checkout-sessions": {
       "post": {
-        "summary": "Create Stripe Checkout session for PAYG setup",
+        "summary": "Create Stripe Checkout session to add payment method and credits",
         "parameters": [
           {
             "schema": {
@@ -1180,7 +1245,7 @@
     },
     "/v1/credits/authorize": {
       "post": {
-        "summary": "Synchronous pre-execution authorization. Attempts auto-reload if insufficient (PAYG). Sends email on failure.",
+        "summary": "Synchronous pre-execution authorization. Attempts auto-reload if configured. Sends email on failure.",
         "parameters": [
           {
             "schema": {
