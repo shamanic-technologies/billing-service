@@ -48,11 +48,10 @@ describe("Stripe webhooks", () => {
     expect(res.body.error).toBe("Invalid signature");
   });
 
-  it("handles checkout.session.completed — updates account to PAYG", async () => {
+  it("handles checkout.session.completed — stores payment method and credits balance", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "trial",
       creditBalanceCents: 200,
     });
 
@@ -85,7 +84,6 @@ describe("Stripe webhooks", () => {
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
-    expect(account.billingMode).toBe("payg");
     expect(account.creditBalanceCents).toBe(2200); // 200 + 2000
     expect(account.stripePaymentMethodId).toBe("pm_new_123");
   });
@@ -94,7 +92,6 @@ describe("Stripe webhooks", () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      billingMode: "payg",
       stripePaymentMethodId: "pm_old",
     });
 

@@ -3,10 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import {
-  UpdateModeRequestSchema,
-  BillingModeSchema,
-} from "../schemas.js";
+import { UpdateAutoReloadRequestSchema } from "../schemas.js";
 import {
   createCustomer,
   createBalanceTransaction,
@@ -20,11 +17,11 @@ function formatAccount(account: typeof billingAccounts.$inferSelect) {
   return {
     id: account.id,
     orgId: account.orgId,
-    billingMode: account.billingMode,
     creditBalanceCents: account.creditBalanceCents,
     reloadAmountCents: account.reloadAmountCents,
     reloadThresholdCents: account.reloadThresholdCents,
     hasPaymentMethod: !!account.stripePaymentMethodId,
+    hasAutoReload: !!(account.reloadAmountCents && account.stripePaymentMethodId),
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString(),
   };
@@ -69,7 +66,6 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
       .values({
         orgId,
         stripeCustomerId: stripeCustomer.id,
-        billingMode: "trial",
         creditBalanceCents: 200,
       })
       .onConflictDoNothing()
@@ -115,7 +111,6 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
 
     res.json({
       balance_cents: account.creditBalanceCents,
-      billing_mode: account.billingMode,
       depleted: account.creditBalanceCents <= 0,
     });
   } catch (err) {
@@ -179,23 +174,21 @@ function classifyTransaction(
   if (description?.includes("reload") || description?.includes("Reload")) {
     return "reload";
   }
-  // Positive amount = deduction (customer owes more)
-  // Negative amount = credit (customer gets credit)
   return amount > 0 ? "deduction" : "credit";
 }
 
-// PATCH /v1/accounts/mode — switch billing mode
-router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
+// PATCH /v1/accounts/auto-reload — configure auto-reload settings
+router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const parsed = UpdateModeRequestSchema.safeParse(req.body);
+    const parsed = UpdateAutoReloadRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
 
-    const { mode, reload_amount_cents, reload_threshold_cents } = parsed.data;
+    const { reload_amount_cents, reload_threshold_cents } = parsed.data;
 
     const [account] = await db
       .select()
@@ -208,48 +201,59 @@ router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Validate transitions
-    // Note: Zod schema already restricts mode to "byok" | "payg" (trial is rejected at parse)
-
-    // PAYG requires payment method
-    if (mode === "payg") {
-      if (!account.stripePaymentMethodId) {
-        res.status(400).json({
-          error:
-            "Payment method required for PAYG. Create a checkout session first.",
-        });
-        return;
-      }
-      if (!reload_amount_cents) {
-        res.status(400).json({
-          error: "reload_amount_cents is required for PAYG mode",
-        });
-        return;
-      }
-    }
-
-    const updateData: Record<string, unknown> = {
-      billingMode: mode,
-      updatedAt: new Date(),
-    };
-
-    if (mode === "payg" && reload_amount_cents) {
-      updateData.reloadAmountCents = reload_amount_cents;
-    }
-
-    if (reload_threshold_cents !== undefined) {
-      updateData.reloadThresholdCents = reload_threshold_cents;
+    if (!account.stripePaymentMethodId) {
+      res.status(400).json({
+        error: "Payment method required. Create a checkout session first.",
+      });
+      return;
     }
 
     const [updated] = await db
       .update(billingAccounts)
-      .set(updateData)
+      .set({
+        reloadAmountCents: reload_amount_cents,
+        reloadThresholdCents: reload_threshold_cents ?? 200,
+        updatedAt: new Date(),
+      })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
     res.json(formatAccount(updated));
   } catch (err) {
-    console.error("Error updating mode:", err);
+    console.error("Error updating auto-reload:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /v1/accounts/auto-reload — disable auto-reload
+router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    const [updated] = await db
+      .update(billingAccounts)
+      .set({
+        reloadAmountCents: null,
+        reloadThresholdCents: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(billingAccounts.orgId, orgId))
+      .returning();
+
+    res.json(formatAccount(updated));
+  } catch (err) {
+    console.error("Error disabling auto-reload:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

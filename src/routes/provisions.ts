@@ -35,7 +35,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -48,7 +47,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -57,31 +55,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
 
       if (!account) {
         return { error: "Billing account not found" as const, status: 404 as const };
-      }
-
-      if (account.billing_mode === "byok") {
-        // BYOK — no credit tracking, create provision record for audit but don't touch balance
-        const [provision] = await tx
-          .insert(creditProvisions)
-          .values({
-            orgId,
-            userId,
-            runId,
-            amountCents: amount_cents,
-            status: "confirmed",
-            description,
-            campaignId: wfHeaders.campaignId,
-            brandId: wfHeaders.brandId,
-            workflowName: wfHeaders.workflowName,
-          })
-          .returning();
-
-        return {
-          provision_id: provision.id,
-          balance_cents: null,
-          billing_mode: "byok" as const,
-          depleted: false,
-        };
       }
 
       // Deduct from balance (allow negative)
@@ -112,7 +85,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       return {
         provision_id: provision.id,
         balance_cents: newBalance,
-        billing_mode: account.billing_mode as "trial" | "byok" | "payg",
         depleted: newBalance <= 0,
         _account: account,
       };
@@ -130,7 +102,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       if (
         result.balance_cents !== null &&
         result.balance_cents < threshold &&
-        account.billing_mode === "payg" &&
         account.stripe_payment_method_id &&
         account.stripe_customer_id &&
         account.reload_amount_cents

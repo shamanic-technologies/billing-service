@@ -14,7 +14,6 @@ export const billingAccounts = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
-    billingMode: text("billing_mode").notNull().default("trial"),
     creditBalanceCents: integer("credit_balance_cents").notNull().default(200),
     reloadAmountCents: integer("reload_amount_cents"),
     reloadThresholdCents: integer("reload_threshold_cents").default(200),
