@@ -92,7 +92,41 @@ describe("Credits deduction endpoint", () => {
       "cus_123",
       "pm_123",
       2000,
-      "Auto-reload",
+      "Auto-reload (1x)",
+      {}
+    );
+  });
+
+  it("charges multiple reloads when amount exceeds single reload", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 200,
+      reloadAmountCents: 1000, // $10 reload unit
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({
+        amount_cents: 3700, // $37 deduction, need $35 more → 4x $10 = $40
+        description: "large deduction",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Balance: 200 + 4000 (4x reload) - 3700 = 500
+    expect(res.body.balance_cents).toBe(500);
+    expect(res.body.depleted).toBe(false);
+    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
+      orgId,
+      userId,
+      "cus_123",
+      "pm_123",
+      4000,
+      "Auto-reload (4x)",
       {}
     );
   });
@@ -330,7 +364,44 @@ describe("Credits authorize endpoint", () => {
       "cus_123",
       "pm_123",
       2000,
-      "Auto-reload",
+      "Auto-reload (1x)",
+      {}
+    );
+  });
+
+  it("charges multiple reloads when required amount exceeds single reload", async () => {
+    // Override costs-client to return a large required amount
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(3700);
+
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 200,
+      reloadAmountCents: 1000, // $10 reload unit
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    // Need 3700, have 200 → deficit 3500 → ceil(3500/1000) = 4 → charge 4000
+    expect(res.body).toEqual({
+      sufficient: true,
+      balance_cents: 4200, // 200 + 4000
+      required_cents: 3700,
+    });
+    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
+      orgId,
+      userId,
+      "cus_123",
+      "pm_123",
+      4000,
+      "Auto-reload (4x)",
       {}
     );
   });

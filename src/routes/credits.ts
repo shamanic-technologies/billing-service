@@ -14,6 +14,17 @@ import { resolveRequiredCents } from "../lib/costs-client.js";
 
 const router = Router();
 
+/**
+ * Compute the reload charge needed to cover `requiredCents` given `currentBalance`.
+ * Returns the smallest multiple of `reloadUnit` such that balance + charge >= required.
+ */
+function computeReloadCharge(currentBalance: number, requiredCents: number, reloadUnit: number): number {
+  const deficit = requiredCents - currentBalance;
+  if (deficit <= 0) return 0;
+  const multiples = Math.ceil(deficit / reloadUnit);
+  return multiples * reloadUnit;
+}
+
 // POST /v1/credits/deduct — deduct credits from org balance (allows negative balances)
 router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
   try {
@@ -62,21 +73,22 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       const filter = eq(billingAccounts.orgId, orgId);
       let reloadFailed = false;
 
-      // If insufficient balance, try auto-reload
+      // If insufficient balance, try auto-reload (charge enough multiples to cover)
       if (currentBalance < amount_cents) {
         if (
           account.stripe_payment_method_id &&
           account.stripe_customer_id &&
           account.reload_amount_cents
         ) {
+          const chargeAmount = computeReloadCharge(currentBalance, amount_cents, account.reload_amount_cents);
           try {
             await chargePaymentMethod(
               orgId,
               userId,
               account.stripe_customer_id,
               account.stripe_payment_method_id,
-              account.reload_amount_cents,
-              "Auto-reload",
+              chargeAmount,
+              `Auto-reload (${chargeAmount / account.reload_amount_cents}x)`,
               wfHeaders
             );
 
@@ -84,13 +96,13 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
               orgId,
               userId,
               account.stripe_customer_id,
-              -account.reload_amount_cents,
-              "Auto-reload credit",
+              -chargeAmount,
+              `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
               undefined,
               wfHeaders
             );
 
-            currentBalance += account.reload_amount_cents;
+            currentBalance += chargeAmount;
             await tx
               .update(billingAccounts)
               .set({
@@ -275,21 +287,22 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
 
       let currentBalance = account.credit_balance_cents;
 
-      // If insufficient, try synchronous auto-reload
+      // If insufficient, try synchronous auto-reload (charge enough multiples to cover)
       if (currentBalance < requiredCents) {
         if (
           account.stripe_payment_method_id &&
           account.stripe_customer_id &&
           account.reload_amount_cents
         ) {
+          const chargeAmount = computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents);
           try {
             await chargePaymentMethod(
               orgId,
               userId,
               account.stripe_customer_id,
               account.stripe_payment_method_id,
-              account.reload_amount_cents,
-              "Auto-reload",
+              chargeAmount,
+              `Auto-reload (${chargeAmount / account.reload_amount_cents}x)`,
               wfHeaders
             );
 
@@ -297,13 +310,13 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
               orgId,
               userId,
               account.stripe_customer_id,
-              -account.reload_amount_cents,
-              "Auto-reload credit",
+              -chargeAmount,
+              `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
               undefined,
               wfHeaders
             );
 
-            currentBalance += account.reload_amount_cents;
+            currentBalance += chargeAmount;
             await tx
               .update(billingAccounts)
               .set({
