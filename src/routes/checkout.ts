@@ -5,6 +5,7 @@ import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import { createCustomer, createCheckoutSession, isStripeAuthError } from "../lib/stripe.js";
+import { findOrCreateAccount } from "../lib/account.js";
 
 const router = Router();
 
@@ -25,33 +26,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     const filter = eq(billingAccounts.orgId, orgId);
 
     // Get or create billing account
-    let [account] = await db
-      .select()
-      .from(billingAccounts)
-      .where(filter)
-      .limit(1);
-
-    if (!account) {
-      // Auto-create account with Stripe customer
-      const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
-
-      const [created] = await db
-        .insert(billingAccounts)
-        .values({
-          orgId,
-          stripeCustomerId: stripeCustomer.id,
-          creditBalanceCents: 200,
-        })
-        .onConflictDoNothing()
-        .returning();
-
-      account = created || (await db
-        .select()
-        .from(billingAccounts)
-        .where(filter)
-        .limit(1)
-      )[0];
-    }
+    let account = await findOrCreateAccount(orgId, userId, wfHeaders);
 
     if (!account.stripeCustomerId) {
       // Account exists but no Stripe customer — create one

@@ -11,6 +11,7 @@ import {
 } from "../lib/stripe.js";
 import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
+import { findOrCreateAccount } from "../lib/account.js";
 
 const router = Router();
 
@@ -40,6 +41,9 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
     }
 
     const { amount_cents, description } = parsed.data;
+
+    // Ensure account exists (auto-create with $2 trial credit if new)
+    await findOrCreateAccount(orgId, userId, wfHeaders);
 
     // Use Drizzle transaction with FOR UPDATE lock to prevent double-spend
     const result = await db.transaction(async (tx) => {
@@ -257,6 +261,9 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       res.status(502).json({ error: "Failed to resolve prices from costs-service" });
       return;
     }
+
+    // Ensure account exists (auto-create with $2 trial credit if new)
+    await findOrCreateAccount(orgId, userId, wfHeaders);
 
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute<{
