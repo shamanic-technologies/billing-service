@@ -13,21 +13,17 @@ export const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
 
-export const BillingModeSchema = z
-  .enum(["trial", "byok", "payg"])
-  .openapi("BillingMode");
-
 // --- Account ---
 
 export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     orgId: z.string().uuid(),
-    billingMode: BillingModeSchema,
     creditBalanceCents: z.number().int(),
     reloadAmountCents: z.number().int().nullable(),
     reloadThresholdCents: z.number().int().nullable(),
     hasPaymentMethod: z.boolean(),
+    hasAutoReload: z.boolean(),
     createdAt: z.string(),
     updatedAt: z.string(),
   })
@@ -45,8 +41,7 @@ export const DeductRequestSchema = z
 export const DeductResponseSchema = z
   .object({
     success: z.boolean(),
-    balance_cents: z.number().int().nullable(),
-    billing_mode: BillingModeSchema,
+    balance_cents: z.number().int(),
     depleted: z.boolean(),
   })
   .openapi("DeductResponse");
@@ -63,8 +58,7 @@ export const ProvisionRequestSchema = z
 export const ProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
-    balance_cents: z.number().int().nullable(),
-    billing_mode: BillingModeSchema,
+    balance_cents: z.number().int(),
     depleted: z.boolean(),
   })
   .openapi("ProvisionResponse");
@@ -114,21 +108,19 @@ export const AuthorizeRequestSchema = z
 export const AuthorizeResponseSchema = z
   .object({
     sufficient: z.boolean(),
-    balance_cents: z.number().int().nullable(),
-    billing_mode: BillingModeSchema,
+    balance_cents: z.number().int(),
     required_cents: z.number().int(),
   })
   .openapi("AuthorizeResponse");
 
-// --- Mode ---
+// --- Auto-Reload ---
 
-export const UpdateModeRequestSchema = z
+export const UpdateAutoReloadRequestSchema = z
   .object({
-    mode: z.enum(["byok", "payg"]),
-    reload_amount_cents: z.number().int().positive().optional(),
+    reload_amount_cents: z.number().int().positive(),
     reload_threshold_cents: z.number().int().min(0).optional(),
   })
-  .openapi("UpdateModeRequest");
+  .openapi("UpdateAutoReloadRequest");
 
 // --- Checkout ---
 
@@ -166,7 +158,6 @@ export const PortalSessionResponseSchema = z
 export const BalanceResponseSchema = z
   .object({
     balance_cents: z.number().int(),
-    billing_mode: BillingModeSchema,
     depleted: z.boolean(),
   })
   .openapi("BalanceResponse");
@@ -280,12 +271,12 @@ registry.registerPath({
 
 registry.registerPath({
   method: "patch",
-  path: "/v1/accounts/mode",
-  summary: "Switch billing mode",
+  path: "/v1/accounts/auto-reload",
+  summary: "Configure auto-reload settings (requires payment method)",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: UpdateModeRequestSchema } },
+      content: { "application/json": { schema: UpdateAutoReloadRequestSchema } },
     },
   },
   responses: {
@@ -294,7 +285,30 @@ registry.registerPath({
       content: { "application/json": { schema: BillingAccountSchema } },
     },
     400: {
-      description: "Invalid transition",
+      description: "Payment method required or invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/v1/accounts/auto-reload",
+  summary: "Disable auto-reload",
+  request: {
+    headers: protectedHeaders,
+  },
+  responses: {
+    200: {
+      description: "Updated account with auto-reload disabled",
+      content: { "application/json": { schema: BillingAccountSchema } },
+    },
+    404: {
+      description: "Billing account not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -357,7 +371,7 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/checkout-sessions",
-  summary: "Create Stripe Checkout session for PAYG setup",
+  summary: "Create Stripe Checkout session to add payment method and credits",
   request: {
     headers: protectedHeaders,
     body: {
@@ -381,7 +395,7 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/credits/authorize",
-  summary: "Synchronous pre-execution authorization. Attempts auto-reload if insufficient (PAYG). Sends email on failure.",
+  summary: "Synchronous pre-execution authorization. Attempts auto-reload if configured. Sends email on failure.",
   request: {
     headers: protectedHeaders,
     body: {

@@ -37,7 +37,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -50,7 +49,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -60,24 +58,13 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
 
-      // BYOK mode — no credit checks, always succeeds
-      if (account.billing_mode === "byok") {
-        return {
-          success: true as const,
-          balance_cents: null,
-          billing_mode: "byok" as const,
-          depleted: false as const,
-        };
-      }
-
       let currentBalance = account.credit_balance_cents;
       const filter = eq(billingAccounts.orgId, orgId);
       let reloadFailed = false;
 
-      // If insufficient balance, try auto-reload for PAYG
+      // If insufficient balance, try auto-reload
       if (currentBalance < amount_cents) {
         if (
-          account.billing_mode === "payg" &&
           account.stripe_payment_method_id &&
           account.stripe_customer_id &&
           account.reload_amount_cents
@@ -143,12 +130,11 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
         });
       }
 
-      // Check if post-deduction balance is below threshold and PAYG — trigger async reload
+      // Check if post-deduction balance is below threshold — trigger async reload
       const threshold = account.reload_threshold_cents ?? 200;
       if (
         newBalance < threshold &&
         !reloadFailed &&
-        account.billing_mode === "payg" &&
         account.stripe_payment_method_id &&
         account.stripe_customer_id &&
         account.reload_amount_cents
@@ -184,7 +170,6 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return {
         success: true as const,
         balance_cents: newBalance,
-        billing_mode: account.billing_mode as "trial" | "byok" | "payg",
         depleted: newBalance <= 0,
         _reloadFailed: reloadFailed,
       };
@@ -266,7 +251,6 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -279,7 +263,6 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         id: string;
         org_id: string;
         stripe_customer_id: string | null;
-        billing_mode: string;
         credit_balance_cents: number;
         reload_amount_cents: number | null;
         reload_threshold_cents: number | null;
@@ -290,22 +273,11 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
 
-      // BYOK — always sufficient, no credit tracking
-      if (account.billing_mode === "byok") {
-        return {
-          sufficient: true as const,
-          balance_cents: null,
-          billing_mode: "byok" as const,
-          required_cents: requiredCents,
-        };
-      }
-
       let currentBalance = account.credit_balance_cents;
 
-      // If insufficient, try synchronous auto-reload for PAYG
+      // If insufficient, try synchronous auto-reload
       if (currentBalance < requiredCents) {
         if (
-          account.billing_mode === "payg" &&
           account.stripe_payment_method_id &&
           account.stripe_customer_id &&
           account.reload_amount_cents
@@ -344,7 +316,6 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
             return {
               sufficient: false as const,
               balance_cents: currentBalance,
-              billing_mode: account.billing_mode as "trial" | "payg",
               required_cents: requiredCents,
               _emailEvent: "credits-reload-failed" as const,
             };
@@ -357,7 +328,6 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       return {
         sufficient: sufficient as boolean,
         balance_cents: currentBalance,
-        billing_mode: account.billing_mode as "trial" | "byok" | "payg",
         required_cents: requiredCents,
         _emailEvent: sufficient ? null : "credits-depleted" as const,
       };

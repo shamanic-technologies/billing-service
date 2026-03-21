@@ -100,13 +100,12 @@ async function handleCheckoutCompleted(orgId: string, session: Stripe.Checkout.S
     );
   }
 
-  // Update account: set payment method, switch to PAYG, update balance
+  // Update account: set payment method, update balance
   const newBalance = account.creditBalanceCents + (reloadAmountCents ?? 0);
 
   await db
     .update(billingAccounts)
     .set({
-      billingMode: "payg",
       creditBalanceCents: newBalance,
       reloadAmountCents: reloadAmountCents ?? account.reloadAmountCents,
       ...(paymentMethodId ? { stripePaymentMethodId: paymentMethodId } : {}),

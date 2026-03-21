@@ -29,6 +29,13 @@
       "when": 1774243200000,
       "tag": "0003_add_credit_provisions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774329600000,
+      "tag": "0004_remove_billing_mode",
+      "breakpoints": true
     }
   ]
 }
