@@ -284,6 +284,67 @@ describe("Accounts endpoints", () => {
       expect(res.body.billingMode).toBe("payg");
     });
 
+    it("stores reload_threshold_cents when switching to payg", async () => {
+      await insertTestAccount({
+        orgId,
+        billingMode: "trial",
+        stripePaymentMethodId: "pm_123",
+      });
+
+      const res = await request(app)
+        .patch("/v1/accounts/mode")
+        .set(getAuthHeaders(orgId))
+        .send({
+          mode: "payg",
+          reload_amount_cents: 5000,
+          reload_threshold_cents: 1000,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.billingMode).toBe("payg");
+      expect(res.body.reloadAmountCents).toBe(5000);
+      expect(res.body.reloadThresholdCents).toBe(1000);
+    });
+
+    it("allows reload_threshold_cents of 0", async () => {
+      await insertTestAccount({
+        orgId,
+        billingMode: "trial",
+        stripePaymentMethodId: "pm_123",
+      });
+
+      const res = await request(app)
+        .patch("/v1/accounts/mode")
+        .set(getAuthHeaders(orgId))
+        .send({
+          mode: "payg",
+          reload_amount_cents: 5000,
+          reload_threshold_cents: 0,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reloadThresholdCents).toBe(0);
+    });
+
+    it("rejects negative reload_threshold_cents", async () => {
+      await insertTestAccount({
+        orgId,
+        billingMode: "trial",
+        stripePaymentMethodId: "pm_123",
+      });
+
+      const res = await request(app)
+        .patch("/v1/accounts/mode")
+        .set(getAuthHeaders(orgId))
+        .send({
+          mode: "payg",
+          reload_amount_cents: 5000,
+          reload_threshold_cents: -100,
+        });
+
+      expect(res.status).toBe(400);
+    });
+
     it("rejects switching back to trial", async () => {
       await insertTestAccount({ orgId, billingMode: "byok" });
 

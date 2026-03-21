@@ -37,6 +37,9 @@ export function setupStripeMocks() {
       status: "succeeded",
       amount: 2000,
     }),
+    createPortalSession: vi.fn().mockResolvedValue({
+      url: "https://billing.stripe.com/p/session/test_portal",
+    }),
     constructWebhookEvent: vi.fn(),
     resolvePlatformKey: vi.fn().mockResolvedValue({
       provider: "stripe",
@@ -62,6 +65,9 @@ export function setupStripeMocks() {
   );
   vi.spyOn(stripeLib, "chargePaymentMethod").mockImplementation(
     mocks.chargePaymentMethod
+  );
+  vi.spyOn(stripeLib, "createPortalSession").mockImplementation(
+    mocks.createPortalSession
   );
   vi.spyOn(stripeLib, "constructWebhookEvent").mockImplementation(
     mocks.constructWebhookEvent

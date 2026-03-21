@@ -184,6 +184,23 @@ export async function chargePaymentMethod(
   );
 }
 
+// --- Portal ---
+
+export async function createPortalSession(
+  orgId: string,
+  userId: string,
+  stripeCustomerId: string,
+  returnUrl: string,
+  workflowHeaders?: Record<string, string>
+): Promise<Stripe.BillingPortal.Session> {
+  return withAuthRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
+    stripe.billingPortal.sessions.create({
+      customer: stripeCustomerId,
+      return_url: returnUrl,
+    })
+  );
+}
+
 // --- Webhook ---
 
 export async function constructWebhookEvent(

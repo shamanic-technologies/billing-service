@@ -126,6 +126,7 @@ export const UpdateModeRequestSchema = z
   .object({
     mode: z.enum(["byok", "payg"]),
     reload_amount_cents: z.number().int().positive().optional(),
+    reload_threshold_cents: z.number().int().min(0).optional(),
   })
   .openapi("UpdateModeRequest");
 
@@ -145,6 +146,20 @@ export const CheckoutResponseSchema = z
     session_id: z.string(),
   })
   .openapi("CheckoutResponse");
+
+// --- Portal Sessions ---
+
+export const CreatePortalSessionRequestSchema = z
+  .object({
+    return_url: z.string().url(),
+  })
+  .openapi("CreatePortalSessionRequest");
+
+export const PortalSessionResponseSchema = z
+  .object({
+    url: z.string(),
+  })
+  .openapi("PortalSessionResponse");
 
 // --- Balance ---
 
@@ -280,6 +295,38 @@ registry.registerPath({
     },
     400: {
       description: "Invalid transition",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/portal-sessions",
+  summary: "Create Stripe Customer Portal session for payment method management",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: {
+        "application/json": { schema: CreatePortalSessionRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Portal session URL",
+      content: { "application/json": { schema: PortalSessionResponseSchema } },
+    },
+    400: {
+      description: "No Stripe customer or invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Payment provider authentication failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
