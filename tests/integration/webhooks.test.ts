@@ -25,7 +25,7 @@ describe("Stripe webhooks", () => {
 
   it("rejects requests without stripe-signature", async () => {
     const res = await request(app)
-      .post(`/v1/webhooks/stripe/${orgId}`)
+      .post("/v1/webhooks/stripe")
       .set("Content-Type", "application/json")
       .send(JSON.stringify({ type: "test" }));
 
@@ -39,7 +39,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post(`/v1/webhooks/stripe/${orgId}`)
+      .post("/v1/webhooks/stripe")
       .set("Content-Type", "application/json")
       .set("stripe-signature", "invalid_sig")
       .send(JSON.stringify({ type: "test" }));
@@ -69,7 +69,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post(`/v1/webhooks/stripe/${orgId}`)
+      .post("/v1/webhooks/stripe")
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "checkout.session.completed" }));
@@ -107,7 +107,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post(`/v1/webhooks/stripe/${orgId}`)
+      .post("/v1/webhooks/stripe")
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "payment_intent.succeeded" }));
@@ -131,7 +131,7 @@ describe("Stripe webhooks", () => {
     });
 
     const res = await request(app)
-      .post(`/v1/webhooks/stripe/${orgId}`)
+      .post("/v1/webhooks/stripe")
       .set("Content-Type", "application/json")
       .set("stripe-signature", "valid_sig")
       .send(JSON.stringify({ type: "some.unknown.event" }));

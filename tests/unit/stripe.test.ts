@@ -81,7 +81,7 @@ describe("Stripe platform key resolution", () => {
     );
   });
 
-  it("webhook uses orgId and 'system' userId for identity context", async () => {
+  it("webhook uses 'system' identity for platform webhook secret", async () => {
     const mockResolvePlatformKey = vi.fn().mockResolvedValue({
       provider: "stripe-webhook",
       key: "whsec_test",
@@ -106,12 +106,12 @@ describe("Stripe platform key resolution", () => {
 
     const { constructWebhookEvent } = await import("../../src/lib/stripe.js");
 
-    await constructWebhookEvent("org-webhook", Buffer.from("{}"), "sig_test");
+    await constructWebhookEvent(Buffer.from("{}"), "sig_test");
 
-    // Webhook secret resolution should use orgId from param and "system" userId
+    // Webhook secret resolution uses system identity (no org needed)
     expect(mockResolvePlatformKey).toHaveBeenCalledWith(
       "stripe-webhook",
-      { orgId: "org-webhook", userId: "system" },
+      { orgId: "system", userId: "system" },
       { service: "billing", method: "POST", path: "/v1/webhooks/stripe" }
     );
   });

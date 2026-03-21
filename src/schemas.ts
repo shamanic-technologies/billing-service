@@ -504,15 +504,12 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/webhooks/stripe/{orgId}",
-  summary: "Stripe webhook handler (per-org)",
-  request: {
-    params: z.object({
-      orgId: z.string().uuid(),
-    }),
-  },
+  path: "/v1/webhooks/stripe",
+  summary: "Stripe webhook handler",
+  description:
+    "Fixed URL for Stripe webhook. Organization is resolved from the Stripe customer ID in the event payload.",
   responses: {
     200: { description: "Webhook processed" },
-    400: { description: "Invalid signature" },
+    400: { description: "Invalid signature or missing stripe-signature header" },
   },
 });
