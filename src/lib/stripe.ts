@@ -204,12 +204,11 @@ export async function createPortalSession(
 // --- Webhook ---
 
 export async function constructWebhookEvent(
-  orgId: string,
   payload: Buffer,
   signature: string
 ): Promise<Stripe.Event> {
-  // Webhook calls come from Stripe, not from users — use "system" as userId
-  const identity: IdentityContext = { orgId, userId: "system" };
+  // Webhook calls come from Stripe, not from users — use "system" identity
+  const identity: IdentityContext = { orgId: "system", userId: "system" };
   if (!cachedWebhookSecret) {
     const result = await resolvePlatformKey("stripe-webhook", identity, {
       service: "billing",

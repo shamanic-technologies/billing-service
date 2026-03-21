@@ -1676,26 +1676,16 @@
         }
       }
     },
-    "/v1/webhooks/stripe/{orgId}": {
+    "/v1/webhooks/stripe": {
       "post": {
-        "summary": "Stripe webhook handler (per-org)",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "orgId",
-            "in": "path"
-          }
-        ],
+        "summary": "Stripe webhook handler",
+        "description": "Fixed URL for Stripe webhook. Organization is resolved from the Stripe customer ID in the event payload.",
         "responses": {
           "200": {
             "description": "Webhook processed"
           },
           "400": {
-            "description": "Invalid signature"
+            "description": "Invalid signature or missing stripe-signature header"
           }
         }
       }
