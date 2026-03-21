@@ -44,16 +44,19 @@ export function requireOrgHeaders(
 ) {
   const orgId = req.headers["x-org-id"] as string;
   if (!orgId) {
+    console.warn(`[billing] 400 on ${req.method} ${req.path}: missing x-org-id`);
     res.status(400).json({ error: "x-org-id header is required" });
     return;
   }
   const userId = req.headers["x-user-id"] as string;
   if (!userId) {
+    console.warn(`[billing] 400 on ${req.method} ${req.path}: missing x-user-id (orgId=${orgId})`);
     res.status(400).json({ error: "x-user-id header is required" });
     return;
   }
   const runId = req.headers["x-run-id"] as string;
   if (!runId) {
+    console.warn(`[billing] 400 on ${req.method} ${req.path}: missing x-run-id (orgId=${orgId})`);
     res.status(400).json({ error: "x-run-id header is required" });
     return;
   }
