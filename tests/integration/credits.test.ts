@@ -159,7 +159,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.body.balance_cents).toBe(-2);
   });
 
-  it("returns 404 for unknown org", async () => {
+  it("auto-creates account for unknown org and deducts from trial balance", async () => {
     const res = await request(app)
       .post("/v1/credits/deduct")
       .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
@@ -168,7 +168,10 @@ describe("Credits deduction endpoint", () => {
         description: "test",
       });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Auto-created with 200 cents ($2), then deducted 5
+    expect(res.body.balance_cents).toBe(195);
   });
 
   it("validates request body", async () => {
@@ -433,13 +436,16 @@ describe("Credits authorize endpoint", () => {
     });
   });
 
-  it("returns 404 for unknown org", async () => {
+  it("auto-creates account for unknown org and authorizes from trial balance", async () => {
     const res = await request(app)
       .post("/v1/credits/authorize")
       .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
       .send(authorizeBody);
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    // Auto-created with 200 cents ($2), costs-service mock returns 100
+    expect(res.body.balance_cents).toBe(200);
   });
 
   it("validates request body — rejects empty items", async () => {

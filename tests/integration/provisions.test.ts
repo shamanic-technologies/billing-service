@@ -56,13 +56,16 @@ describe("Credit provision endpoints", () => {
       expect(res.body.depleted).toBe(true);
     });
 
-    it("returns 404 for unknown org", async () => {
+    it("auto-creates account for unknown org and provisions from trial balance", async () => {
       const res = await request(app)
         .post("/v1/credits/provision")
         .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
         .send({ amount_cents: 100, description: "test" });
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(200);
+      expect(res.body.provision_id).toBeDefined();
+      // Auto-created with 200 cents ($2), then provisioned 100
+      expect(res.body.balance_cents).toBe(100);
     });
 
     it("stores workflow headers in provision record", async () => {
