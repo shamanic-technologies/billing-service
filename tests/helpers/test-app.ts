@@ -5,6 +5,7 @@ import accountsRoutes from "../../src/routes/accounts.js";
 import creditsRoutes from "../../src/routes/credits.js";
 import provisionsRoutes from "../../src/routes/provisions.js";
 import checkoutRoutes from "../../src/routes/checkout.js";
+import portalRoutes from "../../src/routes/portal.js";
 import webhookRoutes from "../../src/routes/webhooks.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 
@@ -28,6 +29,7 @@ export function createTestApp() {
   app.use(creditsRoutes);
   app.use(provisionsRoutes);
   app.use(checkoutRoutes);
+  app.use(portalRoutes);
 
   app.use((_req: express.Request, res: express.Response) => {
     res.status(404).json({ error: "Not found" });

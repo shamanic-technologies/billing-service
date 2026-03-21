@@ -10,6 +10,7 @@ import accountsRoutes from "./routes/accounts.js";
 import creditsRoutes from "./routes/credits.js";
 import provisionsRoutes from "./routes/provisions.js";
 import checkoutRoutes from "./routes/checkout.js";
+import portalRoutes from "./routes/portal.js";
 import webhookRoutes from "./routes/webhooks.js";
 import { requireApiKey } from "./middleware/auth.js";
 
@@ -47,6 +48,7 @@ app.use(accountsRoutes);
 app.use(creditsRoutes);
 app.use(provisionsRoutes);
 app.use(checkoutRoutes);
+app.use(portalRoutes);
 
 // 404 handler
 app.use((_req, res) => {

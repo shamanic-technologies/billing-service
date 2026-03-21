@@ -195,7 +195,7 @@ router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const { mode, reload_amount_cents } = parsed.data;
+    const { mode, reload_amount_cents, reload_threshold_cents } = parsed.data;
 
     const [account] = await db
       .select()
@@ -235,6 +235,10 @@ router.patch("/v1/accounts/mode", requireOrgHeaders, async (req, res) => {
 
     if (mode === "payg" && reload_amount_cents) {
       updateData.reloadAmountCents = reload_amount_cents;
+    }
+
+    if (reload_threshold_cents !== undefined) {
+      updateData.reloadThresholdCents = reload_threshold_cents;
     }
 
     const [updated] = await db
