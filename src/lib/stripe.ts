@@ -201,6 +201,17 @@ export async function createPortalSession(
   );
 }
 
+// --- PaymentIntent retrieval ---
+
+export async function retrievePaymentIntent(
+  paymentIntentId: string
+): Promise<Stripe.PaymentIntent> {
+  const identity: IdentityContext = { orgId: "system", userId: "system" };
+  return withAuthRetry(identity, (stripe) =>
+    stripe.paymentIntents.retrieve(paymentIntentId)
+  );
+}
+
 // --- Webhook ---
 
 export async function constructWebhookEvent(

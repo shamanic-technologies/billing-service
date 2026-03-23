@@ -5,6 +5,7 @@ import { billingAccounts } from "../db/schema.js";
 import {
   constructWebhookEvent,
   createBalanceTransaction,
+  retrievePaymentIntent,
 } from "../lib/stripe.js";
 import type Stripe from "stripe";
 
@@ -78,9 +79,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     return;
   }
 
-  // Extract payment method from the session
-  const sessionAny = session as unknown as Record<string, unknown>;
-  const paymentMethodId = (sessionAny.payment_method as string) ?? null;
+  // Extract payment method from the PaymentIntent (not on the session directly)
+  let paymentMethodId: string | null = null;
+  const piId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id;
+  if (piId) {
+    const paymentIntent = await retrievePaymentIntent(piId);
+    paymentMethodId =
+      typeof paymentIntent.payment_method === "string"
+        ? paymentIntent.payment_method
+        : paymentIntent.payment_method?.id ?? null;
+  }
 
   // Get reload amount from session metadata or account
   const reloadAmountCents = session.metadata?.reload_amount_cents
