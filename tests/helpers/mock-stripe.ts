@@ -40,6 +40,11 @@ export function setupStripeMocks() {
     createPortalSession: vi.fn().mockResolvedValue({
       url: "https://billing.stripe.com/p/session/test_portal",
     }),
+    retrievePaymentIntent: vi.fn().mockResolvedValue({
+      id: "pi_mock",
+      payment_method: "pm_mock",
+      status: "succeeded",
+    }),
     constructWebhookEvent: vi.fn(),
     resolvePlatformKey: vi.fn().mockResolvedValue({
       provider: "stripe",
@@ -68,6 +73,9 @@ export function setupStripeMocks() {
   );
   vi.spyOn(stripeLib, "createPortalSession").mockImplementation(
     mocks.createPortalSession
+  );
+  vi.spyOn(stripeLib, "retrievePaymentIntent").mockImplementation(
+    mocks.retrievePaymentIntent
   );
   vi.spyOn(stripeLib, "constructWebhookEvent").mockImplementation(
     mocks.constructWebhookEvent

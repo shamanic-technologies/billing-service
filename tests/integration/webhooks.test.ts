@@ -62,10 +62,16 @@ describe("Stripe webhooks", () => {
           customer: "cus_123",
           payment_intent: "pi_123",
           payment_method_types: ["card"],
-          payment_method: "pm_new_123",
           metadata: { reload_amount_cents: "2000" },
         },
       },
+    });
+
+    // The payment method is on the PaymentIntent, not the session
+    stripeMocks.retrievePaymentIntent.mockResolvedValue({
+      id: "pi_123",
+      payment_method: "pm_new_123",
+      status: "succeeded",
     });
 
     const res = await request(app)
