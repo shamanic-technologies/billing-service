@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
+import { eq } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
+import { creditProvisions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
@@ -88,6 +91,18 @@ describe("Credit provision endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.provision_id).toBeDefined();
+
+      // Verify all workflow headers including feature_slug are persisted
+      const [row] = await db
+        .select()
+        .from(creditProvisions)
+        .where(eq(creditProvisions.id, res.body.provision_id))
+        .limit(1);
+
+      expect(row.campaignId).toBe("camp_42");
+      expect(row.brandId).toBe("brand_7");
+      expect(row.workflowName).toBe("outreach-flow");
+      expect(row.featureSlug).toBe("press-outreach");
     });
 
     it("validates request body", async () => {
