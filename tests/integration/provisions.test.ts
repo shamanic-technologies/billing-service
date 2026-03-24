@@ -82,6 +82,7 @@ describe("Credit provision endpoints", () => {
           "x-campaign-id": "camp_42",
           "x-brand-id": "brand_7",
           "x-workflow-name": "outreach-flow",
+          "x-feature-slug": "press-outreach",
         })
         .send({ amount_cents: 50, description: "tracked provision" });
 

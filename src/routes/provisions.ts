@@ -83,6 +83,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
           campaignId: wfHeaders.campaignId,
           brandId: wfHeaders.brandId,
           workflowName: wfHeaders.workflowName,
+          featureSlug: wfHeaders.featureSlug,
         })
         .returning();
 

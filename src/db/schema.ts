@@ -47,6 +47,7 @@ export const creditProvisions = pgTable(
     campaignId: text("campaign_id"),
     brandId: text("brand_id"),
     workflowName: text("workflow_name"),
+    featureSlug: text("feature_slug"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -4,6 +4,7 @@ export interface WorkflowHeaders {
   campaignId?: string;
   brandId?: string;
   workflowName?: string;
+  featureSlug?: string;
 }
 
 /** Extract optional workflow-tracking headers injected by workflow-service. */
@@ -12,6 +13,7 @@ export function getWorkflowHeaders(req: Request): WorkflowHeaders {
     campaignId: req.headers["x-campaign-id"] as string | undefined,
     brandId: req.headers["x-brand-id"] as string | undefined,
     workflowName: req.headers["x-workflow-name"] as string | undefined,
+    featureSlug: req.headers["x-feature-slug"] as string | undefined,
   };
 }
 
@@ -21,6 +23,7 @@ export function forwardWorkflowHeaders(wf: WorkflowHeaders): Record<string, stri
   if (wf.campaignId) headers["x-campaign-id"] = wf.campaignId;
   if (wf.brandId) headers["x-brand-id"] = wf.brandId;
   if (wf.workflowName) headers["x-workflow-name"] = wf.workflowName;
+  if (wf.featureSlug) headers["x-feature-slug"] = wf.featureSlug;
   return headers;
 }
 

@@ -29,12 +29,16 @@ beforeAll(async () => {
       "campaign_id" text,
       "brand_id" text,
       "workflow_name" text,
+      "feature_slug" text,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL,
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_org_id" ON "credit_provisions" USING btree ("org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_status" ON "credit_provisions" USING btree ("status")`;
+
+  // Add feature_slug column if it doesn't exist (migration 0005)
+  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "feature_slug" text`;
 
   // Drop billing_mode column if it still exists (migration 0004)
   await sql`
