@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from "express";
 export interface WorkflowHeaders {
   campaignId?: string;
   brandId?: string;
-  workflowName?: string;
+  workflowSlug?: string;
   featureSlug?: string;
 }
 
@@ -12,7 +12,7 @@ export function getWorkflowHeaders(req: Request): WorkflowHeaders {
   return {
     campaignId: req.headers["x-campaign-id"] as string | undefined,
     brandId: req.headers["x-brand-id"] as string | undefined,
-    workflowName: req.headers["x-workflow-name"] as string | undefined,
+    workflowSlug: req.headers["x-workflow-slug"] as string | undefined,
     featureSlug: req.headers["x-feature-slug"] as string | undefined,
   };
 }
@@ -22,7 +22,7 @@ export function forwardWorkflowHeaders(wf: WorkflowHeaders): Record<string, stri
   const headers: Record<string, string> = {};
   if (wf.campaignId) headers["x-campaign-id"] = wf.campaignId;
   if (wf.brandId) headers["x-brand-id"] = wf.brandId;
-  if (wf.workflowName) headers["x-workflow-name"] = wf.workflowName;
+  if (wf.workflowSlug) headers["x-workflow-slug"] = wf.workflowSlug;
   if (wf.featureSlug) headers["x-feature-slug"] = wf.featureSlug;
   return headers;
 }

@@ -511,10 +511,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -621,10 +621,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -711,10 +711,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -811,10 +811,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -928,10 +928,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1028,10 +1028,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1158,10 +1158,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1268,10 +1268,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1378,10 +1378,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1488,10 +1488,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1606,10 +1606,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {
@@ -1734,10 +1734,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Workflow name injected by workflow-service"
+              "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
-            "name": "x-workflow-name",
+            "name": "x-workflow-slug",
             "in": "header"
           },
           {

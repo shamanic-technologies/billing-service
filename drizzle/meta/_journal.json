@@ -43,6 +43,13 @@
       "when": 1774416000000,
       "tag": "0005_true_madelyne_pryor",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774934400000,
+      "tag": "0006_rename_workflow_slug",
+      "breakpoints": true
     }
   ]
 }

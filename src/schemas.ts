@@ -190,7 +190,7 @@ const protectedHeaders = z.object({
   "x-run-id": z.string().uuid(),
   "x-campaign-id": z.string().optional().openapi({ description: "Campaign ID injected by workflow-service" }),
   "x-brand-id": z.string().optional().openapi({ description: "Brand ID injected by workflow-service" }),
-  "x-workflow-name": z.string().optional().openapi({ description: "Workflow name injected by workflow-service" }),
+  "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug injected by workflow-service" }),
   "x-feature-slug": z.string().optional().openapi({ description: "Feature slug for tracking" }),
 });
 
