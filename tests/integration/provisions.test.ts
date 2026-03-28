@@ -84,7 +84,7 @@ describe("Credit provision endpoints", () => {
           ...getAuthHeaders(orgId),
           "x-campaign-id": "camp_42",
           "x-brand-id": "brand_7",
-          "x-workflow-name": "outreach-flow",
+          "x-workflow-slug": "outreach-flow",
           "x-feature-slug": "press-outreach",
         })
         .send({ amount_cents: 50, description: "tracked provision" });
@@ -101,7 +101,7 @@ describe("Credit provision endpoints", () => {
 
       expect(row.campaignId).toBe("camp_42");
       expect(row.brandId).toBe("brand_7");
-      expect(row.workflowName).toBe("outreach-flow");
+      expect(row.workflowSlug).toBe("outreach-flow");
       expect(row.featureSlug).toBe("press-outreach");
     });
 

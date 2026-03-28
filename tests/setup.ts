@@ -28,7 +28,7 @@ beforeAll(async () => {
       "description" text,
       "campaign_id" text,
       "brand_id" text,
-      "workflow_name" text,
+      "workflow_slug" text,
       "feature_slug" text,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL,
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -39,6 +39,15 @@ beforeAll(async () => {
 
   // Add feature_slug column if it doesn't exist (migration 0005)
   await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "feature_slug" text`;
+
+  // Rename workflow_name → workflow_slug if old column exists (migration 0006)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE credit_provisions RENAME COLUMN workflow_name TO workflow_slug;
+    EXCEPTION WHEN undefined_column THEN
+      NULL;
+    END $$
+  `;
 
   // Drop billing_mode column if it still exists (migration 0004)
   await sql`

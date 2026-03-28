@@ -224,7 +224,7 @@ describe("Credits deduction endpoint", () => {
         ...getAuthHeaders(orgId),
         "x-campaign-id": "camp_42",
         "x-brand-id": "brand_7",
-        "x-workflow-name": "outreach-flow",
+        "x-workflow-slug": "outreach-flow",
       })
       .send({
         amount_cents: 5,
@@ -242,7 +242,7 @@ describe("Credits deduction endpoint", () => {
       {
         "x-campaign-id": "camp_42",
         "x-brand-id": "brand_7",
-        "x-workflow-name": "outreach-flow",
+        "x-workflow-slug": "outreach-flow",
       }
     );
   });

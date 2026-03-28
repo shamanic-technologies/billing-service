@@ -57,7 +57,7 @@ describe("Accounts endpoints", () => {
           ...getAuthHeaders(orgId),
           "x-campaign-id": "camp_42",
           "x-brand-id": "brand_7",
-          "x-workflow-name": "onboarding-flow",
+          "x-workflow-slug": "onboarding-flow",
         });
 
       expect(res.status).toBe(200);
@@ -68,7 +68,7 @@ describe("Accounts endpoints", () => {
         {
           "x-campaign-id": "camp_42",
           "x-brand-id": "brand_7",
-          "x-workflow-name": "onboarding-flow",
+          "x-workflow-slug": "onboarding-flow",
         }
       );
     });

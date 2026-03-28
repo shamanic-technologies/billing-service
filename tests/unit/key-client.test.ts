@@ -131,7 +131,7 @@ describe("resolvePlatformKey", () => {
       workflowHeaders: {
         "x-campaign-id": "camp_42",
         "x-brand-id": "brand_7",
-        "x-workflow-name": "outreach-flow",
+        "x-workflow-slug": "outreach-flow",
       },
     });
 
@@ -141,7 +141,7 @@ describe("resolvePlatformKey", () => {
         headers: expect.objectContaining({
           "x-campaign-id": "camp_42",
           "x-brand-id": "brand_7",
-          "x-workflow-name": "outreach-flow",
+          "x-workflow-slug": "outreach-flow",
         }),
       })
     );
