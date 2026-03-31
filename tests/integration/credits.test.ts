@@ -457,6 +457,21 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(400);
   });
 
+  it("returns 400 when x-org-id is not a UUID", async () => {
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set({
+        "x-api-key": process.env.BILLING_SERVICE_API_KEY ?? "test-key",
+        "x-org-id": "platform",
+        "x-user-id": userId,
+        "x-run-id": "00000000-0000-0000-0000-000000000001",
+      })
+      .send(authorizeBody);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("x-org-id must be a valid UUID");
+  });
+
   it("returns 502 when costs-service is unavailable", async () => {
     const costsClient = await import("../../src/lib/costs-client.js");
     vi.spyOn(costsClient, "resolveRequiredCents").mockRejectedValue(

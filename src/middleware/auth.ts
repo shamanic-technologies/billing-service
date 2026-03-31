@@ -47,6 +47,8 @@ export function requireApiKey(
   next();
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function requireOrgHeaders(
   req: Request,
   res: Response,
@@ -58,16 +60,31 @@ export function requireOrgHeaders(
     res.status(400).json({ error: "x-org-id header is required" });
     return;
   }
+  if (!UUID_RE.test(orgId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: invalid x-org-id="${orgId}" (not a UUID)`);
+    res.status(400).json({ error: "x-org-id must be a valid UUID" });
+    return;
+  }
   const userId = req.headers["x-user-id"] as string;
   if (!userId) {
     console.error(`[billing-400] ${req.method} ${req.path}: missing x-user-id (orgId=${orgId})`);
     res.status(400).json({ error: "x-user-id header is required" });
     return;
   }
+  if (!UUID_RE.test(userId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: invalid x-user-id="${userId}" (not a UUID)`);
+    res.status(400).json({ error: "x-user-id must be a valid UUID" });
+    return;
+  }
   const runId = req.headers["x-run-id"] as string;
   if (!runId) {
     console.error(`[billing-400] ${req.method} ${req.path}: missing x-run-id (orgId=${orgId})`);
     res.status(400).json({ error: "x-run-id header is required" });
+    return;
+  }
+  if (!UUID_RE.test(runId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: invalid x-run-id="${runId}" (not a UUID)`);
+    res.status(400).json({ error: "x-run-id must be a valid UUID" });
     return;
   }
   next();
