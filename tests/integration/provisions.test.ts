@@ -100,9 +100,36 @@ describe("Credit provision endpoints", () => {
         .limit(1);
 
       expect(row.campaignId).toBe("camp_42");
-      expect(row.brandId).toBe("brand_7");
+      expect(row.brandIds).toEqual(["brand_7"]);
       expect(row.workflowSlug).toBe("outreach-flow");
       expect(row.featureSlug).toBe("press-outreach");
+    });
+
+    it("stores multiple brand IDs from CSV x-brand-id header", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_123",
+        creditBalanceCents: 500,
+      });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set({
+          ...getAuthHeaders(orgId),
+          "x-brand-id": "brand_1, brand_2, brand_3",
+        })
+        .send({ amount_cents: 50, description: "multi-brand provision" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.provision_id).toBeDefined();
+
+      const [row] = await db
+        .select()
+        .from(creditProvisions)
+        .where(eq(creditProvisions.id, res.body.provision_id))
+        .limit(1);
+
+      expect(row.brandIds).toEqual(["brand_1", "brand_2", "brand_3"]);
     });
 
     it("validates request body", async () => {

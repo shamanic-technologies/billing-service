@@ -2,16 +2,23 @@ import { Request, Response, NextFunction } from "express";
 
 export interface WorkflowHeaders {
   campaignId?: string;
-  brandId?: string;
+  brandIds?: string[];
   workflowSlug?: string;
   featureSlug?: string;
+}
+
+/** Parse the x-brand-id header as a comma-separated list of UUIDs. */
+function parseBrandIds(raw: string | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const ids = String(raw).split(",").map(s => s.trim()).filter(Boolean);
+  return ids.length > 0 ? ids : undefined;
 }
 
 /** Extract optional workflow-tracking headers injected by workflow-service. */
 export function getWorkflowHeaders(req: Request): WorkflowHeaders {
   return {
     campaignId: req.headers["x-campaign-id"] as string | undefined,
-    brandId: req.headers["x-brand-id"] as string | undefined,
+    brandIds: parseBrandIds(req.headers["x-brand-id"] as string | undefined),
     workflowSlug: req.headers["x-workflow-slug"] as string | undefined,
     featureSlug: req.headers["x-feature-slug"] as string | undefined,
   };
@@ -21,7 +28,7 @@ export function getWorkflowHeaders(req: Request): WorkflowHeaders {
 export function forwardWorkflowHeaders(wf: WorkflowHeaders): Record<string, string> {
   const headers: Record<string, string> = {};
   if (wf.campaignId) headers["x-campaign-id"] = wf.campaignId;
-  if (wf.brandId) headers["x-brand-id"] = wf.brandId;
+  if (wf.brandIds && wf.brandIds.length > 0) headers["x-brand-id"] = wf.brandIds.join(",");
   if (wf.workflowSlug) headers["x-workflow-slug"] = wf.workflowSlug;
   if (wf.featureSlug) headers["x-feature-slug"] = wf.featureSlug;
   return headers;

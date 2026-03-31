@@ -45,7 +45,7 @@ export const creditProvisions = pgTable(
     status: text("status").notNull().default("pending"),
     description: text("description"),
     campaignId: text("campaign_id"),
-    brandId: text("brand_id"),
+    brandIds: text("brand_ids").array(),
     workflowSlug: text("workflow_slug"),
     featureSlug: text("feature_slug"),
     createdAt: timestamp("created_at", { withTimezone: true })

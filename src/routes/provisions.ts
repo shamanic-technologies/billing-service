@@ -81,7 +81,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
           status: "pending",
           description,
           campaignId: wfHeaders.campaignId,
-          brandId: wfHeaders.brandId,
+          brandIds: wfHeaders.brandIds,
           workflowSlug: wfHeaders.workflowSlug,
           featureSlug: wfHeaders.featureSlug,
         })
