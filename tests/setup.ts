@@ -27,7 +27,7 @@ beforeAll(async () => {
       "status" text DEFAULT 'pending' NOT NULL,
       "description" text,
       "campaign_id" text,
-      "brand_id" text,
+      "brand_ids" text[],
       "workflow_slug" text,
       "feature_slug" text,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -39,6 +39,18 @@ beforeAll(async () => {
 
   // Add feature_slug column if it doesn't exist (migration 0005)
   await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "feature_slug" text`;
+
+  // Migrate brand_id → brand_ids (migration 0007)
+  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "brand_ids" text[]`;
+  await sql`
+    DO $$ BEGIN
+      UPDATE credit_provisions SET brand_ids = ARRAY[brand_id] WHERE brand_id IS NOT NULL AND brand_ids IS NULL;
+      ALTER TABLE credit_provisions DROP COLUMN IF EXISTS brand_id;
+    EXCEPTION WHEN undefined_column THEN
+      NULL;
+    END $$
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_brand_ids" ON "credit_provisions" USING gin ("brand_ids")`;
 
   // Rename workflow_name → workflow_slug if old column exists (migration 0006)
   await sql`
