@@ -58,6 +58,33 @@ describe("Stripe platform key resolution", () => {
     expect(mockResolvePlatformKey).toHaveBeenCalledTimes(1);
   });
 
+  it("constructs Stripe client with maxNetworkRetries for 429 rate-limit handling", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_retries",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    let capturedConfig: Record<string, unknown> | undefined;
+    const mockCreate = vi.fn().mockResolvedValue({ id: "cus_mock", object: "customer" });
+    vi.doMock("stripe", () => {
+      const MockStripe = function (_key: string, config: Record<string, unknown>) {
+        capturedConfig = config;
+        return { customers: { create: mockCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { createCustomer } = await import("../../src/lib/stripe.js");
+    await createCustomer("org-123", "user-456");
+
+    expect(capturedConfig).toBeDefined();
+    expect(capturedConfig!.maxNetworkRetries).toBe(5);
+  });
+
   it("evicts cached Stripe instance on auth error and retries with fresh key", async () => {
     const mockResolvePlatformKey = vi.fn()
       .mockResolvedValueOnce({ provider: "stripe", key: "sk_expired_key" })

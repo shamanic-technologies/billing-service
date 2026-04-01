@@ -18,7 +18,10 @@ async function getStripe(identity: IdentityContext): Promise<Stripe> {
 
   if (!cachedStripe) {
     const { key } = await resolvePlatformKey("stripe", identity);
-    cachedStripe = new Stripe(key, { apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion });
+    cachedStripe = new Stripe(key, {
+      apiVersion: "2024-12-18.acacia" as Stripe.LatestApiVersion,
+      maxNetworkRetries: 5,
+    });
   }
   return cachedStripe;
 }
