@@ -58,7 +58,7 @@ describe("Stripe platform key resolution", () => {
     expect(mockResolvePlatformKey).toHaveBeenCalledTimes(1);
   });
 
-  it("constructs Stripe client with maxNetworkRetries for 429 rate-limit handling", async () => {
+  it("constructs Stripe client with maxNetworkRetries", async () => {
     const mockResolvePlatformKey = vi.fn().mockResolvedValue({
       provider: "stripe",
       key: "sk_test_retries",
@@ -141,6 +141,222 @@ describe("Stripe platform key resolution", () => {
       { orgId: "system", userId: "system" },
       { service: "billing", method: "POST", path: "/v1/webhooks/stripe" }
     );
+  });
+});
+
+describe("429 rate limit retry", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("retries on StripeRateLimitError and succeeds on subsequent attempt", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_429",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    const rateLimitError = new Stripe.errors.StripeRateLimitError({
+      message: "Rate limit exceeded",
+      type: "rate_limit_error",
+    });
+    const mockCreate = vi.fn()
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce({ id: "cus_after_retry", object: "customer" });
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { customers: { create: mockCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { createCustomer } = await import("../../src/lib/stripe.js");
+    const result = await createCustomer("org-123", "user-456");
+
+    expect(result).toEqual({ id: "cus_after_retry", object: "customer" });
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after exhausting all 429 retries", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_429_exhaust",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    const rateLimitError = new Stripe.errors.StripeRateLimitError({
+      message: "Rate limit exceeded",
+      type: "rate_limit_error",
+    });
+    const mockCreate = vi.fn().mockRejectedValue(rateLimitError);
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { customers: { create: mockCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { createCustomer } = await import("../../src/lib/stripe.js");
+
+    await expect(createCustomer("org-123", "user-456")).rejects.toThrow("Rate limit exceeded");
+    // 1 initial + 3 retries = 4 total calls
+    expect(mockCreate).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry non-rate-limit Stripe errors", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_non429",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    const cardError = new Stripe.errors.StripeCardError({
+      message: "Card declined",
+      type: "card_error",
+    });
+    const mockCreate = vi.fn().mockRejectedValue(cardError);
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return {
+          paymentIntents: { create: mockCreate },
+        };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { chargePaymentMethod } = await import("../../src/lib/stripe.js");
+
+    await expect(
+      chargePaymentMethod("org-123", "user-456", "cus_test", "pm_test", 2000, "reload")
+    ).rejects.toThrow("Card declined");
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("concurrency limiting", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("stripeQueue has concurrency of 10", async () => {
+    const { stripeQueue } = await import("../../src/lib/stripe.js");
+    expect(stripeQueue.concurrency).toBe(10);
+  });
+});
+
+describe("idempotency keys", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("chargePaymentMethod passes an idempotency key to PaymentIntents.create", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_idemp",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    let capturedOptions: Record<string, unknown> | undefined;
+    const mockPiCreate = vi.fn().mockImplementation((_params: unknown, opts: Record<string, unknown>) => {
+      capturedOptions = opts;
+      return Promise.resolve({ id: "pi_mock", status: "succeeded" });
+    });
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { paymentIntents: { create: mockPiCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { chargePaymentMethod } = await import("../../src/lib/stripe.js");
+    await chargePaymentMethod("org-123", "user-456", "cus_test", "pm_test", 2000, "Auto-reload");
+
+    expect(capturedOptions).toBeDefined();
+    expect(capturedOptions!.idempotencyKey).toBeDefined();
+    expect(typeof capturedOptions!.idempotencyKey).toBe("string");
+    expect((capturedOptions!.idempotencyKey as string).length).toBe(32);
+  });
+
+  it("same inputs within same minute produce same idempotency key", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_idemp2",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    const capturedKeys: string[] = [];
+    const mockPiCreate = vi.fn().mockImplementation((_params: unknown, opts: Record<string, unknown>) => {
+      capturedKeys.push(opts.idempotencyKey as string);
+      return Promise.resolve({ id: "pi_mock", status: "succeeded" });
+    });
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { paymentIntents: { create: mockPiCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { chargePaymentMethod } = await import("../../src/lib/stripe.js");
+
+    await chargePaymentMethod("org-A", "user-1", "cus_A", "pm_A", 2000, "Reload");
+    await chargePaymentMethod("org-A", "user-1", "cus_A", "pm_A", 2000, "Reload");
+
+    // Same org + customer + amount within same minute → same key
+    expect(capturedKeys[0]).toBe(capturedKeys[1]);
+  });
+
+  it("different orgs produce different idempotency keys", async () => {
+    const mockResolvePlatformKey = vi.fn().mockResolvedValue({
+      provider: "stripe",
+      key: "sk_test_idemp3",
+    });
+    vi.doMock("../../src/lib/key-client.js", () => ({
+      resolvePlatformKey: mockResolvePlatformKey,
+    }));
+
+    const capturedKeys: string[] = [];
+    const mockPiCreate = vi.fn().mockImplementation((_params: unknown, opts: Record<string, unknown>) => {
+      capturedKeys.push(opts.idempotencyKey as string);
+      return Promise.resolve({ id: "pi_mock", status: "succeeded" });
+    });
+
+    vi.doMock("stripe", () => {
+      const MockStripe = function () {
+        return { paymentIntents: { create: mockPiCreate } };
+      };
+      MockStripe.errors = Stripe.errors;
+      return { default: MockStripe };
+    });
+
+    const { chargePaymentMethod } = await import("../../src/lib/stripe.js");
+
+    await chargePaymentMethod("org-A", "user-1", "cus_A", "pm_A", 2000, "Reload");
+    await chargePaymentMethod("org-B", "user-1", "cus_B", "pm_B", 2000, "Reload");
+
+    expect(capturedKeys[0]).not.toBe(capturedKeys[1]);
   });
 });
 
