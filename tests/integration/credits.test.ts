@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
+import { eq, and } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
+import { creditProvisions, billingAccounts } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
@@ -268,6 +271,131 @@ describe("Credits deduction endpoint", () => {
 
     const res3 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
     expect(res3.body.balance_cents).toBe(70);
+  });
+
+  it("creates a credit provision when post-deduction balance drops below threshold", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 210,
+      reloadAmountCents: 1000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({ amount_cents: 20, description: "test" });
+
+    expect(res.status).toBe(200);
+    // Balance: 210 - 20 = 190 (< 200 threshold) → credit provision for 1000
+    // Returned balance: 190 + 1000 = 1190
+    expect(res.body.balance_cents).toBe(1190);
+
+    // Wait for async confirmation
+    await new Promise((r) => setTimeout(r, 50));
+
+    const creditProvs = await db
+      .select()
+      .from(creditProvisions)
+      .where(
+        and(
+          eq(creditProvisions.orgId, orgId),
+          eq(creditProvisions.type, "credit")
+        )
+      );
+
+    expect(creditProvs).toHaveLength(1);
+    expect(creditProvs[0].amountCents).toBe(1000);
+    expect(creditProvs[0].status).toBe("confirmed");
+    expect(creditProvs[0].stripePaymentIntentId).toBe("pi_mock");
+  });
+
+  it("two sequential deductions below threshold create only one credit provision", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 210,
+      reloadAmountCents: 1000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    // First deduction: 210 - 20 = 190 → below threshold → credit provision
+    const res1 = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({ amount_cents: 20, description: "first" });
+
+    expect(res1.body.balance_cents).toBe(1190);
+
+    // Second deduction: 1190 - 20 = 1170 → above threshold → no credit provision
+    const res2 = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({ amount_cents: 20, description: "second" });
+
+    expect(res2.body.balance_cents).toBe(1170);
+
+    const creditProvs = await db
+      .select()
+      .from(creditProvisions)
+      .where(
+        and(
+          eq(creditProvisions.orgId, orgId),
+          eq(creditProvisions.type, "credit")
+        )
+      );
+
+    expect(creditProvs).toHaveLength(1);
+  });
+
+  it("reverses credit provision on deduct when Stripe charge fails", async () => {
+    stripeMocks.chargePaymentMethod.mockRejectedValue(
+      new Error("Card declined")
+    );
+
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 210,
+      reloadAmountCents: 1000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({ amount_cents: 20, description: "test" });
+
+    expect(res.status).toBe(200);
+
+    // Wait for async rollback
+    await new Promise((r) => setTimeout(r, 100));
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    // Balance should be 190 (210 - 20), no credit applied
+    expect(account.creditBalanceCents).toBe(190);
+
+    const creditProvs = await db
+      .select()
+      .from(creditProvisions)
+      .where(
+        and(
+          eq(creditProvisions.orgId, orgId),
+          eq(creditProvisions.type, "credit")
+        )
+      );
+
+    expect(creditProvs).toHaveLength(1);
+    expect(creditProvs[0].status).toBe("cancelled");
   });
 });
 

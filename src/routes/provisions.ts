@@ -77,6 +77,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
           orgId,
           userId,
           runId,
+          type: "debit",
           amountCents: amount_cents,
           status: "pending",
           description,
@@ -87,11 +88,49 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         })
         .returning();
 
+      // Auto-reload: if balance dropped below threshold, create a credit provision
+      // and increment balance INSIDE the transaction to prevent concurrent race conditions
+      let creditProvisionId: string | null = null;
+      let reloadAmount: number | null = null;
+      const threshold = account.reload_threshold_cents ?? 200;
+      if (
+        newBalance < threshold &&
+        account.stripe_payment_method_id &&
+        account.stripe_customer_id &&
+        account.reload_amount_cents
+      ) {
+        reloadAmount = account.reload_amount_cents;
+        const [creditProv] = await tx
+          .insert(creditProvisions)
+          .values({
+            orgId,
+            userId,
+            type: "credit",
+            amountCents: reloadAmount,
+            status: "pending",
+            description: `Auto-reload credit ($${(reloadAmount / 100).toFixed(2)})`,
+          })
+          .returning();
+        creditProvisionId = creditProv.id;
+
+        // Increment balance immediately (optimistic — will be reversed if Stripe fails)
+        await tx
+          .update(billingAccounts)
+          .set({
+            creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${reloadAmount}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(billingAccounts.orgId, orgId));
+      }
+
       return {
         provision_id: provision.id,
-        balance_cents: newBalance,
+        balance_cents: newBalance + (reloadAmount ?? 0),
         depleted: newBalance <= 0,
-        _account: account,
+        _creditProvisionId: creditProvisionId,
+        _reloadAmount: reloadAmount,
+        _customerId: account.stripe_customer_id,
+        _pmId: account.stripe_payment_method_id,
       };
     });
 
@@ -100,59 +139,65 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Post-transaction: async auto-reload if below threshold (PAYG)
-    if ("_account" in result && result._account) {
-      const account = result._account;
-      const threshold = account.reload_threshold_cents ?? 200;
-      if (
-        result.balance_cents !== null &&
-        result.balance_cents < threshold &&
-        account.stripe_payment_method_id &&
-        account.stripe_customer_id &&
-        account.reload_amount_cents
-      ) {
-        const reloadAmount = account.reload_amount_cents;
-        const customerId = account.stripe_customer_id;
-        const pmId = account.stripe_payment_method_id;
+    // Async Stripe charge for credit provision (fire-and-forget)
+    const creditProvisionId = "_creditProvisionId" in result ? result._creditProvisionId as string | null : null;
+    const reloadAmount = "_reloadAmount" in result ? result._reloadAmount as number | null : null;
+    const customerId = "_customerId" in result ? result._customerId as string | null : null;
+    const pmId = "_pmId" in result ? result._pmId as string | null : null;
 
-        (async () => {
-          try {
-            await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload", fwdHeaders);
-            await createBalanceTransaction(orgId, userId, customerId, -reloadAmount, "Auto-reload credit", undefined, fwdHeaders);
-            await db
+    if (creditProvisionId && reloadAmount && customerId && pmId) {
+      (async () => {
+        try {
+          const pi = await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload", fwdHeaders);
+          await createBalanceTransaction(orgId, userId, customerId, -reloadAmount, `Auto-reload credit ($${(reloadAmount / 100).toFixed(2)})`, undefined, fwdHeaders);
+          await db
+            .update(creditProvisions)
+            .set({
+              status: "confirmed",
+              stripePaymentIntentId: pi.id,
+              updatedAt: new Date(),
+            })
+            .where(eq(creditProvisions.id, creditProvisionId));
+        } catch (err) {
+          console.error("[billing-service] Async auto-reload failed, reversing credit provision:", err);
+          // Reverse: cancel credit provision + decrement balance
+          await db.transaction(async (rollbackTx) => {
+            await rollbackTx
+              .update(creditProvisions)
+              .set({ status: "cancelled", updatedAt: new Date() })
+              .where(eq(creditProvisions.id, creditProvisionId));
+            await rollbackTx
               .update(billingAccounts)
               .set({
-                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${reloadAmount}`,
+                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} - ${reloadAmount}`,
                 updatedAt: new Date(),
               })
               .where(eq(billingAccounts.orgId, orgId));
-          } catch (err) {
-            console.error("Async auto-reload failed:", err);
-            sendEmail({
-              eventType: "credits-reload-failed",
-              orgId,
-              userId,
-              runId,
-              workflowHeaders: fwdHeaders,
-            });
-          }
-        })();
-      }
-
-      // Send depleted email if needed
-      if (result.depleted) {
-        sendEmail({
-          eventType: "credits-depleted",
-          orgId,
-          userId,
-          runId,
-          workflowHeaders: fwdHeaders,
-        });
-      }
+          });
+          sendEmail({
+            eventType: "credits-reload-failed",
+            orgId,
+            userId,
+            runId,
+            workflowHeaders: fwdHeaders,
+          });
+        }
+      })();
     }
 
-    // Strip internal _account from response
-    const { _account, ...response } = result as Record<string, unknown>;
+    // Send depleted email if needed
+    if ("depleted" in result && result.depleted) {
+      sendEmail({
+        eventType: "credits-depleted",
+        orgId,
+        userId,
+        runId,
+        workflowHeaders: fwdHeaders,
+      });
+    }
+
+    // Strip internal fields from response
+    const { _creditProvisionId: _, _reloadAmount: _r, _customerId: _c, _pmId: _p, ...response } = result as Record<string, unknown>;
     res.json(response);
   } catch (err) {
     console.error("Error creating provision:", err);
