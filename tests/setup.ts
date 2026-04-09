@@ -69,5 +69,9 @@ beforeAll(async () => {
       NULL;
     END $$
   `;
+
+  // Add type and stripe_payment_intent_id columns (migration 0008)
+  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'debit' NOT NULL`;
+  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" text`;
 });
 afterAll(() => console.log("Test suite complete."));
