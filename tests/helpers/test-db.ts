@@ -1,9 +1,16 @@
 import { db, sql } from "../../src/db/index.js";
-import { billingAccounts, creditProvisions } from "../../src/db/schema.js";
+import {
+  billingAccounts,
+  creditProvisions,
+  promoCodes,
+  promoRedemptions,
+} from "../../src/db/schema.js";
 
 export async function cleanTestData() {
+  await db.delete(promoRedemptions);
   await db.delete(creditProvisions);
   await db.delete(billingAccounts);
+  await db.delete(promoCodes);
 }
 
 export async function insertTestAccount(data: {
@@ -26,6 +33,24 @@ export async function insertTestAccount(data: {
     })
     .returning();
   return account;
+}
+
+export async function insertTestPromoCode(data: {
+  code: string;
+  amountCents: number;
+  maxRedemptions?: number | null;
+  expiresAt?: Date | null;
+}) {
+  const [promo] = await db
+    .insert(promoCodes)
+    .values({
+      code: data.code,
+      amountCents: data.amountCents,
+      maxRedemptions: data.maxRedemptions ?? null,
+      expiresAt: data.expiresAt ?? null,
+    })
+    .returning();
+  return promo;
 }
 
 export async function closeDb() {

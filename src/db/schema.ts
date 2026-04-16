@@ -65,3 +65,47 @@ export const creditProvisions = pgTable(
 
 export type CreditProvision = typeof creditProvisions.$inferSelect;
 export type NewCreditProvision = typeof creditProvisions.$inferInsert;
+
+export const promoCodes = pgTable(
+  "promo_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    code: text("code").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    maxRedemptions: integer("max_redemptions"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("idx_promo_codes_code").on(table.code)]
+);
+
+export type PromoCode = typeof promoCodes.$inferSelect;
+export type NewPromoCode = typeof promoCodes.$inferInsert;
+
+export const promoRedemptions = pgTable(
+  "promo_redemptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    promoCodeId: uuid("promo_code_id")
+      .notNull()
+      .references(() => promoCodes.id),
+    orgId: uuid("org_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_promo_redemptions_org_code").on(
+      table.promoCodeId,
+      table.orgId
+    ),
+    index("idx_promo_redemptions_org_id").on(table.orgId),
+  ]
+);
+
+export type PromoRedemption = typeof promoRedemptions.$inferSelect;
+export type NewPromoRedemption = typeof promoRedemptions.$inferInsert;

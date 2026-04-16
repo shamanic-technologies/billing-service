@@ -417,6 +417,37 @@
           "refunded_cents",
           "balance_cents"
         ]
+      },
+      "RedeemPromoResponse": {
+        "type": "object",
+        "properties": {
+          "redeemed": {
+            "type": "boolean"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "balance_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "redeemed",
+          "amount_cents",
+          "balance_cents"
+        ]
+      },
+      "RedeemPromoRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "code"
+        ]
       }
     },
     "parameters": {}
@@ -1785,6 +1816,127 @@
           },
           "409": {
             "description": "Provision already confirmed or cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/promo/redeem": {
+      "post": {
+        "summary": "Redeem a promo code for bonus credits",
+        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and credits the bonus amount to the org's billing account. The normal $2 welcome credit is unaffected — this adds on top.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemPromoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Promo redeemed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedeemPromoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired promo code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Promo code already redeemed by this org",
             "content": {
               "application/json": {
                 "schema": {
