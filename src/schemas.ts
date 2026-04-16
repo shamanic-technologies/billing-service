@@ -181,6 +181,22 @@ export const TransactionsResponseSchema = z
   })
   .openapi("TransactionsResponse");
 
+// --- Promo ---
+
+export const RedeemPromoRequestSchema = z
+  .object({
+    code: z.string().min(1),
+  })
+  .openapi("RedeemPromoRequest");
+
+export const RedeemPromoResponseSchema = z
+  .object({
+    redeemed: z.boolean(),
+    amount_cents: z.number().int(),
+    balance_cents: z.number().int(),
+  })
+  .openapi("RedeemPromoResponse");
+
 // --- OpenAPI Path Registrations ---
 
 const protectedHeaders = z.object({
@@ -498,6 +514,36 @@ registry.registerPath({
     },
     409: {
       description: "Provision already confirmed or cancelled",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/promo/redeem",
+  summary: "Redeem a promo code for bonus credits",
+  description:
+    "Validates the promo code, checks it hasn't been redeemed by this org, " +
+    "and credits the bonus amount to the org's billing account. " +
+    "The normal $2 welcome credit is unaffected — this adds on top.",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: { "application/json": { schema: RedeemPromoRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Promo redeemed successfully",
+      content: { "application/json": { schema: RedeemPromoResponseSchema } },
+    },
+    400: {
+      description: "Invalid or expired promo code",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Promo code already redeemed by this org",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
