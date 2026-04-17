@@ -73,5 +73,30 @@ beforeAll(async () => {
   // Add type and stripe_payment_intent_id columns (migration 0008)
   await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'debit' NOT NULL`;
   await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" text`;
+
+  // Promo codes tables (migration 0009)
+  await sql`
+    CREATE TABLE IF NOT EXISTS "promo_codes" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "code" text NOT NULL,
+      "amount_cents" integer NOT NULL,
+      "max_redemptions" integer,
+      "expires_at" timestamp with time zone,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_promo_codes_code" ON "promo_codes" USING btree ("code")`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS "promo_redemptions" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "promo_code_id" uuid NOT NULL REFERENCES "promo_codes"("id"),
+      "org_id" uuid NOT NULL,
+      "user_id" uuid NOT NULL,
+      "amount_cents" integer NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_promo_redemptions_org_code" ON "promo_redemptions" USING btree ("promo_code_id", "org_id")`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_promo_redemptions_org_id" ON "promo_redemptions" USING btree ("org_id")`;
 });
 afterAll(() => console.log("Test suite complete."));
