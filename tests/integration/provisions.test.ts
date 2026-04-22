@@ -218,7 +218,7 @@ describe("Credit provision endpoints", () => {
       expect(res.body.balance_cents).toBe(350);
     });
 
-    it("returns 409 for already confirmed provision", async () => {
+    it("returns 200 idempotently for already confirmed provision", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_123",
@@ -242,7 +242,10 @@ describe("Credit provision endpoints", () => {
         .set(getAuthHeaders(orgId))
         .send({});
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("confirmed");
+      expect(res.body.provision_id).toBe(provisionId);
+      expect(res.body.adjustment_cents).toBe(0);
     });
 
     it("returns 404 for unknown provision", async () => {
@@ -282,7 +285,7 @@ describe("Credit provision endpoints", () => {
       expect(res.body.balance_cents).toBe(500);
     });
 
-    it("returns 409 for already cancelled provision", async () => {
+    it("returns 200 idempotently for already cancelled provision", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_123",
@@ -306,7 +309,10 @@ describe("Credit provision endpoints", () => {
         .set(getAuthHeaders(orgId))
         .send();
 
-      expect(res.status).toBe(409);
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("cancelled");
+      expect(res.body.provision_id).toBe(provisionId);
+      expect(res.body.refunded_cents).toBe(0);
     });
 
     it("cannot cancel a confirmed provision", async () => {
