@@ -245,6 +245,24 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
         return { error: "Provision not found" as const, status: 404 as const };
       }
 
+      if (provision.status === "confirmed") {
+        // Idempotent: already confirmed — return current state as no-op
+        const [account] = await tx
+          .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+          .from(billingAccounts)
+          .where(eq(billingAccounts.orgId, orgId))
+          .limit(1);
+
+        return {
+          provision_id: provisionId,
+          status: "confirmed" as const,
+          original_amount_cents: provision.amount_cents,
+          final_amount_cents: provision.amount_cents,
+          adjustment_cents: 0,
+          balance_cents: account?.creditBalanceCents ?? null,
+        };
+      }
+
       if (provision.status !== "pending") {
         return { error: `Provision already ${provision.status}` as const, status: 409 as const };
       }
@@ -331,6 +349,22 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
 
       if (!provision) {
         return { error: "Provision not found" as const, status: 404 as const };
+      }
+
+      if (provision.status === "cancelled") {
+        // Idempotent: already cancelled — return current state as no-op
+        const [account] = await tx
+          .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+          .from(billingAccounts)
+          .where(eq(billingAccounts.orgId, orgId))
+          .limit(1);
+
+        return {
+          provision_id: provisionId,
+          status: "cancelled" as const,
+          refunded_cents: 0,
+          balance_cents: account?.creditBalanceCents ?? null,
+        };
       }
 
       if (provision.status !== "pending") {
