@@ -8,6 +8,7 @@ import checkoutRoutes from "../../src/routes/checkout.js";
 import portalRoutes from "../../src/routes/portal.js";
 import promoRoutes from "../../src/routes/promo.js";
 import webhookRoutes from "../../src/routes/webhooks.js";
+import internalRoutes from "../../src/routes/internal.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 
 export function createTestApp() {
@@ -26,6 +27,7 @@ export function createTestApp() {
 
   // Protected routes
   app.use(requireApiKey);
+  app.use(internalRoutes);
   app.use(accountsRoutes);
   app.use(creditsRoutes);
   app.use(provisionsRoutes);
