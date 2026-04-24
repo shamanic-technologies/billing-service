@@ -197,6 +197,29 @@ export const RedeemPromoResponseSchema = z
   })
   .openapi("RedeemPromoResponse");
 
+// --- Transfer Brand ---
+
+export const TransferBrandRequestSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    sourceOrgId: z.string().uuid(),
+    targetOrgId: z.string().uuid(),
+  })
+  .openapi("TransferBrandRequest");
+
+export const TransferBrandTableResultSchema = z
+  .object({
+    tableName: z.string(),
+    count: z.number().int(),
+  })
+  .openapi("TransferBrandTableResult");
+
+export const TransferBrandResponseSchema = z
+  .object({
+    updatedTables: z.array(TransferBrandTableResultSchema),
+  })
+  .openapi("TransferBrandResponse");
+
 // --- OpenAPI Path Registrations ---
 
 const protectedHeaders = z.object({
@@ -558,5 +581,35 @@ registry.registerPath({
   responses: {
     200: { description: "Webhook processed" },
     400: { description: "Invalid signature or missing stripe-signature header" },
+  },
+});
+
+const internalHeaders = z.object({
+  "x-api-key": z.string(),
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/transfer-brand",
+  summary: "Transfer all solo-brand rows from one org to another",
+  description:
+    "For every table that stores brand references alongside org_id, " +
+    "re-assigns rows where org_id = sourceOrgId and the row references only the given brandId. " +
+    "Skips co-branding rows (multiple brand IDs). Idempotent.",
+  request: {
+    headers: internalHeaders,
+    body: {
+      content: { "application/json": { schema: TransferBrandRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Transfer result with per-table update counts",
+      content: { "application/json": { schema: TransferBrandResponseSchema } },
+    },
+    400: {
+      description: "Invalid request body",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
