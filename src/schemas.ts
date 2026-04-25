@@ -201,9 +201,10 @@ export const RedeemPromoResponseSchema = z
 
 export const TransferBrandRequestSchema = z
   .object({
-    brandId: z.string().uuid(),
+    sourceBrandId: z.string().uuid(),
     sourceOrgId: z.string().uuid(),
     targetOrgId: z.string().uuid(),
+    targetBrandId: z.string().uuid().optional(),
   })
   .openapi("TransferBrandRequest");
 
@@ -594,7 +595,8 @@ registry.registerPath({
   summary: "Transfer all solo-brand rows from one org to another",
   description:
     "For every table that stores brand references alongside org_id, " +
-    "re-assigns rows where org_id = sourceOrgId and the row references only the given brandId. " +
+    "re-assigns rows where org_id = sourceOrgId and the row references only sourceBrandId. " +
+    "When targetBrandId is provided, also rewrites the brand reference to targetBrandId. " +
     "Skips co-branding rows (multiple brand IDs). Idempotent.",
   request: {
     headers: internalHeaders,
