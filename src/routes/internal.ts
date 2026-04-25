@@ -14,20 +14,29 @@ router.post("/internal/transfer-brand", async (req, res) => {
 
   const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
 
-  // When targetBrandId is present, rewrite the brand reference too (conflict case)
-  const newBrandId = targetBrandId ?? sourceBrandId;
-
-  const result = await db.execute(sql`
+  // Step 1: Move org_id from sourceOrgId to targetOrgId for solo-brand rows
+  const step1 = await db.execute(sql`
     UPDATE credit_provisions
     SET org_id = ${targetOrgId},
-        brand_ids = ARRAY[${newBrandId}],
         updated_at = NOW()
     WHERE org_id = ${sourceOrgId}
       AND array_length(brand_ids, 1) = 1
       AND brand_ids[1] = ${sourceBrandId}
   `);
 
-  const creditProvisionsCount = Number(result.count ?? 0);
+  let creditProvisionsCount = Number(step1.count ?? 0);
+
+  // Step 2: Rewrite brand reference when targetBrandId is provided (conflict case)
+  if (targetBrandId) {
+    const step2 = await db.execute(sql`
+      UPDATE credit_provisions
+      SET brand_ids = ARRAY[${targetBrandId}],
+          updated_at = NOW()
+      WHERE array_length(brand_ids, 1) = 1
+        AND brand_ids[1] = ${sourceBrandId}
+    `);
+    creditProvisionsCount = Math.max(creditProvisionsCount, Number(step2.count ?? 0));
+  }
 
   console.log(
     `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} credit_provisions=${creditProvisionsCount}`
