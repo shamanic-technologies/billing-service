@@ -481,7 +481,7 @@
       "TransferBrandRequest": {
         "type": "object",
         "properties": {
-          "brandId": {
+          "sourceBrandId": {
             "type": "string",
             "format": "uuid"
           },
@@ -492,10 +492,14 @@
           "targetOrgId": {
             "type": "string",
             "format": "uuid"
+          },
+          "targetBrandId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
-          "brandId",
+          "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
         ]
@@ -2016,7 +2020,7 @@
     "/internal/transfer-brand": {
       "post": {
         "summary": "Transfer all solo-brand rows from one org to another",
-        "description": "For every table that stores brand references alongside org_id, re-assigns rows where org_id = sourceOrgId and the row references only the given brandId. Skips co-branding rows (multiple brand IDs). Idempotent.",
+        "description": "For every table that stores brand references alongside org_id, re-assigns rows where org_id = sourceOrgId and the row references only sourceBrandId. When targetBrandId is provided, also rewrites the brand reference to targetBrandId. Skips co-branding rows (multiple brand IDs). Idempotent.",
         "parameters": [
           {
             "schema": {
