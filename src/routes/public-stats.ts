@@ -15,15 +15,6 @@ router.get("/public/stats/billing", async (_req, res) => {
       })
       .from(billingAccounts);
 
-    const [creditStats] = await db
-      .select({
-        totalCreditedCents: rawSql<number>`COALESCE(SUM(${creditProvisions.amountCents}), 0)::int`,
-      })
-      .from(creditProvisions)
-      .where(
-        rawSql`${creditProvisions.type} = 'credit' AND ${creditProvisions.status} = 'confirmed'`
-      );
-
     const [debitStats] = await db
       .select({
         totalConsumedCents: rawSql<number>`COALESCE(SUM(${creditProvisions.amountCents}), 0)::int`,
@@ -33,11 +24,18 @@ router.get("/public/stats/billing", async (_req, res) => {
         rawSql`${creditProvisions.type} = 'debit' AND ${creditProvisions.status} = 'confirmed'`
       );
 
+    // Derive totalCreditedCents from the balance equation: credited = balance + consumed.
+    // Querying credit_provisions WHERE type='credit' misses welcome credits, promo
+    // redemptions, and Stripe checkout reloads which all increase credit_balance_cents
+    // without creating a credit_provision row.
+    const totalCreditedCents =
+      accountStats.totalCreditBalanceCents + debitStats.totalConsumedCents;
+
     res.json({
       totalAccounts: accountStats.totalAccounts,
       accountsWithPaymentMethod: accountStats.accountsWithPaymentMethod,
       totalCreditBalanceCents: accountStats.totalCreditBalanceCents,
-      totalCreditedCents: creditStats.totalCreditedCents,
+      totalCreditedCents,
       totalConsumedCents: debitStats.totalConsumedCents,
     });
   } catch (err) {

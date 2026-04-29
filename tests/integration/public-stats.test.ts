@@ -54,22 +54,6 @@ describe("GET /public/stats/billing", () => {
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 10000,
-        description: "reload",
-      },
-      {
-        orgId: orgB,
-        userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 5000,
-        description: "reload",
-      },
-      {
-        orgId: orgA,
-        userId,
         type: "debit",
         status: "confirmed",
         amountCents: 2000,
@@ -95,13 +79,52 @@ describe("GET /public/stats/billing", () => {
 
     const res = await request(app).get("/public/stats/billing");
 
+    // totalCreditedCents = balance + consumed = 8000 + 2000 = 10000
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       totalAccounts: 2,
       accountsWithPaymentMethod: 1,
       totalCreditBalanceCents: 8000,
-      totalCreditedCents: 15000,
+      totalCreditedCents: 10000,
       totalConsumedCents: 2000,
     });
+  });
+
+  it("includes credits not tracked in credit_provisions (welcome, promo, webhook reload)", async () => {
+    // Balances include welcome credits ($2), promo ($10), and a Stripe reload ($20)
+    // but only the reload created a credit_provision row.
+    // totalCreditedCents must still reflect ALL credits via the balance equation.
+    await insertTestAccount({
+      orgId: orgA,
+      creditBalanceCents: 30000,
+    });
+
+    await db.insert(creditProvisions).values([
+      {
+        orgId: orgA,
+        userId,
+        type: "credit",
+        status: "confirmed",
+        amountCents: 20000,
+        description: "reload — only tracked credit source",
+      },
+      {
+        orgId: orgA,
+        userId,
+        type: "debit",
+        status: "confirmed",
+        amountCents: 2000,
+        description: "usage",
+      },
+    ]);
+
+    const res = await request(app).get("/public/stats/billing");
+
+    expect(res.status).toBe(200);
+    // totalCreditedCents = balance + consumed = 30000 + 2000 = 32000
+    // NOT 20000 (which would miss the $120 from welcome/promo)
+    expect(res.body.totalCreditedCents).toBe(32000);
+    expect(res.body.totalConsumedCents).toBe(2000);
+    expect(res.body.totalCreditBalanceCents).toBe(30000);
   });
 });
