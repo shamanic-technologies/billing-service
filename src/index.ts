@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { db } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
+import publicStatsRoutes from "./routes/public-stats.js";
 import accountsRoutes from "./routes/accounts.js";
 import creditsRoutes from "./routes/credits.js";
 import provisionsRoutes from "./routes/provisions.js";
@@ -32,6 +33,7 @@ app.use(express.json());
 
 // Public routes
 app.use(healthRoutes);
+app.use(publicStatsRoutes);
 
 // Serve OpenAPI spec (resolve relative to dist/ → ../openapi.json in Docker)
 const openapiPath = resolve(__dirname, "..", "openapi.json");

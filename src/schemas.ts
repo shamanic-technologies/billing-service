@@ -221,6 +221,18 @@ export const TransferBrandResponseSchema = z
   })
   .openapi("TransferBrandResponse");
 
+// --- Public Stats ---
+
+export const PublicBillingStatsSchema = z
+  .object({
+    totalAccounts: z.number().int(),
+    accountsWithPaymentMethod: z.number().int(),
+    totalCreditBalanceCents: z.number().int(),
+    totalCreditedCents: z.number().int(),
+    totalConsumedCents: z.number().int(),
+  })
+  .openapi("PublicBillingStats");
+
 // --- OpenAPI Path Registrations ---
 
 const protectedHeaders = z.object({
@@ -248,6 +260,22 @@ registry.registerPath({
             service: z.string(),
           }),
         },
+      },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/public/stats/billing",
+  summary: "Aggregate billing stats (no auth)",
+  description:
+    "Cross-tenant aggregate billing statistics. No authentication required.",
+  responses: {
+    200: {
+      description: "Billing stats",
+      content: {
+        "application/json": { schema: PublicBillingStatsSchema },
       },
     },
   },

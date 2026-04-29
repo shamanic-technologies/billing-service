@@ -12,6 +12,33 @@
   ],
   "components": {
     "schemas": {
+      "PublicBillingStats": {
+        "type": "object",
+        "properties": {
+          "totalAccounts": {
+            "type": "integer"
+          },
+          "accountsWithPaymentMethod": {
+            "type": "integer"
+          },
+          "totalCreditBalanceCents": {
+            "type": "integer"
+          },
+          "totalCreditedCents": {
+            "type": "integer"
+          },
+          "totalConsumedCents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "totalAccounts",
+          "accountsWithPaymentMethod",
+          "totalCreditBalanceCents",
+          "totalCreditedCents",
+          "totalConsumedCents"
+        ]
+      },
       "BillingAccount": {
         "type": "object",
         "properties": {
@@ -530,6 +557,24 @@
                     "status",
                     "service"
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/stats/billing": {
+      "get": {
+        "summary": "Aggregate billing stats (no auth)",
+        "description": "Cross-tenant aggregate billing statistics. No authentication required.",
+        "responses": {
+          "200": {
+            "description": "Billing stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicBillingStats"
                 }
               }
             }
