@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import healthRoutes from "../../src/routes/health.js";
+import publicStatsRoutes from "../../src/routes/public-stats.js";
 import accountsRoutes from "../../src/routes/accounts.js";
 import creditsRoutes from "../../src/routes/credits.js";
 import provisionsRoutes from "../../src/routes/provisions.js";
@@ -24,6 +25,7 @@ export function createTestApp() {
 
   // Public routes
   app.use(healthRoutes);
+  app.use(publicStatsRoutes);
 
   // Protected routes
   app.use(requireApiKey);
