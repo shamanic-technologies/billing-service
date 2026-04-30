@@ -12,6 +12,29 @@
   ],
   "components": {
     "schemas": {
+      "BillingGrowthRow": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "credited_cents": {
+            "type": "integer"
+          },
+          "consumed_cents": {
+            "type": "integer"
+          },
+          "revenue_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "period",
+          "credited_cents",
+          "consumed_cents",
+          "revenue_cents"
+        ]
+      },
       "PublicBillingStats": {
         "type": "object",
         "properties": {
@@ -29,6 +52,18 @@
           },
           "totalConsumedCents": {
             "type": "integer"
+          },
+          "monthlyGrowth": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillingGrowthRow"
+            }
+          },
+          "weeklyGrowth": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillingGrowthRow"
+            }
           }
         },
         "required": [
@@ -36,7 +71,9 @@
           "accountsWithPaymentMethod",
           "totalCreditBalanceCents",
           "totalCreditedCents",
-          "totalConsumedCents"
+          "totalConsumedCents",
+          "monthlyGrowth",
+          "weeklyGrowth"
         ]
       },
       "BillingAccount": {

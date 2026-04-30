@@ -20,7 +20,7 @@ describe("GET /public/stats/billing", () => {
     await closeDb();
   });
 
-  it("returns zeros when no data exists", async () => {
+  it("returns zeros and empty growth when no data exists", async () => {
     const res = await request(app).get("/public/stats/billing");
 
     expect(res.status).toBe(200);
@@ -30,6 +30,8 @@ describe("GET /public/stats/billing", () => {
       totalCreditBalanceCents: 0,
       totalCreditedCents: 0,
       totalConsumedCents: 0,
+      monthlyGrowth: [],
+      weeklyGrowth: [],
     });
   });
 
@@ -101,12 +103,80 @@ describe("GET /public/stats/billing", () => {
     const res = await request(app).get("/public/stats/billing");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      totalAccounts: 2,
-      accountsWithPaymentMethod: 1,
-      totalCreditBalanceCents: 8000,
-      totalCreditedCents: 15000,
-      totalConsumedCents: 2000,
-    });
+    expect(res.body.totalAccounts).toBe(2);
+    expect(res.body.accountsWithPaymentMethod).toBe(1);
+    expect(res.body.totalCreditBalanceCents).toBe(8000);
+    expect(res.body.totalCreditedCents).toBe(15000);
+    expect(res.body.totalConsumedCents).toBe(2000);
+  });
+
+  it("returns monthly and weekly growth with credited, consumed, and revenue", async () => {
+    await insertTestAccount({ orgId: orgA, creditBalanceCents: 1000 });
+
+    await db.insert(creditLedger).values([
+      {
+        orgId: orgA,
+        userId,
+        type: "credit",
+        status: "confirmed",
+        amountCents: 5000,
+        source: "reload",
+        description: "reload — real payment",
+      },
+      {
+        orgId: orgA,
+        userId,
+        type: "credit",
+        status: "confirmed",
+        amountCents: 200,
+        source: "welcome",
+        description: "welcome — not revenue",
+      },
+      {
+        orgId: orgA,
+        userId,
+        type: "debit",
+        status: "confirmed",
+        amountCents: 300,
+        source: "deduct",
+        description: "usage",
+      },
+    ]);
+
+    const res = await request(app).get("/public/stats/billing");
+
+    expect(res.status).toBe(200);
+
+    // Should have growth arrays
+    expect(res.body.monthlyGrowth).toBeInstanceOf(Array);
+    expect(res.body.monthlyGrowth.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.weeklyGrowth).toBeInstanceOf(Array);
+    expect(res.body.weeklyGrowth.length).toBeGreaterThanOrEqual(1);
+
+    // Sum across all periods should match totals
+    const totalMonthlyCredited = res.body.monthlyGrowth.reduce(
+      (sum: number, r: { credited_cents: number }) => sum + r.credited_cents,
+      0
+    );
+    const totalMonthlyConsumed = res.body.monthlyGrowth.reduce(
+      (sum: number, r: { consumed_cents: number }) => sum + r.consumed_cents,
+      0
+    );
+    const totalMonthlyRevenue = res.body.monthlyGrowth.reduce(
+      (sum: number, r: { revenue_cents: number }) => sum + r.revenue_cents,
+      0
+    );
+
+    expect(totalMonthlyCredited).toBe(5200); // 5000 reload + 200 welcome
+    expect(totalMonthlyConsumed).toBe(300);
+    expect(totalMonthlyRevenue).toBe(5000); // only reload is revenue
+
+    // Each row should have the expected shape
+    for (const row of res.body.monthlyGrowth) {
+      expect(row).toHaveProperty("period");
+      expect(row).toHaveProperty("credited_cents");
+      expect(row).toHaveProperty("consumed_cents");
+      expect(row).toHaveProperty("revenue_cents");
+    }
   });
 });

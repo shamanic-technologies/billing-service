@@ -223,6 +223,15 @@ export const TransferBrandResponseSchema = z
 
 // --- Public Stats ---
 
+export const BillingGrowthRowSchema = z
+  .object({
+    period: z.string(),
+    credited_cents: z.number().int(),
+    consumed_cents: z.number().int(),
+    revenue_cents: z.number().int(),
+  })
+  .openapi("BillingGrowthRow");
+
 export const PublicBillingStatsSchema = z
   .object({
     totalAccounts: z.number().int(),
@@ -230,6 +239,8 @@ export const PublicBillingStatsSchema = z
     totalCreditBalanceCents: z.number().int(),
     totalCreditedCents: z.number().int(),
     totalConsumedCents: z.number().int(),
+    monthlyGrowth: z.array(BillingGrowthRowSchema),
+    weeklyGrowth: z.array(BillingGrowthRowSchema),
   })
   .openapi("PublicBillingStats");
 

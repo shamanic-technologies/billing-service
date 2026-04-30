@@ -5,6 +5,34 @@ import { billingAccounts, creditLedger } from "../db/schema.js";
 
 const router = Router();
 
+interface GrowthRow {
+  period: string;
+  credited_cents: number;
+  consumed_cents: number;
+  revenue_cents: number;
+}
+
+async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
+  const rows = await db.execute(
+    rawSql`SELECT
+      to_char(date_trunc(${truncTo}, ${creditLedger.createdAt}), 'YYYY-MM-DD') AS period,
+      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
+        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
+      ), 0)::int AS credited_cents,
+      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
+        WHERE ${creditLedger.type} = 'debit' AND ${creditLedger.status} = 'confirmed'
+      ), 0)::int AS consumed_cents,
+      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
+        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
+          AND ${creditLedger.source} = 'reload'
+      ), 0)::int AS revenue_cents
+    FROM ${creditLedger}
+    GROUP BY 1
+    ORDER BY 1`
+  );
+  return rows as unknown as GrowthRow[];
+}
+
 router.get("/public/stats/billing", async (_req, res) => {
   try {
     const [accountStats] = await db
@@ -33,12 +61,19 @@ router.get("/public/stats/billing", async (_req, res) => {
         rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} = 'confirmed'`
       );
 
+    const [monthlyGrowth, weeklyGrowth] = await Promise.all([
+      queryGrowth("month"),
+      queryGrowth("week"),
+    ]);
+
     res.json({
       totalAccounts: accountStats.totalAccounts,
       accountsWithPaymentMethod: accountStats.accountsWithPaymentMethod,
       totalCreditBalanceCents: accountStats.totalCreditBalanceCents,
       totalCreditedCents: creditStats.totalCreditedCents,
       totalConsumedCents: debitStats.totalConsumedCents,
+      monthlyGrowth,
+      weeklyGrowth,
     });
   } catch (err) {
     console.error("[billing-service] GET /public/stats/billing failed:", err);
