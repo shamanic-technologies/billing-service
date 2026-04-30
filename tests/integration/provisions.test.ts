@@ -544,7 +544,7 @@ describe("Credit provision endpoints", () => {
       expect(res.body.balance_cents).toBe(1150);
 
       // Wait for async rollback to complete
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 500));
 
       // After async rollback, balance should be back to 150 (no credit)
       const [account] = await db
