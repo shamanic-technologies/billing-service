@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { creditProvisions, billingAccounts } from "../../src/db/schema.js";
+import { creditLedger, billingAccounts } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
@@ -23,7 +23,7 @@ describe("Credits deduction endpoint", () => {
     await cleanTestData();
   });
 
-  it("deducts credits successfully", async () => {
+  it("deducts credits successfully and writes ledger entry", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -44,6 +44,21 @@ describe("Credits deduction endpoint", () => {
       balance_cents: 195,
       depleted: false,
     });
+
+    // Verify ledger entry was created
+    const entries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, orgId),
+          eq(creditLedger.source, "deduct")
+        )
+      );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe("debit");
+    expect(entries[0].amountCents).toBe(5);
+    expect(entries[0].status).toBe("confirmed");
   });
 
   it("allows negative balance when insufficient", async () => {
@@ -67,7 +82,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.body.balance_cents).toBe(-2);
   });
 
-  it("auto-reloads when insufficient balance and auto-reload configured", async () => {
+  it("does NOT auto-reload (reload removed from deduct)", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -76,77 +91,6 @@ describe("Credits deduction endpoint", () => {
       reloadThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({
-        amount_cents: 5,
-        description: "test deduction with reload",
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    // Balance should be: 3 (original) + 2000 (reload) - 5 (deduction) = 1998
-    expect(res.body.balance_cents).toBe(1998);
-    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
-      orgId,
-      userId,
-      "cus_123",
-      "pm_123",
-      2000,
-      "Auto-reload (1x)",
-      {}
-    );
-  });
-
-  it("charges multiple reloads when amount exceeds single reload", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 200,
-      reloadAmountCents: 1000, // $10 reload unit
-      reloadThresholdCents: 200,
-      stripePaymentMethodId: "pm_123",
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({
-        amount_cents: 3700, // $37 deduction, need $35 more → 4x $10 = $40
-        description: "large deduction",
-      });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    // Balance: 200 + 4000 (4x reload) - 3700 = 500
-    expect(res.body.balance_cents).toBe(500);
-    expect(res.body.depleted).toBe(false);
-    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
-      orgId,
-      userId,
-      "cus_123",
-      "pm_123",
-      4000,
-      "Auto-reload (4x)",
-      {}
-    );
-  });
-
-  it("deducts into negative when auto-reload fails", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 3,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
-      stripePaymentMethodId: "pm_123",
-    });
-
-    stripeMocks.chargePaymentMethod.mockRejectedValue(
-      new Error("Card declined")
-    );
 
     const res = await request(app)
       .post("/v1/credits/deduct")
@@ -158,8 +102,10 @@ describe("Credits deduction endpoint", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.depleted).toBe(true);
+    // No reload — just deducts into negative
     expect(res.body.balance_cents).toBe(-2);
+    expect(res.body.depleted).toBe(true);
+    expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
   });
 
   it("auto-creates account for unknown org and deducts from trial balance", async () => {
@@ -175,6 +121,19 @@ describe("Credits deduction endpoint", () => {
     expect(res.body.success).toBe(true);
     // Auto-created with 200 cents ($2), then deducted 5
     expect(res.body.balance_cents).toBe(195);
+
+    // Welcome ledger entry should exist
+    const welcomeEntries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, "00000000-0000-0000-0000-999999999999"),
+          eq(creditLedger.source, "welcome")
+        )
+      );
+    expect(welcomeEntries).toHaveLength(1);
+    expect(welcomeEntries[0].amountCents).toBe(200);
   });
 
   it("validates request body", async () => {
@@ -186,7 +145,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(400);
   });
 
-  it("passes userId from header to Stripe metadata", async () => {
+  it("fires Stripe balance transaction asynchronously", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -202,51 +161,18 @@ describe("Credits deduction endpoint", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+
+    // Wait for async Stripe call
+    await new Promise((r) => setTimeout(r, 50));
+
     expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
       orgId,
       userId,
       "cus_123",
       5,
       "test deduction",
-      { user_id: userId },
+      undefined,
       {}
-    );
-  });
-
-  it("forwards workflow headers to Stripe calls", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 200,
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set({
-        ...getAuthHeaders(orgId),
-        "x-campaign-id": "camp_42",
-        "x-brand-id": "brand_7",
-        "x-workflow-slug": "outreach-flow",
-      })
-      .send({
-        amount_cents: 5,
-        description: "test deduction",
-      });
-
-    expect(res.status).toBe(200);
-    expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-      orgId,
-      userId,
-      "cus_123",
-      5,
-      "test deduction",
-      { user_id: userId },
-      {
-        "x-campaign-id": "camp_42",
-        "x-brand-id": "brand_7",
-        "x-workflow-slug": "outreach-flow",
-      }
     );
   });
 
@@ -271,131 +197,6 @@ describe("Credits deduction endpoint", () => {
 
     const res3 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
     expect(res3.body.balance_cents).toBe(70);
-  });
-
-  it("creates a credit provision when post-deduction balance drops below threshold", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 210,
-      reloadAmountCents: 1000,
-      reloadThresholdCents: 200,
-      stripePaymentMethodId: "pm_123",
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({ amount_cents: 20, description: "test" });
-
-    expect(res.status).toBe(200);
-    // Balance: 210 - 20 = 190 (< 200 threshold) → credit provision for 1000
-    // Returned balance: 190 + 1000 = 1190
-    expect(res.body.balance_cents).toBe(1190);
-
-    // Wait for async confirmation
-    await new Promise((r) => setTimeout(r, 50));
-
-    const creditProvs = await db
-      .select()
-      .from(creditProvisions)
-      .where(
-        and(
-          eq(creditProvisions.orgId, orgId),
-          eq(creditProvisions.type, "credit")
-        )
-      );
-
-    expect(creditProvs).toHaveLength(1);
-    expect(creditProvs[0].amountCents).toBe(1000);
-    expect(creditProvs[0].status).toBe("confirmed");
-    expect(creditProvs[0].stripePaymentIntentId).toBe("pi_mock");
-  });
-
-  it("two sequential deductions below threshold create only one credit provision", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 210,
-      reloadAmountCents: 1000,
-      reloadThresholdCents: 200,
-      stripePaymentMethodId: "pm_123",
-    });
-
-    // First deduction: 210 - 20 = 190 → below threshold → credit provision
-    const res1 = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({ amount_cents: 20, description: "first" });
-
-    expect(res1.body.balance_cents).toBe(1190);
-
-    // Second deduction: 1190 - 20 = 1170 → above threshold → no credit provision
-    const res2 = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({ amount_cents: 20, description: "second" });
-
-    expect(res2.body.balance_cents).toBe(1170);
-
-    const creditProvs = await db
-      .select()
-      .from(creditProvisions)
-      .where(
-        and(
-          eq(creditProvisions.orgId, orgId),
-          eq(creditProvisions.type, "credit")
-        )
-      );
-
-    expect(creditProvs).toHaveLength(1);
-  });
-
-  it("reverses credit provision on deduct when Stripe charge fails", async () => {
-    stripeMocks.chargePaymentMethod.mockRejectedValue(
-      new Error("Card declined")
-    );
-
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
-      creditBalanceCents: 210,
-      reloadAmountCents: 1000,
-      reloadThresholdCents: 200,
-      stripePaymentMethodId: "pm_123",
-    });
-
-    const res = await request(app)
-      .post("/v1/credits/deduct")
-      .set(getAuthHeaders(orgId))
-      .send({ amount_cents: 20, description: "test" });
-
-    expect(res.status).toBe(200);
-
-    // Wait for async rollback
-    await new Promise((r) => setTimeout(r, 100));
-
-    const [account] = await db
-      .select()
-      .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
-      .limit(1);
-
-    // Balance should be 190 (210 - 20), no credit applied
-    expect(account.creditBalanceCents).toBe(190);
-
-    const creditProvs = await db
-      .select()
-      .from(creditProvisions)
-      .where(
-        and(
-          eq(creditProvisions.orgId, orgId),
-          eq(creditProvisions.type, "credit")
-        )
-      );
-
-    expect(creditProvs).toHaveLength(1);
-    expect(creditProvs[0].status).toBe("cancelled");
   });
 });
 
@@ -498,6 +299,20 @@ describe("Credits authorize endpoint", () => {
       "Auto-reload (1x)",
       {}
     );
+
+    // Reload ledger entry should exist
+    const reloadEntries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, orgId),
+          eq(creditLedger.source, "reload")
+        )
+      );
+    expect(reloadEntries).toHaveLength(1);
+    expect(reloadEntries[0].amountCents).toBe(2000);
+    expect(reloadEntries[0].stripePaymentIntentId).toBe("pi_mock");
   });
 
   it("charges multiple reloads when required amount exceeds single reload", async () => {
@@ -619,5 +434,34 @@ describe("Credits authorize endpoint", () => {
 
     expect(res.status).toBe(502);
     expect(res.body.error).toContain("costs-service");
+  });
+
+  it("reconciles cache drift (Check 1)", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 999, // deliberately wrong cache
+    });
+
+    // Insert a ledger entry that should compute to 300
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 300,
+      status: "confirmed",
+      source: "welcome",
+      description: "Welcome credit",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    // After reconcile, balance should be 300 (from ledger), not 999
+    expect(res.body.balance_cents).toBe(300);
+    expect(res.body.sufficient).toBe(true);
   });
 });

@@ -28,6 +28,10 @@ export function setupStripeMocks() {
       data: [],
       has_more: false,
     }),
+    listPaymentIntents: vi.fn().mockResolvedValue({
+      data: [],
+      has_more: false,
+    }),
     createCheckoutSession: vi.fn().mockResolvedValue({
       id: "cs_mock_session",
       url: "https://checkout.stripe.com/pay/cs_mock_session",
@@ -64,6 +68,9 @@ export function setupStripeMocks() {
   );
   vi.spyOn(stripeLib, "listBalanceTransactions").mockImplementation(
     mocks.listBalanceTransactions
+  );
+  vi.spyOn(stripeLib, "listPaymentIntents").mockImplementation(
+    mocks.listPaymentIntents
   );
   vi.spyOn(stripeLib, "createCheckoutSession").mockImplementation(
     mocks.createCheckoutSession

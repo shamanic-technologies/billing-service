@@ -274,6 +274,22 @@ export async function retrievePaymentIntent(
   );
 }
 
+// --- PaymentIntents list (for reconciliation) ---
+
+export async function listPaymentIntents(
+  orgId: string,
+  userId: string,
+  stripeCustomerId: string,
+  workflowHeaders?: Record<string, string>
+): Promise<Stripe.ApiList<Stripe.PaymentIntent>> {
+  return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
+    stripe.paymentIntents.list({
+      customer: stripeCustomerId,
+      limit: 100,
+    })
+  );
+}
+
 // --- Webhook ---
 
 export async function constructWebhookEvent(

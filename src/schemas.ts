@@ -223,6 +223,15 @@ export const TransferBrandResponseSchema = z
 
 // --- Public Stats ---
 
+export const BillingGrowthRowSchema = z
+  .object({
+    period: z.string(),
+    credited_cents: z.number().int(),
+    consumed_cents: z.number().int(),
+    revenue_cents: z.number().int(),
+  })
+  .openapi("BillingGrowthRow");
+
 export const PublicBillingStatsSchema = z
   .object({
     totalAccounts: z.number().int(),
@@ -230,6 +239,8 @@ export const PublicBillingStatsSchema = z
     totalCreditBalanceCents: z.number().int(),
     totalCreditedCents: z.number().int(),
     totalConsumedCents: z.number().int(),
+    monthlyGrowth: z.array(BillingGrowthRowSchema),
+    weeklyGrowth: z.array(BillingGrowthRowSchema),
   })
   .openapi("PublicBillingStats");
 
@@ -420,9 +431,8 @@ registry.registerPath({
   path: "/v1/credits/deduct",
   summary: "Deduct credits from org balance",
   description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "If the balance is insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
-    "that covers the deficit (e.g. $10 reload unit, $37 deduction with $2 balance → charges 4x $10 = $40). " +
-    "Always deducts, even if it results in a negative balance.",
+    "Always deducts, even if it results in a negative balance. " +
+    "Does NOT auto-reload — use authorize for pre-execution checks with auto-reload.",
   request: {
     headers: protectedHeaders,
     body: {
