@@ -10,6 +10,8 @@ process.env.STRIPE_SECRET_KEY = "sk_test_fake";
 process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_fake";
 process.env.COSTS_SERVICE_URL = "http://localhost:9998";
 process.env.COSTS_SERVICE_API_KEY = "test-costs-service-key";
+process.env.RUNS_SERVICE_URL = "http://localhost:9997";
+process.env.RUNS_SERVICE_API_KEY = "test-runs-service-key";
 process.env.NODE_ENV = "test";
 
 beforeAll(async () => {
