@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
+import { billingAccounts, creditLedger } from "../db/schema.js";
 import {
   constructWebhookEvent,
-  createBalanceTransaction,
   retrievePaymentIntent,
 } from "../lib/stripe.js";
+import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
 import type Stripe from "stripe";
 
 const router = Router();
@@ -25,7 +25,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
     try {
       event = await constructWebhookEvent(req.body as Buffer, signature);
     } catch (err) {
-      console.error("Webhook signature verification failed:", err);
+      console.error("[billing-service] Webhook signature verification failed:", err);
       res.status(400).json({ error: "Invalid signature" });
       return;
     }
@@ -46,7 +46,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
       case "payment_intent.payment_failed": {
         const pi = event.data.object as Stripe.PaymentIntent;
         console.error(
-          `Payment failed for customer ${pi.customer}: ${pi.last_payment_error?.message}`
+          `[billing-service] Payment failed for customer ${pi.customer}: ${pi.last_payment_error?.message}`
         );
         break;
       }
@@ -57,7 +57,7 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
 
     res.json({ received: true });
   } catch (err) {
-    console.error("Webhook processing error:", err);
+    console.error("[billing-service] Webhook processing error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -74,7 +74,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   if (!account) {
     console.error(
-      `Checkout completed but no account found for customer ${customerId}`
+      `[billing-service] Checkout completed but no account found for customer ${customerId}`
     );
     return;
   }
@@ -98,29 +98,57 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     ? parseInt(session.metadata.reload_amount_cents, 10)
     : account.reloadAmountCents;
 
-  // Credit the balance with the reload amount
-  if (reloadAmountCents && account.stripeCustomerId) {
-    await createBalanceTransaction(
-      account.orgId,
-      "system",
-      account.stripeCustomerId,
-      -reloadAmountCents,
-      "Initial reload credit"
-    );
+  // Credit the balance with the reload amount and write to ledger
+  if (reloadAmountCents) {
+    const newBalance = account.creditBalanceCents + reloadAmountCents;
+
+    // Insert reload ledger entry
+    const [ledgerEntry] = await db
+      .insert(creditLedger)
+      .values({
+        orgId: account.orgId,
+        userId: "00000000-0000-0000-0000-000000000000",
+        type: "credit",
+        amountCents: reloadAmountCents,
+        status: "confirmed",
+        source: "reload",
+        stripePaymentIntentId: piId ?? null,
+        description: "Initial reload credit",
+      })
+      .returning();
+
+    // Update account: set payment method, update balance
+    await db
+      .update(billingAccounts)
+      .set({
+        creditBalanceCents: newBalance,
+        reloadAmountCents: reloadAmountCents ?? account.reloadAmountCents,
+        ...(paymentMethodId ? { stripePaymentMethodId: paymentMethodId } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(billingAccounts.stripeCustomerId, customerId));
+
+    // Fire-and-forget Stripe balance txn
+    if (account.stripeCustomerId) {
+      fireAndForgetBalanceTxn(
+        account.orgId,
+        "system",
+        account.stripeCustomerId,
+        -reloadAmountCents,
+        "Initial reload credit",
+        ledgerEntry.id
+      );
+    }
+  } else {
+    // No reload amount — just update payment method
+    await db
+      .update(billingAccounts)
+      .set({
+        ...(paymentMethodId ? { stripePaymentMethodId: paymentMethodId } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(billingAccounts.stripeCustomerId, customerId));
   }
-
-  // Update account: set payment method, update balance
-  const newBalance = account.creditBalanceCents + (reloadAmountCents ?? 0);
-
-  await db
-    .update(billingAccounts)
-    .set({
-      creditBalanceCents: newBalance,
-      reloadAmountCents: reloadAmountCents ?? account.reloadAmountCents,
-      ...(paymentMethodId ? { stripePaymentMethodId: paymentMethodId } : {}),
-      updatedAt: new Date(),
-    })
-    .where(eq(billingAccounts.stripeCustomerId, customerId));
 }
 
 async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {

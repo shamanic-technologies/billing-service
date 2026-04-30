@@ -64,6 +64,20 @@
       "when": 1775952000000,
       "tag": "0008_add_provision_type",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776038400000,
+      "tag": "0009_promo_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776124800000,
+      "tag": "0010_credit_ledger_rename",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
 
   // Step 1: Move org_id from sourceOrgId to targetOrgId for solo-brand rows
   const step1 = await db.execute(sql`
-    UPDATE credit_provisions
+    UPDATE credit_ledger
     SET org_id = ${targetOrgId},
         updated_at = NOW()
     WHERE org_id = ${sourceOrgId}
@@ -24,27 +24,27 @@ router.post("/internal/transfer-brand", async (req, res) => {
       AND brand_ids[1] = ${sourceBrandId}
   `);
 
-  let creditProvisionsCount = Number(step1.count ?? 0);
+  let creditLedgerCount = Number(step1.count ?? 0);
 
   // Step 2: Rewrite brand reference when targetBrandId is provided (conflict case)
   if (targetBrandId) {
     const step2 = await db.execute(sql`
-      UPDATE credit_provisions
+      UPDATE credit_ledger
       SET brand_ids = ARRAY[${targetBrandId}],
           updated_at = NOW()
       WHERE array_length(brand_ids, 1) = 1
         AND brand_ids[1] = ${sourceBrandId}
     `);
-    creditProvisionsCount = Math.max(creditProvisionsCount, Number(step2.count ?? 0));
+    creditLedgerCount = Math.max(creditLedgerCount, Number(step2.count ?? 0));
   }
 
   console.log(
-    `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} credit_provisions=${creditProvisionsCount}`
+    `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} credit_ledger=${creditLedgerCount}`
   );
 
   res.json({
     updatedTables: [
-      { tableName: "credit_provisions", count: creditProvisionsCount },
+      { tableName: "credit_ledger", count: creditLedgerCount },
     ],
   });
 });

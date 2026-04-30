@@ -1,16 +1,14 @@
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
-  creditProvisions,
-  promoCodes,
-  promoRedemptions,
+  creditLedger,
+  localPromoCodes,
 } from "../../src/db/schema.js";
 
 export async function cleanTestData() {
-  await db.delete(promoRedemptions);
-  await db.delete(creditProvisions);
+  await db.delete(creditLedger);
   await db.delete(billingAccounts);
-  await db.delete(promoCodes);
+  await db.delete(localPromoCodes);
 }
 
 export async function insertTestAccount(data: {
@@ -42,7 +40,7 @@ export async function insertTestPromoCode(data: {
   expiresAt?: Date | null;
 }) {
   const [promo] = await db
-    .insert(promoCodes)
+    .insert(localPromoCodes)
     .values({
       code: data.code,
       amountCents: data.amountCents,

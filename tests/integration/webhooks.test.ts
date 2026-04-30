@@ -55,7 +55,7 @@ describe("Stripe webhooks", () => {
       creditBalanceCents: 200,
     });
 
-    stripeMocks.constructWebhookEvent.mockReturnValue({
+    stripeMocks.constructWebhookEvent.mockResolvedValue({
       type: "checkout.session.completed",
       data: {
         object: {
@@ -101,7 +101,7 @@ describe("Stripe webhooks", () => {
       stripePaymentMethodId: "pm_old",
     });
 
-    stripeMocks.constructWebhookEvent.mockReturnValue({
+    stripeMocks.constructWebhookEvent.mockResolvedValue({
       type: "payment_intent.succeeded",
       data: {
         object: {
@@ -131,7 +131,7 @@ describe("Stripe webhooks", () => {
   });
 
   it("acknowledges unknown event types", async () => {
-    stripeMocks.constructWebhookEvent.mockReturnValue({
+    stripeMocks.constructWebhookEvent.mockResolvedValue({
       type: "some.unknown.event",
       data: { object: {} },
     });
