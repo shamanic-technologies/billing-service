@@ -45,7 +45,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
     await findOrCreateAccount(orgId, userId, fwdHeaders);
 
     const result = await db.transaction(async (tx) => {
-      const rows = await tx.execute<AccountRow>(
+      const rows = await tx.execute(
         rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 

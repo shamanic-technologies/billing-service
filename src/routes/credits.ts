@@ -185,7 +185,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
     // Use Drizzle transaction with FOR UPDATE lock to prevent double-spend
     const result = await db.transaction(async (tx) => {
-      const rows = await tx.execute<AccountRow>(
+      const rows = await tx.execute(
         rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 
@@ -330,7 +330,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     }
 
     const result = await db.transaction(async (tx) => {
-      const rows = await tx.execute<AccountRow>(
+      const rows = await tx.execute(
         rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 
