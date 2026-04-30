@@ -15,16 +15,58 @@ process.env.NODE_ENV = "test";
 beforeAll(async () => {
   console.log("Test suite starting...");
 
-  // Ensure credit_provisions table exists (migration may not have run on test DB)
   const { sql } = await import("../src/db/index.js");
+
+  // Drop billing_mode column if it still exists
   await sql`
-    CREATE TABLE IF NOT EXISTS "credit_provisions" (
+    DO $$ BEGIN
+      ALTER TABLE billing_accounts DROP COLUMN IF EXISTS billing_mode;
+    EXCEPTION WHEN undefined_column THEN
+      NULL;
+    END $$
+  `;
+
+  // Rename promo_codes -> local_promo_codes (if old table exists)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE promo_codes RENAME TO local_promo_codes;
+    EXCEPTION WHEN undefined_table THEN NULL;
+              WHEN duplicate_table THEN NULL;
+    END $$
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS "local_promo_codes" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "code" text NOT NULL,
+      "amount_cents" integer NOT NULL,
+      "max_redemptions" integer,
+      "expires_at" timestamp with time zone,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promo_codes_code" ON "local_promo_codes" USING btree ("code")`;
+
+  // Rename credit_provisions -> credit_ledger (if old table exists)
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE credit_provisions RENAME TO credit_ledger;
+    EXCEPTION WHEN undefined_table THEN NULL;
+              WHEN duplicate_table THEN NULL;
+    END $$
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS "credit_ledger" (
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
       "org_id" uuid NOT NULL,
       "user_id" uuid NOT NULL,
       "run_id" uuid,
+      "type" text DEFAULT 'debit' NOT NULL,
       "amount_cents" integer NOT NULL,
       "status" text DEFAULT 'pending' NOT NULL,
+      "source" text DEFAULT 'provision' NOT NULL,
+      "stripe_payment_intent_id" text,
+      "stripe_balance_txn_id" text,
+      "promo_code_id" uuid,
       "description" text,
       "campaign_id" text,
       "brand_ids" text[],
@@ -34,69 +76,44 @@ beforeAll(async () => {
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL
     )
   `;
-  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_org_id" ON "credit_provisions" USING btree ("org_id")`;
-  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_status" ON "credit_provisions" USING btree ("status")`;
 
-  // Add feature_slug column if it doesn't exist (migration 0005)
-  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "feature_slug" text`;
+  // Add new columns if they don't exist (for rename path)
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "source" text DEFAULT 'provision' NOT NULL`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "stripe_balance_txn_id" text`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "promo_code_id" uuid`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "feature_slug" text`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "brand_ids" text[]`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" text`;
+  await sql`ALTER TABLE "credit_ledger" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'debit' NOT NULL`;
 
-  // Migrate brand_id → brand_ids (migration 0007)
-  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "brand_ids" text[]`;
+  // Indexes
+  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_ledger_org_id" ON "credit_ledger" USING btree ("org_id")`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_ledger_status" ON "credit_ledger" USING btree ("status")`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_ledger_source" ON "credit_ledger" USING btree ("source")`;
+
+  // Partial unique index for promo anti-double-redemption
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_credit_ledger_promo_org" ON "credit_ledger" ("promo_code_id", "org_id") WHERE source = 'promo'`;
+
+  // Migrate brand_id -> brand_ids if old column exists
   await sql`
     DO $$ BEGIN
-      UPDATE credit_provisions SET brand_ids = ARRAY[brand_id] WHERE brand_id IS NOT NULL AND brand_ids IS NULL;
-      ALTER TABLE credit_provisions DROP COLUMN IF EXISTS brand_id;
-    EXCEPTION WHEN undefined_column THEN
-      NULL;
-    END $$
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_provisions_brand_ids" ON "credit_provisions" USING gin ("brand_ids")`;
-
-  // Rename workflow_name → workflow_slug if old column exists (migration 0006)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE credit_provisions RENAME COLUMN workflow_name TO workflow_slug;
-    EXCEPTION WHEN undefined_column THEN
-      NULL;
-    END $$
-  `;
-
-  // Drop billing_mode column if it still exists (migration 0004)
-  await sql`
-    DO $$ BEGIN
-      ALTER TABLE billing_accounts DROP COLUMN IF EXISTS billing_mode;
+      UPDATE credit_ledger SET brand_ids = ARRAY[brand_id] WHERE brand_id IS NOT NULL AND brand_ids IS NULL;
+      ALTER TABLE credit_ledger DROP COLUMN IF EXISTS brand_id;
     EXCEPTION WHEN undefined_column THEN
       NULL;
     END $$
   `;
 
-  // Add type and stripe_payment_intent_id columns (migration 0008)
-  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'debit' NOT NULL`;
-  await sql`ALTER TABLE "credit_provisions" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" text`;
+  // Rename workflow_name -> workflow_slug if old column exists
+  await sql`
+    DO $$ BEGIN
+      ALTER TABLE credit_ledger RENAME COLUMN workflow_name TO workflow_slug;
+    EXCEPTION WHEN undefined_column THEN
+      NULL;
+    END $$
+  `;
 
-  // Promo codes tables (migration 0009)
-  await sql`
-    CREATE TABLE IF NOT EXISTS "promo_codes" (
-      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      "code" text NOT NULL,
-      "amount_cents" integer NOT NULL,
-      "max_redemptions" integer,
-      "expires_at" timestamp with time zone,
-      "created_at" timestamp with time zone DEFAULT now() NOT NULL
-    )
-  `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_promo_codes_code" ON "promo_codes" USING btree ("code")`;
-  await sql`
-    CREATE TABLE IF NOT EXISTS "promo_redemptions" (
-      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      "promo_code_id" uuid NOT NULL REFERENCES "promo_codes"("id"),
-      "org_id" uuid NOT NULL,
-      "user_id" uuid NOT NULL,
-      "amount_cents" integer NOT NULL,
-      "created_at" timestamp with time zone DEFAULT now() NOT NULL
-    )
-  `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_promo_redemptions_org_code" ON "promo_redemptions" USING btree ("promo_code_id", "org_id")`;
-  await sql`CREATE INDEX IF NOT EXISTS "idx_promo_redemptions_org_id" ON "promo_redemptions" USING btree ("org_id")`;
+  // Drop promo_redemptions table (data migrated to credit_ledger)
+  await sql`DROP TABLE IF EXISTS "promo_redemptions"`;
 });
 afterAll(() => console.log("Test suite complete."));

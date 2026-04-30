@@ -1,14 +1,16 @@
 import { Router } from "express";
-import { eq, sql as rawSql } from "drizzle-orm";
+import { eq, and, isNull, gte, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditProvisions } from "../db/schema.js";
+import { billingAccounts, creditLedger } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { DeductRequestSchema, AuthorizeRequestSchema } from "../schemas.js";
 import {
   createBalanceTransaction,
   chargePaymentMethod,
+  listPaymentIntents,
   isStripeAuthError,
 } from "../lib/stripe.js";
+import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
 import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
@@ -24,6 +26,142 @@ function computeReloadCharge(currentBalance: number, requiredCents: number, relo
   if (deficit <= 0) return 0;
   const multiples = Math.ceil(deficit / reloadUnit);
   return multiples * reloadUnit;
+}
+
+interface AccountRow {
+  id: string;
+  org_id: string;
+  stripe_customer_id: string | null;
+  credit_balance_cents: number;
+  reload_amount_cents: number | null;
+  reload_threshold_cents: number | null;
+  stripe_payment_method_id: string | null;
+}
+
+/**
+ * Reconcile the billing account against the ledger and Stripe.
+ * Runs 3 self-healing checks before authorize checks sufficiency.
+ */
+async function reconcile(
+  orgId: string,
+  userId: string,
+  account: AccountRow,
+  wfHeaders: Record<string, string>
+): Promise<void> {
+  // Check 1: Cache vs Ledger
+  // Only reconcile if ledger has entries — no entries means account predates ledger
+  const [ledgerResult] = await db.execute<{ computed: number; entry_count: number }>(
+    rawSql`SELECT COALESCE(SUM(
+      CASE
+        WHEN type = 'credit' AND status = 'confirmed' THEN amount_cents
+        WHEN type = 'debit' AND status IN ('confirmed', 'pending') THEN -amount_cents
+        ELSE 0
+      END
+    ), 0)::int AS computed,
+    COUNT(*)::int AS entry_count
+    FROM credit_ledger WHERE org_id = ${orgId}`
+  );
+  const { computed, entry_count } = ledgerResult as unknown as { computed: number; entry_count: number };
+  if (entry_count > 0 && computed !== account.credit_balance_cents) {
+    console.warn(
+      `[billing-service] Cache drift detected for org ${orgId}: cache=${account.credit_balance_cents}, ledger=${computed}. Fixing.`
+    );
+    await db
+      .update(billingAccounts)
+      .set({ creditBalanceCents: computed, updatedAt: new Date() })
+      .where(eq(billingAccounts.orgId, orgId));
+  }
+
+  // Check 2: Stripe payments -> DB
+  if (account.stripe_customer_id) {
+    try {
+      const paymentIntents = await listPaymentIntents(
+        orgId,
+        userId,
+        account.stripe_customer_id,
+        wfHeaders
+      );
+      for (const pi of paymentIntents.data) {
+        if (pi.status !== "succeeded") continue;
+        const [existingEntry] = await db
+          .select({ id: creditLedger.id })
+          .from(creditLedger)
+          .where(
+            and(
+              eq(creditLedger.orgId, orgId),
+              eq(creditLedger.stripePaymentIntentId, pi.id),
+              eq(creditLedger.source, "reload")
+            )
+          )
+          .limit(1);
+        if (!existingEntry) {
+          console.warn(
+            `[billing-service] Missing ledger entry for PI ${pi.id}, org ${orgId}. Recovering.`
+          );
+          await db.insert(creditLedger).values({
+            orgId,
+            userId,
+            type: "credit",
+            amountCents: pi.amount,
+            status: "confirmed",
+            source: "reload",
+            stripePaymentIntentId: pi.id,
+            description: `Recovered reload from Stripe PI ${pi.id}`,
+          });
+          await db
+            .update(billingAccounts)
+            .set({
+              creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${pi.amount}`,
+              updatedAt: new Date(),
+            })
+            .where(eq(billingAccounts.orgId, orgId));
+        }
+      }
+    } catch (err) {
+      console.error("[billing-service] Check 2 failed (Stripe -> DB):", err);
+    }
+  }
+
+  // Check 3: DB -> Stripe (synchronous — must succeed on reconcile path)
+  if (account.stripe_customer_id) {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const unsyncedEntries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, orgId),
+          isNull(creditLedger.stripeBalanceTxnId),
+          eq(creditLedger.status, "confirmed"),
+          gte(creditLedger.createdAt, sevenDaysAgo)
+        )
+      );
+
+    for (const entry of unsyncedEntries) {
+      try {
+        const stripeAmount =
+          entry.type === "credit" ? -entry.amountCents : entry.amountCents;
+        const txn = await createBalanceTransaction(
+          orgId,
+          userId,
+          account.stripe_customer_id,
+          stripeAmount,
+          entry.description ?? `Reconciled ${entry.source}`,
+          undefined,
+          wfHeaders
+        );
+        await db
+          .update(creditLedger)
+          .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
+          .where(eq(creditLedger.id, entry.id));
+      } catch (err) {
+        console.error(
+          `[billing-service] Check 3: Failed to sync ledger entry ${entry.id} to Stripe:`,
+          err
+        );
+      }
+    }
+  }
 }
 
 // POST /v1/credits/deduct — deduct credits from org balance (allows negative balances)
@@ -47,150 +185,46 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
     // Use Drizzle transaction with FOR UPDATE lock to prevent double-spend
     const result = await db.transaction(async (tx) => {
-      // Lock the row with FOR UPDATE via raw SQL
-      const rows = await tx.execute<{
-        id: string;
-        org_id: string;
-        stripe_customer_id: string | null;
-        credit_balance_cents: number;
-        reload_amount_cents: number | null;
-        reload_threshold_cents: number | null;
-        stripe_payment_method_id: string | null;
-      }>(
+      const rows = await tx.execute<AccountRow>(
         rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 
-      const account = (rows as unknown as Array<{
-        id: string;
-        org_id: string;
-        stripe_customer_id: string | null;
-        credit_balance_cents: number;
-        reload_amount_cents: number | null;
-        reload_threshold_cents: number | null;
-        stripe_payment_method_id: string | null;
-      }>)[0];
+      const account = (rows as unknown as AccountRow[])[0];
       if (!account) {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
 
-      let currentBalance = account.credit_balance_cents;
-      const filter = eq(billingAccounts.orgId, orgId);
-      let reloadFailed = false;
-
-      // If insufficient balance, try auto-reload (charge enough multiples to cover)
-      if (currentBalance < amount_cents) {
-        if (
-          account.stripe_payment_method_id &&
-          account.stripe_customer_id &&
-          account.reload_amount_cents
-        ) {
-          const chargeAmount = computeReloadCharge(currentBalance, amount_cents, account.reload_amount_cents);
-          try {
-            await chargePaymentMethod(
-              orgId,
-              userId,
-              account.stripe_customer_id,
-              account.stripe_payment_method_id,
-              chargeAmount,
-              `Auto-reload (${chargeAmount / account.reload_amount_cents}x)`,
-              wfHeaders
-            );
-
-            await createBalanceTransaction(
-              orgId,
-              userId,
-              account.stripe_customer_id,
-              -chargeAmount,
-              `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
-              undefined,
-              wfHeaders
-            );
-
-            currentBalance += chargeAmount;
-            await tx
-              .update(billingAccounts)
-              .set({
-                creditBalanceCents: currentBalance,
-                updatedAt: new Date(),
-              })
-              .where(filter);
-          } catch (reloadErr) {
-            console.error("Auto-reload failed:", reloadErr);
-            reloadFailed = true;
-          }
-        }
-      }
-
       // Always deduct, even if it results in a negative balance
-      const newBalance = currentBalance - amount_cents;
+      const newBalance = account.credit_balance_cents - amount_cents;
       await tx
         .update(billingAccounts)
         .set({
           creditBalanceCents: newBalance,
           updatedAt: new Date(),
         })
-        .where(filter);
+        .where(eq(billingAccounts.orgId, orgId));
 
-      // Fire Stripe balance transaction async (non-blocking)
-      if (account.stripe_customer_id) {
-        createBalanceTransaction(
+      // Insert debit ledger entry
+      const [ledgerEntry] = await tx
+        .insert(creditLedger)
+        .values({
           orgId,
           userId,
-          account.stripe_customer_id,
-          amount_cents,
+          runId,
+          type: "debit",
+          amountCents: amount_cents,
+          status: "confirmed",
+          source: "deduct",
           description,
-          { user_id: userId },
-          wfHeaders
-        ).catch((err) => {
-          console.error("Stripe balance transaction failed (async):", err);
-        });
-      }
-
-      // Auto-reload: if post-deduction balance is below threshold, create a credit provision
-      // and increment balance INSIDE the transaction to prevent concurrent race conditions
-      let creditProvisionId: string | null = null;
-      let asyncReloadAmount: number | null = null;
-      const threshold = account.reload_threshold_cents ?? 200;
-      if (
-        newBalance < threshold &&
-        !reloadFailed &&
-        account.stripe_payment_method_id &&
-        account.stripe_customer_id &&
-        account.reload_amount_cents
-      ) {
-        asyncReloadAmount = account.reload_amount_cents;
-        const [creditProv] = await tx
-          .insert(creditProvisions)
-          .values({
-            orgId,
-            userId,
-            type: "credit",
-            amountCents: asyncReloadAmount,
-            status: "pending",
-            description: `Auto-reload credit ($${(asyncReloadAmount / 100).toFixed(2)})`,
-          })
-          .returning();
-        creditProvisionId = creditProv.id;
-
-        // Increment balance immediately (optimistic — will be reversed if Stripe fails)
-        await tx
-          .update(billingAccounts)
-          .set({
-            creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${asyncReloadAmount}`,
-            updatedAt: new Date(),
-          })
-          .where(filter);
-      }
+        })
+        .returning();
 
       return {
         success: true as const,
-        balance_cents: newBalance + (asyncReloadAmount ?? 0),
+        balance_cents: newBalance,
         depleted: newBalance <= 0,
-        _reloadFailed: reloadFailed,
-        _creditProvisionId: creditProvisionId,
-        _asyncReloadAmount: asyncReloadAmount,
         _customerId: account.stripe_customer_id,
-        _pmId: account.stripe_payment_method_id,
+        _ledgerEntryId: ledgerEntry.id,
       };
     });
 
@@ -199,17 +233,20 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Post-transaction emails
-    const syncReloadFailed = "_reloadFailed" in result && result._reloadFailed;
-    if (syncReloadFailed) {
-      sendEmail({
-        eventType: "credits-reload-failed",
+    // Fire-and-forget Stripe balance transaction
+    if (result._customerId && result._ledgerEntryId) {
+      fireAndForgetBalanceTxn(
         orgId,
         userId,
-        runId,
-        workflowHeaders: wfHeaders,
-      });
+        result._customerId,
+        amount_cents,
+        description,
+        result._ledgerEntryId,
+        wfHeaders
+      );
     }
+
+    // Send depleted email if needed
     if (result.depleted) {
       sendEmail({
         eventType: "credits-depleted",
@@ -220,56 +257,11 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       });
     }
 
-    // Async Stripe charge for credit provision (fire-and-forget)
-    const creditProvisionId = "_creditProvisionId" in result ? result._creditProvisionId as string | null : null;
-    const asyncReloadAmount = "_asyncReloadAmount" in result ? result._asyncReloadAmount as number | null : null;
-    const customerId = "_customerId" in result ? result._customerId as string | null : null;
-    const pmId = "_pmId" in result ? result._pmId as string | null : null;
-
-    if (creditProvisionId && asyncReloadAmount && customerId && pmId) {
-      (async () => {
-        try {
-          const pi = await chargePaymentMethod(orgId, userId, customerId, pmId, asyncReloadAmount, "Auto-reload", wfHeaders);
-          await createBalanceTransaction(orgId, userId, customerId, -asyncReloadAmount, `Auto-reload credit ($${(asyncReloadAmount / 100).toFixed(2)})`, undefined, wfHeaders);
-          await db
-            .update(creditProvisions)
-            .set({
-              status: "confirmed",
-              stripePaymentIntentId: pi.id,
-              updatedAt: new Date(),
-            })
-            .where(eq(creditProvisions.id, creditProvisionId));
-        } catch (err) {
-          console.error("[billing-service] Async auto-reload failed, reversing credit provision:", err);
-          await db.transaction(async (rollbackTx) => {
-            await rollbackTx
-              .update(creditProvisions)
-              .set({ status: "cancelled", updatedAt: new Date() })
-              .where(eq(creditProvisions.id, creditProvisionId));
-            await rollbackTx
-              .update(billingAccounts)
-              .set({
-                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} - ${asyncReloadAmount}`,
-                updatedAt: new Date(),
-              })
-              .where(eq(billingAccounts.orgId, orgId));
-          });
-          sendEmail({
-            eventType: "credits-reload-failed",
-            orgId,
-            userId,
-            runId,
-            workflowHeaders: wfHeaders,
-          });
-        }
-      })();
-    }
-
     // Strip internal fields from response
-    const { _reloadFailed, _creditProvisionId: _, _asyncReloadAmount: _a, _customerId: _c, _pmId: _p, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _ledgerEntryId: _l, ...response } = result as Record<string, unknown>;
     res.json(response);
   } catch (err) {
-    console.error("Error deducting credits:", err);
+    console.error("[billing-service] Error deducting credits:", err);
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;
@@ -279,7 +271,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 });
 
 // POST /v1/credits/authorize — synchronous pre-execution authorization with auto-reload attempt
-// Resolves prices from costs-service, then checks balance.
+// Resolves prices from costs-service, runs reconciliation, then checks balance.
 router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -305,7 +297,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         ...wfHeaders,
       });
     } catch (costErr) {
-      console.error("Failed to resolve prices from costs-service:", costErr);
+      console.error("[billing-service] Failed to resolve prices from costs-service:", costErr);
       res.status(502).json({ error: "Failed to resolve prices from costs-service" });
       return;
     }
@@ -313,29 +305,36 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
+    // Run reconciliation checks before checking sufficiency
+    const [preAccount] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (preAccount) {
+      await reconcile(
+        orgId,
+        userId,
+        {
+          id: preAccount.id,
+          org_id: preAccount.orgId,
+          stripe_customer_id: preAccount.stripeCustomerId,
+          credit_balance_cents: preAccount.creditBalanceCents,
+          reload_amount_cents: preAccount.reloadAmountCents,
+          reload_threshold_cents: preAccount.reloadThresholdCents,
+          stripe_payment_method_id: preAccount.stripePaymentMethodId,
+        },
+        wfHeaders
+      );
+    }
+
     const result = await db.transaction(async (tx) => {
-      const rows = await tx.execute<{
-        id: string;
-        org_id: string;
-        stripe_customer_id: string | null;
-        credit_balance_cents: number;
-        reload_amount_cents: number | null;
-        reload_threshold_cents: number | null;
-        stripe_payment_method_id: string | null;
-      }>(
+      const rows = await tx.execute<AccountRow>(
         rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
       );
 
-      const account = (rows as unknown as Array<{
-        id: string;
-        org_id: string;
-        stripe_customer_id: string | null;
-        credit_balance_cents: number;
-        reload_amount_cents: number | null;
-        reload_threshold_cents: number | null;
-        stripe_payment_method_id: string | null;
-      }>)[0];
-
+      const account = (rows as unknown as AccountRow[])[0];
       if (!account) {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
@@ -343,6 +342,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       let currentBalance = account.credit_balance_cents;
 
       // If insufficient, try synchronous auto-reload (charge enough multiples to cover)
+      let reloadLedgerEntryId: string | null = null;
       if (currentBalance < requiredCents) {
         if (
           account.stripe_payment_method_id &&
@@ -351,7 +351,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         ) {
           const chargeAmount = computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents);
           try {
-            await chargePaymentMethod(
+            const pi = await chargePaymentMethod(
               orgId,
               userId,
               account.stripe_customer_id,
@@ -361,15 +361,21 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
               wfHeaders
             );
 
-            await createBalanceTransaction(
-              orgId,
-              userId,
-              account.stripe_customer_id,
-              -chargeAmount,
-              `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
-              undefined,
-              wfHeaders
-            );
+            // Insert reload ledger entry
+            const [reloadEntry] = await tx
+              .insert(creditLedger)
+              .values({
+                orgId,
+                userId,
+                type: "credit",
+                amountCents: chargeAmount,
+                status: "confirmed",
+                source: "reload",
+                stripePaymentIntentId: pi.id,
+                description: `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
+              })
+              .returning();
+            reloadLedgerEntryId = reloadEntry.id;
 
             currentBalance += chargeAmount;
             await tx
@@ -380,12 +386,14 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
               })
               .where(eq(billingAccounts.orgId, orgId));
           } catch (reloadErr) {
-            console.error("Auto-reload failed during authorize:", reloadErr);
+            console.error("[billing-service] Auto-reload failed during authorize:", reloadErr);
             return {
               sufficient: false as const,
               balance_cents: currentBalance,
               required_cents: requiredCents,
               _emailEvent: "credits-reload-failed" as const,
+              _reloadLedgerEntryId: null as string | null,
+              _customerId: account.stripe_customer_id,
             };
           }
         }
@@ -397,13 +405,35 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         sufficient: sufficient as boolean,
         balance_cents: currentBalance,
         required_cents: requiredCents,
-        _emailEvent: sufficient ? null : "credits-depleted" as const,
+        _emailEvent: sufficient ? null : ("credits-depleted" as const),
+        _reloadLedgerEntryId: reloadLedgerEntryId,
+        _customerId: account.stripe_customer_id,
       };
     });
 
     if ("error" in result && result.error) {
       res.status(result.status as number).json({ error: result.error });
       return;
+    }
+
+    // Fire-and-forget Stripe balance txn for the reload (if one happened)
+    if (result._reloadLedgerEntryId && result._customerId) {
+      const entry = await db
+        .select()
+        .from(creditLedger)
+        .where(eq(creditLedger.id, result._reloadLedgerEntryId))
+        .limit(1);
+      if (entry[0]) {
+        fireAndForgetBalanceTxn(
+          orgId,
+          userId,
+          result._customerId,
+          -entry[0].amountCents,
+          entry[0].description ?? "Auto-reload credit",
+          result._reloadLedgerEntryId,
+          wfHeaders
+        );
+      }
     }
 
     // Fire-and-forget email notification
@@ -419,10 +449,10 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     }
 
     // Strip internal fields
-    const { _emailEvent, ...response } = result as Record<string, unknown>;
+    const { _emailEvent, _reloadLedgerEntryId, _customerId, ...response } = result as Record<string, unknown>;
     res.json(response);
   } catch (err) {
-    console.error("Error authorizing credits:", err);
+    console.error("[billing-service] Error authorizing credits:", err);
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;

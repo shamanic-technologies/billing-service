@@ -420,9 +420,8 @@ registry.registerPath({
   path: "/v1/credits/deduct",
   summary: "Deduct credits from org balance",
   description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "If the balance is insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
-    "that covers the deficit (e.g. $10 reload unit, $37 deduction with $2 balance → charges 4x $10 = $40). " +
-    "Always deducts, even if it results in a negative balance.",
+    "Always deducts, even if it results in a negative balance. " +
+    "Does NOT auto-reload — use authorize for pre-execution checks with auto-reload.",
   request: {
     headers: protectedHeaders,
     body: {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditProvisions } from "../db/schema.js";
+import { billingAccounts, creditLedger } from "../db/schema.js";
 
 const router = Router();
 
@@ -17,20 +17,20 @@ router.get("/public/stats/billing", async (_req, res) => {
 
     const [creditStats] = await db
       .select({
-        totalCreditedCents: rawSql<number>`COALESCE(SUM(${creditProvisions.amountCents}), 0)::int`,
+        totalCreditedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
       })
-      .from(creditProvisions)
+      .from(creditLedger)
       .where(
-        rawSql`${creditProvisions.type} = 'credit' AND ${creditProvisions.status} = 'confirmed'`
+        rawSql`${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'`
       );
 
     const [debitStats] = await db
       .select({
-        totalConsumedCents: rawSql<number>`COALESCE(SUM(${creditProvisions.amountCents}), 0)::int`,
+        totalConsumedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
       })
-      .from(creditProvisions)
+      .from(creditLedger)
       .where(
-        rawSql`${creditProvisions.type} = 'debit' AND ${creditProvisions.status} = 'confirmed'`
+        rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} = 'confirmed'`
       );
 
     res.json({

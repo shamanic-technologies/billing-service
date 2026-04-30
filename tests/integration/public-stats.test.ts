@@ -3,7 +3,7 @@ import request from "supertest";
 import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
-import { creditProvisions } from "../../src/db/schema.js";
+import { creditLedger } from "../../src/db/schema.js";
 
 describe("GET /public/stats/billing", () => {
   const app = createTestApp();
@@ -50,13 +50,14 @@ describe("GET /public/stats/billing", () => {
       stripePaymentMethodId: null,
     });
 
-    await db.insert(creditProvisions).values([
+    await db.insert(creditLedger).values([
       {
         orgId: orgA,
         userId,
         type: "credit",
         status: "confirmed",
         amountCents: 10000,
+        source: "reload",
         description: "reload",
       },
       {
@@ -65,6 +66,7 @@ describe("GET /public/stats/billing", () => {
         type: "credit",
         status: "confirmed",
         amountCents: 5000,
+        source: "reload",
         description: "reload",
       },
       {
@@ -73,6 +75,7 @@ describe("GET /public/stats/billing", () => {
         type: "debit",
         status: "confirmed",
         amountCents: 2000,
+        source: "deduct",
         description: "usage",
       },
       {
@@ -81,6 +84,7 @@ describe("GET /public/stats/billing", () => {
         type: "debit",
         status: "pending",
         amountCents: 9999,
+        source: "provision",
         description: "should be excluded — pending",
       },
       {
@@ -89,6 +93,7 @@ describe("GET /public/stats/billing", () => {
         type: "credit",
         status: "cancelled",
         amountCents: 9999,
+        source: "reload",
         description: "should be excluded — cancelled",
       },
     ]);
