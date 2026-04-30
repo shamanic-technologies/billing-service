@@ -1,3 +1,7 @@
+-- Rename promo_codes -> local_promo_codes (must happen before FK reference)
+ALTER TABLE "promo_codes" RENAME TO "local_promo_codes";--> statement-breakpoint
+ALTER INDEX IF EXISTS "idx_promo_codes_code" RENAME TO "idx_local_promo_codes_code";--> statement-breakpoint
+
 -- Rename credit_provisions -> credit_ledger
 ALTER TABLE "credit_provisions" RENAME TO "credit_ledger";--> statement-breakpoint
 
@@ -20,10 +24,6 @@ ALTER INDEX IF EXISTS "idx_credit_provisions_brand_ids" RENAME TO "idx_credit_le
 
 -- Partial unique index for promo anti-double-redemption
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_credit_ledger_promo_org" ON "credit_ledger" ("promo_code_id", "org_id") WHERE source = 'promo';--> statement-breakpoint
-
--- Rename promo_codes -> local_promo_codes
-ALTER TABLE "promo_codes" RENAME TO "local_promo_codes";--> statement-breakpoint
-ALTER INDEX IF EXISTS "idx_promo_codes_code" RENAME TO "idx_local_promo_codes_code";--> statement-breakpoint
 
 -- Drop promo_redemptions table (data migrated to credit_ledger with source='promo')
 -- Migrate existing promo_redemptions to credit_ledger before dropping
