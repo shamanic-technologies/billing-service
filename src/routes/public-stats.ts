@@ -20,7 +20,7 @@ async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
         WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
       ), 0)::int AS credited_cents,
       COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'debit' AND ${creditLedger.status} = 'confirmed'
+        WHERE ${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')
       ), 0)::int AS consumed_cents,
       COALESCE(SUM(${creditLedger.amountCents}) FILTER (
         WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
@@ -58,7 +58,7 @@ router.get("/public/stats/billing", async (_req, res) => {
       })
       .from(creditLedger)
       .where(
-        rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} = 'confirmed'`
+        rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')`
       );
 
     const [monthlyGrowth, weeklyGrowth] = await Promise.all([
