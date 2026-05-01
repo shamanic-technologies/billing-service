@@ -6,6 +6,7 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import { createCustomer, createCheckoutSession, isStripeAuthError } from "../lib/stripe.js";
 import { findOrCreateAccount } from "../lib/account.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -23,6 +24,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     }
 
     const { success_url, cancel_url, reload_amount_cents } = parsed.data;
+    const runId = req.headers["x-run-id"] as string;
+
+    traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { reload_amount_cents } }, req.headers);
+
     const filter = eq(billingAccounts.orgId, orgId);
 
     // Get or create billing account
@@ -59,6 +64,8 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         updatedAt: new Date(),
       })
       .where(filter);
+
+    traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.id } }, req.headers);
 
     res.json({
       url: session.url,
