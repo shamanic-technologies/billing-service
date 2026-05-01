@@ -11,7 +11,7 @@ import {
 import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
 import { sendEmail } from "../lib/email-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { traceEvent } from "../lib/trace-client.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -41,6 +41,8 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
     }
 
     const { amount_cents, description } = parsed.data;
+
+    traceEvent(runId, { service: "billing-service", event: "provision.start", data: { amount_cents } }, req.headers);
 
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, fwdHeaders);
@@ -216,18 +218,10 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       });
     }
 
+    traceEvent(runId, { service: "billing-service", event: "provision.done", data: { provision_id: result.provision_id, balance_cents: result.balance_cents } }, req.headers);
+
     // Strip internal fields from response
     const { _creditLedgerEntryId: _, _reloadAmount: _r, _customerId: _c, _pmId: _p, _provisionLedgerEntryId: _pl, ...response } = result as Record<string, unknown>;
-
-    traceEvent({
-      runId,
-      orgId,
-      userId,
-      event: "billing.provision.created",
-      detail: { provision_id: result.provision_id, amount_cents, balance_cents: result.balance_cents },
-      workflowHeaders: fwdHeaders,
-    });
-
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error creating provision:", err);
@@ -244,6 +238,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const provisionId = req.params.id;
     const parsed = ConfirmProvisionRequestSchema.safeParse(req.body);
@@ -254,6 +249,8 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
     }
 
     const { actual_amount_cents } = parsed.data;
+
+    traceEvent(runId, { service: "billing-service", event: "provision.confirm.start", data: { provision_id: provisionId, actual_amount_cents } }, req.headers);
 
     const result = await db.transaction(async (tx) => {
       // Lock the provision row
@@ -385,18 +382,10 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       );
     }
 
+    traceEvent(runId, { service: "billing-service", event: "provision.confirm.done", data: { provision_id: provisionId, adjustment_cents: result.adjustment_cents } }, req.headers);
+
     // Strip internal fields
     const { _customerId: _c, _adjustmentCents: _a, ...response } = result as Record<string, unknown>;
-
-    traceEvent({
-      runId: req.headers["x-run-id"] as string,
-      orgId,
-      userId,
-      event: "billing.provision.confirmed",
-      detail: { provision_id: provisionId, adjustment_cents: adjustment },
-      workflowHeaders: wfHeaders,
-    });
-
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error confirming provision:", err);
@@ -409,8 +398,11 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const provisionId = req.params.id;
+
+    traceEvent(runId, { service: "billing-service", event: "provision.cancel.start", data: { provision_id: provisionId } }, req.headers);
 
     const result = await db.transaction(async (tx) => {
       const provRows = await tx.execute<{
@@ -522,18 +514,10 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       );
     }
 
+    traceEvent(runId, { service: "billing-service", event: "provision.cancel.done", data: { provision_id: provisionId, refunded_cents: result.refunded_cents } }, req.headers);
+
     // Strip internal fields
     const { _customerId: _c, _refundedCents: _r, ...response } = result as Record<string, unknown>;
-
-    traceEvent({
-      runId: req.headers["x-run-id"] as string,
-      orgId,
-      userId,
-      event: "billing.provision.cancelled",
-      detail: { provision_id: provisionId, refunded_cents: refundedCents },
-      workflowHeaders: wfHeaders,
-    });
-
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error cancelling provision:", err);

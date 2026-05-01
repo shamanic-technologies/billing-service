@@ -14,7 +14,7 @@ import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
 import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { traceEvent } from "../lib/trace-client.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -181,6 +181,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
     const { amount_cents, description } = parsed.data;
 
+    traceEvent(runId, { service: "billing-service", event: "credits.deduct.start", data: { amount_cents } }, req.headers);
+
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
@@ -258,18 +260,10 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       });
     }
 
+    traceEvent(runId, { service: "billing-service", event: "credits.deduct.done", data: { balance_cents: result.balance_cents, depleted: result.depleted } }, req.headers);
+
     // Strip internal fields from response
     const { _customerId: _c, _ledgerEntryId: _l, ...response } = result as Record<string, unknown>;
-
-    traceEvent({
-      runId,
-      orgId,
-      userId,
-      event: "billing.credits.deducted",
-      detail: { amount_cents, balance_cents: result.balance_cents, depleted: result.depleted },
-      workflowHeaders: wfHeaders,
-    });
-
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error deducting credits:", err);
@@ -298,6 +292,8 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
 
     const { items } = parsed.data;
 
+    traceEvent(runId, { service: "billing-service", event: "credits.authorize.start", data: { item_count: items.length } }, req.headers);
+
     // Resolve prices from costs-service (outside transaction — read-only, no lock needed)
     let requiredCents: number;
     try {
@@ -308,10 +304,13 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         ...wfHeaders,
       });
     } catch (costErr) {
+      traceEvent(runId, { service: "billing-service", event: "credits.authorize.costs-failed", level: "error", detail: String(costErr) }, req.headers);
       console.error("[billing-service] Failed to resolve prices from costs-service:", costErr);
       res.status(502).json({ error: "Failed to resolve prices from costs-service" });
       return;
     }
+
+    traceEvent(runId, { service: "billing-service", event: "credits.authorize.resolved", data: { required_cents: requiredCents } }, req.headers);
 
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, wfHeaders);
@@ -459,18 +458,10 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       });
     }
 
+    traceEvent(runId, { service: "billing-service", event: "credits.authorize.done", data: { sufficient: result.sufficient, balance_cents: result.balance_cents, required_cents: result.required_cents } }, req.headers);
+
     // Strip internal fields
     const { _emailEvent, _reloadLedgerEntryId, _customerId, ...response } = result as Record<string, unknown>;
-
-    traceEvent({
-      runId,
-      orgId,
-      userId,
-      event: "billing.credits.authorized",
-      detail: { sufficient: result.sufficient, balance_cents: result.balance_cents, required_cents: requiredCents },
-      workflowHeaders: wfHeaders,
-    });
-
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error authorizing credits:", err);
