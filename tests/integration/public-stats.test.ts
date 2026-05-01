@@ -87,7 +87,7 @@ describe("GET /public/stats/billing", () => {
         status: "pending",
         amountCents: 9999,
         source: "provision",
-        description: "should be excluded — pending",
+        description: "pending provision — included in consumed",
       },
       {
         orgId: orgB,
@@ -107,7 +107,7 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.accountsWithPaymentMethod).toBe(1);
     expect(res.body.totalCreditBalanceCents).toBe(8000);
     expect(res.body.totalCreditedCents).toBe(15000);
-    expect(res.body.totalConsumedCents).toBe(2000);
+    expect(res.body.totalConsumedCents).toBe(11999); // 2000 confirmed + 9999 pending
   });
 
   it("returns monthly and weekly growth with credited, consumed, and revenue", async () => {
