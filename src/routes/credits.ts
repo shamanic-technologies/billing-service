@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, isNull, gte, sql as rawSql } from "drizzle-orm";
+import { eq, and, isNull, gte, desc, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, creditLedger } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
@@ -360,52 +360,87 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
           account.stripe_customer_id &&
           account.reload_amount_cents
         ) {
-          const chargeAmount = computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents);
-          try {
-            const pi = await chargePaymentMethod(
-              orgId,
-              userId,
-              account.stripe_customer_id,
-              account.stripe_payment_method_id,
-              chargeAmount,
-              `Auto-reload (${chargeAmount / account.reload_amount_cents}x)`,
-              wfHeaders
-            );
+          // Cooldown: skip reload if the last reload entry is cancelled and < 15 min old
+          const RELOAD_COOLDOWN_MS = 15 * 60 * 1000;
+          const [lastReload] = await tx
+            .select({ status: creditLedger.status, createdAt: creditLedger.createdAt })
+            .from(creditLedger)
+            .where(
+              and(
+                eq(creditLedger.orgId, orgId),
+                eq(creditLedger.source, "reload")
+              )
+            )
+            .orderBy(desc(creditLedger.createdAt))
+            .limit(1);
 
-            // Insert reload ledger entry
-            const [reloadEntry] = await tx
-              .insert(creditLedger)
-              .values({
+          const reloadOnCooldown =
+            lastReload &&
+            lastReload.status === "cancelled" &&
+            Date.now() - new Date(lastReload.createdAt).getTime() < RELOAD_COOLDOWN_MS;
+
+          if (reloadOnCooldown) {
+            console.warn(`[billing-service] Auto-reload skipped for org ${orgId}: cooldown active (last failed reload < 15 min ago)`);
+          } else {
+            const chargeAmount = computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents);
+            try {
+              const pi = await chargePaymentMethod(
                 orgId,
                 userId,
-                type: "credit",
-                amountCents: chargeAmount,
-                status: "confirmed",
-                source: "reload",
-                stripePaymentIntentId: pi.id,
-                description: `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
-              })
-              .returning();
-            reloadLedgerEntryId = reloadEntry.id;
+                account.stripe_customer_id,
+                account.stripe_payment_method_id,
+                chargeAmount,
+                `Auto-reload (${chargeAmount / account.reload_amount_cents}x)`,
+                wfHeaders
+              );
 
-            currentBalance += chargeAmount;
-            await tx
-              .update(billingAccounts)
-              .set({
-                creditBalanceCents: currentBalance,
-                updatedAt: new Date(),
-              })
-              .where(eq(billingAccounts.orgId, orgId));
-          } catch (reloadErr) {
-            console.error("[billing-service] Auto-reload failed during authorize:", reloadErr);
-            return {
-              sufficient: false as const,
-              balance_cents: currentBalance,
-              required_cents: requiredCents,
-              _emailEvent: "credits-reload-failed" as const,
-              _reloadLedgerEntryId: null as string | null,
-              _customerId: account.stripe_customer_id,
-            };
+              // Insert reload ledger entry
+              const [reloadEntry] = await tx
+                .insert(creditLedger)
+                .values({
+                  orgId,
+                  userId,
+                  type: "credit",
+                  amountCents: chargeAmount,
+                  status: "confirmed",
+                  source: "reload",
+                  stripePaymentIntentId: pi.id,
+                  description: `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
+                })
+                .returning();
+              reloadLedgerEntryId = reloadEntry.id;
+
+              currentBalance += chargeAmount;
+              await tx
+                .update(billingAccounts)
+                .set({
+                  creditBalanceCents: currentBalance,
+                  updatedAt: new Date(),
+                })
+                .where(eq(billingAccounts.orgId, orgId));
+            } catch (reloadErr) {
+              console.error("[billing-service] Auto-reload failed during authorize:", reloadErr);
+              // Record failed reload in ledger for cooldown tracking
+              await tx
+                .insert(creditLedger)
+                .values({
+                  orgId,
+                  userId,
+                  type: "credit",
+                  amountCents: computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents),
+                  status: "cancelled",
+                  source: "reload",
+                  description: `Auto-reload failed: ${reloadErr instanceof Error ? reloadErr.message : "unknown error"}`,
+                });
+              return {
+                sufficient: false as const,
+                balance_cents: currentBalance,
+                required_cents: requiredCents,
+                _emailEvent: "credits-reload-failed" as const,
+                _reloadLedgerEntryId: null as string | null,
+                _customerId: account.stripe_customer_id,
+              };
+            }
           }
         }
       }

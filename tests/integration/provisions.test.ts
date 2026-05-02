@@ -405,8 +405,8 @@ describe("Credit provision endpoints", () => {
     });
   });
 
-  describe("Auto-reload credit entries", () => {
-    it("creates a credit entry when balance drops below threshold", async () => {
+  describe("No auto-reload on provision (reload only in authorize)", () => {
+    it("does not auto-reload even when balance drops below threshold", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_123",
@@ -422,47 +422,8 @@ describe("Credit provision endpoints", () => {
         .send({ amount_cents: 100, description: "test" });
 
       expect(res.status).toBe(200);
-      // Balance: 250 - 100 = 150 (< 200 threshold) → credit entry for 1000
-      // Returned balance includes the credit: 150 + 1000 = 1150
-      expect(res.body.balance_cents).toBe(1150);
-
-      // Wait for async confirmation
-      await new Promise((r) => setTimeout(r, 50));
-
-      const creditEntries = await db
-        .select()
-        .from(creditLedger)
-        .where(
-          and(
-            eq(creditLedger.orgId, orgId),
-            eq(creditLedger.type, "credit"),
-            eq(creditLedger.source, "reload")
-          )
-        );
-
-      expect(creditEntries).toHaveLength(1);
-      expect(creditEntries[0].amountCents).toBe(1000);
-      expect(creditEntries[0].status).toBe("confirmed");
-      expect(creditEntries[0].stripePaymentIntentId).toBe("pi_mock");
-    });
-
-    it("does not create a credit entry when balance stays above threshold", async () => {
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_123",
-        creditBalanceCents: 500,
-        reloadAmountCents: 1000,
-        reloadThresholdCents: 200,
-        stripePaymentMethodId: "pm_123",
-      });
-
-      const res = await request(app)
-        .post("/v1/credits/provision")
-        .set(getAuthHeaders(orgId))
-        .send({ amount_cents: 100, description: "test" });
-
-      expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBe(400);
+      expect(res.body.balance_cents).toBe(150);
+      expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
 
       const creditEntries = await db
         .select()
@@ -476,99 +437,6 @@ describe("Credit provision endpoints", () => {
         );
 
       expect(creditEntries).toHaveLength(0);
-    });
-
-    it("two sequential provisions only create one credit entry (no double reload)", async () => {
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_123",
-        creditBalanceCents: 210,
-        reloadAmountCents: 1000,
-        reloadThresholdCents: 200,
-        stripePaymentMethodId: "pm_123",
-      });
-
-      // First provision: 210 - 50 = 160 → below threshold → credit entry created
-      const res1 = await request(app)
-        .post("/v1/credits/provision")
-        .set(getAuthHeaders(orgId))
-        .send({ amount_cents: 50, description: "first" });
-
-      expect(res1.status).toBe(200);
-      expect(res1.body.balance_cents).toBe(1160); // 160 + 1000
-
-      // Second provision: 1160 - 50 = 1110 → above threshold → no credit entry
-      const res2 = await request(app)
-        .post("/v1/credits/provision")
-        .set(getAuthHeaders(orgId))
-        .send({ amount_cents: 50, description: "second" });
-
-      expect(res2.status).toBe(200);
-      expect(res2.body.balance_cents).toBe(1110);
-
-      const creditEntries = await db
-        .select()
-        .from(creditLedger)
-        .where(
-          and(
-            eq(creditLedger.orgId, orgId),
-            eq(creditLedger.type, "credit"),
-            eq(creditLedger.source, "reload")
-          )
-        );
-
-      expect(creditEntries).toHaveLength(1);
-    });
-
-    it("reverses credit entry when Stripe charge fails", async () => {
-      stripeMocks.chargePaymentMethod.mockRejectedValue(
-        new Error("Card declined")
-      );
-
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_123",
-        creditBalanceCents: 250,
-        reloadAmountCents: 1000,
-        reloadThresholdCents: 200,
-        stripePaymentMethodId: "pm_123",
-      });
-
-      const res = await request(app)
-        .post("/v1/credits/provision")
-        .set(getAuthHeaders(orgId))
-        .send({ amount_cents: 100, description: "test" });
-
-      expect(res.status).toBe(200);
-      // Response shows optimistic balance (150 + 1000)
-      expect(res.body.balance_cents).toBe(1150);
-
-      // Wait for async rollback to complete
-      await new Promise((r) => setTimeout(r, 500));
-
-      // After async rollback, balance should be back to 150 (no credit)
-      const [account] = await db
-        .select()
-        .from(billingAccounts)
-        .where(eq(billingAccounts.orgId, orgId))
-        .limit(1);
-
-      expect(account.creditBalanceCents).toBe(150);
-
-      // Credit entry should be cancelled
-      const creditEntries = await db
-        .select()
-        .from(creditLedger)
-        .where(
-          and(
-            eq(creditLedger.orgId, orgId),
-            eq(creditLedger.type, "credit"),
-            eq(creditLedger.source, "reload")
-          )
-        );
-
-      expect(creditEntries).toHaveLength(1);
-      expect(creditEntries[0].status).toBe("cancelled");
     });
   });
 });
