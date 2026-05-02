@@ -352,7 +352,7 @@ describe("Credits authorize endpoint", () => {
     );
   });
 
-  it("returns sufficient: false when auto-reload fails", async () => {
+  it("returns sufficient: false when auto-reload fails and writes cancelled ledger entry", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -377,6 +377,155 @@ describe("Credits authorize endpoint", () => {
       balance_cents: 50,
       required_cents: 100,
     });
+
+    // Verify cancelled reload entry was written
+    const reloadEntries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, orgId),
+          eq(creditLedger.source, "reload")
+        )
+      );
+    expect(reloadEntries).toHaveLength(1);
+    expect(reloadEntries[0].status).toBe("cancelled");
+    expect(reloadEntries[0].type).toBe("credit");
+  });
+
+  it("skips auto-reload when a cancelled reload exists within 15 min cooldown", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 50,
+      reloadAmountCents: 2000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    // Insert a recent cancelled reload entry (5 min ago)
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 2000,
+      status: "cancelled",
+      source: "reload",
+      description: "Auto-reload failed: Card declined",
+      createdAt: new Date(Date.now() - 5 * 60 * 1000),
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+    expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
+  });
+
+  it("retries auto-reload when cancelled reload is older than 15 min", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 50,
+      reloadAmountCents: 2000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    // Back up the 50 cents with a confirmed ledger entry (so reconcile doesn't zero it)
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 50,
+      status: "confirmed",
+      source: "welcome",
+      description: "Welcome credit",
+    });
+
+    // Insert an old cancelled reload entry (20 min ago)
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 2000,
+      status: "cancelled",
+      source: "reload",
+      description: "Auto-reload failed: Card declined",
+      createdAt: new Date(Date.now() - 20 * 60 * 1000),
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(res.body.balance_cents).toBe(2050);
+    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalled();
+  });
+
+  it("retries auto-reload when a confirmed reload is more recent than cancelled", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_123",
+      creditBalanceCents: 50,
+      reloadAmountCents: 2000,
+      reloadThresholdCents: 200,
+      stripePaymentMethodId: "pm_123",
+    });
+
+    // Back up the 50 cents
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 50,
+      status: "confirmed",
+      source: "welcome",
+      description: "Welcome credit",
+    });
+
+    // Insert a cancelled reload entry (3 min ago)
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 100,
+      status: "cancelled",
+      source: "reload",
+      description: "Auto-reload failed: Card declined",
+      createdAt: new Date(Date.now() - 3 * 60 * 1000),
+    });
+
+    // Insert a small confirmed reload entry (1 min ago) — resets cooldown
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 10,
+      status: "confirmed",
+      source: "reload",
+      stripePaymentIntentId: "pi_previous",
+      description: "Auto-reload credit",
+      createdAt: new Date(Date.now() - 1 * 60 * 1000),
+    });
+
+    // Reconcile computes: 50 + 10 = 60 (cancelled ignored). 60 < 100 → reload
+    // Last reload is confirmed → no cooldown → charges 2000
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(res.body.balance_cents).toBe(2060); // 60 + 2000
+    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalled();
   });
 
   it("auto-creates account for unknown org and authorizes from trial balance", async () => {

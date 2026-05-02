@@ -4,12 +4,8 @@ import { db } from "../db/index.js";
 import { billingAccounts, creditLedger } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { ProvisionRequestSchema, ConfirmProvisionRequestSchema } from "../schemas.js";
-import {
-  chargePaymentMethod,
-  isStripeAuthError,
-} from "../lib/stripe.js";
+import { isStripeAuthError } from "../lib/stripe.js";
 import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
-import { sendEmail } from "../lib/email-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-client.js";
 
@@ -83,50 +79,11 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         })
         .returning();
 
-      // Auto-reload: if balance dropped below threshold, create a credit entry
-      // and increment balance INSIDE the transaction to prevent concurrent race conditions
-      let creditLedgerEntryId: string | null = null;
-      let reloadAmount: number | null = null;
-      const threshold = account.reload_threshold_cents ?? 200;
-      if (
-        newBalance < threshold &&
-        account.stripe_payment_method_id &&
-        account.stripe_customer_id &&
-        account.reload_amount_cents
-      ) {
-        reloadAmount = account.reload_amount_cents;
-        const [creditEntry] = await tx
-          .insert(creditLedger)
-          .values({
-            orgId,
-            userId,
-            type: "credit",
-            amountCents: reloadAmount,
-            status: "pending",
-            source: "reload",
-            description: `Auto-reload credit ($${(reloadAmount / 100).toFixed(2)})`,
-          })
-          .returning();
-        creditLedgerEntryId = creditEntry.id;
-
-        // Increment balance immediately (optimistic — will be reversed if Stripe fails)
-        await tx
-          .update(billingAccounts)
-          .set({
-            creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${reloadAmount}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(billingAccounts.orgId, orgId));
-      }
-
       return {
         provision_id: provision.id,
-        balance_cents: newBalance + (reloadAmount ?? 0),
+        balance_cents: newBalance,
         depleted: newBalance <= 0,
-        _creditLedgerEntryId: creditLedgerEntryId,
-        _reloadAmount: reloadAmount,
         _customerId: account.stripe_customer_id,
-        _pmId: account.stripe_payment_method_id,
         _provisionLedgerEntryId: provision.id,
       };
     });
@@ -149,75 +106,8 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       );
     }
 
-    // Async Stripe charge for reload credit entry (fire-and-forget)
-    const creditLedgerEntryId = "_creditLedgerEntryId" in result ? result._creditLedgerEntryId as string | null : null;
-    const reloadAmount = "_reloadAmount" in result ? result._reloadAmount as number | null : null;
-    const customerId = "_customerId" in result ? result._customerId as string | null : null;
-    const pmId = "_pmId" in result ? result._pmId as string | null : null;
-
-    if (creditLedgerEntryId && reloadAmount && customerId && pmId) {
-      (async () => {
-        try {
-          const pi = await chargePaymentMethod(orgId, userId, customerId, pmId, reloadAmount, "Auto-reload", fwdHeaders);
-          await db
-            .update(creditLedger)
-            .set({
-              status: "confirmed",
-              stripePaymentIntentId: pi.id,
-              updatedAt: new Date(),
-            })
-            .where(eq(creditLedger.id, creditLedgerEntryId));
-
-          // Fire-and-forget Stripe balance txn for the reload credit
-          fireAndForgetBalanceTxn(
-            orgId,
-            userId,
-            customerId,
-            -reloadAmount,
-            `Auto-reload credit ($${(reloadAmount / 100).toFixed(2)})`,
-            creditLedgerEntryId,
-            fwdHeaders
-          );
-        } catch (err) {
-          console.error("[billing-service] Async auto-reload failed, reversing credit entry:", err);
-          // Reverse: cancel credit entry + decrement balance
-          await db.transaction(async (rollbackTx) => {
-            await rollbackTx
-              .update(creditLedger)
-              .set({ status: "cancelled", updatedAt: new Date() })
-              .where(eq(creditLedger.id, creditLedgerEntryId));
-            await rollbackTx
-              .update(billingAccounts)
-              .set({
-                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} - ${reloadAmount}`,
-                updatedAt: new Date(),
-              })
-              .where(eq(billingAccounts.orgId, orgId));
-          });
-          sendEmail({
-            eventType: "credits-reload-failed",
-            orgId,
-            userId,
-            runId,
-            workflowHeaders: fwdHeaders,
-          });
-        }
-      })();
-    }
-
-    // Send depleted email if needed
-    if ("depleted" in result && result.depleted) {
-      sendEmail({
-        eventType: "credits-depleted",
-        orgId,
-        userId,
-        runId,
-        workflowHeaders: fwdHeaders,
-      });
-    }
-
     // Strip internal fields from response
-    const { _creditLedgerEntryId: _, _reloadAmount: _r, _customerId: _c, _pmId: _p, _provisionLedgerEntryId: _pl, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _provisionLedgerEntryId: _pl, ...response } = result as Record<string, unknown>;
 
     traceEvent({
       runId,
