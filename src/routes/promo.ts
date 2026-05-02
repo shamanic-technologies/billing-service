@@ -14,6 +14,7 @@ import {
 import { RedeemPromoRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
+import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
@@ -31,6 +32,9 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
     }
 
     const { code } = parsed.data;
+    const runId = req.headers["x-run-id"] as string;
+
+    traceEvent(runId, { service: "billing-service", event: "promo.redeem.start", data: { code } }, req.headers);
 
     // Look up the promo code
     const [promo] = await db
@@ -130,6 +134,8 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
         wfHeaders
       );
     }
+
+    traceEvent(runId, { service: "billing-service", event: "promo.redeem.done", data: { code, amount_cents: promo.amountCents, balance_cents: result.updated.creditBalanceCents } }, req.headers);
 
     console.log(
       `[billing-service] Promo "${code}" redeemed by org ${orgId}: +$${(promo.amountCents / 100).toFixed(2)}`
