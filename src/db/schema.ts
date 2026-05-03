@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -82,6 +83,9 @@ export const creditLedger = pgTable(
     index("idx_credit_ledger_org_id").on(table.orgId),
     index("idx_credit_ledger_status").on(table.status),
     index("idx_credit_ledger_source").on(table.source),
+    uniqueIndex("idx_credit_ledger_reload_pi")
+      .on(table.orgId, table.stripePaymentIntentId)
+      .where(sql`source = 'reload' AND stripe_payment_intent_id IS NOT NULL`),
   ]
 );
 

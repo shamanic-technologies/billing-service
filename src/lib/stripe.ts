@@ -142,15 +142,20 @@ export async function createBalanceTransaction(
   amountCents: number,
   description: string,
   metadata?: Record<string, string>,
-  workflowHeaders?: Record<string, string>
+  workflowHeaders?: Record<string, string>,
+  idempotencyKey?: string
 ): Promise<Stripe.CustomerBalanceTransaction> {
   return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
-    stripe.customers.createBalanceTransaction(stripeCustomerId, {
-      amount: amountCents,
-      currency: "usd",
-      description,
-      metadata,
-    })
+    stripe.customers.createBalanceTransaction(
+      stripeCustomerId,
+      {
+        amount: amountCents,
+        currency: "usd",
+        description,
+        metadata,
+      },
+      idempotencyKey ? { idempotencyKey } : undefined
+    )
   );
 }
 

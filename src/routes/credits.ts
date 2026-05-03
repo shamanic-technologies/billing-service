@@ -39,130 +39,144 @@ interface AccountRow {
   stripe_payment_method_id: string | null;
 }
 
+// Namespace key for advisory locks scoped to billing reconcile (any constant int4).
+const RECONCILE_LOCK_NAMESPACE = 0x42111331;
+
 /**
  * Reconcile the billing account against the ledger and Stripe.
  * Runs 3 self-healing checks before authorize checks sufficiency.
+ *
+ * Wrapped in a transaction with `pg_try_advisory_xact_lock` keyed on orgId — concurrent
+ * /authorize calls for the same org skip reconcile (the in-flight one will fix any drift).
+ * Without the lock, N parallel reconcilers each detect the same drift, insert duplicate
+ * ledger rows for the same Stripe PI, and post duplicate balance txns.
  */
 async function reconcile(
   orgId: string,
   userId: string,
-  account: AccountRow,
   wfHeaders: Record<string, string>
 ): Promise<void> {
-  // Check 1: Cache vs Ledger
-  // Only reconcile if ledger has entries — no entries means account predates ledger
-  const [ledgerResult] = await db.execute<{ computed: number; entry_count: number }>(
-    rawSql`SELECT COALESCE(SUM(
-      CASE
-        WHEN type = 'credit' AND status = 'confirmed' THEN amount_cents
-        WHEN type = 'debit' AND status IN ('confirmed', 'pending') THEN -amount_cents
-        ELSE 0
-      END
-    ), 0)::int AS computed,
-    COUNT(*)::int AS entry_count
-    FROM credit_ledger WHERE org_id = ${orgId}`
-  );
-  const { computed, entry_count } = ledgerResult as unknown as { computed: number; entry_count: number };
-  if (entry_count > 0 && computed !== account.credit_balance_cents) {
-    console.warn(
-      `[billing-service] Cache drift detected for org ${orgId}: cache=${account.credit_balance_cents}, ledger=${computed}. Fixing.`
-    );
-    await db
-      .update(billingAccounts)
-      .set({ creditBalanceCents: computed, updatedAt: new Date() })
-      .where(eq(billingAccounts.orgId, orgId));
-  }
-
-  // Check 2: Stripe payments -> DB
-  if (account.stripe_customer_id) {
-    try {
-      const paymentIntents = await listPaymentIntents(
-        orgId,
-        userId,
-        account.stripe_customer_id,
-        wfHeaders
-      );
-      for (const pi of paymentIntents.data) {
-        if (pi.status !== "succeeded") continue;
-        const [existingEntry] = await db
-          .select({ id: creditLedger.id })
-          .from(creditLedger)
-          .where(
-            and(
-              eq(creditLedger.orgId, orgId),
-              eq(creditLedger.stripePaymentIntentId, pi.id),
-              eq(creditLedger.source, "reload")
-            )
-          )
-          .limit(1);
-        if (!existingEntry) {
-          console.warn(
-            `[billing-service] Missing ledger entry for PI ${pi.id}, org ${orgId}. Recovering.`
-          );
-          await db.insert(creditLedger).values({
-            orgId,
-            userId,
-            type: "credit",
-            amountCents: pi.amount,
-            status: "confirmed",
-            source: "reload",
-            stripePaymentIntentId: pi.id,
-            description: `Recovered reload from Stripe PI ${pi.id}`,
-          });
-          await db
-            .update(billingAccounts)
-            .set({
-              creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${pi.amount}`,
-              updatedAt: new Date(),
-            })
-            .where(eq(billingAccounts.orgId, orgId));
-        }
-      }
-    } catch (err) {
-      console.error("[billing-service] Check 2 failed (Stripe -> DB):", err);
+  await db.transaction(async (tx) => {
+    const lockRows = (await tx.execute(
+      rawSql`SELECT pg_try_advisory_xact_lock(${RECONCILE_LOCK_NAMESPACE}::int, hashtext(${orgId})) AS locked`
+    )) as unknown as { locked: boolean }[];
+    if (!lockRows[0]?.locked) {
+      return;
     }
-  }
 
-  // Check 3: DB -> Stripe (synchronous — must succeed on reconcile path)
-  if (account.stripe_customer_id) {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const unsyncedEntries = await db
-      .select()
-      .from(creditLedger)
-      .where(
-        and(
-          eq(creditLedger.orgId, orgId),
-          isNull(creditLedger.stripeBalanceTxnId),
-          eq(creditLedger.status, "confirmed"),
-          gte(creditLedger.createdAt, sevenDaysAgo)
-        )
+    const accountRows = (await tx.execute(
+      rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId}`
+    )) as unknown as AccountRow[];
+    const account = accountRows[0];
+    if (!account) return;
+
+    // Check 1: Cache vs Ledger
+    // Only reconcile if ledger has entries — no entries means account predates ledger
+    const ledgerRows = (await tx.execute(
+      rawSql`SELECT COALESCE(SUM(
+        CASE
+          WHEN type = 'credit' AND status = 'confirmed' THEN amount_cents
+          WHEN type = 'debit' AND status IN ('confirmed', 'pending') THEN -amount_cents
+          ELSE 0
+        END
+      ), 0)::int AS computed,
+      COUNT(*)::int AS entry_count
+      FROM credit_ledger WHERE org_id = ${orgId}`
+    )) as unknown as { computed: number; entry_count: number }[];
+    const { computed, entry_count } = ledgerRows[0];
+    if (entry_count > 0 && computed !== account.credit_balance_cents) {
+      console.warn(
+        `[billing-service] Cache drift detected for org ${orgId}: cache=${account.credit_balance_cents}, ledger=${computed}. Fixing.`
       );
+      await tx
+        .update(billingAccounts)
+        .set({ creditBalanceCents: computed, updatedAt: new Date() })
+        .where(eq(billingAccounts.orgId, orgId));
+    }
 
-    for (const entry of unsyncedEntries) {
+    // Check 2: Stripe payments -> DB
+    if (account.stripe_customer_id) {
       try {
-        const stripeAmount =
-          entry.type === "credit" ? -entry.amountCents : entry.amountCents;
-        const txn = await createBalanceTransaction(
+        const paymentIntents = await listPaymentIntents(
           orgId,
           userId,
           account.stripe_customer_id,
-          stripeAmount,
-          entry.description ?? `Reconciled ${entry.source}`,
-          undefined,
           wfHeaders
         );
-        await db
-          .update(creditLedger)
-          .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
-          .where(eq(creditLedger.id, entry.id));
+        for (const pi of paymentIntents.data) {
+          if (pi.status !== "succeeded") continue;
+          // Idempotent insert: relies on partial unique index
+          // (org_id, stripe_payment_intent_id) WHERE source='reload' AND stripe_payment_intent_id IS NOT NULL.
+          const insertedRows = (await tx.execute(
+            rawSql`INSERT INTO credit_ledger
+              (org_id, user_id, type, amount_cents, status, source, stripe_payment_intent_id, description)
+              VALUES (${orgId}, ${userId}, 'credit', ${pi.amount}, 'confirmed', 'reload', ${pi.id},
+                ${`Recovered reload from Stripe PI ${pi.id}`})
+              ON CONFLICT (org_id, stripe_payment_intent_id)
+                WHERE source = 'reload' AND stripe_payment_intent_id IS NOT NULL
+              DO NOTHING
+              RETURNING id`
+          )) as unknown as { id: string }[];
+          if (insertedRows.length > 0) {
+            console.warn(
+              `[billing-service] Missing ledger entry for PI ${pi.id}, org ${orgId}. Recovered.`
+            );
+            await tx
+              .update(billingAccounts)
+              .set({
+                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${pi.amount}`,
+                updatedAt: new Date(),
+              })
+              .where(eq(billingAccounts.orgId, orgId));
+          }
+        }
       } catch (err) {
-        console.error(
-          `[billing-service] Check 3: Failed to sync ledger entry ${entry.id} to Stripe:`,
-          err
-        );
+        console.error("[billing-service] Check 2 failed (Stripe -> DB):", err);
       }
     }
-  }
+
+    // Check 3: DB -> Stripe (synchronous — must succeed on reconcile path)
+    if (account.stripe_customer_id) {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const unsyncedEntries = await tx
+        .select()
+        .from(creditLedger)
+        .where(
+          and(
+            eq(creditLedger.orgId, orgId),
+            isNull(creditLedger.stripeBalanceTxnId),
+            eq(creditLedger.status, "confirmed"),
+            gte(creditLedger.createdAt, sevenDaysAgo)
+          )
+        );
+
+      for (const entry of unsyncedEntries) {
+        try {
+          const stripeAmount =
+            entry.type === "credit" ? -entry.amountCents : entry.amountCents;
+          const txn = await createBalanceTransaction(
+            orgId,
+            userId,
+            account.stripe_customer_id,
+            stripeAmount,
+            entry.description ?? `Reconciled ${entry.source}`,
+            undefined,
+            wfHeaders,
+            entry.id
+          );
+          await tx
+            .update(creditLedger)
+            .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
+            .where(eq(creditLedger.id, entry.id));
+        } catch (err) {
+          console.error(
+            `[billing-service] Check 3: Failed to sync ledger entry ${entry.id} to Stripe:`,
+            err
+          );
+        }
+      }
+    }
+  });
 }
 
 // POST /v1/credits/deduct — deduct credits from org balance (allows negative balances)
@@ -315,29 +329,10 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
-    // Run reconciliation checks before checking sufficiency
-    const [preAccount] = await db
-      .select()
-      .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
-      .limit(1);
-
-    if (preAccount) {
-      await reconcile(
-        orgId,
-        userId,
-        {
-          id: preAccount.id,
-          org_id: preAccount.orgId,
-          stripe_customer_id: preAccount.stripeCustomerId,
-          credit_balance_cents: preAccount.creditBalanceCents,
-          reload_amount_cents: preAccount.reloadAmountCents,
-          reload_threshold_cents: preAccount.reloadThresholdCents,
-          stripe_payment_method_id: preAccount.stripePaymentMethodId,
-        },
-        wfHeaders
-      );
-    }
+    // Run reconciliation checks before checking sufficiency.
+    // reconcile() acquires a per-org advisory lock; concurrent calls for the same org
+    // skip and rely on the in-flight reconcile to fix any drift.
+    await reconcile(orgId, userId, wfHeaders);
 
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute(
