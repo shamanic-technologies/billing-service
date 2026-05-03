@@ -55,7 +55,8 @@ describe("Promo endpoints", () => {
         -800,
         "Promo credit: qr10 ($8.00)",
         undefined,
-        {}
+        {},
+        expect.any(String)
       );
     });
 

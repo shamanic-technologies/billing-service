@@ -172,7 +172,8 @@ describe("Credits deduction endpoint", () => {
       5,
       "test deduction",
       undefined,
-      {}
+      {},
+      expect.any(String) // idempotencyKey = ledger entry id
     );
   });
 
@@ -226,7 +227,6 @@ describe("Credits authorize endpoint", () => {
 
   afterAll(async () => {
     await cleanTestData();
-    await closeDb();
   });
 
   it("returns sufficient: true when balance covers required amount", async () => {
@@ -612,5 +612,179 @@ describe("Credits authorize endpoint", () => {
     // After reconcile, balance should be 300 (from ledger), not 999
     expect(res.body.balance_cents).toBe(300);
     expect(res.body.sufficient).toBe(true);
+  });
+});
+
+describe("Credits authorize — reconcile race conditions", () => {
+  const app = createTestApp();
+  const orgId = "00000000-0000-0000-0000-0000000000aa";
+  const userId = "00000000-0000-0000-0000-000000000099";
+  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+
+  const authorizeBody = {
+    items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }],
+    description: "race-test",
+  };
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    stripeMocks = setupStripeMocks();
+    await cleanTestData();
+
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(100);
+  });
+
+  afterAll(async () => {
+    await cleanTestData();
+    await closeDb();
+  });
+
+  it("serializes reconcile across N concurrent /authorize calls (cache drift)", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_race",
+      creditBalanceCents: 999, // wrong cache
+    });
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 300,
+      status: "confirmed",
+      source: "welcome",
+      description: "Welcome credit",
+    });
+
+    const N = 10;
+    const responses = await Promise.all(
+      Array.from({ length: N }, () =>
+        request(app)
+          .post("/v1/credits/authorize")
+          .set(getAuthHeaders(orgId))
+          .send(authorizeBody)
+      )
+    );
+
+    for (const res of responses) {
+      expect(res.status).toBe(200);
+    }
+    // Only one welcome ledger row should exist — no duplicates from concurrent reconciles
+    const entries = await db
+      .select()
+      .from(creditLedger)
+      .where(eq(creditLedger.orgId, orgId));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].source).toBe("welcome");
+  });
+
+  it("inserts a single reload ledger entry under N concurrent /authorize when a Stripe PI is missing from the ledger", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_race",
+      creditBalanceCents: 500,
+    });
+
+    // Stripe says one succeeded PI exists; it has no matching ledger entry yet
+    stripeMocks.listPaymentIntents.mockResolvedValue({
+      data: [{ id: "pi_recover_xyz", status: "succeeded", amount: 2000 }],
+      has_more: false,
+    });
+
+    const N = 10;
+    const responses = await Promise.all(
+      Array.from({ length: N }, () =>
+        request(app)
+          .post("/v1/credits/authorize")
+          .set(getAuthHeaders(orgId))
+          .send(authorizeBody)
+      )
+    );
+
+    for (const res of responses) {
+      expect(res.status).toBe(200);
+    }
+
+    // Exactly one recovered reload entry — no duplicates from concurrent reconciles
+    const reloadEntries = await db
+      .select()
+      .from(creditLedger)
+      .where(
+        and(
+          eq(creditLedger.orgId, orgId),
+          eq(creditLedger.source, "reload")
+        )
+      );
+    expect(reloadEntries).toHaveLength(1);
+    expect(reloadEntries[0].stripePaymentIntentId).toBe("pi_recover_xyz");
+    expect(reloadEntries[0].amountCents).toBe(2000);
+  });
+
+  it("rejects duplicate (org_id, stripe_payment_intent_id) reload rows at the DB level", async () => {
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 1000,
+      status: "confirmed",
+      source: "reload",
+      stripePaymentIntentId: "pi_dup_test",
+      description: "first",
+    });
+
+    await expect(
+      db.insert(creditLedger).values({
+        orgId,
+        userId,
+        type: "credit",
+        amountCents: 1000,
+        status: "confirmed",
+        source: "reload",
+        stripePaymentIntentId: "pi_dup_test",
+        description: "duplicate",
+      })
+    ).rejects.toThrow();
+  });
+
+  it("passes idempotencyKey = ledger entry id when syncing to Stripe (Check 3)", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_race",
+      creditBalanceCents: 500,
+    });
+
+    const [entry] = await db
+      .insert(creditLedger)
+      .values({
+        orgId,
+        userId,
+        type: "credit",
+        amountCents: 500,
+        status: "confirmed",
+        source: "welcome",
+        description: "Welcome credit",
+        // stripeBalanceTxnId left null → Check 3 will sync this entry
+      })
+      .returning();
+
+    stripeMocks.createBalanceTransaction.mockResolvedValue({
+      id: "cbtxn_race",
+      amount: -500,
+      currency: "usd",
+      description: "Welcome credit",
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(stripeMocks.createBalanceTransaction).toHaveBeenCalled();
+
+    // 8th positional arg = idempotencyKey
+    const calls = stripeMocks.createBalanceTransaction.mock.calls;
+    const matched = calls.find((args) => args[7] === entry.id);
+    expect(matched).toBeDefined();
   });
 });

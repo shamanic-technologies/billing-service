@@ -78,6 +78,13 @@
       "when": 1776124800000,
       "tag": "0010_credit_ledger_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777161600000,
+      "tag": "0011_reload_pi_unique",
+      "breakpoints": true
     }
   ]
 }

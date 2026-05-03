@@ -96,6 +96,9 @@ beforeAll(async () => {
   // Partial unique index for promo anti-double-redemption
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_credit_ledger_promo_org" ON "credit_ledger" ("promo_code_id", "org_id") WHERE source = 'promo'`;
 
+  // Partial unique index to prevent duplicate reload entries for the same Stripe PI
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_credit_ledger_reload_pi" ON "credit_ledger" ("org_id", "stripe_payment_intent_id") WHERE source = 'reload' AND stripe_payment_intent_id IS NOT NULL`;
+
   // Migrate brand_id -> brand_ids if old column exists
   await sql`
     DO $$ BEGIN

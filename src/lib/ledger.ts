@@ -23,7 +23,8 @@ export function fireAndForgetBalanceTxn(
     amountCents,
     description,
     undefined,
-    wfHeaders
+    wfHeaders,
+    ledgerEntryId
   )
     .then((txn) => {
       db.update(creditLedger)
