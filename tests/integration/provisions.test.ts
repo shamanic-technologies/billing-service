@@ -173,8 +173,7 @@ describe("Credit provision endpoints", () => {
         100,
         "test provision",
         undefined,
-        {},
-        expect.any(String)
+        {}
       );
     });
   });

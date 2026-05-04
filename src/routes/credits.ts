@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { eq, and, isNull, gte, desc, sql as rawSql } from "drizzle-orm";
+import { eq, and, isNull, gte, lte, desc, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, creditLedger } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
@@ -135,9 +135,13 @@ async function reconcile(
       }
     }
 
-    // Check 3: DB -> Stripe (synchronous — must succeed on reconcile path)
+    // Check 3: DB -> Stripe (recovery path)
+    // Grace filter (2 min): fire-and-forget Stripe sync runs async after the originating
+    // request returns; without a grace window we'd race that in-flight call and create
+    // duplicate Stripe balance transactions. 7-day upper bound keeps recovery cheap.
     if (account.stripe_customer_id) {
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
       const unsyncedEntries = await tx
         .select()
         .from(creditLedger)
@@ -146,7 +150,8 @@ async function reconcile(
             eq(creditLedger.orgId, orgId),
             isNull(creditLedger.stripeBalanceTxnId),
             eq(creditLedger.status, "confirmed"),
-            gte(creditLedger.createdAt, sevenDaysAgo)
+            gte(creditLedger.createdAt, sevenDaysAgo),
+            lte(creditLedger.createdAt, twoMinAgo)
           )
         );
 
