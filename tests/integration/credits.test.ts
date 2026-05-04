@@ -172,8 +172,7 @@ describe("Credits deduction endpoint", () => {
       5,
       "test deduction",
       undefined,
-      {},
-      expect.any(String) // idempotencyKey = ledger entry id
+      {}
     );
   });
 
@@ -764,6 +763,8 @@ describe("Credits authorize — reconcile race conditions", () => {
         source: "welcome",
         description: "Welcome credit",
         // stripeBalanceTxnId left null → Check 3 will sync this entry
+        // Backdate beyond the 2-minute grace window so Check 3 doesn't skip it
+        createdAt: new Date(Date.now() - 5 * 60 * 1000),
       })
       .returning();
 
@@ -786,5 +787,57 @@ describe("Credits authorize — reconcile race conditions", () => {
     const calls = stripeMocks.createBalanceTransaction.mock.calls;
     const matched = calls.find((args) => args[7] === entry.id);
     expect(matched).toBeDefined();
+  });
+
+  it("Check 3 skips entries newer than 2 minutes (grace window for fire-and-forget)", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_race",
+      creditBalanceCents: 500,
+    });
+
+    // Fresh entry — within grace window — should be skipped by Check 3
+    await db.insert(creditLedger).values({
+      orgId,
+      userId,
+      type: "credit",
+      amountCents: 500,
+      status: "confirmed",
+      source: "welcome",
+      description: "Welcome credit",
+      // createdAt defaults to NOW() — well within the 2-minute grace window
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    // Stripe should NOT be called for a fresh unsynced entry
+    expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
+  });
+
+  it("fireAndForgetBalanceTxn does NOT pass an idempotency key (multiple Stripe ops share a ledger row id)", async () => {
+    await insertTestAccount({
+      orgId,
+      stripeCustomerId: "cus_race",
+      creditBalanceCents: 200,
+    });
+
+    const res = await request(app)
+      .post("/v1/credits/deduct")
+      .set(getAuthHeaders(orgId))
+      .send({ amount_cents: 5, description: "race-no-idem" });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(stripeMocks.createBalanceTransaction).toHaveBeenCalled();
+    const calls = stripeMocks.createBalanceTransaction.mock.calls;
+    // No call from fire-and-forget should pass an 8th positional arg (idempotencyKey)
+    for (const args of calls) {
+      expect(args[7]).toBeUndefined();
+    }
   });
 });

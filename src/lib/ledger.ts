@@ -16,6 +16,10 @@ export function fireAndForgetBalanceTxn(
   ledgerEntryId: string,
   wfHeaders?: Record<string, string>
 ): void {
+  // Note: do NOT pass `ledgerEntryId` as `idempotencyKey` here. Multiple distinct
+  // Stripe operations (initial debit, provision adjustment, cancel refund) target the
+  // same ledger row id with different params; reusing the key would trigger
+  // StripeIdempotencyError. Recovery via reconcile() Check 3 owns idempotency keying.
   createBalanceTransaction(
     orgId,
     userId,
@@ -23,8 +27,7 @@ export function fireAndForgetBalanceTxn(
     amountCents,
     description,
     undefined,
-    wfHeaders,
-    ledgerEntryId
+    wfHeaders
   )
     .then((txn) => {
       db.update(creditLedger)
