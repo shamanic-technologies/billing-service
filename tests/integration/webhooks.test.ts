@@ -90,7 +90,7 @@ describe("Stripe webhooks", () => {
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
-    expect(account.creditBalanceCents).toBe(2200); // 200 + 2000
+    expect(account.creditBalanceCents).toBe("2200.0000000000"); // 200 + 2000
     expect(account.stripePaymentMethodId).toBe("pm_new_123");
   });
 

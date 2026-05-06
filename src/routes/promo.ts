@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import {
   billingAccounts,
   localPromoCodes,
-  creditLedger,
+  transactions,
 } from "../db/schema.js";
 import {
   requireOrgHeaders,
@@ -13,7 +13,7 @@ import {
 } from "../middleware/auth.js";
 import { RedeemPromoRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
+import { syncStripeCeilDelta } from "../lib/ledger.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
@@ -54,15 +54,14 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Check max redemptions (count from credit_ledger where source='promo')
     if (promo.maxRedemptions !== null) {
       const [countResult] = await db
         .select({ count: rawSql<number>`count(*)::int` })
-        .from(creditLedger)
+        .from(transactions)
         .where(
           and(
-            eq(creditLedger.promoCodeId, promo.id),
-            eq(creditLedger.source, "promo")
+            eq(transactions.promoCodeId, promo.id),
+            eq(transactions.source, "promo")
           )
         );
       if (countResult.count >= promo.maxRedemptions) {
@@ -71,15 +70,14 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       }
     }
 
-    // Check if this org already redeemed this code (via credit_ledger)
     const [existing] = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.promoCodeId, promo.id),
-          eq(creditLedger.orgId, orgId),
-          eq(creditLedger.source, "promo")
+          eq(transactions.promoCodeId, promo.id),
+          eq(transactions.orgId, orgId),
+          eq(transactions.source, "promo")
         )
       )
       .limit(1);
@@ -94,14 +92,20 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
 
     // Credit the promo amount inside a transaction
     const result = await db.transaction(async (tx) => {
-      // Record the redemption in credit_ledger (partial unique index prevents double-dip)
+      const [accountBefore] = await tx
+        .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.orgId, orgId))
+        .limit(1);
+      const oldBalance = accountBefore?.creditBalanceCents ?? "0.0000000000";
+
       const [ledgerEntry] = await tx
-        .insert(creditLedger)
+        .insert(transactions)
         .values({
           orgId,
           userId,
           type: "credit",
-          amountCents: promo.amountCents,
+          amountCents: String(promo.amountCents),
           status: "confirmed",
           source: "promo",
           promoCodeId: promo.id,
@@ -113,26 +117,27 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       const [updated] = await tx
         .update(billingAccounts)
         .set({
-          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${promo.amountCents}`,
+          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${promo.amountCents}::numeric`,
           updatedAt: new Date(),
         })
         .where(eq(billingAccounts.orgId, orgId))
         .returning();
 
-      return { updated, ledgerEntryId: ledgerEntry.id };
+      return { updated, ledgerEntryId: ledgerEntry.id, oldBalance };
     });
 
-    // Fire-and-forget Stripe balance txn for promo credit
+    // Fire-and-forget Stripe balance sync for promo credit
     if (account.stripeCustomerId) {
-      fireAndForgetBalanceTxn(
+      syncStripeCeilDelta({
         orgId,
         userId,
-        account.stripeCustomerId,
-        -promo.amountCents,
-        `Promo credit: ${code} ($${(promo.amountCents / 100).toFixed(2)})`,
-        result.ledgerEntryId,
-        wfHeaders
-      );
+        customerId: account.stripeCustomerId,
+        oldBalance: result.oldBalance,
+        newBalance: result.updated.creditBalanceCents,
+        description: `Promo credit: ${code} ($${(promo.amountCents / 100).toFixed(2)})`,
+        ledgerEntryId: result.ledgerEntryId,
+        wfHeaders,
+      });
     }
 
     traceEvent(runId, { service: "billing-service", event: "promo.redeem.done", data: { code, amount_cents: promo.amountCents, balance_cents: result.updated.creditBalanceCents } }, req.headers);
@@ -150,8 +155,7 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
     // Handle unique constraint violation (race condition double-dip via partial index)
     if (
       err instanceof Error &&
-      (err.message.includes("idx_credit_ledger_promo_org") ||
-        err.message.includes("idx_promo_redemptions_org_code"))
+      err.message.includes("idx_transactions_promo_org")
     ) {
       res.status(409).json({ error: "Promo code already redeemed by this organization" });
       return;

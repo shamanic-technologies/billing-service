@@ -29,7 +29,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.orgId).toBe(orgId);
-      expect(res.body.creditBalanceCents).toBe(200);
+      expect(res.body.creditBalanceCents).toBe("200.0000000000");
       expect(res.body.hasPaymentMethod).toBe(false);
       expect(res.body.hasAutoReload).toBe(false);
       expect(res.body).not.toHaveProperty("billingMode");
@@ -85,7 +85,7 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.creditBalanceCents).toBe(150);
+      expect(res.body.creditBalanceCents).toBe("150.0000000000");
       expect(stripeMocks.createCustomer).not.toHaveBeenCalled();
     });
 
@@ -155,7 +155,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        balance_cents: 150,
+        balance_cents: "150.0000000000",
         depleted: false,
       });
     });

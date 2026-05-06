@@ -1,7 +1,9 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 import { createCustomer, createBalanceTransaction } from "./stripe.js";
+
+const WELCOME_CREDIT_CENTS = "200";
 
 /**
  * Find or auto-create a billing account for an org.
@@ -26,7 +28,7 @@ export async function findOrCreateAccount(
     .insert(billingAccounts)
     .values({
       orgId,
-      creditBalanceCents: 200,
+      creditBalanceCents: WELCOME_CREDIT_CENTS,
     })
     .onConflictDoNothing()
     .returning();
@@ -52,12 +54,12 @@ export async function findOrCreateAccount(
 
   // Write welcome credit to ledger
   const [welcomeEntry] = await db
-    .insert(creditLedger)
+    .insert(transactions)
     .values({
       orgId,
       userId,
       type: "credit",
-      amountCents: 200,
+      amountCents: WELCOME_CREDIT_CENTS,
       status: "confirmed",
       source: "welcome",
       description: "Trial credit: $2.00",
@@ -75,9 +77,9 @@ export async function findOrCreateAccount(
     wfHeaders
   )
     .then((txn) => {
-      db.update(creditLedger)
+      db.update(transactions)
         .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
-        .where(eq(creditLedger.id, welcomeEntry.id))
+        .where(eq(transactions.id, welcomeEntry.id))
         .then(() => {})
         .catch(() => {});
     })

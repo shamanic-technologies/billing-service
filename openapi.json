@@ -19,13 +19,13 @@
             "type": "string"
           },
           "credited_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "consumed_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "revenue_cents": {
-            "type": "integer"
+            "type": "string"
           }
         },
         "required": [
@@ -45,13 +45,13 @@
             "type": "integer"
           },
           "totalCreditBalanceCents": {
-            "type": "integer"
+            "type": "string"
           },
           "totalCreditedCents": {
-            "type": "integer"
+            "type": "string"
           },
           "totalConsumedCents": {
-            "type": "integer"
+            "type": "string"
           },
           "monthlyGrowth": {
             "type": "array",
@@ -88,7 +88,7 @@
             "format": "uuid"
           },
           "creditBalanceCents": {
-            "type": "integer"
+            "type": "string"
           },
           "reloadAmountCents": {
             "type": "integer",
@@ -138,7 +138,7 @@
         "type": "object",
         "properties": {
           "balance_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "depleted": {
             "type": "boolean"
@@ -247,7 +247,7 @@
             "type": "boolean"
           },
           "balance_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "depleted": {
             "type": "boolean"
@@ -263,9 +263,14 @@
         "type": "object",
         "properties": {
           "amount_cents": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
           },
           "description": {
             "type": "string",
@@ -322,10 +327,10 @@
             "type": "boolean"
           },
           "balance_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "required_cents": {
-            "type": "integer"
+            "type": "string"
           }
         },
         "required": [
@@ -378,7 +383,7 @@
             "format": "uuid"
           },
           "balance_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "depleted": {
             "type": "boolean"
@@ -394,9 +399,14 @@
         "type": "object",
         "properties": {
           "amount_cents": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
           },
           "description": {
             "type": "string",
@@ -422,16 +432,16 @@
             ]
           },
           "original_amount_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "final_amount_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "adjustment_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "balance_cents": {
-            "type": "integer",
+            "type": "string",
             "nullable": true
           }
         },
@@ -448,9 +458,14 @@
         "type": "object",
         "properties": {
           "actual_amount_cents": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
           }
         }
       },
@@ -468,10 +483,10 @@
             ]
           },
           "refunded_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "balance_cents": {
-            "type": "integer",
+            "type": "string",
             "nullable": true
           }
         },
@@ -492,7 +507,7 @@
             "type": "integer"
           },
           "balance_cents": {
-            "type": "integer"
+            "type": "string"
           }
         },
         "required": [

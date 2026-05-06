@@ -11,6 +11,7 @@ import {
   isStripeAuthError,
 } from "../lib/stripe.js";
 import { findOrCreateAccount } from "../lib/account.js";
+import { isDepleted } from "../lib/cents.js";
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
 
     res.json({
       balance_cents: account.creditBalanceCents,
-      depleted: account.creditBalanceCents <= 0,
+      depleted: isDepleted(account.creditBalanceCents),
     });
   } catch (err) {
     console.error("Error checking balance:", err);

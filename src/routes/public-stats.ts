@@ -1,32 +1,36 @@
 import { Router } from "express";
 import { sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 
 const router = Router();
 
+// Public-stats sums are returned as full-precision decimal strings (numeric(16,10)::text).
+// Investor/dashboard consumers wanting a display-rounded integer should
+// `Math.ceil(parseFloat(...))` at the presentation layer.
+
 interface GrowthRow {
   period: string;
-  credited_cents: number;
-  consumed_cents: number;
-  revenue_cents: number;
+  credited_cents: string;
+  consumed_cents: string;
+  revenue_cents: string;
 }
 
 async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
   const rows = await db.execute(
     rawSql`SELECT
-      to_char(date_trunc(${truncTo}, ${creditLedger.createdAt}), 'YYYY-MM-DD') AS period,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
-      ), 0)::int AS credited_cents,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')
-      ), 0)::int AS consumed_cents,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
-          AND ${creditLedger.source} = 'reload'
-      ), 0)::int AS revenue_cents
-    FROM ${creditLedger}
+      to_char(date_trunc(${truncTo}, ${transactions.createdAt}), 'YYYY-MM-DD') AS period,
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
+      ), 0)::numeric(16,10)::text AS credited_cents,
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')
+      ), 0)::numeric(16,10)::text AS consumed_cents,
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
+          AND ${transactions.source} = 'reload'
+      ), 0)::numeric(16,10)::text AS revenue_cents
+    FROM ${transactions}
     GROUP BY 1
     ORDER BY 1`
   );
@@ -39,26 +43,26 @@ router.get("/public/stats/billing", async (_req, res) => {
       .select({
         totalAccounts: rawSql<number>`COUNT(*)::int`,
         accountsWithPaymentMethod: rawSql<number>`COUNT(*) FILTER (WHERE ${billingAccounts.stripePaymentMethodId} IS NOT NULL)::int`,
-        totalCreditBalanceCents: rawSql<number>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::int`,
+        totalCreditBalanceCents: rawSql<string>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::numeric(16,10)::text`,
       })
       .from(billingAccounts);
 
     const [creditStats] = await db
       .select({
-        totalCreditedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
+        totalCreditedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
       })
-      .from(creditLedger)
+      .from(transactions)
       .where(
-        rawSql`${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'`
+        rawSql`${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'`
       );
 
     const [debitStats] = await db
       .select({
-        totalConsumedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
+        totalConsumedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
       })
-      .from(creditLedger)
+      .from(transactions)
       .where(
-        rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')`
+        rawSql`${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')`
       );
 
     const [monthlyGrowth, weeklyGrowth] = await Promise.all([
