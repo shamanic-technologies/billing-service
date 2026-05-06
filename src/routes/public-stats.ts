@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 
 const router = Router();
 
@@ -15,18 +15,18 @@ interface GrowthRow {
 async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
   const rows = await db.execute(
     rawSql`SELECT
-      to_char(date_trunc(${truncTo}, ${creditLedger.createdAt}), 'YYYY-MM-DD') AS period,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
+      to_char(date_trunc(${truncTo}, ${transactions.createdAt}), 'YYYY-MM-DD') AS period,
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
       ), 0)::int AS credited_cents,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')
       ), 0)::int AS consumed_cents,
-      COALESCE(SUM(${creditLedger.amountCents}) FILTER (
-        WHERE ${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'
-          AND ${creditLedger.source} = 'reload'
+      COALESCE(SUM(${transactions.amountCents}) FILTER (
+        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
+          AND ${transactions.source} = 'reload'
       ), 0)::int AS revenue_cents
-    FROM ${creditLedger}
+    FROM ${transactions}
     GROUP BY 1
     ORDER BY 1`
   );
@@ -45,20 +45,20 @@ router.get("/public/stats/billing", async (_req, res) => {
 
     const [creditStats] = await db
       .select({
-        totalCreditedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
+        totalCreditedCents: rawSql<number>`COALESCE(SUM(${transactions.amountCents}), 0)::int`,
       })
-      .from(creditLedger)
+      .from(transactions)
       .where(
-        rawSql`${creditLedger.type} = 'credit' AND ${creditLedger.status} = 'confirmed'`
+        rawSql`${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'`
       );
 
     const [debitStats] = await db
       .select({
-        totalConsumedCents: rawSql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::int`,
+        totalConsumedCents: rawSql<number>`COALESCE(SUM(${transactions.amountCents}), 0)::int`,
       })
-      .from(creditLedger)
+      .from(transactions)
       .where(
-        rawSql`${creditLedger.type} = 'debit' AND ${creditLedger.status} IN ('confirmed', 'pending')`
+        rawSql`${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')`
       );
 
     const [monthlyGrowth, weeklyGrowth] = await Promise.all([

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 import {
   constructWebhookEvent,
   retrievePaymentIntent,
@@ -104,7 +104,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
     // Insert reload ledger entry
     const [ledgerEntry] = await db
-      .insert(creditLedger)
+      .insert(transactions)
       .values({
         orgId: account.orgId,
         userId: "00000000-0000-0000-0000-000000000000",

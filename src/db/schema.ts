@@ -53,8 +53,8 @@ export const localPromoCodes = pgTable(
 export type LocalPromoCode = typeof localPromoCodes.$inferSelect;
 export type NewLocalPromoCode = typeof localPromoCodes.$inferInsert;
 
-export const creditLedger = pgTable(
-  "credit_ledger",
+export const transactions = pgTable(
+  "transactions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
@@ -63,7 +63,7 @@ export const creditLedger = pgTable(
     type: text("type").notNull().default("debit"),
     amountCents: integer("amount_cents").notNull(),
     status: text("status").notNull().default("pending"),
-    source: text("source").notNull().default("provision"),
+    source: text("source").notNull().default("charge"),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
     stripeBalanceTxnId: text("stripe_balance_txn_id"),
     promoCodeId: uuid("promo_code_id").references(() => localPromoCodes.id),
@@ -80,14 +80,14 @@ export const creditLedger = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index("idx_credit_ledger_org_id").on(table.orgId),
-    index("idx_credit_ledger_status").on(table.status),
-    index("idx_credit_ledger_source").on(table.source),
-    uniqueIndex("idx_credit_ledger_reload_pi")
+    index("idx_transactions_org_id").on(table.orgId),
+    index("idx_transactions_status").on(table.status),
+    index("idx_transactions_source").on(table.source),
+    uniqueIndex("idx_transactions_reload_pi")
       .on(table.orgId, table.stripePaymentIntentId)
       .where(sql`source = 'reload' AND stripe_payment_intent_id IS NOT NULL`),
   ]
 );
 
-export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
-export type NewCreditLedgerEntry = typeof creditLedger.$inferInsert;
+export type Transaction = typeof transactions.$inferSelect;
+export type NewTransaction = typeof transactions.$inferInsert;

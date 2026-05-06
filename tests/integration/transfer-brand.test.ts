@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { creditLedger } from "../../src/db/schema.js";
+import { transactions } from "../../src/db/schema.js";
 import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 
@@ -32,7 +32,7 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("transfers solo-brand ledger entries from source to target org", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -47,12 +47,12 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 1 },
+      { tableName: "transactions", count: 1 },
     ]);
   });
 
   it("rewrites brand_ids when targetBrandId is provided", async () => {
-    const [provision] = await db.insert(creditLedger).values({
+    const [provision] = await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -67,21 +67,21 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 1 },
+      { tableName: "transactions", count: 1 },
     ]);
 
     // Verify the brand_ids was rewritten to targetBrandId
     const [updated] = await db
       .select()
-      .from(creditLedger)
-      .where(eq(creditLedger.id, provision.id));
+      .from(transactions)
+      .where(eq(transactions.id, provision.id));
 
     expect(updated.orgId).toBe(targetOrgId);
     expect(updated.brandIds).toEqual([targetBrandId]);
   });
 
   it("skips co-branding entries (multiple brand IDs)", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 200,
@@ -96,12 +96,12 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 0 },
+      { tableName: "transactions", count: 0 },
     ]);
   });
 
   it("skips entries for a different brand", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -116,12 +116,12 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 0 },
+      { tableName: "transactions", count: 0 },
     ]);
   });
 
   it("skips entries with null brand_ids", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -136,12 +136,12 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 0 },
+      { tableName: "transactions", count: 0 },
     ]);
   });
 
   it("is idempotent — second call is a no-op", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -156,7 +156,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res1.status).toBe(200);
     expect(res1.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 1 },
+      { tableName: "transactions", count: 1 },
     ]);
 
     const res2 = await request(app)
@@ -166,12 +166,12 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res2.status).toBe(200);
     expect(res2.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 0 },
+      { tableName: "transactions", count: 0 },
     ]);
   });
 
   it("is idempotent with targetBrandId — second call is a no-op", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId: sourceOrgId,
       userId,
       amountCents: 100,
@@ -186,7 +186,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res1.status).toBe(200);
     expect(res1.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 1 },
+      { tableName: "transactions", count: 1 },
     ]);
 
     // Second call — brand_ids is now [targetBrandId], org_id is targetOrgId, so WHERE won't match
@@ -197,7 +197,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res2.status).toBe(200);
     expect(res2.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 0 },
+      { tableName: "transactions", count: 0 },
     ]);
   });
 
@@ -221,7 +221,7 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("transfers multiple solo-brand entries at once", async () => {
-    await db.insert(creditLedger).values([
+    await db.insert(transactions).values([
       {
         orgId: sourceOrgId,
         userId,
@@ -252,7 +252,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "credit_ledger", count: 2 },
+      { tableName: "transactions", count: 2 },
     ]);
   });
 });

@@ -85,6 +85,13 @@
       "when": 1777161600000,
       "tag": "0011_reload_pi_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1778198400000,
+      "tag": "0012_transactions_rename",
+      "breakpoints": true
     }
   ]
 }
