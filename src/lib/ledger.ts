@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { creditLedger } from "../db/schema.js";
+import { transactions } from "../db/schema.js";
 import { createBalanceTransaction } from "./stripe.js";
 
 /**
@@ -30,9 +30,9 @@ export function fireAndForgetBalanceTxn(
     wfHeaders
   )
     .then((txn) => {
-      db.update(creditLedger)
+      db.update(transactions)
         .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
-        .where(eq(creditLedger.id, ledgerEntryId))
+        .where(eq(transactions.id, ledgerEntryId))
         .then(() => {})
         .catch(() => {});
     })

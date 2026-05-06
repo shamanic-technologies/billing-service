@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { ProvisionRequestSchema, ConfirmProvisionRequestSchema } from "../schemas.js";
 import { isStripeAuthError } from "../lib/stripe.js";
@@ -21,7 +21,7 @@ interface AccountRow {
   stripe_payment_method_id: string | null;
 }
 
-// POST /v1/credits/provision — provision credits (deduct from balance immediately)
+// POST /v1/credits/provision — provision credits (deduct from balance immediately, status=pending)
 router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -38,7 +38,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
 
     const { amount_cents, description } = parsed.data;
 
-    // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, fwdHeaders);
 
     const result = await db.transaction(async (tx) => {
@@ -51,7 +50,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
 
-      // Deduct from balance (allow negative)
       const newBalance = account.credit_balance_cents - amount_cents;
       await tx
         .update(billingAccounts)
@@ -62,7 +60,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         .where(eq(billingAccounts.orgId, orgId));
 
       const [provision] = await tx
-        .insert(creditLedger)
+        .insert(transactions)
         .values({
           orgId,
           userId,
@@ -70,7 +68,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
           type: "debit",
           amountCents: amount_cents,
           status: "pending",
-          source: "provision",
+          source: "charge",
           description,
           campaignId: wfHeaders.campaignId,
           brandIds: wfHeaders.brandIds,
@@ -93,7 +91,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Fire-and-forget Stripe balance txn for the provision debit
     if (result._customerId && result._provisionLedgerEntryId) {
       fireAndForgetBalanceTxn(
         orgId,
@@ -106,7 +103,6 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       );
     }
 
-    // Strip internal fields from response
     const { _customerId: _c, _provisionLedgerEntryId: _pl, ...response } = result as Record<string, unknown>;
 
     traceEvent({
@@ -129,12 +125,14 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// POST /v1/credits/provision/:id/confirm — confirm provision, optionally adjust for actual cost
+// POST /v1/credits/provision/:id/confirm — confirm provision; on amount mismatch, cancel original and write a fresh charge.
 router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
-    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const runId = req.headers["x-run-id"] as string;
+    const wfHeadersRaw = getWorkflowHeaders(req);
+    const wfHeaders = forwardWorkflowHeaders(wfHeadersRaw);
     const provisionId = req.params.id;
     const parsed = ConfirmProvisionRequestSchema.safeParse(req.body);
 
@@ -146,14 +144,18 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
     const { actual_amount_cents } = parsed.data;
 
     const result = await db.transaction(async (tx) => {
-      // Lock the provision row
       const provRows = await tx.execute<{
         id: string;
         org_id: string;
         amount_cents: number;
         status: string;
+        description: string | null;
+        campaign_id: string | null;
+        brand_ids: string[] | null;
+        workflow_slug: string | null;
+        feature_slug: string | null;
       }>(
-        rawSql`SELECT * FROM credit_ledger WHERE id = ${provisionId} AND org_id = ${orgId} FOR UPDATE`
+        rawSql`SELECT * FROM transactions WHERE id = ${provisionId} AND org_id = ${orgId} FOR UPDATE`
       );
 
       const provision = (provRows as unknown as Array<{
@@ -161,14 +163,28 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
         org_id: string;
         amount_cents: number;
         status: string;
+        description: string | null;
+        campaign_id: string | null;
+        brand_ids: string[] | null;
+        workflow_slug: string | null;
+        feature_slug: string | null;
       }>)[0];
 
       if (!provision) {
         return { error: "Provision not found" as const, status: 404 as const };
       }
 
+      // Idempotent: confirm with same amount on already-confirmed row is a no-op.
       if (provision.status === "confirmed") {
-        // Idempotent: already confirmed — return current state as no-op
+        const sameAmount =
+          actual_amount_cents === undefined ||
+          actual_amount_cents === provision.amount_cents;
+        if (!sameAmount) {
+          return {
+            error: `Provision already confirmed at ${provision.amount_cents} cents` as const,
+            status: 409 as const,
+          };
+        }
         const [account] = await tx
           .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
           .from(billingAccounts)
@@ -189,48 +205,71 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
         return { error: `Provision already ${provision.status}` as const, status: 409 as const };
       }
 
-      // If actual cost differs, adjust balance
-      const adjustmentCents = actual_amount_cents !== undefined
-        ? provision.amount_cents - actual_amount_cents
-        : 0;
+      const finalAmount = actual_amount_cents ?? provision.amount_cents;
+      const adjustmentCents = provision.amount_cents - finalAmount;
 
-      if (adjustmentCents !== 0) {
-        // Positive adjustment = we over-provisioned, credit back
-        // Negative adjustment = we under-provisioned, deduct more
+      // Same amount → flip status only; no balance change, no new row.
+      if (adjustmentCents === 0) {
         await tx
-          .update(billingAccounts)
-          .set({
-            creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${adjustmentCents}`,
-            updatedAt: new Date(),
+          .update(transactions)
+          .set({ status: "confirmed", updatedAt: new Date() })
+          .where(eq(transactions.id, provisionId));
+
+        const [account] = await tx
+          .select({
+            creditBalanceCents: billingAccounts.creditBalanceCents,
+            stripeCustomerId: billingAccounts.stripeCustomerId,
           })
-          .where(eq(billingAccounts.orgId, orgId));
+          .from(billingAccounts)
+          .where(eq(billingAccounts.orgId, orgId))
+          .limit(1);
 
-        // Insert adjustment ledger entry
-        await tx
-          .insert(creditLedger)
-          .values({
-            orgId,
-            userId,
-            type: adjustmentCents > 0 ? "credit" : "debit",
-            amountCents: Math.abs(adjustmentCents),
-            status: "confirmed",
-            source: "provision_adjust",
-            description: `Provision ${provisionId} adjustment: ${adjustmentCents > 0 ? "+" : ""}${adjustmentCents} cents`,
-          });
+        return {
+          provision_id: provisionId,
+          status: "confirmed" as const,
+          original_amount_cents: provision.amount_cents,
+          final_amount_cents: finalAmount,
+          adjustment_cents: 0,
+          balance_cents: account?.creditBalanceCents ?? null,
+          _customerId: account?.stripeCustomerId ?? null,
+          _adjustmentCents: 0,
+          _newChargeId: null as string | null,
+        };
       }
 
-      const finalAmount = actual_amount_cents ?? provision.amount_cents;
-
+      // Amount differs: cancel original hold (refund $X) and write a fresh confirmed charge ($Y).
+      // Net balance change = (X - Y) = adjustmentCents.
       await tx
-        .update(creditLedger)
+        .update(billingAccounts)
         .set({
-          status: "confirmed",
-          amountCents: finalAmount,
+          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${adjustmentCents}`,
           updatedAt: new Date(),
         })
-        .where(eq(creditLedger.id, provisionId));
+        .where(eq(billingAccounts.orgId, orgId));
 
-      // Get updated balance and customer ID for Stripe balance txn
+      await tx
+        .update(transactions)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(eq(transactions.id, provisionId));
+
+      const [newCharge] = await tx
+        .insert(transactions)
+        .values({
+          orgId,
+          userId,
+          runId,
+          type: "debit",
+          amountCents: finalAmount,
+          status: "confirmed",
+          source: "charge",
+          description: provision.description,
+          campaignId: provision.campaign_id ?? undefined,
+          brandIds: provision.brand_ids ?? undefined,
+          workflowSlug: provision.workflow_slug ?? undefined,
+          featureSlug: provision.feature_slug ?? undefined,
+        })
+        .returning();
+
       const [account] = await tx
         .select({
           creditBalanceCents: billingAccounts.creditBalanceCents,
@@ -249,6 +288,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
         balance_cents: account?.creditBalanceCents ?? null,
         _customerId: account?.stripeCustomerId ?? null,
         _adjustmentCents: adjustmentCents,
+        _newChargeId: newCharge.id,
       };
     });
 
@@ -257,29 +297,40 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       return;
     }
 
-    // Fire-and-forget Stripe balance txn for the adjustment (if any)
-    const customerId = "_customerId" in result ? result._customerId as string | null : null;
-    const adjustment = "_adjustmentCents" in result ? result._adjustmentCents as number : 0;
-    if (customerId && adjustment !== 0) {
-      // adjustment > 0 means credit back → negative Stripe amount
-      // adjustment < 0 means deduct more → positive Stripe amount
-      const stripeAmount = -adjustment;
+    // Stripe sync: when amount changes, post a refund of the original hold AND a charge for the new amount.
+    // Each fires against its own ledger row id (refund → original provision row, charge → newly inserted row).
+    const customerId = "_customerId" in result ? (result._customerId as string | null) : null;
+    const adjustment = "_adjustmentCents" in result ? (result._adjustmentCents as number) : 0;
+    const newChargeId = "_newChargeId" in result ? (result._newChargeId as string | null) : null;
+    if (customerId && adjustment !== 0 && newChargeId) {
+      // Refund the original $X to the customer's Stripe balance (negative amount for credit).
       fireAndForgetBalanceTxn(
         orgId,
         userId,
         customerId,
-        stripeAmount,
-        `Provision ${provisionId} adjustment`,
+        -result.original_amount_cents,
+        `Provision ${provisionId} cancelled (replaced by confirm at ${result.final_amount_cents} cents)`,
         provisionId,
+        wfHeaders
+      );
+      // Charge the new $Y on Stripe balance (positive amount for debit).
+      fireAndForgetBalanceTxn(
+        orgId,
+        userId,
+        customerId,
+        result.final_amount_cents,
+        result.original_amount_cents !== result.final_amount_cents
+          ? `Confirmed charge (replacing provision ${provisionId})`
+          : `Provision ${provisionId} confirmed`,
+        newChargeId,
         wfHeaders
       );
     }
 
-    // Strip internal fields
-    const { _customerId: _c, _adjustmentCents: _a, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _adjustmentCents: _a, _newChargeId: _n, ...response } = result as Record<string, unknown>;
 
     traceEvent({
-      runId: req.headers["x-run-id"] as string,
+      runId,
       orgId,
       userId,
       event: "billing.provision.confirmed",
@@ -294,7 +345,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
   }
 });
 
-// POST /v1/credits/provision/:id/cancel — cancel provision, re-credit balance
+// POST /v1/credits/provision/:id/cancel — cancel provision, re-credit balance. No miroir row.
 router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -309,7 +360,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         amount_cents: number;
         status: string;
       }>(
-        rawSql`SELECT * FROM credit_ledger WHERE id = ${provisionId} AND org_id = ${orgId} FOR UPDATE`
+        rawSql`SELECT * FROM transactions WHERE id = ${provisionId} AND org_id = ${orgId} FOR UPDATE`
       );
 
       const provision = (provRows as unknown as Array<{
@@ -324,7 +375,6 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       }
 
       if (provision.status === "cancelled") {
-        // Idempotent: already cancelled — return current state as no-op
         const [account] = await tx
           .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
           .from(billingAccounts)
@@ -343,7 +393,6 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         return { error: `Provision already ${provision.status}` as const, status: 409 as const };
       }
 
-      // Re-credit the provisioned amount
       await tx
         .update(billingAccounts)
         .set({
@@ -353,25 +402,12 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         .where(eq(billingAccounts.orgId, orgId));
 
       await tx
-        .update(creditLedger)
+        .update(transactions)
         .set({
           status: "cancelled",
           updatedAt: new Date(),
         })
-        .where(eq(creditLedger.id, provisionId));
-
-      // Insert cancel refund ledger entry
-      await tx
-        .insert(creditLedger)
-        .values({
-          orgId,
-          userId,
-          type: "credit",
-          amountCents: provision.amount_cents,
-          status: "confirmed",
-          source: "provision_cancel",
-          description: `Provision ${provisionId} cancelled — refund`,
-        });
+        .where(eq(transactions.id, provisionId));
 
       const [account] = await tx
         .select({
@@ -397,7 +433,6 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       return;
     }
 
-    // Fire-and-forget Stripe balance txn for the refund
     const customerId = "_customerId" in result ? result._customerId as string | null : null;
     const refundedCents = "_refundedCents" in result ? result._refundedCents as number : 0;
     if (customerId && refundedCents > 0) {
@@ -412,7 +447,6 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       );
     }
 
-    // Strip internal fields
     const { _customerId: _c, _refundedCents: _r, ...response } = result as Record<string, unknown>;
 
     traceEvent({

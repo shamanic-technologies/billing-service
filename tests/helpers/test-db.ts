@@ -1,12 +1,12 @@
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
-  creditLedger,
+  transactions,
   localPromoCodes,
 } from "../../src/db/schema.js";
 
 export async function cleanTestData() {
-  await db.delete(creditLedger);
+  await db.delete(transactions);
   await db.delete(billingAccounts);
   await db.delete(localPromoCodes);
 }

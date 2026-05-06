@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { creditLedger, billingAccounts } from "../../src/db/schema.js";
+import { transactions, billingAccounts } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
@@ -48,11 +48,11 @@ describe("Credits deduction endpoint", () => {
     // Verify ledger entry was created
     const entries = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.orgId, orgId),
-          eq(creditLedger.source, "deduct")
+          eq(transactions.orgId, orgId),
+          eq(transactions.source, "charge")
         )
       );
     expect(entries).toHaveLength(1);
@@ -125,11 +125,11 @@ describe("Credits deduction endpoint", () => {
     // Welcome ledger entry should exist
     const welcomeEntries = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.orgId, "00000000-0000-0000-0000-999999999999"),
-          eq(creditLedger.source, "welcome")
+          eq(transactions.orgId, "00000000-0000-0000-0000-999999999999"),
+          eq(transactions.source, "welcome")
         )
       );
     expect(welcomeEntries).toHaveLength(1);
@@ -302,11 +302,11 @@ describe("Credits authorize endpoint", () => {
     // Reload ledger entry should exist
     const reloadEntries = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.orgId, orgId),
-          eq(creditLedger.source, "reload")
+          eq(transactions.orgId, orgId),
+          eq(transactions.source, "reload")
         )
       );
     expect(reloadEntries).toHaveLength(1);
@@ -380,11 +380,11 @@ describe("Credits authorize endpoint", () => {
     // Verify cancelled reload entry was written
     const reloadEntries = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.orgId, orgId),
-          eq(creditLedger.source, "reload")
+          eq(transactions.orgId, orgId),
+          eq(transactions.source, "reload")
         )
       );
     expect(reloadEntries).toHaveLength(1);
@@ -403,7 +403,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Insert a recent cancelled reload entry (5 min ago)
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -435,7 +435,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Back up the 50 cents with a confirmed ledger entry (so reconcile doesn't zero it)
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -446,7 +446,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Insert an old cancelled reload entry (20 min ago)
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -479,7 +479,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Back up the 50 cents
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -490,7 +490,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Insert a cancelled reload entry (3 min ago)
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -502,7 +502,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Insert a small confirmed reload entry (1 min ago) — resets cooldown
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -592,7 +592,7 @@ describe("Credits authorize endpoint", () => {
     });
 
     // Insert a ledger entry that should compute to 300
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -645,7 +645,7 @@ describe("Credits authorize — reconcile race conditions", () => {
       stripeCustomerId: "cus_race",
       creditBalanceCents: 999, // wrong cache
     });
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -671,8 +671,8 @@ describe("Credits authorize — reconcile race conditions", () => {
     // Only one welcome ledger row should exist — no duplicates from concurrent reconciles
     const entries = await db
       .select()
-      .from(creditLedger)
-      .where(eq(creditLedger.orgId, orgId));
+      .from(transactions)
+      .where(eq(transactions.orgId, orgId));
     expect(entries).toHaveLength(1);
     expect(entries[0].source).toBe("welcome");
   });
@@ -707,11 +707,11 @@ describe("Credits authorize — reconcile race conditions", () => {
     // Exactly one recovered reload entry — no duplicates from concurrent reconciles
     const reloadEntries = await db
       .select()
-      .from(creditLedger)
+      .from(transactions)
       .where(
         and(
-          eq(creditLedger.orgId, orgId),
-          eq(creditLedger.source, "reload")
+          eq(transactions.orgId, orgId),
+          eq(transactions.source, "reload")
         )
       );
     expect(reloadEntries).toHaveLength(1);
@@ -720,7 +720,7 @@ describe("Credits authorize — reconcile race conditions", () => {
   });
 
   it("rejects duplicate (org_id, stripe_payment_intent_id) reload rows at the DB level", async () => {
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",
@@ -732,7 +732,7 @@ describe("Credits authorize — reconcile race conditions", () => {
     });
 
     await expect(
-      db.insert(creditLedger).values({
+      db.insert(transactions).values({
         orgId,
         userId,
         type: "credit",
@@ -753,7 +753,7 @@ describe("Credits authorize — reconcile race conditions", () => {
     });
 
     const [entry] = await db
-      .insert(creditLedger)
+      .insert(transactions)
       .values({
         orgId,
         userId,
@@ -797,7 +797,7 @@ describe("Credits authorize — reconcile race conditions", () => {
     });
 
     // Fresh entry — within grace window — should be skipped by Check 3
-    await db.insert(creditLedger).values({
+    await db.insert(transactions).values({
       orgId,
       userId,
       type: "credit",

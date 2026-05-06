@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq, and, isNull, gte, lte, desc, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, creditLedger } from "../db/schema.js";
+import { billingAccounts, transactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { DeductRequestSchema, AuthorizeRequestSchema } from "../schemas.js";
 import {
@@ -81,7 +81,7 @@ async function reconcile(
         END
       ), 0)::int AS computed,
       COUNT(*)::int AS entry_count
-      FROM credit_ledger WHERE org_id = ${orgId}`
+      FROM transactions WHERE org_id = ${orgId}`
     )) as unknown as { computed: number; entry_count: number }[];
     const { computed, entry_count } = ledgerRows[0];
     if (entry_count > 0 && computed !== account.credit_balance_cents) {
@@ -108,7 +108,7 @@ async function reconcile(
           // Idempotent insert: relies on partial unique index
           // (org_id, stripe_payment_intent_id) WHERE source='reload' AND stripe_payment_intent_id IS NOT NULL.
           const insertedRows = (await tx.execute(
-            rawSql`INSERT INTO credit_ledger
+            rawSql`INSERT INTO transactions
               (org_id, user_id, type, amount_cents, status, source, stripe_payment_intent_id, description)
               VALUES (${orgId}, ${userId}, 'credit', ${pi.amount}, 'confirmed', 'reload', ${pi.id},
                 ${`Recovered reload from Stripe PI ${pi.id}`})
@@ -144,14 +144,14 @@ async function reconcile(
       const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
       const unsyncedEntries = await tx
         .select()
-        .from(creditLedger)
+        .from(transactions)
         .where(
           and(
-            eq(creditLedger.orgId, orgId),
-            isNull(creditLedger.stripeBalanceTxnId),
-            eq(creditLedger.status, "confirmed"),
-            gte(creditLedger.createdAt, sevenDaysAgo),
-            lte(creditLedger.createdAt, twoMinAgo)
+            eq(transactions.orgId, orgId),
+            isNull(transactions.stripeBalanceTxnId),
+            eq(transactions.status, "confirmed"),
+            gte(transactions.createdAt, sevenDaysAgo),
+            lte(transactions.createdAt, twoMinAgo)
           )
         );
 
@@ -170,9 +170,9 @@ async function reconcile(
             entry.id
           );
           await tx
-            .update(creditLedger)
+            .update(transactions)
             .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
-            .where(eq(creditLedger.id, entry.id));
+            .where(eq(transactions.id, entry.id));
         } catch (err) {
           console.error(
             `[billing-service] Check 3: Failed to sync ledger entry ${entry.id} to Stripe:`,
@@ -228,7 +228,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
 
       // Insert debit ledger entry
       const [ledgerEntry] = await tx
-        .insert(creditLedger)
+        .insert(transactions)
         .values({
           orgId,
           userId,
@@ -236,7 +236,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
           type: "debit",
           amountCents: amount_cents,
           status: "confirmed",
-          source: "deduct",
+          source: "charge",
           description,
         })
         .returning();
@@ -362,15 +362,15 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
           // Cooldown: skip reload if the last reload entry is cancelled and < 15 min old
           const RELOAD_COOLDOWN_MS = 15 * 60 * 1000;
           const [lastReload] = await tx
-            .select({ status: creditLedger.status, createdAt: creditLedger.createdAt })
-            .from(creditLedger)
+            .select({ status: transactions.status, createdAt: transactions.createdAt })
+            .from(transactions)
             .where(
               and(
-                eq(creditLedger.orgId, orgId),
-                eq(creditLedger.source, "reload")
+                eq(transactions.orgId, orgId),
+                eq(transactions.source, "reload")
               )
             )
-            .orderBy(desc(creditLedger.createdAt))
+            .orderBy(desc(transactions.createdAt))
             .limit(1);
 
           const reloadOnCooldown =
@@ -395,7 +395,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
 
               // Insert reload ledger entry
               const [reloadEntry] = await tx
-                .insert(creditLedger)
+                .insert(transactions)
                 .values({
                   orgId,
                   userId,
@@ -421,7 +421,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
               console.error("[billing-service] Auto-reload failed during authorize:", reloadErr);
               // Record failed reload in ledger for cooldown tracking
               await tx
-                .insert(creditLedger)
+                .insert(transactions)
                 .values({
                   orgId,
                   userId,
@@ -465,8 +465,8 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     if (result._reloadLedgerEntryId && result._customerId) {
       const entry = await db
         .select()
-        .from(creditLedger)
-        .where(eq(creditLedger.id, result._reloadLedgerEntryId))
+        .from(transactions)
+        .where(eq(transactions.id, result._reloadLedgerEntryId))
         .limit(1);
       if (entry[0]) {
         fireAndForgetBalanceTxn(
