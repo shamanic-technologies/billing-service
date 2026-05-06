@@ -94,7 +94,7 @@ describe("Migration 0012: transactions rename + source unification", () => {
     const rows = await db.select().from(transactions).where(eq(transactions.orgId, orgId));
     expect(rows).toHaveLength(1);
     expect(rows[0].source).toBe("charge");
-    expect(rows[0].amountCents).toBe(50);
+    expect(rows[0].amountCents).toBe("50.0000000000");
   });
 
   it("renames source 'provision' -> 'charge' for all statuses", async () => {
@@ -206,7 +206,7 @@ describe("Migration 0012: transactions rename + source unification", () => {
     // Parent reverted to $X = 100, status cancelled.
     const [parentAfter] = await db.select().from(transactions).where(eq(transactions.id, parent.id));
     expect(parentAfter.status).toBe("cancelled");
-    expect(parentAfter.amountCents).toBe(100);
+    expect(parentAfter.amountCents).toBe("100.0000000000");
     expect(parentAfter.source).toBe("charge");
 
     // Adjust row deleted.
@@ -228,7 +228,7 @@ describe("Migration 0012: transactions rename + source unification", () => {
         )
       );
     expect(charges).toHaveLength(1);
-    expect(charges[0].amountCents).toBe(60);
+    expect(charges[0].amountCents).toBe("60.0000000000");
 
     // Net balance contribution preserved: pre = -60 (parent) + 40 (adjust) = -20.
     // post = 0 (cancelled parent) - 60 (new charge) = -60.
@@ -279,7 +279,7 @@ describe("Migration 0012: transactions rename + source unification", () => {
 
     const [parentAfter] = await db.select().from(transactions).where(eq(transactions.id, parent.id));
     expect(parentAfter.status).toBe("cancelled");
-    expect(parentAfter.amountCents).toBe(100);
+    expect(parentAfter.amountCents).toBe("100.0000000000");
 
     const charges = await db
       .select()
@@ -292,7 +292,7 @@ describe("Migration 0012: transactions rename + source unification", () => {
         )
       );
     expect(charges).toHaveLength(1);
-    expect(charges[0].amountCents).toBe(150);
+    expect(charges[0].amountCents).toBe("150.0000000000");
   });
 
   it("aborts when a provision_cancel row has no matching parent", async () => {

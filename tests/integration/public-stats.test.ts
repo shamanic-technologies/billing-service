@@ -27,9 +27,9 @@ describe("GET /public/stats/billing", () => {
     expect(res.body).toEqual({
       totalAccounts: 0,
       accountsWithPaymentMethod: 0,
-      totalCreditBalanceCents: 0,
-      totalCreditedCents: 0,
-      totalConsumedCents: 0,
+      totalCreditBalanceCents: "0.0000000000",
+      totalCreditedCents: "0.0000000000",
+      totalConsumedCents: "0.0000000000",
       monthlyGrowth: [],
       weeklyGrowth: [],
     });
@@ -105,9 +105,9 @@ describe("GET /public/stats/billing", () => {
     expect(res.status).toBe(200);
     expect(res.body.totalAccounts).toBe(2);
     expect(res.body.accountsWithPaymentMethod).toBe(1);
-    expect(res.body.totalCreditBalanceCents).toBe(8000);
-    expect(res.body.totalCreditedCents).toBe(15000);
-    expect(res.body.totalConsumedCents).toBe(11999); // 2000 confirmed + 9999 pending
+    expect(res.body.totalCreditBalanceCents).toBe("8000.0000000000");
+    expect(res.body.totalCreditedCents).toBe("15000.0000000000");
+    expect(res.body.totalConsumedCents).toBe("11999.0000000000"); // 2000 confirmed + 9999 pending
   });
 
   it("returns monthly and weekly growth with credited, consumed, and revenue", async () => {
@@ -153,17 +153,17 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.weeklyGrowth).toBeInstanceOf(Array);
     expect(res.body.weeklyGrowth.length).toBeGreaterThanOrEqual(1);
 
-    // Sum across all periods should match totals
+    // Sum across all periods should match totals (parse string-cents to number for sum)
     const totalMonthlyCredited = res.body.monthlyGrowth.reduce(
-      (sum: number, r: { credited_cents: number }) => sum + r.credited_cents,
+      (sum: number, r: { credited_cents: string }) => sum + parseFloat(r.credited_cents),
       0
     );
     const totalMonthlyConsumed = res.body.monthlyGrowth.reduce(
-      (sum: number, r: { consumed_cents: number }) => sum + r.consumed_cents,
+      (sum: number, r: { consumed_cents: string }) => sum + parseFloat(r.consumed_cents),
       0
     );
     const totalMonthlyRevenue = res.body.monthlyGrowth.reduce(
-      (sum: number, r: { revenue_cents: number }) => sum + r.revenue_cents,
+      (sum: number, r: { revenue_cents: string }) => sum + parseFloat(r.revenue_cents),
       0
     );
 
@@ -229,7 +229,7 @@ describe("GET /public/stats/billing", () => {
 
     const res = await request(app).get("/public/stats/billing");
     expect(res.status).toBe(200);
-    expect(res.body.totalCreditedCents).toBe(1250); // 1000 + 200 + 50
+    expect(res.body.totalCreditedCents).toBe("1250.0000000000"); // 1000 + 200 + 50
   });
 
   it("totalConsumedCents excludes cancelled charges", async () => {
@@ -267,6 +267,6 @@ describe("GET /public/stats/billing", () => {
 
     const res = await request(app).get("/public/stats/billing");
     expect(res.status).toBe(200);
-    expect(res.body.totalConsumedCents).toBe(150);
+    expect(res.body.totalConsumedCents).toBe("150.0000000000");
   });
 });

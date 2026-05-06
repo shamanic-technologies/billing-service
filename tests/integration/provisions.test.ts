@@ -38,7 +38,7 @@ describe("Credit provision endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.provision_id).toBeDefined();
-      expect(res.body.balance_cents).toBe(400);
+      expect(res.body.balance_cents).toBe("400.0000000000");
       expect(res.body.depleted).toBe(false);
 
       const entries = await db
@@ -64,7 +64,7 @@ describe("Credit provision endpoints", () => {
         .send({ amount_cents: 200, description: "large task" });
 
       expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBe(-150);
+      expect(res.body.balance_cents).toBe("-150.0000000000");
       expect(res.body.depleted).toBe(true);
     });
 
@@ -77,7 +77,7 @@ describe("Credit provision endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.provision_id).toBeDefined();
       // Auto-created with 200 cents ($2), then provisioned 100
-      expect(res.body.balance_cents).toBe(100);
+      expect(res.body.balance_cents).toBe("100.0000000000");
     });
 
     it("stores workflow headers in provision record", async () => {
@@ -199,10 +199,10 @@ describe("Credit provision endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("confirmed");
-      expect(res.body.original_amount_cents).toBe(100);
-      expect(res.body.final_amount_cents).toBe(100);
-      expect(res.body.adjustment_cents).toBe(0);
-      expect(res.body.balance_cents).toBe(400);
+      expect(res.body.original_amount_cents).toBe("100.0000000000");
+      expect(res.body.final_amount_cents).toBe("100.0000000000");
+      expect(res.body.adjustment_cents).toBe("0.0000000000");
+      expect(res.body.balance_cents).toBe("400.0000000000");
     });
 
     it("on lower actual cost: cancels original hold, writes new charge at $Y, refunds delta", async () => {
@@ -225,9 +225,9 @@ describe("Credit provision endpoints", () => {
         .send({ actual_amount_cents: 60 });
 
       expect(res.status).toBe(200);
-      expect(res.body.adjustment_cents).toBe(40);
-      expect(res.body.final_amount_cents).toBe(60);
-      expect(res.body.balance_cents).toBe(440);
+      expect(res.body.adjustment_cents).toBe("40.0000000000");
+      expect(res.body.final_amount_cents).toBe("60.0000000000");
+      expect(res.body.balance_cents).toBe("440.0000000000");
 
       // Original row mutates to cancelled at $X, no miroir credit row.
       const original = await db
@@ -236,7 +236,7 @@ describe("Credit provision endpoints", () => {
         .where(eq(transactions.id, provisionId));
       expect(original).toHaveLength(1);
       expect(original[0].status).toBe("cancelled");
-      expect(original[0].amountCents).toBe(100);
+      expect(original[0].amountCents).toBe("100.0000000000");
       expect(original[0].source).toBe("charge");
 
       // Exactly one fresh confirmed charge row at $Y.
@@ -252,7 +252,7 @@ describe("Credit provision endpoints", () => {
         );
       expect(confirmed).toHaveLength(1);
       expect(confirmed[0].type).toBe("debit");
-      expect(confirmed[0].amountCents).toBe(60);
+      expect(confirmed[0].amountCents).toBe("60.0000000000");
 
       // No legacy miroir sources written
       const legacy = await db
@@ -287,16 +287,16 @@ describe("Credit provision endpoints", () => {
         .send({ actual_amount_cents: 150 });
 
       expect(res.status).toBe(200);
-      expect(res.body.adjustment_cents).toBe(-50);
-      expect(res.body.final_amount_cents).toBe(150);
-      expect(res.body.balance_cents).toBe(350);
+      expect(res.body.adjustment_cents).toBe("-50.0000000000");
+      expect(res.body.final_amount_cents).toBe("150.0000000000");
+      expect(res.body.balance_cents).toBe("350.0000000000");
 
       const original = await db
         .select()
         .from(transactions)
         .where(eq(transactions.id, provisionId));
       expect(original[0].status).toBe("cancelled");
-      expect(original[0].amountCents).toBe(100);
+      expect(original[0].amountCents).toBe("100.0000000000");
 
       const confirmed = await db
         .select()
@@ -309,7 +309,7 @@ describe("Credit provision endpoints", () => {
           )
         );
       expect(confirmed).toHaveLength(1);
-      expect(confirmed[0].amountCents).toBe(150);
+      expect(confirmed[0].amountCents).toBe("150.0000000000");
     });
 
     it("on same amount: mutates row pending→confirmed, no new row", async () => {
@@ -332,7 +332,7 @@ describe("Credit provision endpoints", () => {
         .send({ actual_amount_cents: 100 });
 
       expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBe(400);
+      expect(res.body.balance_cents).toBe("400.0000000000");
 
       const all = await db
         .select()
@@ -341,7 +341,7 @@ describe("Credit provision endpoints", () => {
       expect(all).toHaveLength(1);
       expect(all[0].id).toBe(provisionId);
       expect(all[0].status).toBe("confirmed");
-      expect(all[0].amountCents).toBe(100);
+      expect(all[0].amountCents).toBe("100.0000000000");
     });
 
     it("returns 200 idempotently for already confirmed provision", async () => {
@@ -371,7 +371,7 @@ describe("Credit provision endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("confirmed");
       expect(res.body.provision_id).toBe(provisionId);
-      expect(res.body.adjustment_cents).toBe(0);
+      expect(res.body.adjustment_cents).toBe("0.0000000000");
     });
 
     it("returns 404 for unknown provision", async () => {
@@ -408,8 +408,8 @@ describe("Credit provision endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("cancelled");
-      expect(res.body.refunded_cents).toBe(100);
-      expect(res.body.balance_cents).toBe(500);
+      expect(res.body.refunded_cents).toBe("100.0000000000");
+      expect(res.body.balance_cents).toBe("500.0000000000");
 
       // Original row mutates to cancelled — no new miroir credit row.
       const all = await db
@@ -460,7 +460,7 @@ describe("Credit provision endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("cancelled");
       expect(res.body.provision_id).toBe(provisionId);
-      expect(res.body.refunded_cents).toBe(0);
+      expect(res.body.refunded_cents).toBe("0.0000000000");
     });
 
     it("cannot cancel a confirmed provision", async () => {
@@ -506,7 +506,7 @@ describe("Credit provision endpoints", () => {
         .send({ amount_cents: 100, description: "test" });
 
       expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBe(150);
+      expect(res.body.balance_cents).toBe("150.0000000000");
       expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
 
       const creditEntries = await db

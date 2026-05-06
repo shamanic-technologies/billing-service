@@ -47,20 +47,25 @@ export async function resolvePlatformPrice(
   return (await res.json()) as ResolvedPrice;
 }
 
-/** Resolve all items and compute total required cents. */
+/**
+ * Resolve all items and compute total required cents as a fractional-cents
+ * decimal string. Rounding is deferred to the presentation layer; the ledger
+ * works in full precision.
+ */
 export async function resolveRequiredCents(
   items: CostItem[],
   headers: Record<string, string>
-): Promise<number> {
+): Promise<string> {
+  const { Decimal } = await import("decimal.js");
   const prices = await Promise.all(
     items.map((item) => resolvePlatformPrice(item.costName, headers))
   );
 
-  let totalCents = 0;
+  let total = new Decimal(0);
   for (let i = 0; i < items.length; i++) {
-    const unitCost = parseFloat(prices[i].pricePerUnitInUsdCents);
-    totalCents += items[i].quantity * unitCost;
+    const unitCost = new Decimal(prices[i].pricePerUnitInUsdCents);
+    total = total.plus(unitCost.times(items[i].quantity));
   }
 
-  return Math.ceil(totalCents);
+  return total.toFixed(10);
 }

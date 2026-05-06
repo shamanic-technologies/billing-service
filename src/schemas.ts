@@ -3,6 +3,7 @@ import {
   OpenAPIRegistry,
   extendZodWithOpenApi,
 } from "@asteasolutions/zod-to-openapi";
+import { parsePositiveCents } from "./lib/cents.js";
 
 extendZodWithOpenApi(z);
 export const registry = new OpenAPIRegistry();
@@ -13,13 +14,38 @@ export const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
 
+/**
+ * Inbound fractional-cents amount. Accepts decimal string or finite number.
+ * Rejects negative, zero, NaN, non-numeric, or integer part > 16 digits.
+ * Output is the canonical fixed-scale string (10 fractional digits).
+ */
+const PositiveCentsSchema = z
+  .union([z.string(), z.number()])
+  .transform((v, ctx) => {
+    try {
+      return parsePositiveCents(v);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : "invalid amount_cents",
+      });
+      return z.NEVER;
+    }
+  });
+
+/**
+ * Outbound balance/amount string with full numeric(16,10) precision.
+ * Drizzle returns numeric columns as strings — we pass them through unchanged.
+ */
+const CentsStringSchema = z.string();
+
 // --- Account ---
 
 export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     orgId: z.string().uuid(),
-    creditBalanceCents: z.number().int(),
+    creditBalanceCents: CentsStringSchema,
     reloadAmountCents: z.number().int().nullable(),
     reloadThresholdCents: z.number().int().nullable(),
     hasPaymentMethod: z.boolean(),
@@ -33,7 +59,7 @@ export const BillingAccountSchema = z
 
 export const DeductRequestSchema = z
   .object({
-    amount_cents: z.number().int().positive(),
+    amount_cents: PositiveCentsSchema,
     description: z.string().min(1),
   })
   .openapi("DeductRequest");
@@ -41,7 +67,7 @@ export const DeductRequestSchema = z
 export const DeductResponseSchema = z
   .object({
     success: z.boolean(),
-    balance_cents: z.number().int(),
+    balance_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
   .openapi("DeductResponse");
@@ -50,7 +76,7 @@ export const DeductResponseSchema = z
 
 export const ProvisionRequestSchema = z
   .object({
-    amount_cents: z.number().int().positive(),
+    amount_cents: PositiveCentsSchema,
     description: z.string().min(1),
   })
   .openapi("ProvisionRequest");
@@ -58,14 +84,14 @@ export const ProvisionRequestSchema = z
 export const ProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
-    balance_cents: z.number().int(),
+    balance_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
   .openapi("ProvisionResponse");
 
 export const ConfirmProvisionRequestSchema = z
   .object({
-    actual_amount_cents: z.number().int().positive().optional(),
+    actual_amount_cents: PositiveCentsSchema.optional(),
   })
   .openapi("ConfirmProvisionRequest");
 
@@ -73,10 +99,10 @@ export const ConfirmProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
     status: z.literal("confirmed"),
-    original_amount_cents: z.number().int(),
-    final_amount_cents: z.number().int(),
-    adjustment_cents: z.number().int(),
-    balance_cents: z.number().int().nullable(),
+    original_amount_cents: CentsStringSchema,
+    final_amount_cents: CentsStringSchema,
+    adjustment_cents: CentsStringSchema,
+    balance_cents: CentsStringSchema.nullable(),
   })
   .openapi("ConfirmProvisionResponse");
 
@@ -84,8 +110,8 @@ export const CancelProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
     status: z.literal("cancelled"),
-    refunded_cents: z.number().int(),
-    balance_cents: z.number().int().nullable(),
+    refunded_cents: CentsStringSchema,
+    balance_cents: CentsStringSchema.nullable(),
   })
   .openapi("CancelProvisionResponse");
 
@@ -108,8 +134,8 @@ export const AuthorizeRequestSchema = z
 export const AuthorizeResponseSchema = z
   .object({
     sufficient: z.boolean(),
-    balance_cents: z.number().int(),
-    required_cents: z.number().int(),
+    balance_cents: CentsStringSchema,
+    required_cents: CentsStringSchema,
   })
   .openapi("AuthorizeResponse");
 
@@ -157,7 +183,7 @@ export const PortalSessionResponseSchema = z
 
 export const BalanceResponseSchema = z
   .object({
-    balance_cents: z.number().int(),
+    balance_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
   .openapi("BalanceResponse");
@@ -193,7 +219,7 @@ export const RedeemPromoResponseSchema = z
   .object({
     redeemed: z.boolean(),
     amount_cents: z.number().int(),
-    balance_cents: z.number().int(),
+    balance_cents: CentsStringSchema,
   })
   .openapi("RedeemPromoResponse");
 
@@ -223,12 +249,15 @@ export const TransferBrandResponseSchema = z
 
 // --- Public Stats ---
 
+// Public-stats values are full-precision decimal strings to preserve sub-cent
+// fidelity in JSON. Consumers wanting display-rounded integers should
+// `Math.ceil(parseFloat(...))` at the presentation layer.
 export const BillingGrowthRowSchema = z
   .object({
     period: z.string(),
-    credited_cents: z.number().int(),
-    consumed_cents: z.number().int(),
-    revenue_cents: z.number().int(),
+    credited_cents: CentsStringSchema,
+    consumed_cents: CentsStringSchema,
+    revenue_cents: CentsStringSchema,
   })
   .openapi("BillingGrowthRow");
 
@@ -236,9 +265,9 @@ export const PublicBillingStatsSchema = z
   .object({
     totalAccounts: z.number().int(),
     accountsWithPaymentMethod: z.number().int(),
-    totalCreditBalanceCents: z.number().int(),
-    totalCreditedCents: z.number().int(),
-    totalConsumedCents: z.number().int(),
+    totalCreditBalanceCents: CentsStringSchema,
+    totalCreditedCents: CentsStringSchema,
+    totalConsumedCents: CentsStringSchema,
     monthlyGrowth: z.array(BillingGrowthRowSchema),
     weeklyGrowth: z.array(BillingGrowthRowSchema),
   })

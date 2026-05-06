@@ -3,6 +3,8 @@ import { db } from "../db/index.js";
 import { billingAccounts, transactions } from "../db/schema.js";
 import { createCustomer, createBalanceTransaction } from "./stripe.js";
 
+const WELCOME_CREDIT_CENTS = "200";
+
 /**
  * Find or auto-create a billing account for an org.
  * Uses INSERT ON CONFLICT to prevent duplicate Stripe customers
@@ -26,7 +28,7 @@ export async function findOrCreateAccount(
     .insert(billingAccounts)
     .values({
       orgId,
-      creditBalanceCents: 200,
+      creditBalanceCents: WELCOME_CREDIT_CENTS,
     })
     .onConflictDoNothing()
     .returning();
@@ -57,7 +59,7 @@ export async function findOrCreateAccount(
       orgId,
       userId,
       type: "credit",
-      amountCents: 200,
+      amountCents: WELCOME_CREDIT_CENTS,
       status: "confirmed",
       source: "welcome",
       description: "Trial credit: $2.00",

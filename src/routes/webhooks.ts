@@ -6,7 +6,8 @@ import {
   constructWebhookEvent,
   retrievePaymentIntent,
 } from "../lib/stripe.js";
-import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
+import { syncStripeCeilDelta } from "../lib/ledger.js";
+import { addCents } from "../lib/cents.js";
 import type Stripe from "stripe";
 
 const router = Router();
@@ -100,7 +101,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 
   // Credit the balance with the reload amount and write to ledger
   if (reloadAmountCents) {
-    const newBalance = account.creditBalanceCents + reloadAmountCents;
+    const oldBalance = account.creditBalanceCents;
+    const newBalance = addCents(oldBalance, String(reloadAmountCents));
 
     // Insert reload ledger entry
     const [ledgerEntry] = await db
@@ -109,7 +111,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         orgId: account.orgId,
         userId: "00000000-0000-0000-0000-000000000000",
         type: "credit",
-        amountCents: reloadAmountCents,
+        amountCents: String(reloadAmountCents),
         status: "confirmed",
         source: "reload",
         stripePaymentIntentId: piId ?? null,
@@ -128,16 +130,18 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       })
       .where(eq(billingAccounts.stripeCustomerId, customerId));
 
-    // Fire-and-forget Stripe balance txn
+    // Fire-and-forget Stripe balance sync (ceil-delta — for whole-cent reload this
+    // always fires with delta = -reloadAmountCents, but the helper handles both cases).
     if (account.stripeCustomerId) {
-      fireAndForgetBalanceTxn(
-        account.orgId,
-        "system",
-        account.stripeCustomerId,
-        -reloadAmountCents,
-        "Initial reload credit",
-        ledgerEntry.id
-      );
+      syncStripeCeilDelta({
+        orgId: account.orgId,
+        userId: "system",
+        customerId: account.stripeCustomerId,
+        oldBalance,
+        newBalance,
+        description: "Initial reload credit",
+        ledgerEntryId: ledgerEntry.id,
+      });
     }
   } else {
     // No reload amount — just update payment method

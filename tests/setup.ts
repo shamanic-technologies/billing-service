@@ -127,5 +127,27 @@ beforeAll(async () => {
   `;
 
   await sql`DROP TABLE IF EXISTS "promo_redemptions"`;
+
+  // Migration 0013 — fractional cents.
+  // Idempotent: only alters when columns are still integer.
+  await sql`
+    DO $$ BEGIN
+      IF (SELECT data_type FROM information_schema.columns
+          WHERE table_name = 'transactions' AND column_name = 'amount_cents') = 'integer'
+      THEN
+        ALTER TABLE "transactions" ALTER COLUMN "amount_cents" TYPE numeric(16,10) USING "amount_cents"::numeric(16,10);
+      END IF;
+    END $$
+  `;
+  await sql`
+    DO $$ BEGIN
+      IF (SELECT data_type FROM information_schema.columns
+          WHERE table_name = 'billing_accounts' AND column_name = 'credit_balance_cents') = 'integer'
+      THEN
+        ALTER TABLE "billing_accounts" ALTER COLUMN "credit_balance_cents" TYPE numeric(16,10) USING "credit_balance_cents"::numeric(16,10);
+        ALTER TABLE "billing_accounts" ALTER COLUMN "credit_balance_cents" SET DEFAULT 200;
+      END IF;
+    END $$
+  `;
 });
 afterAll(() => console.log("Test suite complete."));

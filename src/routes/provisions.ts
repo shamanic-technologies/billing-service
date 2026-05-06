@@ -5,9 +5,10 @@ import { billingAccounts, transactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { ProvisionRequestSchema, ConfirmProvisionRequestSchema } from "../schemas.js";
 import { isStripeAuthError } from "../lib/stripe.js";
-import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
+import { syncStripeCeilDelta } from "../lib/ledger.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-client.js";
+import { addCents, subCents, isDepleted, cmpCents } from "../lib/cents.js";
 
 const router = Router();
 
@@ -15,7 +16,7 @@ interface AccountRow {
   id: string;
   org_id: string;
   stripe_customer_id: string | null;
-  credit_balance_cents: number;
+  credit_balance_cents: string;
   reload_amount_cents: number | null;
   reload_threshold_cents: number | null;
   stripe_payment_method_id: string | null;
@@ -50,7 +51,8 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         return { error: "Billing account not found" as const, status: 404 as const };
       }
 
-      const newBalance = account.credit_balance_cents - amount_cents;
+      const oldBalance = account.credit_balance_cents;
+      const newBalance = subCents(oldBalance, amount_cents);
       await tx
         .update(billingAccounts)
         .set({
@@ -80,7 +82,8 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       return {
         provision_id: provision.id,
         balance_cents: newBalance,
-        depleted: newBalance <= 0,
+        depleted: isDepleted(newBalance),
+        _oldBalance: oldBalance,
         _customerId: account.stripe_customer_id,
         _provisionLedgerEntryId: provision.id,
       };
@@ -92,18 +95,19 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
     }
 
     if (result._customerId && result._provisionLedgerEntryId) {
-      fireAndForgetBalanceTxn(
+      syncStripeCeilDelta({
         orgId,
         userId,
-        result._customerId,
-        amount_cents,
+        customerId: result._customerId,
+        oldBalance: result._oldBalance,
+        newBalance: result.balance_cents,
         description,
-        result._provisionLedgerEntryId,
-        fwdHeaders
-      );
+        ledgerEntryId: result._provisionLedgerEntryId,
+        wfHeaders: fwdHeaders,
+      });
     }
 
-    const { _customerId: _c, _provisionLedgerEntryId: _pl, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _provisionLedgerEntryId: _pl, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
 
     traceEvent({
       runId,
@@ -147,7 +151,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       const provRows = await tx.execute<{
         id: string;
         org_id: string;
-        amount_cents: number;
+        amount_cents: string;
         status: string;
         description: string | null;
         campaign_id: string | null;
@@ -161,7 +165,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       const provision = (provRows as unknown as Array<{
         id: string;
         org_id: string;
-        amount_cents: number;
+        amount_cents: string;
         status: string;
         description: string | null;
         campaign_id: string | null;
@@ -178,7 +182,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       if (provision.status === "confirmed") {
         const sameAmount =
           actual_amount_cents === undefined ||
-          actual_amount_cents === provision.amount_cents;
+          cmpCents(actual_amount_cents, provision.amount_cents) === 0;
         if (!sameAmount) {
           return {
             error: `Provision already confirmed at ${provision.amount_cents} cents` as const,
@@ -196,7 +200,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
           status: "confirmed" as const,
           original_amount_cents: provision.amount_cents,
           final_amount_cents: provision.amount_cents,
-          adjustment_cents: 0,
+          adjustment_cents: "0.0000000000",
           balance_cents: account?.creditBalanceCents ?? null,
         };
       }
@@ -206,10 +210,10 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       }
 
       const finalAmount = actual_amount_cents ?? provision.amount_cents;
-      const adjustmentCents = provision.amount_cents - finalAmount;
+      const adjustmentCents = subCents(provision.amount_cents, finalAmount);
 
       // Same amount → flip status only; no balance change, no new row.
-      if (adjustmentCents === 0) {
+      if (cmpCents(adjustmentCents, "0") === 0) {
         await tx
           .update(transactions)
           .set({ status: "confirmed", updatedAt: new Date() })
@@ -229,20 +233,28 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
           status: "confirmed" as const,
           original_amount_cents: provision.amount_cents,
           final_amount_cents: finalAmount,
-          adjustment_cents: 0,
+          adjustment_cents: "0.0000000000",
           balance_cents: account?.creditBalanceCents ?? null,
           _customerId: account?.stripeCustomerId ?? null,
-          _adjustmentCents: 0,
+          _oldBalance: account?.creditBalanceCents ?? null,
+          _adjustmentCents: "0.0000000000",
           _newChargeId: null as string | null,
         };
       }
 
       // Amount differs: cancel original hold (refund $X) and write a fresh confirmed charge ($Y).
       // Net balance change = (X - Y) = adjustmentCents.
+      const [accountBefore] = await tx
+        .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.orgId, orgId))
+        .limit(1);
+      const oldBalance = accountBefore?.creditBalanceCents ?? null;
+
       await tx
         .update(billingAccounts)
         .set({
-          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${adjustmentCents}`,
+          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${adjustmentCents}::numeric`,
           updatedAt: new Date(),
         })
         .where(eq(billingAccounts.orgId, orgId));
@@ -287,6 +299,7 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
         adjustment_cents: adjustmentCents,
         balance_cents: account?.creditBalanceCents ?? null,
         _customerId: account?.stripeCustomerId ?? null,
+        _oldBalance: oldBalance,
         _adjustmentCents: adjustmentCents,
         _newChargeId: newCharge.id,
       };
@@ -297,44 +310,36 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       return;
     }
 
-    // Stripe sync: when amount changes, post a refund of the original hold AND a charge for the new amount.
-    // Each fires against its own ledger row id (refund → original provision row, charge → newly inserted row).
+    // Stripe sync: post ONE ceil-delta sized to the net balance change.
+    // The new charge row owns the stripeBalanceTxnId; the cancelled provision row stays null.
     const customerId = "_customerId" in result ? (result._customerId as string | null) : null;
-    const adjustment = "_adjustmentCents" in result ? (result._adjustmentCents as number) : 0;
+    const oldBal = "_oldBalance" in result ? (result._oldBalance as string | null) : null;
     const newChargeId = "_newChargeId" in result ? (result._newChargeId as string | null) : null;
-    if (customerId && adjustment !== 0 && newChargeId) {
-      // Refund the original $X to the customer's Stripe balance (negative amount for credit).
-      fireAndForgetBalanceTxn(
+    if (customerId && oldBal !== null && newChargeId) {
+      syncStripeCeilDelta({
         orgId,
         userId,
         customerId,
-        -result.original_amount_cents,
-        `Provision ${provisionId} cancelled (replaced by confirm at ${result.final_amount_cents} cents)`,
-        provisionId,
-        wfHeaders
-      );
-      // Charge the new $Y on Stripe balance (positive amount for debit).
-      fireAndForgetBalanceTxn(
-        orgId,
-        userId,
-        customerId,
-        result.final_amount_cents,
-        result.original_amount_cents !== result.final_amount_cents
-          ? `Confirmed charge (replacing provision ${provisionId})`
-          : `Provision ${provisionId} confirmed`,
-        newChargeId,
-        wfHeaders
-      );
+        oldBalance: oldBal,
+        newBalance: result.balance_cents as string,
+        description:
+          cmpCents(result.original_amount_cents as string, result.final_amount_cents as string) !== 0
+            ? `Confirmed charge (replacing provision ${provisionId})`
+            : `Provision ${provisionId} confirmed`,
+        ledgerEntryId: newChargeId,
+        wfHeaders,
+      });
     }
 
-    const { _customerId: _c, _adjustmentCents: _a, _newChargeId: _n, ...response } = result as Record<string, unknown>;
+    const adjustment = "_adjustmentCents" in result ? (result._adjustmentCents as string) : "0";
+    const { _customerId: _c, _adjustmentCents: _a, _newChargeId: _n, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
 
     traceEvent({
       runId,
       orgId,
       userId,
       event: "billing.provision.confirmed",
-      detail: { provision_id: provisionId, adjustment_cents: adjustment },
+      detail: { provision_id: provisionId, adjustment_cents: adjustment as unknown as string },
       workflowHeaders: wfHeaders,
     });
 
@@ -357,7 +362,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       const provRows = await tx.execute<{
         id: string;
         org_id: string;
-        amount_cents: number;
+        amount_cents: string;
         status: string;
       }>(
         rawSql`SELECT * FROM transactions WHERE id = ${provisionId} AND org_id = ${orgId} FOR UPDATE`
@@ -366,7 +371,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       const provision = (provRows as unknown as Array<{
         id: string;
         org_id: string;
-        amount_cents: number;
+        amount_cents: string;
         status: string;
       }>)[0];
 
@@ -384,7 +389,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         return {
           provision_id: provisionId,
           status: "cancelled" as const,
-          refunded_cents: 0,
+          refunded_cents: "0.0000000000",
           balance_cents: account?.creditBalanceCents ?? null,
         };
       }
@@ -393,10 +398,17 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         return { error: `Provision already ${provision.status}` as const, status: 409 as const };
       }
 
+      const [accountBefore] = await tx
+        .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.orgId, orgId))
+        .limit(1);
+      const oldBalance = accountBefore?.creditBalanceCents ?? null;
+
       await tx
         .update(billingAccounts)
         .set({
-          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${provision.amount_cents}`,
+          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${provision.amount_cents}::numeric`,
           updatedAt: new Date(),
         })
         .where(eq(billingAccounts.orgId, orgId));
@@ -425,6 +437,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
         balance_cents: account?.creditBalanceCents ?? null,
         _customerId: account?.stripeCustomerId ?? null,
         _refundedCents: provision.amount_cents,
+        _oldBalance: oldBalance,
       };
     });
 
@@ -434,20 +447,22 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
     }
 
     const customerId = "_customerId" in result ? result._customerId as string | null : null;
-    const refundedCents = "_refundedCents" in result ? result._refundedCents as number : 0;
-    if (customerId && refundedCents > 0) {
-      fireAndForgetBalanceTxn(
+    const refundedCents = "_refundedCents" in result ? result._refundedCents as string : "0";
+    const oldBal = "_oldBalance" in result ? result._oldBalance as string | null : null;
+    if (customerId && oldBal !== null && cmpCents(refundedCents, "0") > 0) {
+      syncStripeCeilDelta({
         orgId,
         userId,
         customerId,
-        -refundedCents,
-        `Provision ${provisionId} cancel refund`,
-        provisionId,
-        wfHeaders
-      );
+        oldBalance: oldBal,
+        newBalance: result.balance_cents as string,
+        description: `Provision ${provisionId} cancel refund`,
+        ledgerEntryId: provisionId,
+        wfHeaders,
+      });
     }
 
-    const { _customerId: _c, _refundedCents: _r, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _refundedCents: _r, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
 
     traceEvent({
       runId: req.headers["x-run-id"] as string,
