@@ -41,7 +41,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       success: true,
-      balance_cents: 195,
+      balance_cents: "195.0000000000",
       depleted: false,
     });
 
@@ -57,7 +57,7 @@ describe("Credits deduction endpoint", () => {
       );
     expect(entries).toHaveLength(1);
     expect(entries[0].type).toBe("debit");
-    expect(entries[0].amountCents).toBe(5);
+    expect(entries[0].amountCents).toBe("5.0000000000");
     expect(entries[0].status).toBe("confirmed");
   });
 
@@ -79,7 +79,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.depleted).toBe(true);
-    expect(res.body.balance_cents).toBe(-2);
+    expect(res.body.balance_cents).toBe("-2.0000000000");
   });
 
   it("does NOT auto-reload (reload removed from deduct)", async () => {
@@ -103,7 +103,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     // No reload — just deducts into negative
-    expect(res.body.balance_cents).toBe(-2);
+    expect(res.body.balance_cents).toBe("-2.0000000000");
     expect(res.body.depleted).toBe(true);
     expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
   });
@@ -120,7 +120,7 @@ describe("Credits deduction endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     // Auto-created with 200 cents ($2), then deducted 5
-    expect(res.body.balance_cents).toBe(195);
+    expect(res.body.balance_cents).toBe("195.0000000000");
 
     // Welcome ledger entry should exist
     const welcomeEntries = await db
@@ -133,7 +133,7 @@ describe("Credits deduction endpoint", () => {
         )
       );
     expect(welcomeEntries).toHaveLength(1);
-    expect(welcomeEntries[0].amountCents).toBe(200);
+    expect(welcomeEntries[0].amountCents).toBe("200.0000000000");
   });
 
   it("validates request body", async () => {
@@ -190,13 +190,13 @@ describe("Credits deduction endpoint", () => {
     };
 
     const res1 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
-    expect(res1.body.balance_cents).toBe(90);
+    expect(res1.body.balance_cents).toBe("90.0000000000");
 
     const res2 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
-    expect(res2.body.balance_cents).toBe(80);
+    expect(res2.body.balance_cents).toBe("80.0000000000");
 
     const res3 = await request(app).post("/v1/credits/deduct").set(headers).send(body);
-    expect(res3.body.balance_cents).toBe(70);
+    expect(res3.body.balance_cents).toBe("70.0000000000");
   });
 });
 
@@ -221,7 +221,7 @@ describe("Credits authorize endpoint", () => {
 
     // Mock costs-client to return deterministic prices
     const costsClient = await import("../../src/lib/costs-client.js");
-    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(100);
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("100.0000000000");
   });
 
   afterAll(async () => {
@@ -243,8 +243,8 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: true,
-      balance_cents: 500,
-      required_cents: 100,
+      balance_cents: "500.0000000000",
+      required_cents: "100.0000000000",
     });
   });
 
@@ -263,8 +263,8 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: false,
-      balance_cents: 50,
-      required_cents: 100,
+      balance_cents: "50.0000000000",
+      required_cents: "100.0000000000",
     });
   });
 
@@ -286,8 +286,8 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: true,
-      balance_cents: 2050,
-      required_cents: 100,
+      balance_cents: "2050.0000000000",
+      required_cents: "100.0000000000",
     });
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
       orgId,
@@ -310,14 +310,14 @@ describe("Credits authorize endpoint", () => {
         )
       );
     expect(reloadEntries).toHaveLength(1);
-    expect(reloadEntries[0].amountCents).toBe(2000);
+    expect(reloadEntries[0].amountCents).toBe("2000.0000000000");
     expect(reloadEntries[0].stripePaymentIntentId).toBe("pi_mock");
   });
 
   it("charges multiple reloads when required amount exceeds single reload", async () => {
     // Override costs-client to return a large required amount
     const costsClient = await import("../../src/lib/costs-client.js");
-    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(3700);
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("3700.0000000000");
 
     await insertTestAccount({
       orgId,
@@ -337,8 +337,8 @@ describe("Credits authorize endpoint", () => {
     // Need 3700, have 200 → deficit 3500 → ceil(3500/1000) = 4 → charge 4000
     expect(res.body).toEqual({
       sufficient: true,
-      balance_cents: 4200, // 200 + 4000
-      required_cents: 3700,
+      balance_cents: "4200.0000000000", // 200 + 4000
+      required_cents: "3700.0000000000",
     });
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledWith(
       orgId,
@@ -373,8 +373,8 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       sufficient: false,
-      balance_cents: 50,
-      required_cents: 100,
+      balance_cents: "50.0000000000",
+      required_cents: "100.0000000000",
     });
 
     // Verify cancelled reload entry was written
@@ -464,7 +464,7 @@ describe("Credits authorize endpoint", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(res.body.balance_cents).toBe(2050);
+    expect(res.body.balance_cents).toBe("2050.0000000000");
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalled();
   });
 
@@ -523,7 +523,7 @@ describe("Credits authorize endpoint", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(res.body.balance_cents).toBe(2060); // 60 + 2000
+    expect(res.body.balance_cents).toBe("2060.0000000000"); // 60 + 2000
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalled();
   });
 
@@ -536,7 +536,7 @@ describe("Credits authorize endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
     // Auto-created with 200 cents ($2), costs-service mock returns 100
-    expect(res.body.balance_cents).toBe(200);
+    expect(res.body.balance_cents).toBe("200.0000000000");
   });
 
   it("validates request body — rejects empty items", async () => {
@@ -609,7 +609,7 @@ describe("Credits authorize endpoint", () => {
 
     expect(res.status).toBe(200);
     // After reconcile, balance should be 300 (from ledger), not 999
-    expect(res.body.balance_cents).toBe(300);
+    expect(res.body.balance_cents).toBe("300.0000000000");
     expect(res.body.sufficient).toBe(true);
   });
 });
@@ -631,7 +631,7 @@ describe("Credits authorize — reconcile race conditions", () => {
     await cleanTestData();
 
     const costsClient = await import("../../src/lib/costs-client.js");
-    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue(100);
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("100.0000000000");
   });
 
   afterAll(async () => {
@@ -716,7 +716,7 @@ describe("Credits authorize — reconcile race conditions", () => {
       );
     expect(reloadEntries).toHaveLength(1);
     expect(reloadEntries[0].stripePaymentIntentId).toBe("pi_recover_xyz");
-    expect(reloadEntries[0].amountCents).toBe(2000);
+    expect(reloadEntries[0].amountCents).toBe("2000.0000000000");
   });
 
   it("rejects duplicate (org_id, stripe_payment_intent_id) reload rows at the DB level", async () => {

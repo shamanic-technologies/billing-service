@@ -44,7 +44,7 @@ describe("Promo endpoints", () => {
       expect(res.body).toEqual({
         redeemed: true,
         amount_cents: 800,
-        balance_cents: 1000,
+        balance_cents: "1000.0000000000",
       });
 
       // Stripe balance transaction should be fired
@@ -70,7 +70,7 @@ describe("Promo endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.redeemed).toBe(true);
       // $2 welcome + $10 promo = $12 = 1200 cents
-      expect(res.body.balance_cents).toBe(1200);
+      expect(res.body.balance_cents).toBe("1200.0000000000");
     });
 
     it("returns 400 for invalid promo code", async () => {

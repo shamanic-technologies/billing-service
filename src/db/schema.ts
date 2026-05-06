@@ -4,10 +4,16 @@ import {
   uuid,
   text,
   integer,
+  numeric,
   timestamp,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
+
+// Sub-cent fractional cents — see migration 0013.
+// Drizzle returns numeric columns as JS strings to preserve precision.
+const FRACTIONAL_PRECISION = 16;
+const FRACTIONAL_SCALE = 10;
 
 export const billingAccounts = pgTable(
   "billing_accounts",
@@ -15,7 +21,12 @@ export const billingAccounts = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
-    creditBalanceCents: integer("credit_balance_cents").notNull().default(200),
+    creditBalanceCents: numeric("credit_balance_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    })
+      .notNull()
+      .default("200"),
     reloadAmountCents: integer("reload_amount_cents"),
     reloadThresholdCents: integer("reload_threshold_cents").default(200),
     stripePaymentMethodId: text("stripe_payment_method_id"),
@@ -61,7 +72,10 @@ export const transactions = pgTable(
     userId: uuid("user_id").notNull(),
     runId: uuid("run_id"),
     type: text("type").notNull().default("debit"),
-    amountCents: integer("amount_cents").notNull(),
+    amountCents: numeric("amount_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
     status: text("status").notNull().default("pending"),
     source: text("source").notNull().default("charge"),
     stripePaymentIntentId: text("stripe_payment_intent_id"),

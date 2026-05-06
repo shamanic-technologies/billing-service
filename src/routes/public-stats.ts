@@ -5,11 +5,15 @@ import { billingAccounts, transactions } from "../db/schema.js";
 
 const router = Router();
 
+// Public-stats sums are returned as full-precision decimal strings (numeric(16,10)::text).
+// Investor/dashboard consumers wanting a display-rounded integer should
+// `Math.ceil(parseFloat(...))` at the presentation layer.
+
 interface GrowthRow {
   period: string;
-  credited_cents: number;
-  consumed_cents: number;
-  revenue_cents: number;
+  credited_cents: string;
+  consumed_cents: string;
+  revenue_cents: string;
 }
 
 async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
@@ -18,14 +22,14 @@ async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
       to_char(date_trunc(${truncTo}, ${transactions.createdAt}), 'YYYY-MM-DD') AS period,
       COALESCE(SUM(${transactions.amountCents}) FILTER (
         WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
-      ), 0)::int AS credited_cents,
+      ), 0)::numeric(16,10)::text AS credited_cents,
       COALESCE(SUM(${transactions.amountCents}) FILTER (
         WHERE ${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')
-      ), 0)::int AS consumed_cents,
+      ), 0)::numeric(16,10)::text AS consumed_cents,
       COALESCE(SUM(${transactions.amountCents}) FILTER (
         WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
           AND ${transactions.source} = 'reload'
-      ), 0)::int AS revenue_cents
+      ), 0)::numeric(16,10)::text AS revenue_cents
     FROM ${transactions}
     GROUP BY 1
     ORDER BY 1`
@@ -39,13 +43,13 @@ router.get("/public/stats/billing", async (_req, res) => {
       .select({
         totalAccounts: rawSql<number>`COUNT(*)::int`,
         accountsWithPaymentMethod: rawSql<number>`COUNT(*) FILTER (WHERE ${billingAccounts.stripePaymentMethodId} IS NOT NULL)::int`,
-        totalCreditBalanceCents: rawSql<number>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::int`,
+        totalCreditBalanceCents: rawSql<string>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::numeric(16,10)::text`,
       })
       .from(billingAccounts);
 
     const [creditStats] = await db
       .select({
-        totalCreditedCents: rawSql<number>`COALESCE(SUM(${transactions.amountCents}), 0)::int`,
+        totalCreditedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
       })
       .from(transactions)
       .where(
@@ -54,7 +58,7 @@ router.get("/public/stats/billing", async (_req, res) => {
 
     const [debitStats] = await db
       .select({
-        totalConsumedCents: rawSql<number>`COALESCE(SUM(${transactions.amountCents}), 0)::int`,
+        totalConsumedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
       })
       .from(transactions)
       .where(

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { eq, and, isNull, gte, lte, desc, sql as rawSql } from "drizzle-orm";
+import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import { billingAccounts, transactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
@@ -10,22 +11,25 @@ import {
   listPaymentIntents,
   isStripeAuthError,
 } from "../lib/stripe.js";
-import { fireAndForgetBalanceTxn } from "../lib/ledger.js";
+import { syncStripeCeilDelta } from "../lib/ledger.js";
 import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { addCents, subCents, gte as gteCents, isDepleted, cmpCents } from "../lib/cents.js";
 
 const router = Router();
 
 /**
  * Compute the reload charge needed to cover `requiredCents` given `currentBalance`.
  * Returns the smallest multiple of `reloadUnit` such that balance + charge >= required.
+ * Reload units are integer cents (configured by the user in whole-dollar amounts);
+ * required and balance can be fractional.
  */
-function computeReloadCharge(currentBalance: number, requiredCents: number, reloadUnit: number): number {
-  const deficit = requiredCents - currentBalance;
-  if (deficit <= 0) return 0;
-  const multiples = Math.ceil(deficit / reloadUnit);
+function computeReloadCharge(currentBalance: string, requiredCents: string, reloadUnit: number): number {
+  const deficit = new Decimal(requiredCents).minus(currentBalance);
+  if (deficit.lessThanOrEqualTo(0)) return 0;
+  const multiples = deficit.dividedBy(reloadUnit).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
   return multiples * reloadUnit;
 }
 
@@ -33,7 +37,7 @@ interface AccountRow {
   id: string;
   org_id: string;
   stripe_customer_id: string | null;
-  credit_balance_cents: number;
+  credit_balance_cents: string;
   reload_amount_cents: number | null;
   reload_threshold_cents: number | null;
   stripe_payment_method_id: string | null;
@@ -79,12 +83,12 @@ async function reconcile(
           WHEN type = 'debit' AND status IN ('confirmed', 'pending') THEN -amount_cents
           ELSE 0
         END
-      ), 0)::int AS computed,
+      ), 0)::numeric(16,10)::text AS computed,
       COUNT(*)::int AS entry_count
       FROM transactions WHERE org_id = ${orgId}`
-    )) as unknown as { computed: number; entry_count: number }[];
+    )) as unknown as { computed: string; entry_count: number }[];
     const { computed, entry_count } = ledgerRows[0];
-    if (entry_count > 0 && computed !== account.credit_balance_cents) {
+    if (entry_count > 0 && cmpCents(computed, account.credit_balance_cents) !== 0) {
       console.warn(
         `[billing-service] Cache drift detected for org ${orgId}: cache=${account.credit_balance_cents}, ledger=${computed}. Fixing.`
       );
@@ -110,7 +114,7 @@ async function reconcile(
           const insertedRows = (await tx.execute(
             rawSql`INSERT INTO transactions
               (org_id, user_id, type, amount_cents, status, source, stripe_payment_intent_id, description)
-              VALUES (${orgId}, ${userId}, 'credit', ${pi.amount}, 'confirmed', 'reload', ${pi.id},
+              VALUES (${orgId}, ${userId}, 'credit', ${pi.amount}::numeric, 'confirmed', 'reload', ${pi.id},
                 ${`Recovered reload from Stripe PI ${pi.id}`})
               ON CONFLICT (org_id, stripe_payment_intent_id)
                 WHERE source = 'reload' AND stripe_payment_intent_id IS NOT NULL
@@ -124,7 +128,7 @@ async function reconcile(
             await tx
               .update(billingAccounts)
               .set({
-                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${pi.amount}`,
+                creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${pi.amount}::numeric`,
                 updatedAt: new Date(),
               })
               .where(eq(billingAccounts.orgId, orgId));
@@ -157,8 +161,15 @@ async function reconcile(
 
       for (const entry of unsyncedEntries) {
         try {
-          const stripeAmount =
-            entry.type === "credit" ? -entry.amountCents : entry.amountCents;
+          // Recovery sync: send the row's amount rounded up to integer cents.
+          // Bound: each recovered fractional row may overshoot Stripe by <1¢.
+          // The forward path's ceil-delta strategy (syncStripeCeilDelta) maintains
+          // ≤1¢ in steady state; this branch only fires when forward sync failed.
+          const ceilAmount = new Decimal(entry.amountCents)
+            .toDecimalPlaces(0, Decimal.ROUND_CEIL)
+            .toNumber();
+          const stripeAmount = entry.type === "credit" ? -ceilAmount : ceilAmount;
+          if (stripeAmount === 0) continue;
           const txn = await createBalanceTransaction(
             orgId,
             userId,
@@ -217,7 +228,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       }
 
       // Always deduct, even if it results in a negative balance
-      const newBalance = account.credit_balance_cents - amount_cents;
+      const oldBalance = account.credit_balance_cents;
+      const newBalance = subCents(oldBalance, amount_cents);
       await tx
         .update(billingAccounts)
         .set({
@@ -244,7 +256,8 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return {
         success: true as const,
         balance_cents: newBalance,
-        depleted: newBalance <= 0,
+        depleted: isDepleted(newBalance),
+        _oldBalance: oldBalance,
         _customerId: account.stripe_customer_id,
         _ledgerEntryId: ledgerEntry.id,
       };
@@ -255,17 +268,18 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Fire-and-forget Stripe balance transaction
+    // Fire-and-forget Stripe balance sync — only when ceil-cent boundary crossed
     if (result._customerId && result._ledgerEntryId) {
-      fireAndForgetBalanceTxn(
+      syncStripeCeilDelta({
         orgId,
         userId,
-        result._customerId,
-        amount_cents,
+        customerId: result._customerId,
+        oldBalance: result._oldBalance,
+        newBalance: result.balance_cents,
         description,
-        result._ledgerEntryId,
-        wfHeaders
-      );
+        ledgerEntryId: result._ledgerEntryId,
+        wfHeaders,
+      });
     }
 
     // Send depleted email if needed
@@ -282,7 +296,7 @@ router.post("/v1/credits/deduct", requireOrgHeaders, async (req, res) => {
     traceEvent(runId, { service: "billing-service", event: "credits.deduct.done", data: { balance_cents: result.balance_cents, depleted: result.depleted } }, req.headers);
 
     // Strip internal fields from response
-    const { _customerId: _c, _ledgerEntryId: _l, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _ledgerEntryId: _l, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error deducting credits:", err);
@@ -314,7 +328,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     traceEvent(runId, { service: "billing-service", event: "credits.authorize.start", data: { item_count: items.length } }, req.headers);
 
     // Resolve prices from costs-service (outside transaction — read-only, no lock needed)
-    let requiredCents: number;
+    let requiredCents: string;
     try {
       requiredCents = await resolveRequiredCents(items, {
         "x-org-id": orgId,
@@ -350,10 +364,11 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       }
 
       let currentBalance = account.credit_balance_cents;
+      const balanceBeforeReload = currentBalance;
 
       // If insufficient, try synchronous auto-reload (charge enough multiples to cover)
       let reloadLedgerEntryId: string | null = null;
-      if (currentBalance < requiredCents) {
+      if (cmpCents(currentBalance, requiredCents) < 0) {
         if (
           account.stripe_payment_method_id &&
           account.stripe_customer_id &&
@@ -400,7 +415,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
                   orgId,
                   userId,
                   type: "credit",
-                  amountCents: chargeAmount,
+                  amountCents: String(chargeAmount),
                   status: "confirmed",
                   source: "reload",
                   stripePaymentIntentId: pi.id,
@@ -409,7 +424,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
                 .returning();
               reloadLedgerEntryId = reloadEntry.id;
 
-              currentBalance += chargeAmount;
+              currentBalance = addCents(currentBalance, String(chargeAmount));
               await tx
                 .update(billingAccounts)
                 .set({
@@ -426,7 +441,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
                   orgId,
                   userId,
                   type: "credit",
-                  amountCents: computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents),
+                  amountCents: String(computeReloadCharge(currentBalance, requiredCents, account.reload_amount_cents)),
                   status: "cancelled",
                   source: "reload",
                   description: `Auto-reload failed: ${reloadErr instanceof Error ? reloadErr.message : "unknown error"}`,
@@ -437,6 +452,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
                 required_cents: requiredCents,
                 _emailEvent: "credits-reload-failed" as const,
                 _reloadLedgerEntryId: null as string | null,
+                _balanceBefore: balanceBeforeReload,
                 _customerId: account.stripe_customer_id,
               };
             }
@@ -444,7 +460,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         }
       }
 
-      const sufficient = currentBalance >= requiredCents;
+      const sufficient = gteCents(currentBalance, requiredCents);
 
       return {
         sufficient: sufficient as boolean,
@@ -452,6 +468,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         required_cents: requiredCents,
         _emailEvent: sufficient ? null : ("credits-depleted" as const),
         _reloadLedgerEntryId: reloadLedgerEntryId,
+        _balanceBefore: balanceBeforeReload,
         _customerId: account.stripe_customer_id,
       };
     });
@@ -461,7 +478,8 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Fire-and-forget Stripe balance txn for the reload (if one happened)
+    // Fire-and-forget Stripe balance txn for the reload (if one happened) — uses
+    // ceil-delta sized to keep Stripe within ≤1¢ of `ceil(ledger_balance)`.
     if (result._reloadLedgerEntryId && result._customerId) {
       const entry = await db
         .select()
@@ -469,15 +487,16 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
         .where(eq(transactions.id, result._reloadLedgerEntryId))
         .limit(1);
       if (entry[0]) {
-        fireAndForgetBalanceTxn(
+        syncStripeCeilDelta({
           orgId,
           userId,
-          result._customerId,
-          -entry[0].amountCents,
-          entry[0].description ?? "Auto-reload credit",
-          result._reloadLedgerEntryId,
-          wfHeaders
-        );
+          customerId: result._customerId,
+          oldBalance: result._balanceBefore,
+          newBalance: result.balance_cents,
+          description: entry[0].description ?? "Auto-reload credit",
+          ledgerEntryId: result._reloadLedgerEntryId,
+          wfHeaders,
+        });
       }
     }
 
@@ -496,7 +515,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     traceEvent(runId, { service: "billing-service", event: "credits.authorize.done", data: { sufficient: result.sufficient, balance_cents: result.balance_cents, required_cents: result.required_cents } }, req.headers);
 
     // Strip internal fields
-    const { _emailEvent, _reloadLedgerEntryId, _customerId, ...response } = result as Record<string, unknown>;
+    const { _emailEvent, _reloadLedgerEntryId, _balanceBefore, _customerId, ...response } = result as Record<string, unknown>;
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error authorizing credits:", err);
