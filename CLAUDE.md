@@ -25,6 +25,14 @@ Canonical `transactions.source` values (post-#82/#83):
 
 `charge` lifecycle: provision inserts `(debit, pending)`; confirm with same amount mutates row to `confirmed`; confirm with $Y != $X mutates original to `cancelled` and inserts a new `(debit, confirmed, $Y)`; cancel mutates to `cancelled`. **No miroir credit rows are ever inserted.** `provision_cancel` and `provision_adjust` are dead sources from the pre-#82 era.
 
+## `cost_id` natural key (post-#92)
+
+`transactions.cost_id` (uuid, nullable, indexed) decouples external callers from the billing-internal `transactions.id`. runs-service issues one provision per `runs_costs.id` and confirms/cancels via `POST /v1/credits/provision/by-cost/:cost_id/{confirm,cancel}` — no billing-side id needed.
+
+By-cost lookup picks the **most recent** row by `created_at` (one cost_id can produce a `pending → cancelled` row plus a fresh `confirmed` replacement when the actual amount differs). Only one row per cost_id is non-terminal at a time. Replacement rows carry the same `cost_id` so subsequent calls still hit the active row.
+
+When confirm produces a replacement (amount mismatch), the `provision_id` field in the response points to the **new** confirmed row, not the cancelled original. By-id endpoints (`/provision/:id/{confirm,cancel}`) remain unchanged for back-compat.
+
 ## Fractional cents
 
 `transactions.amount_cents` and `billing_accounts.credit_balance_cents` are `numeric(16,10)`. Drizzle returns them as JS strings — never cast with `Number()` for math (precision loss). Use `parseFloat` for display only; for arithmetic in JS, use `BigInt`-scaled or `numeric.js`-style. Do NOT round inside billing — runs-service sends raw fractional, ledger preserves it.
