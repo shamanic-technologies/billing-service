@@ -120,7 +120,12 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
 
     res.json(response);
   } catch (err) {
-    console.error("[billing-service] Error creating provision:", err);
+    console.error("[billing-service] Error creating provision", {
+      run_id: req.headers["x-run-id"],
+      org_id: req.headers["x-org-id"],
+      user_id: req.headers["x-user-id"],
+      err,
+    });
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;
@@ -175,7 +180,12 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       }>)[0];
 
       if (!provision) {
-        return { error: "Provision not found" as const, status: 404 as const };
+        return {
+          error: "Provision not found" as const,
+          status: 404 as const,
+          current_status: null as string | null,
+          current_amount_cents: null as string | null,
+        };
       }
 
       // Idempotent: confirm with same amount on already-confirmed row is a no-op.
@@ -187,6 +197,8 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
           return {
             error: `Provision already confirmed at ${provision.amount_cents} cents` as const,
             status: 409 as const,
+            current_status: provision.status,
+            current_amount_cents: provision.amount_cents,
           };
         }
         const [account] = await tx
@@ -206,7 +218,12 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
       }
 
       if (provision.status !== "pending") {
-        return { error: `Provision already ${provision.status}` as const, status: 409 as const };
+        return {
+          error: `Provision already ${provision.status}` as const,
+          status: 409 as const,
+          current_status: provision.status,
+          current_amount_cents: provision.amount_cents,
+        };
       }
 
       const finalAmount = actual_amount_cents ?? provision.amount_cents;
@@ -306,7 +323,27 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
     });
 
     if ("error" in result && result.error) {
-      res.status(result.status as number).json({ error: result.error });
+      const currentStatus = "current_status" in result ? result.current_status : null;
+      const currentAmountCents = "current_amount_cents" in result ? result.current_amount_cents : null;
+      console.warn("[billing-service] provision confirm rejected", {
+        provision_id: provisionId,
+        run_id: runId,
+        org_id: orgId,
+        user_id: userId,
+        status_code: result.status,
+        error: result.error,
+        current_status: currentStatus,
+        current_amount_cents: currentAmountCents,
+        requested_amount_cents: actual_amount_cents ?? null,
+      });
+      res.status(result.status as number).json({
+        error: result.error,
+        provision_id: provisionId,
+        run_id: runId,
+        current_status: currentStatus,
+        current_amount_cents: currentAmountCents,
+        requested_amount_cents: actual_amount_cents ?? null,
+      });
       return;
     }
 
@@ -345,7 +382,13 @@ router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, 
 
     res.json(response);
   } catch (err) {
-    console.error("[billing-service] Error confirming provision:", err);
+    console.error("[billing-service] Error confirming provision", {
+      provision_id: req.params.id,
+      run_id: req.headers["x-run-id"],
+      org_id: req.headers["x-org-id"],
+      user_id: req.headers["x-user-id"],
+      err,
+    });
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -355,6 +398,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const provisionId = req.params.id;
 
@@ -376,7 +420,12 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       }>)[0];
 
       if (!provision) {
-        return { error: "Provision not found" as const, status: 404 as const };
+        return {
+          error: "Provision not found" as const,
+          status: 404 as const,
+          current_status: null as string | null,
+          current_amount_cents: null as string | null,
+        };
       }
 
       if (provision.status === "cancelled") {
@@ -395,7 +444,12 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
       }
 
       if (provision.status !== "pending") {
-        return { error: `Provision already ${provision.status}` as const, status: 409 as const };
+        return {
+          error: `Provision already ${provision.status}` as const,
+          status: 409 as const,
+          current_status: provision.status,
+          current_amount_cents: provision.amount_cents,
+        };
       }
 
       const [accountBefore] = await tx
@@ -442,7 +496,25 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
     });
 
     if ("error" in result && result.error) {
-      res.status(result.status as number).json({ error: result.error });
+      const currentStatus = "current_status" in result ? result.current_status : null;
+      const currentAmountCents = "current_amount_cents" in result ? result.current_amount_cents : null;
+      console.warn("[billing-service] provision cancel rejected", {
+        provision_id: provisionId,
+        run_id: runId,
+        org_id: orgId,
+        user_id: userId,
+        status_code: result.status,
+        error: result.error,
+        current_status: currentStatus,
+        current_amount_cents: currentAmountCents,
+      });
+      res.status(result.status as number).json({
+        error: result.error,
+        provision_id: provisionId,
+        run_id: runId,
+        current_status: currentStatus,
+        current_amount_cents: currentAmountCents,
+      });
       return;
     }
 
@@ -465,7 +537,7 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
     const { _customerId: _c, _refundedCents: _r, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
 
     traceEvent({
-      runId: req.headers["x-run-id"] as string,
+      runId,
       orgId,
       userId,
       event: "billing.provision.cancelled",
@@ -475,7 +547,13 @@ router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, r
 
     res.json(response);
   } catch (err) {
-    console.error("[billing-service] Error cancelling provision:", err);
+    console.error("[billing-service] Error cancelling provision", {
+      provision_id: req.params.id,
+      run_id: req.headers["x-run-id"],
+      org_id: req.headers["x-org-id"],
+      user_id: req.headers["x-user-id"],
+      err,
+    });
     res.status(500).json({ error: "Internal server error" });
   }
 });

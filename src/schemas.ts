@@ -14,6 +14,17 @@ export const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
 
+export const ProvisionConflictResponseSchema = z
+  .object({
+    error: z.string(),
+    provision_id: z.string().uuid(),
+    run_id: z.string().nullable(),
+    current_status: z.string().nullable(),
+    current_amount_cents: z.string().nullable(),
+    requested_amount_cents: z.string().nullable().optional(),
+  })
+  .openapi("ProvisionConflictResponse");
+
 /**
  * Inbound fractional-cents amount. Accepts decimal string or finite number.
  * Rejects negative, zero, NaN, non-numeric, or integer part > 16 digits.
@@ -577,11 +588,11 @@ registry.registerPath({
     },
     404: {
       description: "Provision not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
     409: {
       description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
   },
 });
@@ -601,11 +612,11 @@ registry.registerPath({
     },
     404: {
       description: "Provision not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
     409: {
       description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
   },
 });
