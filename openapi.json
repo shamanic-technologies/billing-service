@@ -382,6 +382,11 @@
             "type": "string",
             "format": "uuid"
           },
+          "cost_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
           "balance_cents": {
             "type": "string"
           },
@@ -411,6 +416,10 @@
           "description": {
             "type": "string",
             "minLength": 1
+          },
+          "cost_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
@@ -423,6 +432,11 @@
         "properties": {
           "provision_id": {
             "type": "string",
+            "format": "uuid"
+          },
+          "cost_id": {
+            "type": "string",
+            "nullable": true,
             "format": "uuid"
           },
           "status": {
@@ -454,6 +468,47 @@
           "balance_cents"
         ]
       },
+      "ProvisionConflictResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provision_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "cost_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "run_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "current_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "current_amount_cents": {
+            "type": "string",
+            "nullable": true
+          },
+          "requested_amount_cents": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "error",
+          "provision_id",
+          "run_id",
+          "current_status",
+          "current_amount_cents"
+        ]
+      },
       "ConfirmProvisionRequest": {
         "type": "object",
         "properties": {
@@ -476,6 +531,11 @@
             "type": "string",
             "format": "uuid"
           },
+          "cost_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -496,6 +556,21 @@
           "refunded_cents",
           "balance_cents"
         ]
+      },
+      "ConfirmByCostRequest": {
+        "type": "object",
+        "properties": {
+          "actual_amount_cents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        }
       },
       "RedeemPromoResponse": {
         "type": "object",
@@ -1841,7 +1916,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
                 }
               }
             }
@@ -1851,7 +1926,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
                 }
               }
             }
@@ -1961,7 +2036,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
                 }
               }
             }
@@ -1971,7 +2046,258 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/provision/by-cost/{cost_id}/confirm": {
+      "post": {
+        "summary": "Confirm a provision looked up by cost_id (natural key)",
+        "description": "Confirms the most recent provision row for the given cost_id. Use this when callers (e.g. runs-service) hold the cost_id but not the billing-internal provision_id. Idempotent: re-confirming with the same amount returns 200.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "cost_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmByCostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provision confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmProvisionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No provision found for cost_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing provision is in incompatible state (cancelled, or confirmed at a different amount)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/provision/by-cost/{cost_id}/cancel": {
+      "post": {
+        "summary": "Cancel a provision looked up by cost_id (natural key)",
+        "description": "Cancels the most recent provision row for the given cost_id. Idempotent: re-cancelling an already-cancelled cost_id returns 200.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "cost_id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provision cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelProvisionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No provision found for cost_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing provision is confirmed (cannot cancel)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionConflictResponse"
                 }
               }
             }

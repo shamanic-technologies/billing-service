@@ -71,6 +71,7 @@ export const transactions = pgTable(
     orgId: uuid("org_id").notNull(),
     userId: uuid("user_id").notNull(),
     runId: uuid("run_id"),
+    costId: uuid("cost_id"),
     type: text("type").notNull().default("debit"),
     amountCents: numeric("amount_cents", {
       precision: FRACTIONAL_PRECISION,
@@ -97,6 +98,7 @@ export const transactions = pgTable(
     index("idx_transactions_org_id").on(table.orgId),
     index("idx_transactions_status").on(table.status),
     index("idx_transactions_source").on(table.source),
+    index("idx_transactions_cost_id").on(table.costId),
     uniqueIndex("idx_transactions_reload_pi")
       .on(table.orgId, table.stripePaymentIntentId)
       .where(sql`source = 'reload' AND stripe_payment_intent_id IS NOT NULL`),
