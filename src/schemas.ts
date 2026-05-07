@@ -14,6 +14,18 @@ export const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
 
+export const ProvisionConflictResponseSchema = z
+  .object({
+    error: z.string(),
+    provision_id: z.string().uuid().nullable(),
+    cost_id: z.string().uuid().nullable().optional(),
+    run_id: z.string().nullable(),
+    current_status: z.string().nullable(),
+    current_amount_cents: z.string().nullable(),
+    requested_amount_cents: z.string().nullable().optional(),
+  })
+  .openapi("ProvisionConflictResponse");
+
 /**
  * Inbound fractional-cents amount. Accepts decimal string or finite number.
  * Rejects negative, zero, NaN, non-numeric, or integer part > 16 digits.
@@ -78,12 +90,14 @@ export const ProvisionRequestSchema = z
   .object({
     amount_cents: PositiveCentsSchema,
     description: z.string().min(1),
+    cost_id: z.string().uuid().optional(),
   })
   .openapi("ProvisionRequest");
 
 export const ProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
+    cost_id: z.string().uuid().nullable().optional(),
     balance_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
@@ -98,6 +112,7 @@ export const ConfirmProvisionRequestSchema = z
 export const ConfirmProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
+    cost_id: z.string().uuid().nullable().optional(),
     status: z.literal("confirmed"),
     original_amount_cents: CentsStringSchema,
     final_amount_cents: CentsStringSchema,
@@ -109,11 +124,18 @@ export const ConfirmProvisionResponseSchema = z
 export const CancelProvisionResponseSchema = z
   .object({
     provision_id: z.string().uuid(),
+    cost_id: z.string().uuid().nullable().optional(),
     status: z.literal("cancelled"),
     refunded_cents: CentsStringSchema,
     balance_cents: CentsStringSchema.nullable(),
   })
   .openapi("CancelProvisionResponse");
+
+export const ConfirmByCostRequestSchema = z
+  .object({
+    actual_amount_cents: PositiveCentsSchema.optional(),
+  })
+  .openapi("ConfirmByCostRequest");
 
 // --- Authorize ---
 
@@ -577,11 +599,11 @@ registry.registerPath({
     },
     404: {
       description: "Provision not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
     409: {
       description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
   },
 });
@@ -601,11 +623,69 @@ registry.registerPath({
     },
     404: {
       description: "Provision not found",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
     409: {
       description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ErrorResponseSchema } },
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/provision/by-cost/{cost_id}/confirm",
+  summary: "Confirm a provision looked up by cost_id (natural key)",
+  description:
+    "Confirms the most recent provision row for the given cost_id. " +
+    "Use this when callers (e.g. runs-service) hold the cost_id but not the billing-internal provision_id. " +
+    "Idempotent: re-confirming with the same amount returns 200.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ cost_id: z.string().uuid() }),
+    body: {
+      content: { "application/json": { schema: ConfirmByCostRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Provision confirmed",
+      content: { "application/json": { schema: ConfirmProvisionResponseSchema } },
+    },
+    404: {
+      description: "No provision found for cost_id",
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
+    },
+    409: {
+      description: "Existing provision is in incompatible state (cancelled, or confirmed at a different amount)",
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/provision/by-cost/{cost_id}/cancel",
+  summary: "Cancel a provision looked up by cost_id (natural key)",
+  description:
+    "Cancels the most recent provision row for the given cost_id. " +
+    "Idempotent: re-cancelling an already-cancelled cost_id returns 200.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ cost_id: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Provision cancelled",
+      content: { "application/json": { schema: CancelProvisionResponseSchema } },
+    },
+    404: {
+      description: "No provision found for cost_id",
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
+    },
+    409: {
+      description: "Existing provision is confirmed (cannot cancel)",
+      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
   },
 });

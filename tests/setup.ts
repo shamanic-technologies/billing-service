@@ -95,6 +95,8 @@ beforeAll(async () => {
   await sql`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "brand_ids" text[]`;
   await sql`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "stripe_payment_intent_id" text`;
   await sql`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "type" text DEFAULT 'debit' NOT NULL`;
+  await sql`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "cost_id" uuid`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_transactions_cost_id" ON "transactions" USING btree ("cost_id")`;
 
   // Renamed indexes (rename path) + create-if-missing (fresh DB path).
   await sql`ALTER INDEX IF EXISTS "idx_credit_ledger_org_id" RENAME TO "idx_transactions_org_id"`;

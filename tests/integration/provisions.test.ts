@@ -489,6 +489,197 @@ describe("Credit provision endpoints", () => {
     });
   });
 
+  describe("cost_id natural key — by-cost/:cost_id endpoints", () => {
+    const costIdA = "cccc0000-0000-0000-0000-00000000000a";
+    const costIdB = "cccc0000-0000-0000-0000-00000000000b";
+    const unknownCostId = "cccc0000-0000-0000-0000-0000ffffffff";
+
+    it("persists cost_id on provision row when provided", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "with cost_id", cost_id: costIdA });
+
+      expect(res.status).toBe(200);
+      expect(res.body.cost_id).toBe(costIdA);
+
+      const [row] = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.id, res.body.provision_id));
+      expect(row.costId).toBe(costIdA);
+    });
+
+    it("confirm by-cost/:cost_id flips status; second call same amount is idempotent", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "by-cost flow", cost_id: costIdA });
+      expect(provRes.status).toBe(200);
+
+      const first = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+      expect(first.status).toBe(200);
+      expect(first.body.status).toBe("confirmed");
+      expect(first.body.cost_id).toBe(costIdA);
+      expect(first.body.provision_id).toBe(provRes.body.provision_id);
+
+      const second = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+      expect(second.status).toBe(200);
+      expect(second.body.status).toBe("confirmed");
+      expect(second.body.adjustment_cents).toBe("0.0000000000");
+
+      const all = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.orgId, orgId));
+      expect(all).toHaveLength(1);
+      expect(all[0].status).toBe("confirmed");
+    });
+
+    it("returns 409 with structured body when re-confirming at a different amount", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "x", cost_id: costIdA });
+
+      const first = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 100 });
+      expect(first.status).toBe(200);
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      const second = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 150 });
+
+      expect(second.status).toBe(409);
+      expect(second.body.cost_id).toBe(costIdA);
+      expect(second.body.current_status).toBe("confirmed");
+      expect(second.body.current_amount_cents).toBe("100.0000000000");
+      expect(second.body.requested_amount_cents).toBe("150.0000000000");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[billing-service] provision confirm rejected",
+        expect.objectContaining({
+          cost_id: costIdA,
+          current_status: "confirmed",
+          current_amount_cents: "100.0000000000",
+          requested_amount_cents: "150.0000000000",
+        })
+      );
+      warnSpy.mockRestore();
+    });
+
+    it("returns 409 when confirming a cancelled cost_id", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "x", cost_id: costIdA });
+
+      const cancelRes = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+      expect(cancelRes.status).toBe(200);
+
+      const confirmRes = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+      expect(confirmRes.status).toBe(409);
+      expect(confirmRes.body.cost_id).toBe(costIdA);
+      expect(confirmRes.body.current_status).toBe("cancelled");
+    });
+
+    it("re-cancel of cancelled cost_id is idempotent (200)", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "x", cost_id: costIdA });
+
+      const first = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+      expect(first.status).toBe(200);
+      expect(first.body.refunded_cents).toBe("100.0000000000");
+
+      const second = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+      expect(second.status).toBe(200);
+      expect(second.body.refunded_cents).toBe("0.0000000000");
+      expect(second.body.cost_id).toBe(costIdA);
+    });
+
+    it("returns 404 with cost_id in body for unknown cost_id", async () => {
+      await insertTestAccount({ orgId });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/by-cost/${unknownCostId}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(404);
+      expect(res.body.cost_id).toBe(unknownCostId);
+      expect(res.body.provision_id).toBe(null);
+      expect(res.body.current_status).toBe(null);
+    });
+
+    it("amount-mismatch confirm carries cost_id onto replacement row; subsequent by-cost lookup hits the latest row", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "x", cost_id: costIdB });
+
+      const confirmRes = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdB}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 60 });
+      expect(confirmRes.status).toBe(200);
+      expect(confirmRes.body.adjustment_cents).toBe("40.0000000000");
+      expect(confirmRes.body.cost_id).toBe(costIdB);
+
+      // Replacement row carries cost_id; subsequent same-amount confirm idempotently finds it.
+      const reConfirm = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdB}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({ actual_amount_cents: 60 });
+      expect(reConfirm.status).toBe(200);
+      expect(reConfirm.body.provision_id).toBe(confirmRes.body.provision_id);
+      expect(reConfirm.body.provision_id).not.toBe(provRes.body.provision_id);
+
+      const rows = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.costId, costIdB));
+      expect(rows).toHaveLength(2);
+      expect(rows.find((r) => r.status === "cancelled")?.amountCents).toBe("100.0000000000");
+      expect(rows.find((r) => r.status === "confirmed")?.amountCents).toBe("60.0000000000");
+    });
+  });
+
   describe("No auto-reload on provision (reload only in authorize)", () => {
     it("does not auto-reload even when balance drops below threshold", async () => {
       await insertTestAccount({
