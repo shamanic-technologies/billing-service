@@ -378,9 +378,14 @@
       "ProvisionResponse": {
         "type": "object",
         "properties": {
-          "provision_id": {
+          "transaction_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "provision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DEPRECATED alias of transaction_id; will be removed after consumers migrate"
           },
           "cost_id": {
             "type": "string",
@@ -395,6 +400,7 @@
           }
         },
         "required": [
+          "transaction_id",
           "provision_id",
           "balance_cents",
           "depleted"
@@ -430,9 +436,14 @@
       "ConfirmProvisionResponse": {
         "type": "object",
         "properties": {
-          "provision_id": {
+          "transaction_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "provision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DEPRECATED alias of transaction_id; will be removed after consumers migrate"
           },
           "cost_id": {
             "type": "string",
@@ -460,6 +471,7 @@
           }
         },
         "required": [
+          "transaction_id",
           "provision_id",
           "status",
           "original_amount_cents",
@@ -474,10 +486,16 @@
           "error": {
             "type": "string"
           },
-          "provision_id": {
+          "transaction_id": {
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "provision_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "DEPRECATED alias of transaction_id; will be removed after consumers migrate"
           },
           "cost_id": {
             "type": "string",
@@ -503,6 +521,7 @@
         },
         "required": [
           "error",
+          "transaction_id",
           "provision_id",
           "run_id",
           "current_status",
@@ -527,9 +546,14 @@
       "CancelProvisionResponse": {
         "type": "object",
         "properties": {
-          "provision_id": {
+          "transaction_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "provision_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "DEPRECATED alias of transaction_id; will be removed after consumers migrate"
           },
           "cost_id": {
             "type": "string",
@@ -551,6 +575,7 @@
           }
         },
         "required": [
+          "transaction_id",
           "provision_id",
           "status",
           "refunded_cents",
