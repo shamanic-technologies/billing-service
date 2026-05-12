@@ -34,7 +34,7 @@ export async function fetchRunsExpectedTotals(
   if (!config) return null;
 
   const res = await fetch(
-    `${config.url}/v1/internal/runs-expected-totals?org_id=${encodeURIComponent(orgId)}`,
+    `${config.url}/internal/runs-expected-totals?org_id=${encodeURIComponent(orgId)}`,
     {
       headers: {
         "x-api-key": config.apiKey,
