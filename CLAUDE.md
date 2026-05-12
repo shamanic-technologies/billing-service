@@ -31,7 +31,11 @@ Canonical `transactions.source` values (post-#82/#83):
 
 By-cost lookup picks the **most recent** row by `created_at` (one cost_id can produce a `pending → cancelled` row plus a fresh `confirmed` replacement when the actual amount differs). Only one row per cost_id is non-terminal at a time. Replacement rows carry the same `cost_id` so subsequent calls still hit the active row.
 
-When confirm produces a replacement (amount mismatch), the `provision_id` field in the response points to the **new** confirmed row, not the cancelled original. By-id endpoints (`/provision/:id/{confirm,cancel}`) remain unchanged for back-compat.
+When confirm produces a replacement (amount mismatch), the `transaction_id` field in the response points to the **new** confirmed row, not the cancelled original. By-id endpoints (`/provision/:id/{confirm,cancel}`) remain unchanged for back-compat.
+
+## `transaction_id` canonical key, `provision_id` deprecated alias (post-#96)
+
+There is **one** id surfaced in billing responses: `transaction_id` (= `transactions.id`). Internal code uses `transactionId` / `transaction_id` consistently. The `provision_id` field is a deprecated alias kept in responses for back-compat during the cross-repo rename; it always equals `transaction_id`. Remove the alias once all consumers (runs-service primarily) migrate to read `transaction_id`. There is no separate "provision" object — every "provision" is a `transactions` row with `source='charge'`.
 
 ## Fractional cents
 

@@ -34,7 +34,7 @@ export function syncStripeCeilDelta(args: {
   // Note: do NOT pass `ledgerEntryId` as `idempotencyKey` here. Multiple distinct
   // Stripe operations (initial debit, provision adjustment, cancel refund) target the
   // same ledger row id with different params; reusing the key would trigger
-  // StripeIdempotencyError. Recovery via reconcile() Check 3 owns idempotency keying.
+  // StripeIdempotencyError. Recovery via reconcileBillingStripe() Check 3 owns idempotency keying.
   createBalanceTransaction(
     args.orgId,
     args.userId,

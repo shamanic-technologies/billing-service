@@ -16,6 +16,7 @@ import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
+import { fetchRunsExpectedTotals } from "../lib/runs-client.js";
 import { addCents, subCents, gte as gteCents, isDepleted, cmpCents } from "../lib/cents.js";
 
 const router = Router();
@@ -43,26 +44,35 @@ interface AccountRow {
   stripe_payment_method_id: string | null;
 }
 
-// Namespace key for advisory locks scoped to billing reconcile (any constant int4).
-const RECONCILE_LOCK_NAMESPACE = 0x42111331;
+// Namespace keys for advisory locks scoped to billing reconciles (constant int4 each).
+// Distinct namespaces per reconcile flavor so a Stripe reconcile lock does not
+// block a Runs reconcile (or vice versa) within the same /authorize call.
+const RECONCILE_BILLING_STRIPE_LOCK_NAMESPACE = 0x42111331;
+const RECONCILE_BILLING_RUNS_LOCK_NAMESPACE = 0x42111332;
 
 /**
- * Reconcile the billing account against the ledger and Stripe.
- * Runs 3 self-healing checks before authorize checks sufficiency.
+ * Reconcile the billing account against its own ledger and Stripe.
+ * Runs 3 self-healing checks before authorize checks sufficiency:
+ *   1. cache (billing_accounts.credit_balance_cents) vs ledger sum
+ *   2. Stripe payment intents missing from the ledger (recover reload rows)
+ *   3. Ledger rows confirmed but never synced to Stripe (push to Stripe)
+ *
+ * Scope: intra-billing + Stripe only. Does NOT reconcile against runs-service —
+ * that is `reconcileBillingRuns`.
  *
  * Wrapped in a transaction with `pg_try_advisory_xact_lock` keyed on orgId — concurrent
  * /authorize calls for the same org skip reconcile (the in-flight one will fix any drift).
  * Without the lock, N parallel reconcilers each detect the same drift, insert duplicate
  * ledger rows for the same Stripe PI, and post duplicate balance txns.
  */
-async function reconcile(
+async function reconcileBillingStripe(
   orgId: string,
   userId: string,
   wfHeaders: Record<string, string>
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const lockRows = (await tx.execute(
-      rawSql`SELECT pg_try_advisory_xact_lock(${RECONCILE_LOCK_NAMESPACE}::int, hashtext(${orgId})) AS locked`
+      rawSql`SELECT pg_try_advisory_xact_lock(${RECONCILE_BILLING_STRIPE_LOCK_NAMESPACE}::int, hashtext(${orgId})) AS locked`
     )) as unknown as { locked: boolean }[];
     if (!lockRows[0]?.locked) {
       return;
@@ -193,6 +203,210 @@ async function reconcile(
       }
     }
   });
+}
+
+/**
+ * Reconcile the billing ledger against runs-service recorded actuals.
+ *
+ * Detects per-run drift between:
+ *   - billing-side: sum of confirmed `charge` transactions per `run_id`
+ *   - runs-side:    sum of `runs_costs.total_cost_in_usd_cents` for platform actuals
+ *
+ * On gap > 0 (under-billed): inserts a `(debit, charge, confirmed, gap)` row and
+ * decrements the balance — catching up revenue that should have been billed.
+ * On gap < 0 (over-billed): inserts a `(credit, refund, confirmed, |gap|)` row
+ * and increments the balance — refunding the over-charge.
+ *
+ * Exact, no threshold: even a sub-cent gap is corrected. Idempotent: the newly
+ * inserted row contributes to `billed` on the next call so subsequent reconciles
+ * compute gap=0 and noop. No state column required.
+ *
+ * Global gate: org-level totals are compared first (one SUM per side); the
+ * per-run sweep only runs when totals diverge. Trade-off: per-run drifts that
+ * exactly cancel at the org level go uncorrected (rare — historical drift is
+ * one-sided under-billing). The org balance remains correct in that case; only
+ * the per-row ledger labels are off.
+ *
+ * Cross-service call: a single HTTP GET to runs-service. Performed BEFORE the
+ * DB transaction opens so we never hold a billing-side row lock across an
+ * external network round-trip.
+ */
+async function reconcileBillingRuns(
+  orgId: string,
+  userId: string,
+  runId: string,
+  wfHeaders: Record<string, string>
+): Promise<void> {
+  let expectedFromRuns: Awaited<ReturnType<typeof fetchRunsExpectedTotals>>;
+  try {
+    expectedFromRuns = await fetchRunsExpectedTotals(orgId, wfHeaders);
+  } catch (err) {
+    // Best-effort: do not break /authorize on a transient runs-service outage.
+    // Future /authorize will retry; missed reconciles converge on the next run.
+    console.error(
+      `[billing-service] reconcileBillingRuns: runs-service fetch failed for org ${orgId}:`,
+      err
+    );
+    return;
+  }
+  if (!expectedFromRuns) return; // runs-service not configured (dev / test)
+
+  const result = await db.transaction(async (tx) => {
+    const lockRows = (await tx.execute(
+      rawSql`SELECT pg_try_advisory_xact_lock(${RECONCILE_BILLING_RUNS_LOCK_NAMESPACE}::int, hashtext(${orgId})) AS locked`
+    )) as unknown as { locked: boolean }[];
+    if (!lockRows[0]?.locked) return null;
+
+    const accountRows = (await tx.execute(
+      rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
+    )) as unknown as AccountRow[];
+    const account = accountRows[0];
+    if (!account) return null;
+
+    // Global gate: org-level confirmed charges vs runs-side expected.
+    const billedRows = (await tx.execute(
+      rawSql`SELECT COALESCE(SUM(amount_cents), 0)::numeric(16,10)::text AS total_billed
+             FROM transactions
+             WHERE org_id = ${orgId}
+               AND source = 'charge'
+               AND status = 'confirmed'`
+    )) as unknown as { total_billed: string }[];
+    const totalBilled = billedRows[0]?.total_billed ?? "0";
+
+    if (cmpCents(expectedFromRuns.total_expected_cents, totalBilled) === 0) {
+      return null; // no org-level drift — skip per-run sweep
+    }
+
+    // Per-run sweep.
+    // Pre-fetch per-run confirmed billed sums in a SINGLE query so a 200k-run
+    // org doesn't trigger 200k round-trips inside the transaction (which would
+    // exceed Postgres statement_timeout and abort the whole reconcile).
+    const billedRowsByRun = (await tx.execute(
+      rawSql`SELECT run_id::text AS run_id,
+                    COALESCE(SUM(amount_cents), 0)::numeric(16,10)::text AS billed
+             FROM transactions
+             WHERE org_id = ${orgId}
+               AND source = 'charge'
+               AND status = 'confirmed'
+               AND run_id IS NOT NULL
+             GROUP BY run_id`
+    )) as unknown as { run_id: string; billed: string }[];
+    const billedByRun = new Map<string, string>();
+    for (const row of billedRowsByRun) {
+      billedByRun.set(row.run_id, row.billed);
+    }
+
+    const collected: {
+      entryId: string;
+      runId: string;
+      oldBalance: string;
+      newBalance: string;
+      description: string;
+      action: "debit" | "refund";
+      gap: string;
+    }[] = [];
+    let currentBalance = account.credit_balance_cents;
+
+    for (const { run_id: targetRunId, expected_cents } of expectedFromRuns.runs) {
+      const billed = billedByRun.get(targetRunId) ?? "0";
+
+      const gap = subCents(expected_cents, billed);
+      const cmp = cmpCents(gap, "0");
+      if (cmp === 0) continue;
+
+      const isUnderBilled = cmp > 0;
+      const absGap = isUnderBilled ? gap : subCents("0", gap);
+      const oldBalance = currentBalance;
+      const newBalance = isUnderBilled
+        ? subCents(oldBalance, absGap)
+        : addCents(oldBalance, absGap);
+      const description = isUnderBilled
+        ? `Reconcile run ${targetRunId}: under-billed by ${absGap}`
+        : `Reconcile run ${targetRunId}: over-billed by ${absGap}`;
+
+      await tx
+        .update(billingAccounts)
+        .set({ creditBalanceCents: newBalance, updatedAt: new Date() })
+        .where(eq(billingAccounts.orgId, orgId));
+
+      const [entry] = await tx
+        .insert(transactions)
+        .values({
+          orgId,
+          userId,
+          runId: targetRunId,
+          type: isUnderBilled ? "debit" : "credit",
+          amountCents: absGap,
+          status: "confirmed",
+          source: isUnderBilled ? "charge" : "refund",
+          description,
+        })
+        .returning();
+
+      currentBalance = newBalance;
+      collected.push({
+        entryId: entry.id,
+        runId: targetRunId,
+        oldBalance,
+        newBalance,
+        description,
+        action: isUnderBilled ? "debit" : "refund",
+        gap,
+      });
+
+      console.warn(
+        `[billing-service] reconcileBillingRuns gap ${isUnderBilled ? ">" : "<"} 0`,
+        {
+          org_id: orgId,
+          run_id: targetRunId,
+          gap_cents: gap,
+          billed_cents: billed,
+          expected_cents,
+        }
+      );
+    }
+
+    return { customerId: account.stripe_customer_id, collected };
+  });
+
+  if (!result || result.collected.length === 0) return;
+
+  // Post-commit: Stripe ceil-delta sync + trace event for each correction.
+  for (const { entryId, oldBalance, newBalance, description } of result.collected) {
+    if (result.customerId) {
+      syncStripeCeilDelta({
+        orgId,
+        userId,
+        customerId: result.customerId,
+        oldBalance,
+        newBalance,
+        description,
+        ledgerEntryId: entryId,
+        wfHeaders,
+      });
+    }
+  }
+
+  traceEvent(
+    runId,
+    {
+      service: "billing-service",
+      event: "billing.reconcile-run.applied",
+      data: {
+        fixed_count: result.collected.length,
+        entries: result.collected.map((c) => ({
+          run_id: c.runId,
+          gap_cents: c.gap,
+          action: c.action,
+        })),
+      },
+    },
+    {
+      "x-org-id": orgId,
+      "x-user-id": userId,
+      ...wfHeaders,
+    }
+  );
 }
 
 // POST /v1/credits/deduct — deduct credits from org balance (allows negative balances)
@@ -348,10 +562,13 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     // Ensure account exists (auto-create with $2 trial credit if new)
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
-    // Run reconciliation checks before checking sufficiency.
-    // reconcile() acquires a per-org advisory lock; concurrent calls for the same org
+    // Run reconciliation checks before checking sufficiency. Each acquires its
+    // own per-org advisory lock; concurrent /authorize calls for the same org
     // skip and rely on the in-flight reconcile to fix any drift.
-    await reconcile(orgId, userId, wfHeaders);
+    // Order: Stripe-side first (cheap-when-clean, no external dependency cost
+    // when ledger is healthy) → runs-side second (depends on runs-service HTTP).
+    await reconcileBillingStripe(orgId, userId, wfHeaders);
+    await reconcileBillingRuns(orgId, userId, runId, wfHeaders);
 
     const result = await db.transaction(async (tx) => {
       const rows = await tx.execute(
