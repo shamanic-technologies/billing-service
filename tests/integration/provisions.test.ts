@@ -680,6 +680,108 @@ describe("Credit provision endpoints", () => {
     });
   });
 
+  describe("transaction_id / provision_id alias (back-compat during rename)", () => {
+    const costIdA = "dddd0000-0000-0000-0000-00000000000a";
+
+    it("provision response exposes both transaction_id and provision_id with equal value", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const res = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "alias test" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.transaction_id).toBeDefined();
+      expect(res.body.provision_id).toBe(res.body.transaction_id);
+    });
+
+    it("confirm (by-id) response exposes both transaction_id and provision_id", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "alias test" });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.transaction_id}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.transaction_id).toBeDefined();
+      expect(res.body.provision_id).toBe(res.body.transaction_id);
+    });
+
+    it("cancel (by-id) response exposes both transaction_id and provision_id", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      const provRes = await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "alias test" });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/${provRes.body.transaction_id}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.transaction_id).toBeDefined();
+      expect(res.body.provision_id).toBe(res.body.transaction_id);
+    });
+
+    it("confirm by-cost response exposes both transaction_id and provision_id", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "alias test", cost_id: costIdA });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.transaction_id).toBeDefined();
+      expect(res.body.provision_id).toBe(res.body.transaction_id);
+    });
+
+    it("cancel by-cost response exposes both transaction_id and provision_id", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 500 });
+
+      await request(app)
+        .post("/v1/credits/provision")
+        .set(getAuthHeaders(orgId))
+        .send({ amount_cents: 100, description: "alias test", cost_id: costIdA });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/by-cost/${costIdA}/cancel`)
+        .set(getAuthHeaders(orgId))
+        .send();
+
+      expect(res.status).toBe(200);
+      expect(res.body.transaction_id).toBeDefined();
+      expect(res.body.provision_id).toBe(res.body.transaction_id);
+    });
+
+    it("conflict response (404 unknown cost_id) exposes both transaction_id and provision_id (null)", async () => {
+      await insertTestAccount({ orgId });
+
+      const res = await request(app)
+        .post(`/v1/credits/provision/by-cost/00000000-0000-0000-0000-000000000099/confirm`)
+        .set(getAuthHeaders(orgId))
+        .send({});
+
+      expect(res.status).toBe(404);
+      expect(res.body.transaction_id).toBe(null);
+      expect(res.body.provision_id).toBe(null);
+    });
+  });
+
   describe("No auto-reload on provision (reload only in authorize)", () => {
     it("does not auto-reload even when balance drops below threshold", async () => {
       await insertTestAccount({
