@@ -278,6 +278,24 @@ async function reconcileBillingRuns(
     }
 
     // Per-run sweep.
+    // Pre-fetch per-run confirmed billed sums in a SINGLE query so a 200k-run
+    // org doesn't trigger 200k round-trips inside the transaction (which would
+    // exceed Postgres statement_timeout and abort the whole reconcile).
+    const billedRowsByRun = (await tx.execute(
+      rawSql`SELECT run_id::text AS run_id,
+                    COALESCE(SUM(amount_cents), 0)::numeric(16,10)::text AS billed
+             FROM transactions
+             WHERE org_id = ${orgId}
+               AND source = 'charge'
+               AND status = 'confirmed'
+               AND run_id IS NOT NULL
+             GROUP BY run_id`
+    )) as unknown as { run_id: string; billed: string }[];
+    const billedByRun = new Map<string, string>();
+    for (const row of billedRowsByRun) {
+      billedByRun.set(row.run_id, row.billed);
+    }
+
     const collected: {
       entryId: string;
       runId: string;
@@ -290,15 +308,7 @@ async function reconcileBillingRuns(
     let currentBalance = account.credit_balance_cents;
 
     for (const { run_id: targetRunId, expected_cents } of expectedFromRuns.runs) {
-      const sumRows = (await tx.execute(
-        rawSql`SELECT COALESCE(SUM(amount_cents), 0)::numeric(16,10)::text AS billed
-               FROM transactions
-               WHERE run_id = ${targetRunId}
-                 AND org_id = ${orgId}
-                 AND source = 'charge'
-                 AND status = 'confirmed'`
-      )) as unknown as { billed: string }[];
-      const billed = sumRows[0]?.billed ?? "0";
+      const billed = billedByRun.get(targetRunId) ?? "0";
 
       const gap = subCents(expected_cents, billed);
       const cmp = cmpCents(gap, "0");
