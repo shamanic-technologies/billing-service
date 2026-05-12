@@ -39,14 +39,14 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 async function lookupProvisionById(
   tx: Tx,
-  provisionId: string,
+  transactionId: string,
   orgId: string
 ): Promise<ProvisionRow | undefined> {
   const rows = await tx.execute(
     rawSql`SELECT id, org_id, cost_id, amount_cents, status, description,
                   campaign_id, brand_ids, workflow_slug, feature_slug
            FROM transactions
-           WHERE id = ${provisionId} AND org_id = ${orgId}
+           WHERE id = ${transactionId} AND org_id = ${orgId}
            FOR UPDATE`
   );
   return (rows as unknown as ProvisionRow[])[0];
@@ -128,13 +128,13 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         .returning();
 
       return {
-        provision_id: provision.id,
+        transaction_id: provision.id,
         cost_id: provision.costId ?? null,
         balance_cents: newBalance,
         depleted: isDepleted(newBalance),
         _oldBalance: oldBalance,
         _customerId: account.stripe_customer_id,
-        _provisionLedgerEntryId: provision.id,
+        _ledgerEntryId: provision.id,
       };
     });
 
@@ -143,7 +143,7 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    if (result._customerId && result._provisionLedgerEntryId) {
+    if (result._customerId && result._ledgerEntryId) {
       syncStripeCeilDelta({
         orgId,
         userId,
@@ -151,19 +151,20 @@ router.post("/v1/credits/provision", requireOrgHeaders, async (req, res) => {
         oldBalance: result._oldBalance,
         newBalance: result.balance_cents,
         description,
-        ledgerEntryId: result._provisionLedgerEntryId,
+        ledgerEntryId: result._ledgerEntryId,
         wfHeaders: fwdHeaders,
       });
     }
 
-    const { _customerId: _c, _provisionLedgerEntryId: _pl, _oldBalance: _ob, ...response } = result as Record<string, unknown>;
+    const { _customerId: _c, _ledgerEntryId: _pl, _oldBalance: _ob, ...rest } = result as Record<string, unknown>;
+    const response = { ...rest, provision_id: rest.transaction_id };
 
     traceEvent({
       runId,
       orgId,
       userId,
       event: "billing.provision.created",
-      detail: { provision_id: result.provision_id, cost_id: result.cost_id, amount_cents, balance_cents: result.balance_cents },
+      detail: { transaction_id: result.transaction_id, cost_id: result.cost_id, amount_cents, balance_cents: result.balance_cents },
       workflowHeaders: fwdHeaders,
     });
 
@@ -193,7 +194,7 @@ interface ConfirmConflict {
 }
 
 interface ConfirmSuccess {
-  provision_id: string;
+  transaction_id: string;
   cost_id: string | null;
   status: "confirmed";
   original_amount_cents: string;
@@ -243,7 +244,7 @@ async function performConfirmInTx(
       .limit(1);
 
     return {
-      provision_id: provision.id,
+      transaction_id: provision.id,
       cost_id: provision.cost_id,
       status: "confirmed",
       original_amount_cents: provision.amount_cents,
@@ -281,7 +282,7 @@ async function performConfirmInTx(
       .limit(1);
 
     return {
-      provision_id: provision.id,
+      transaction_id: provision.id,
       cost_id: provision.cost_id,
       status: "confirmed",
       original_amount_cents: provision.amount_cents,
@@ -345,10 +346,10 @@ async function performConfirmInTx(
     .where(eq(billingAccounts.orgId, ctx.orgId))
     .limit(1);
 
-  // provision_id in the response points to the active confirmed row,
+  // transaction_id in the response points to the active confirmed row,
   // not the cancelled original — so by-cost callers can re-confirm idempotently.
   return {
-    provision_id: newCharge.id,
+    transaction_id: newCharge.id,
     cost_id: provision.cost_id,
     status: "confirmed",
     original_amount_cents: provision.amount_cents,
@@ -365,8 +366,8 @@ async function performConfirmInTx(
 interface ConfirmHandlerArgs {
   req: Request;
   res: Response;
-  // identifier echoed back in error/log payload — provision_id when the path-id route is used; null when looking up by cost_id
-  reqProvisionId: string | null;
+  // identifier echoed back in error/log payload — transaction_id when the path-id route is used; null when looking up by cost_id
+  reqTransactionId: string | null;
   reqCostId: string | null;
   lookup: (tx: Tx, orgId: string) => Promise<ProvisionRow | undefined>;
 }
@@ -374,7 +375,7 @@ interface ConfirmHandlerArgs {
 async function handleConfirm({
   req,
   res,
-  reqProvisionId,
+  reqTransactionId,
   reqCostId,
   lookup,
 }: ConfirmHandlerArgs): Promise<void> {
@@ -400,7 +401,7 @@ async function handleConfirm({
     if ("error" in result && result.error) {
       const conflict = result as ConfirmConflict;
       console.warn("[billing-service] provision confirm rejected", {
-        provision_id: reqProvisionId,
+        transaction_id: reqTransactionId,
         cost_id: reqCostId,
         run_id: runId,
         org_id: orgId,
@@ -413,7 +414,8 @@ async function handleConfirm({
       });
       res.status(conflict.status).json({
         error: conflict.error,
-        provision_id: reqProvisionId,
+        transaction_id: reqTransactionId,
+        provision_id: reqTransactionId,
         cost_id: reqCostId,
         run_id: runId,
         current_status: conflict.current_status,
@@ -435,33 +437,34 @@ async function handleConfirm({
         newBalance: success.balance_cents as string,
         description:
           cmpCents(success.original_amount_cents, success.final_amount_cents) !== 0
-            ? `Confirmed charge (replacing provision ${success.provision_id})`
-            : `Provision ${success.provision_id} confirmed`,
+            ? `Confirmed charge (replacing transaction ${success.transaction_id})`
+            : `Transaction ${success.transaction_id} confirmed`,
         ledgerEntryId: success._newChargeId,
         wfHeaders,
       });
     }
 
     const adjustment = success._adjustmentCents ?? "0";
-    const { _customerId, _adjustmentCents, _newChargeId, _oldBalance, ...response } = success;
+    const { _customerId, _adjustmentCents, _newChargeId, _oldBalance, ...rest } = success;
     void _customerId;
     void _adjustmentCents;
     void _newChargeId;
     void _oldBalance;
+    const response = { ...rest, provision_id: rest.transaction_id };
 
     traceEvent({
       runId,
       orgId,
       userId,
       event: "billing.provision.confirmed",
-      detail: { provision_id: success.provision_id, cost_id: success.cost_id, adjustment_cents: adjustment },
+      detail: { transaction_id: success.transaction_id, cost_id: success.cost_id, adjustment_cents: adjustment },
       workflowHeaders: wfHeaders,
     });
 
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error confirming provision", {
-      provision_id: reqProvisionId,
+      transaction_id: reqTransactionId,
       cost_id: reqCostId,
       run_id: req.headers["x-run-id"],
       org_id: req.headers["x-org-id"],
@@ -482,7 +485,7 @@ interface CancelConflict {
 }
 
 interface CancelSuccess {
-  provision_id: string;
+  transaction_id: string;
   cost_id: string | null;
   status: "cancelled";
   refunded_cents: string;
@@ -516,7 +519,7 @@ async function performCancelInTx(
       .limit(1);
 
     return {
-      provision_id: provision.id,
+      transaction_id: provision.id,
       cost_id: provision.cost_id,
       status: "cancelled",
       refunded_cents: "0.0000000000",
@@ -566,7 +569,7 @@ async function performCancelInTx(
     .limit(1);
 
   return {
-    provision_id: provision.id,
+    transaction_id: provision.id,
     cost_id: provision.cost_id,
     status: "cancelled",
     refunded_cents: provision.amount_cents,
@@ -580,7 +583,7 @@ async function performCancelInTx(
 interface CancelHandlerArgs {
   req: Request;
   res: Response;
-  reqProvisionId: string | null;
+  reqTransactionId: string | null;
   reqCostId: string | null;
   lookup: (tx: Tx, orgId: string) => Promise<ProvisionRow | undefined>;
 }
@@ -588,7 +591,7 @@ interface CancelHandlerArgs {
 async function handleCancel({
   req,
   res,
-  reqProvisionId,
+  reqTransactionId,
   reqCostId,
   lookup,
 }: CancelHandlerArgs): Promise<void> {
@@ -606,7 +609,7 @@ async function handleCancel({
     if ("error" in result && result.error) {
       const conflict = result as CancelConflict;
       console.warn("[billing-service] provision cancel rejected", {
-        provision_id: reqProvisionId,
+        transaction_id: reqTransactionId,
         cost_id: reqCostId,
         run_id: runId,
         org_id: orgId,
@@ -618,7 +621,8 @@ async function handleCancel({
       });
       res.status(conflict.status).json({
         error: conflict.error,
-        provision_id: reqProvisionId,
+        transaction_id: reqTransactionId,
+        provision_id: reqTransactionId,
         cost_id: reqCostId,
         run_id: runId,
         current_status: conflict.current_status,
@@ -642,31 +646,32 @@ async function handleCancel({
         customerId: success._customerId,
         oldBalance: success._oldBalance,
         newBalance: success.balance_cents as string,
-        description: `Provision ${success.provision_id} cancel refund`,
-        ledgerEntryId: success.provision_id,
+        description: `Transaction ${success.transaction_id} cancel refund`,
+        ledgerEntryId: success.transaction_id,
         wfHeaders,
       });
     }
 
     const refundedCents = success._refundedCents ?? "0";
-    const { _customerId, _refundedCents, _oldBalance, ...response } = success;
+    const { _customerId, _refundedCents, _oldBalance, ...rest } = success;
     void _customerId;
     void _refundedCents;
     void _oldBalance;
+    const response = { ...rest, provision_id: rest.transaction_id };
 
     traceEvent({
       runId,
       orgId,
       userId,
       event: "billing.provision.cancelled",
-      detail: { provision_id: success.provision_id, cost_id: success.cost_id, refunded_cents: refundedCents },
+      detail: { transaction_id: success.transaction_id, cost_id: success.cost_id, refunded_cents: refundedCents },
       workflowHeaders: wfHeaders,
     });
 
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error cancelling provision", {
-      provision_id: reqProvisionId,
+      transaction_id: reqTransactionId,
       cost_id: reqCostId,
       run_id: req.headers["x-run-id"],
       org_id: req.headers["x-org-id"],
@@ -679,27 +684,27 @@ async function handleCancel({
 
 // --- Routes ---
 
-// POST /v1/credits/provision/:id/confirm — confirm provision by billing-internal id
+// POST /v1/credits/provision/:id/confirm — confirm provision by billing-internal transaction id
 router.post("/v1/credits/provision/:id/confirm", requireOrgHeaders, async (req, res) => {
-  const provisionId = req.params.id;
+  const transactionId = req.params.id;
   await handleConfirm({
     req,
     res,
-    reqProvisionId: provisionId,
+    reqTransactionId: transactionId,
     reqCostId: null,
-    lookup: (tx, orgId) => lookupProvisionById(tx, provisionId, orgId),
+    lookup: (tx, orgId) => lookupProvisionById(tx, transactionId, orgId),
   });
 });
 
-// POST /v1/credits/provision/:id/cancel — cancel provision by billing-internal id
+// POST /v1/credits/provision/:id/cancel — cancel provision by billing-internal transaction id
 router.post("/v1/credits/provision/:id/cancel", requireOrgHeaders, async (req, res) => {
-  const provisionId = req.params.id;
+  const transactionId = req.params.id;
   await handleCancel({
     req,
     res,
-    reqProvisionId: provisionId,
+    reqTransactionId: transactionId,
     reqCostId: null,
-    lookup: (tx, orgId) => lookupProvisionById(tx, provisionId, orgId),
+    lookup: (tx, orgId) => lookupProvisionById(tx, transactionId, orgId),
   });
 });
 
@@ -709,7 +714,7 @@ router.post("/v1/credits/provision/by-cost/:cost_id/confirm", requireOrgHeaders,
   await handleConfirm({
     req,
     res,
-    reqProvisionId: null,
+    reqTransactionId: null,
     reqCostId: costId,
     lookup: (tx, orgId) => lookupProvisionByCostId(tx, costId, orgId),
   });
@@ -721,7 +726,7 @@ router.post("/v1/credits/provision/by-cost/:cost_id/cancel", requireOrgHeaders, 
   await handleCancel({
     req,
     res,
-    reqProvisionId: null,
+    reqTransactionId: null,
     reqCostId: costId,
     lookup: (tx, orgId) => lookupProvisionByCostId(tx, costId, orgId),
   });

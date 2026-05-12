@@ -17,7 +17,8 @@ export const ErrorResponseSchema = z
 export const ProvisionConflictResponseSchema = z
   .object({
     error: z.string(),
-    provision_id: z.string().uuid().nullable(),
+    transaction_id: z.string().uuid().nullable(),
+    provision_id: z.string().uuid().nullable().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
     cost_id: z.string().uuid().nullable().optional(),
     run_id: z.string().nullable(),
     current_status: z.string().nullable(),
@@ -96,7 +97,8 @@ export const ProvisionRequestSchema = z
 
 export const ProvisionResponseSchema = z
   .object({
-    provision_id: z.string().uuid(),
+    transaction_id: z.string().uuid(),
+    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
     cost_id: z.string().uuid().nullable().optional(),
     balance_cents: CentsStringSchema,
     depleted: z.boolean(),
@@ -111,7 +113,8 @@ export const ConfirmProvisionRequestSchema = z
 
 export const ConfirmProvisionResponseSchema = z
   .object({
-    provision_id: z.string().uuid(),
+    transaction_id: z.string().uuid(),
+    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
     cost_id: z.string().uuid().nullable().optional(),
     status: z.literal("confirmed"),
     original_amount_cents: CentsStringSchema,
@@ -123,7 +126,8 @@ export const ConfirmProvisionResponseSchema = z
 
 export const CancelProvisionResponseSchema = z
   .object({
-    provision_id: z.string().uuid(),
+    transaction_id: z.string().uuid(),
+    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
     cost_id: z.string().uuid().nullable().optional(),
     status: z.literal("cancelled"),
     refunded_cents: CentsStringSchema,
