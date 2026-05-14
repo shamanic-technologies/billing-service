@@ -47,16 +47,7 @@ describe("Promo endpoints", () => {
         balance_cents: "1000.0000000000",
       });
 
-      // Stripe balance transaction should be fired
-      expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-        orgId,
-        expect.any(String),
-        "cus_promo",
-        -800,
-        "Promo credit: qr10 ($8.00)",
-        undefined,
-        {}
-      );
+      expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
     });
 
     it("auto-creates billing account if org has none", async () => {

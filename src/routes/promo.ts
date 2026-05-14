@@ -13,7 +13,6 @@ import {
 } from "../middleware/auth.js";
 import { RedeemPromoRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { syncStripeCeilDelta } from "../lib/ledger.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
@@ -88,7 +87,7 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
     }
 
     // Ensure billing account exists
-    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
+    await findOrCreateAccount(orgId, userId, wfHeaders);
 
     // Credit the promo amount inside a transaction
     const result = await db.transaction(async (tx) => {
@@ -125,20 +124,6 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
 
       return { updated, ledgerEntryId: ledgerEntry.id, oldBalance };
     });
-
-    // Fire-and-forget Stripe balance sync for promo credit
-    if (account.stripeCustomerId) {
-      syncStripeCeilDelta({
-        orgId,
-        userId,
-        customerId: account.stripeCustomerId,
-        oldBalance: result.oldBalance,
-        newBalance: result.updated.creditBalanceCents,
-        description: `Promo credit: ${code} ($${(promo.amountCents / 100).toFixed(2)})`,
-        ledgerEntryId: result.ledgerEntryId,
-        wfHeaders,
-      });
-    }
 
     traceEvent(runId, { service: "billing-service", event: "promo.redeem.done", data: { code, amount_cents: promo.amountCents, balance_cents: result.updated.creditBalanceCents } }, req.headers);
 

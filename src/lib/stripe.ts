@@ -125,54 +125,6 @@ export async function getCustomer(
   );
 }
 
-// --- Customer Balance ---
-
-/**
- * Stripe balance semantics:
- * - Negative balance = customer has credit (money available)
- * - Positive balance = customer owes money
- *
- * We use positive `amountCents` for deductions (increases balance towards positive)
- * and negative `amountCents` for credits (decreases balance towards negative).
- */
-export async function createBalanceTransaction(
-  orgId: string,
-  userId: string,
-  stripeCustomerId: string,
-  amountCents: number,
-  description: string,
-  metadata?: Record<string, string>,
-  workflowHeaders?: Record<string, string>,
-  idempotencyKey?: string
-): Promise<Stripe.CustomerBalanceTransaction> {
-  return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
-    stripe.customers.createBalanceTransaction(
-      stripeCustomerId,
-      {
-        amount: amountCents,
-        currency: "usd",
-        description,
-        metadata,
-      },
-      idempotencyKey ? { idempotencyKey } : undefined
-    )
-  );
-}
-
-export async function listBalanceTransactions(
-  orgId: string,
-  userId: string,
-  stripeCustomerId: string,
-  limit = 50,
-  workflowHeaders?: Record<string, string>
-): Promise<Stripe.ApiList<Stripe.CustomerBalanceTransaction>> {
-  return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
-    stripe.customers.listBalanceTransactions(stripeCustomerId, {
-      limit,
-    })
-  );
-}
-
 // --- Checkout ---
 
 export async function createCheckoutSession(
@@ -276,22 +228,6 @@ export async function retrievePaymentIntent(
   const identity: IdentityContext = { orgId: "system", userId: "system" };
   return withRetry(identity, (stripe) =>
     stripe.paymentIntents.retrieve(paymentIntentId)
-  );
-}
-
-// --- PaymentIntents list (for reconciliation) ---
-
-export async function listPaymentIntents(
-  orgId: string,
-  userId: string,
-  stripeCustomerId: string,
-  workflowHeaders?: Record<string, string>
-): Promise<Stripe.ApiList<Stripe.PaymentIntent>> {
-  return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
-    stripe.paymentIntents.list({
-      customer: stripeCustomerId,
-      limit: 100,
-    })
   );
 }
 
