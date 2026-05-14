@@ -27,12 +27,13 @@ describe("GET /public/stats/billing", () => {
     expect(res.body).toEqual({
       totalAccounts: 0,
       accountsWithPaymentMethod: 0,
-      totalCreditBalanceCents: "0.0000000000",
+      totalGrantsCents: "0.0000000000",
       totalCreditedCents: "0.0000000000",
-      totalConsumedCents: "0.0000000000",
       monthlyGrowth: [],
       weeklyGrowth: [],
     });
+    expect(res.body).not.toHaveProperty("totalConsumedCents");
+    expect(res.body).not.toHaveProperty("totalCreditBalanceCents");
   });
 
   it("does not require authentication", async () => {
@@ -72,24 +73,6 @@ describe("GET /public/stats/billing", () => {
         description: "reload",
       },
       {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "confirmed",
-        amountCents: 2000,
-        source: "charge",
-        description: "usage",
-      },
-      {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "pending",
-        amountCents: 9999,
-        source: "charge",
-        description: "pending charge — included in consumed",
-      },
-      {
         orgId: orgB,
         userId,
         type: "credit",
@@ -105,12 +88,12 @@ describe("GET /public/stats/billing", () => {
     expect(res.status).toBe(200);
     expect(res.body.totalAccounts).toBe(2);
     expect(res.body.accountsWithPaymentMethod).toBe(1);
-    expect(res.body.totalCreditBalanceCents).toBe("8000.0000000000");
+    expect(res.body.totalGrantsCents).toBe("8000.0000000000");
     expect(res.body.totalCreditedCents).toBe("15000.0000000000");
-    expect(res.body.totalConsumedCents).toBe("11999.0000000000"); // 2000 confirmed + 9999 pending
+    expect(res.body).not.toHaveProperty("totalConsumedCents");
   });
 
-  it("returns monthly and weekly growth with credited, consumed, and revenue", async () => {
+  it("returns monthly and weekly growth with credited and revenue", async () => {
     await insertTestAccount({ orgId: orgA, creditBalanceCents: 1000 });
 
     await db.insert(transactions).values([
@@ -132,15 +115,6 @@ describe("GET /public/stats/billing", () => {
         source: "welcome",
         description: "welcome — not revenue",
       },
-      {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "confirmed",
-        amountCents: 300,
-        source: "charge",
-        description: "usage",
-      },
     ]);
 
     const res = await request(app).get("/public/stats/billing");
@@ -158,25 +132,20 @@ describe("GET /public/stats/billing", () => {
       (sum: number, r: { credited_cents: string }) => sum + parseFloat(r.credited_cents),
       0
     );
-    const totalMonthlyConsumed = res.body.monthlyGrowth.reduce(
-      (sum: number, r: { consumed_cents: string }) => sum + parseFloat(r.consumed_cents),
-      0
-    );
     const totalMonthlyRevenue = res.body.monthlyGrowth.reduce(
       (sum: number, r: { revenue_cents: string }) => sum + parseFloat(r.revenue_cents),
       0
     );
 
     expect(totalMonthlyCredited).toBe(5200); // 5000 reload + 200 welcome
-    expect(totalMonthlyConsumed).toBe(300);
     expect(totalMonthlyRevenue).toBe(5000); // only reload is revenue
 
     // Each row should have the expected shape
     for (const row of res.body.monthlyGrowth) {
       expect(row).toHaveProperty("period");
       expect(row).toHaveProperty("credited_cents");
-      expect(row).toHaveProperty("consumed_cents");
       expect(row).toHaveProperty("revenue_cents");
+      expect(row).not.toHaveProperty("consumed_cents");
     }
   });
 
@@ -232,41 +201,4 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.totalCreditedCents).toBe("1250.0000000000"); // 1000 + 200 + 50
   });
 
-  it("totalConsumedCents excludes cancelled charges", async () => {
-    await insertTestAccount({ orgId: orgA, creditBalanceCents: 1000 });
-
-    await db.insert(transactions).values([
-      {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "confirmed",
-        amountCents: 100,
-        source: "charge",
-        description: "confirmed usage",
-      },
-      {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "pending",
-        amountCents: 50,
-        source: "charge",
-        description: "active hold",
-      },
-      {
-        orgId: orgA,
-        userId,
-        type: "debit",
-        status: "cancelled",
-        amountCents: 999,
-        source: "charge",
-        description: "cancelled hold — must not count",
-      },
-    ]);
-
-    const res = await request(app).get("/public/stats/billing");
-    expect(res.status).toBe(200);
-    expect(res.body.totalConsumedCents).toBe("150.0000000000");
-  });
 });

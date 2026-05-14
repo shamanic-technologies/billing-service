@@ -37,11 +37,11 @@ describe("Fractional cents — public-stats string repr", () => {
       {
         orgId,
         userId,
-        type: "debit",
+        type: "credit",
         status: "confirmed",
         amountCents: "50.0000001",
-        source: "charge",
-        description: "frac-debit",
+        source: "welcome",
+        description: "frac-welcome",
       },
     ]);
 
@@ -49,13 +49,12 @@ describe("Fractional cents — public-stats string repr", () => {
     expect(res.status).toBe(200);
 
     // Strings, not numbers
-    expect(typeof res.body.totalCreditBalanceCents).toBe("string");
+    expect(typeof res.body.totalGrantsCents).toBe("string");
     expect(typeof res.body.totalCreditedCents).toBe("string");
-    expect(typeof res.body.totalConsumedCents).toBe("string");
 
     // Round-trip preserves precision
     const parsed = JSON.parse(JSON.stringify(res.body));
-    expect(parsed.totalCreditedCents).toBe("100.1234567000");
-    expect(parsed.totalConsumedCents).toBe("50.0000001000");
+    expect(parsed.totalGrantsCents).toBe("100.1234567000");
+    expect(parsed.totalCreditedCents).toBe("150.1234568000");
   });
 });
