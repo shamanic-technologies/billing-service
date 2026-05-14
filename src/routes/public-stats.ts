@@ -12,7 +12,6 @@ const router = Router();
 interface GrowthRow {
   period: string;
   credited_cents: string;
-  consumed_cents: string;
   revenue_cents: string;
 }
 
@@ -23,9 +22,6 @@ async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
       COALESCE(SUM(${transactions.amountCents}) FILTER (
         WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
       ), 0)::numeric(16,10)::text AS credited_cents,
-      COALESCE(SUM(${transactions.amountCents}) FILTER (
-        WHERE ${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')
-      ), 0)::numeric(16,10)::text AS consumed_cents,
       COALESCE(SUM(${transactions.amountCents}) FILTER (
         WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
           AND ${transactions.source} = 'reload'
@@ -43,7 +39,7 @@ router.get("/public/stats/billing", async (_req, res) => {
       .select({
         totalAccounts: rawSql<number>`COUNT(*)::int`,
         accountsWithPaymentMethod: rawSql<number>`COUNT(*) FILTER (WHERE ${billingAccounts.stripePaymentMethodId} IS NOT NULL)::int`,
-        totalCreditBalanceCents: rawSql<string>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::numeric(16,10)::text`,
+        totalGrantsCents: rawSql<string>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::numeric(16,10)::text`,
       })
       .from(billingAccounts);
 
@@ -56,15 +52,6 @@ router.get("/public/stats/billing", async (_req, res) => {
         rawSql`${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'`
       );
 
-    const [debitStats] = await db
-      .select({
-        totalConsumedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
-      })
-      .from(transactions)
-      .where(
-        rawSql`${transactions.type} = 'debit' AND ${transactions.status} IN ('confirmed', 'pending')`
-      );
-
     const [monthlyGrowth, weeklyGrowth] = await Promise.all([
       queryGrowth("month"),
       queryGrowth("week"),
@@ -73,9 +60,8 @@ router.get("/public/stats/billing", async (_req, res) => {
     res.json({
       totalAccounts: accountStats.totalAccounts,
       accountsWithPaymentMethod: accountStats.accountsWithPaymentMethod,
-      totalCreditBalanceCents: accountStats.totalCreditBalanceCents,
+      totalGrantsCents: accountStats.totalGrantsCents,
       totalCreditedCents: creditStats.totalCreditedCents,
-      totalConsumedCents: debitStats.totalConsumedCents,
       monthlyGrowth,
       weeklyGrowth,
     });

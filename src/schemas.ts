@@ -25,7 +25,12 @@ export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     orgId: z.string().uuid(),
-    creditBalanceCents: CentsStringSchema,
+    /** Billing-owned credit grants (welcome + promo + Stripe top-ups − refunds). */
+    grantsCents: CentsStringSchema,
+    /** Mirrored from runs-service /internal/org-usage-total.spent_cents (platform actual + provisioned, excludes cancelled and org/BYOK). */
+    runsSpentCents: CentsStringSchema,
+    /** grantsCents − runsSpentCents. The number to display as the org's effective credit balance. */
+    availableCents: CentsStringSchema,
     reloadAmountCents: z.number().int().nullable(),
     reloadThresholdCents: z.number().int().nullable(),
     hasPaymentMethod: z.boolean(),
@@ -131,7 +136,7 @@ export const TransactionSchema = z
     amount_cents: z.number().int(),
     description: z.string().nullable(),
     created_at: z.string(),
-    type: z.enum(["deduction", "credit", "reload"]),
+    type: z.enum(["credit", "reload"]),
   })
   .openapi("Transaction");
 
@@ -191,7 +196,6 @@ export const BillingGrowthRowSchema = z
   .object({
     period: z.string(),
     credited_cents: CentsStringSchema,
-    consumed_cents: CentsStringSchema,
     revenue_cents: CentsStringSchema,
   })
   .openapi("BillingGrowthRow");
@@ -200,9 +204,10 @@ export const PublicBillingStatsSchema = z
   .object({
     totalAccounts: z.number().int(),
     accountsWithPaymentMethod: z.number().int(),
-    totalCreditBalanceCents: CentsStringSchema,
+    /** Sum of billing_accounts.credit_balance_cents — billing-owned grants only, not net of runs-service usage. */
+    totalGrantsCents: CentsStringSchema,
+    /** Lifetime sum of confirmed credit transactions (welcome + promo + reload − refunds counted as credits). */
     totalCreditedCents: CentsStringSchema,
-    totalConsumedCents: CentsStringSchema,
     monthlyGrowth: z.array(BillingGrowthRowSchema),
     weeklyGrowth: z.array(BillingGrowthRowSchema),
   })
