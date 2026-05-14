@@ -20,10 +20,12 @@ Canonical `transactions.source` values (post-#82/#83):
 | `reload` | credit | Stripe top-up succeeded |
 | `welcome` | credit | $2 trial credit on signup |
 | `promo` | credit | promo code redemption |
-| `charge` | debit | run consumption (lifecycle: `pending` -> `confirmed` or `cancelled`) |
+| `charge` | debit | **Frozen post-#104 / #107.** No new inserts; legacy rows deleted from prod. |
 | `refund` | credit | exceptional refund |
 
-`charge` lifecycle: provision inserts `(debit, pending)`; confirm with same amount mutates row to `confirmed`; confirm with $Y != $X mutates original to `cancelled` and inserts a new `(debit, confirmed, $Y)`; cancel mutates to `cancelled`. **No miroir credit rows are ever inserted.** `provision_cancel` and `provision_adjust` are dead sources from the pre-#82 era.
+Pre-#104 `charge` lifecycle (historical only): provision inserted `(debit, pending)`; confirm mutated to `confirmed`; cancel mutated to `cancelled`. **No miroir credit rows ever inserted.** `provision_cancel` and `provision_adjust` are dead sources from the pre-#82 era.
+
+Post-#107: legacy `charge` rows were deleted from prod and copied to `transactions_archive_pre104_charges` (same DB, audit-only). `GET /v1/accounts/transactions` filters `source != 'charge'` as defense-in-depth.
 
 ## `cost_id` natural key (post-#92)
 
@@ -60,3 +62,20 @@ welcome/promo grants, and Stripe payment/refund records.
 Do not sync Stripe Customer Balance Transactions for internal credit balance.
 Stripe is payment processor/audit; available credits come from billing grants
 minus runs usage.
+
+## Public surface field names (post-#107)
+
+`GET /v1/accounts` and `PATCH/DELETE /v1/accounts/auto-reload`:
+- `grantsCents` — billing-owned credit grants (welcome + promo + reload − refunds). Same value that was misleadingly called `creditBalanceCents` pre-#107.
+- `runsSpentCents` — mirrored from runs-service `/internal/org-usage-total`.
+- `availableCents` — `grantsCents − runsSpentCents`. Use this for depletion checks, balance display, and budget gates. NOT `grantsCents`.
+
+All three endpoints fail loud (502) when runs-service is unreachable. PATCH/DELETE call runs-service to keep the response shape consistent.
+
+`GET /public/stats/billing`:
+- `totalGrantsCents` (renamed from `totalCreditBalanceCents`) — SUM of billing_accounts.credit_balance_cents.
+- `totalCreditedCents` — lifetime SUM of confirmed credit transactions.
+- Growth rows expose `credited_cents` and `revenue_cents` only. `consumed_cents` was dropped.
+- `totalConsumedCents` removed; usage truth lives in runs-service.
+
+`Transaction.type` enum on `/v1/accounts/transactions` is `'credit' | 'reload'` (no `'deduction'`).
