@@ -21,9 +21,6 @@
           "credited_cents": {
             "type": "string"
           },
-          "consumed_cents": {
-            "type": "string"
-          },
           "revenue_cents": {
             "type": "string"
           }
@@ -31,7 +28,6 @@
         "required": [
           "period",
           "credited_cents",
-          "consumed_cents",
           "revenue_cents"
         ]
       },
@@ -44,13 +40,10 @@
           "accountsWithPaymentMethod": {
             "type": "integer"
           },
-          "totalCreditBalanceCents": {
+          "totalGrantsCents": {
             "type": "string"
           },
           "totalCreditedCents": {
-            "type": "string"
-          },
-          "totalConsumedCents": {
             "type": "string"
           },
           "monthlyGrowth": {
@@ -69,9 +62,8 @@
         "required": [
           "totalAccounts",
           "accountsWithPaymentMethod",
-          "totalCreditBalanceCents",
+          "totalGrantsCents",
           "totalCreditedCents",
-          "totalConsumedCents",
           "monthlyGrowth",
           "weeklyGrowth"
         ]
@@ -87,7 +79,13 @@
             "type": "string",
             "format": "uuid"
           },
-          "creditBalanceCents": {
+          "grantsCents": {
+            "type": "string"
+          },
+          "runsSpentCents": {
+            "type": "string"
+          },
+          "availableCents": {
             "type": "string"
           },
           "reloadAmountCents": {
@@ -114,7 +112,9 @@
         "required": [
           "id",
           "orgId",
-          "creditBalanceCents",
+          "grantsCents",
+          "runsSpentCents",
+          "availableCents",
           "reloadAmountCents",
           "reloadThresholdCents",
           "hasPaymentMethod",
@@ -168,7 +168,6 @@
           "type": {
             "type": "string",
             "enum": [
-              "deduction",
               "credit",
               "reload"
             ]

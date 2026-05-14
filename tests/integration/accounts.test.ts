@@ -42,7 +42,10 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.orgId).toBe(orgId);
-      expect(res.body.creditBalanceCents).toBe("200.0000000000");
+      expect(res.body.grantsCents).toBe("200.0000000000");
+      expect(res.body.runsSpentCents).toBe("0.0000000000");
+      expect(res.body.availableCents).toBe("200.0000000000");
+      expect(res.body).not.toHaveProperty("creditBalanceCents");
       expect(res.body.hasPaymentMethod).toBe(false);
       expect(res.body.hasAutoReload).toBe(false);
       expect(res.body).not.toHaveProperty("billingMode");
@@ -53,6 +56,68 @@ describe("Accounts endpoints", () => {
         {}
       );
       expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
+    });
+
+    it("subtracts runs-service spent_cents to compute availableCents", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_existing",
+        creditBalanceCents: 150,
+      });
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "25.0000000000",
+        as_of: "2026-05-13T00:00:00.000Z",
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.grantsCents).toBe("150.0000000000");
+      expect(res.body.runsSpentCents).toBe("25.0000000000");
+      expect(res.body.availableCents).toBe("125.0000000000");
+    });
+
+    it("returns negative availableCents when runs spent exceeds grants", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_existing",
+        creditBalanceCents: 75,
+      });
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "383.0000000000",
+        as_of: "2026-05-13T00:00:00.000Z",
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.availableCents).toBe("-308.0000000000");
+    });
+
+    it("returns 502 when runs-service total is unavailable", async () => {
+      await insertTestAccount({
+        orgId,
+        stripeCustomerId: "cus_existing",
+        creditBalanceCents: 150,
+      });
+      fetchRunsOrgUsageTotalSpy.mockRejectedValue(
+        new Error("runs-service down")
+      );
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe(
+        "Failed to fetch usage total from runs-service"
+      );
     });
 
     it("forwards workflow headers to downstream calls", async () => {
@@ -90,7 +155,7 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.creditBalanceCents).toBe("150.0000000000");
+      expect(res.body.grantsCents).toBe("150.0000000000");
       expect(stripeMocks.createCustomer).not.toHaveBeenCalled();
     });
 
@@ -253,6 +318,55 @@ describe("Accounts endpoints", () => {
         "credit",
       ]);
       expect(stripeMocks.listBalanceTransactions).not.toHaveBeenCalled();
+    });
+
+    it("excludes legacy source='charge' rows from response", async () => {
+      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
+      await db.insert(transactions).values([
+        {
+          orgId,
+          userId,
+          type: "credit",
+          amountCents: "200.0000000000",
+          status: "confirmed",
+          source: "welcome",
+          description: "welcome grant",
+          createdAt: new Date("2026-05-13T00:00:00.000Z"),
+        },
+        {
+          orgId,
+          userId,
+          type: "debit",
+          amountCents: "50.0000000000",
+          status: "confirmed",
+          source: "charge",
+          description: "legacy pre-#104 charge row",
+          createdAt: new Date("2026-05-13T00:01:00.000Z"),
+        },
+        {
+          orgId,
+          userId,
+          type: "debit",
+          amountCents: "25.0000000000",
+          status: "pending",
+          source: "charge",
+          description: "legacy pre-#104 pending charge",
+          createdAt: new Date("2026-05-13T00:02:00.000Z"),
+        },
+      ]);
+
+      const res = await request(app)
+        .get("/v1/accounts/transactions")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.transactions).toHaveLength(1);
+      expect(res.body.transactions[0].description).toBe("welcome grant");
+      expect(
+        res.body.transactions.some(
+          (txn: { type: string }) => txn.type === "deduction"
+        )
+      ).toBe(false);
     });
   });
 

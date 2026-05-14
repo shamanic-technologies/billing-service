@@ -34,26 +34,24 @@ describe("Balance depletion check", () => {
 });
 
 describe("Transaction classification", () => {
-  function classifyTransaction(
-    amount: number,
-    description: string | null
-  ): "deduction" | "credit" | "reload" {
-    if (description?.includes("reload") || description?.includes("Reload")) {
-      return "reload";
-    }
-    return amount > 0 ? "deduction" : "credit";
+  function classifyTransaction(source: string): "credit" | "reload" {
+    if (source === "reload") return "reload";
+    return "credit";
   }
 
-  it("classifies positive amounts as deductions", () => {
-    expect(classifyTransaction(5, "anthropic tokens")).toBe("deduction");
+  it("classifies reload source as reload", () => {
+    expect(classifyTransaction("reload")).toBe("reload");
   });
 
-  it("classifies negative amounts as credits", () => {
-    expect(classifyTransaction(-200, "Trial credit")).toBe("credit");
+  it("classifies welcome source as credit", () => {
+    expect(classifyTransaction("welcome")).toBe("credit");
   });
 
-  it("classifies reload transactions by description", () => {
-    expect(classifyTransaction(-2000, "Auto-reload credit")).toBe("reload");
-    expect(classifyTransaction(-1000, "Initial Reload")).toBe("reload");
+  it("classifies promo source as credit", () => {
+    expect(classifyTransaction("promo")).toBe("credit");
+  });
+
+  it("classifies refund source as credit", () => {
+    expect(classifyTransaction("refund")).toBe("credit");
   });
 });
