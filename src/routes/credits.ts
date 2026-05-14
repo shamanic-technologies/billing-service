@@ -4,7 +4,7 @@ import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import { billingAccounts, transactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { AuthorizeRequestSchema } from "../schemas.js";
+import { AuthorizeRequestSchema, UsageNotifyRequestSchema } from "../schemas.js";
 import {
   chargePaymentMethod,
   isStripeAuthError,
@@ -14,7 +14,7 @@ import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
-import { addCents, subCents, gte as gteCents } from "../lib/cents.js";
+import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 
 const router = Router();
 
@@ -255,6 +255,155 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error("[billing-service] Error authorizing credits:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POST /v1/credits/usage-notify — runs-service hint to evaluate proactive Stripe reload.
+// Fire-and-forget from caller's perspective: always returns 202. Caller correctness does
+// not depend on this; billing re-pulls authoritative spent total from runs-service at
+// authorize time. Reload triggers when available = grants - spent_total < reload_threshold.
+router.post("/v1/credits/usage-notify", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+    const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+
+    const parsed = UsageNotifyRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+
+    let spentTotalCents: string;
+    try {
+      spentTotalCents = parseNonNegativeCents(parsed.data.spent_total_cents);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "invalid spent_total_cents" });
+      return;
+    }
+
+    traceEvent(runId, { service: "billing-service", event: "credits.usage-notify.start", data: { spent_total_cents: spentTotalCents } }, req.headers);
+
+    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
+
+    const availableBalance = subCents(account.creditBalanceCents, spentTotalCents);
+    const thresholdCents = account.reloadThresholdCents != null ? String(account.reloadThresholdCents) : null;
+    const reloadEligible =
+      account.reloadAmountCents != null &&
+      account.stripePaymentMethodId &&
+      account.stripeCustomerId &&
+      thresholdCents != null;
+
+    if (!reloadEligible || gteCents(availableBalance, thresholdCents!)) {
+      traceEvent(runId, { service: "billing-service", event: "credits.usage-notify.no-reload", data: { available_cents: availableBalance, threshold_cents: thresholdCents } }, req.headers);
+      res.status(202).json({ acknowledged: true, reload_triggered: false });
+      return;
+    }
+
+    const reloadTriggered = await db.transaction(async (tx) => {
+      const rows = await tx.execute(
+        rawSql`SELECT * FROM billing_accounts WHERE org_id = ${orgId} FOR UPDATE`
+      );
+      const locked = (rows as unknown as AccountRow[])[0];
+      if (
+        !locked ||
+        locked.reload_amount_cents == null ||
+        !locked.stripe_payment_method_id ||
+        !locked.stripe_customer_id ||
+        locked.reload_threshold_cents == null
+      ) {
+        return false;
+      }
+
+      const lockedAvailable = subCents(locked.credit_balance_cents, spentTotalCents);
+      const lockedThreshold = String(locked.reload_threshold_cents);
+      if (gteCents(lockedAvailable, lockedThreshold)) {
+        return false;
+      }
+
+      // Cooldown: skip reload if last reload row is cancelled and < 15 min old.
+      const RELOAD_COOLDOWN_MS = 15 * 60 * 1000;
+      const [lastReload] = await tx
+        .select({ status: transactions.status, createdAt: transactions.createdAt })
+        .from(transactions)
+        .where(and(eq(transactions.orgId, orgId), eq(transactions.source, "reload")))
+        .orderBy(desc(transactions.createdAt))
+        .limit(1);
+
+      const reloadOnCooldown =
+        lastReload &&
+        lastReload.status === "cancelled" &&
+        Date.now() - new Date(lastReload.createdAt).getTime() < RELOAD_COOLDOWN_MS;
+
+      if (reloadOnCooldown) {
+        console.warn(`[billing-service] Notify-triggered reload skipped for org ${orgId}: cooldown active`);
+        return false;
+      }
+
+      const chargeAmount = computeReloadCharge(lockedAvailable, lockedThreshold, locked.reload_amount_cents);
+      if (chargeAmount === 0) return false;
+
+      try {
+        const pi = await chargePaymentMethod(
+          orgId,
+          userId,
+          locked.stripe_customer_id,
+          locked.stripe_payment_method_id,
+          chargeAmount,
+          `Auto-reload (${chargeAmount / locked.reload_amount_cents}x, notify-triggered)`,
+          wfHeaders
+        );
+
+        await tx.insert(transactions).values({
+          orgId,
+          userId,
+          type: "credit",
+          amountCents: String(chargeAmount),
+          status: "confirmed",
+          source: "reload",
+          stripePaymentIntentId: pi.id,
+          description: `Auto-reload credit ($${(chargeAmount / 100).toFixed(2)})`,
+        });
+
+        await tx
+          .update(billingAccounts)
+          .set({
+            creditBalanceCents: addCents(locked.credit_balance_cents, String(chargeAmount)),
+            updatedAt: new Date(),
+          })
+          .where(eq(billingAccounts.orgId, orgId));
+
+        return true;
+      } catch (reloadErr) {
+        console.error("[billing-service] Notify-triggered reload failed:", reloadErr);
+        await tx.insert(transactions).values({
+          orgId,
+          userId,
+          type: "credit",
+          amountCents: String(chargeAmount),
+          status: "cancelled",
+          source: "reload",
+          description: `Auto-reload failed: ${reloadErr instanceof Error ? reloadErr.message : "unknown error"}`,
+        });
+        return false;
+      }
+    });
+
+    if (reloadTriggered) {
+      traceEvent(runId, { service: "billing-service", event: "credits.usage-notify.reload-fired" }, req.headers);
+    } else {
+      traceEvent(runId, { service: "billing-service", event: "credits.usage-notify.reload-skipped" }, req.headers);
+    }
+
+    res.status(202).json({ acknowledged: true, reload_triggered: reloadTriggered });
+  } catch (err) {
+    console.error("[billing-service] Error in usage-notify:", err);
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;

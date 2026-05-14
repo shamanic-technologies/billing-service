@@ -59,6 +59,21 @@ export const AuthorizeResponseSchema = z
   })
   .openapi("AuthorizeResponse");
 
+// --- Usage Notify ---
+
+export const UsageNotifyRequestSchema = z
+  .object({
+    spent_total_cents: CentsStringSchema,
+  })
+  .openapi("UsageNotifyRequest");
+
+export const UsageNotifyResponseSchema = z
+  .object({
+    acknowledged: z.boolean(),
+    reload_triggered: z.boolean(),
+  })
+  .openapi("UsageNotifyResponse");
+
 // --- Auto-Reload ---
 
 export const UpdateAutoReloadRequestSchema = z
@@ -424,6 +439,35 @@ registry.registerPath({
     },
     502: {
       description: "Payment provider, costs-service, or runs-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/usage-notify",
+  summary: "Notify billing of an org's current usage total (hint for proactive reload)",
+  description:
+    "Fire-and-forget endpoint called by runs-service after every runs_costs write. " +
+    "Body carries the org's current spent total (actual + provisioned platform costs). " +
+    "Billing computes available = credit_grants - spent_total; if below reload_threshold " +
+    "and auto-reload is configured, fires a Stripe reload under a short row lock. " +
+    "Always returns 202 — caller does NOT rely on this for correctness; billing always " +
+    "re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: { "application/json": { schema: UsageNotifyRequestSchema } },
+    },
+  },
+  responses: {
+    202: {
+      description: "Notification acknowledged",
+      content: { "application/json": { schema: UsageNotifyResponseSchema } },
+    },
+    400: {
+      description: "Invalid request body",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

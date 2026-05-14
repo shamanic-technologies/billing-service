@@ -333,6 +333,32 @@
           "items"
         ]
       },
+      "UsageNotifyResponse": {
+        "type": "object",
+        "properties": {
+          "acknowledged": {
+            "type": "boolean"
+          },
+          "reload_triggered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "acknowledged",
+          "reload_triggered"
+        ]
+      },
+      "UsageNotifyRequest": {
+        "type": "object",
+        "properties": {
+          "spent_total_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spent_total_cents"
+        ]
+      },
       "RedeemPromoResponse": {
         "type": "object",
         "properties": {
@@ -1333,6 +1359,117 @@
           },
           "502": {
             "description": "Payment provider, costs-service, or runs-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/usage-notify": {
+      "post": {
+        "summary": "Notify billing of an org's current usage total (hint for proactive reload)",
+        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Body carries the org's current spent total (actual + provisioned platform costs). Billing computes available = credit_grants - spent_total; if below reload_threshold and auto-reload is configured, fires a Stripe reload under a short row lock. Always returns 202 — caller does NOT rely on this for correctness; billing always re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageNotifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Notification acknowledged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageNotifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
             "content": {
               "application/json": {
                 "schema": {
