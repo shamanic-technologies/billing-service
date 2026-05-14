@@ -18,20 +18,8 @@ export function setupStripeMocks() {
       id: "cus_mock123",
       metadata: { org_id: "test-org" },
     }),
-    createBalanceTransaction: vi.fn().mockResolvedValue({
-      id: "cbtxn_mock",
-      amount: -200,
-      currency: "usd",
-      description: "Trial credit",
-    }),
-    listBalanceTransactions: vi.fn().mockResolvedValue({
-      data: [],
-      has_more: false,
-    }),
-    listPaymentIntents: vi.fn().mockResolvedValue({
-      data: [],
-      has_more: false,
-    }),
+    createBalanceTransaction: vi.fn(),
+    listBalanceTransactions: vi.fn(),
     createCheckoutSession: vi.fn().mockResolvedValue({
       id: "cs_mock_session",
       url: "https://checkout.stripe.com/pay/cs_mock_session",
@@ -63,15 +51,6 @@ export function setupStripeMocks() {
   vi.spyOn(keyClient, "resolvePlatformKey").mockImplementation(mocks.resolvePlatformKey);
 
   vi.spyOn(stripeLib, "createCustomer").mockImplementation(mocks.createCustomer);
-  vi.spyOn(stripeLib, "createBalanceTransaction").mockImplementation(
-    mocks.createBalanceTransaction
-  );
-  vi.spyOn(stripeLib, "listBalanceTransactions").mockImplementation(
-    mocks.listBalanceTransactions
-  );
-  vi.spyOn(stripeLib, "listPaymentIntents").mockImplementation(
-    mocks.listPaymentIntents
-  );
   vi.spyOn(stripeLib, "createCheckoutSession").mockImplementation(
     mocks.createCheckoutSession
   );

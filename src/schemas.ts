@@ -3,7 +3,6 @@ import {
   OpenAPIRegistry,
   extendZodWithOpenApi,
 } from "@asteasolutions/zod-to-openapi";
-import { parsePositiveCents } from "./lib/cents.js";
 
 extendZodWithOpenApi(z);
 export const registry = new OpenAPIRegistry();
@@ -13,38 +12,6 @@ export const registry = new OpenAPIRegistry();
 export const ErrorResponseSchema = z
   .object({ error: z.string() })
   .openapi("ErrorResponse");
-
-export const ProvisionConflictResponseSchema = z
-  .object({
-    error: z.string(),
-    transaction_id: z.string().uuid().nullable(),
-    provision_id: z.string().uuid().nullable().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
-    cost_id: z.string().uuid().nullable().optional(),
-    run_id: z.string().nullable(),
-    current_status: z.string().nullable(),
-    current_amount_cents: z.string().nullable(),
-    requested_amount_cents: z.string().nullable().optional(),
-  })
-  .openapi("ProvisionConflictResponse");
-
-/**
- * Inbound fractional-cents amount. Accepts decimal string or finite number.
- * Rejects negative, zero, NaN, non-numeric, or integer part > 16 digits.
- * Output is the canonical fixed-scale string (10 fractional digits).
- */
-const PositiveCentsSchema = z
-  .union([z.string(), z.number()])
-  .transform((v, ctx) => {
-    try {
-      return parsePositiveCents(v);
-    } catch (err) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: err instanceof Error ? err.message : "invalid amount_cents",
-      });
-      return z.NEVER;
-    }
-  });
 
 /**
  * Outbound balance/amount string with full numeric(16,10) precision.
@@ -67,79 +34,6 @@ export const BillingAccountSchema = z
     updatedAt: z.string(),
   })
   .openapi("BillingAccount");
-
-// --- Deduct ---
-
-export const DeductRequestSchema = z
-  .object({
-    amount_cents: PositiveCentsSchema,
-    description: z.string().min(1),
-  })
-  .openapi("DeductRequest");
-
-export const DeductResponseSchema = z
-  .object({
-    success: z.boolean(),
-    balance_cents: CentsStringSchema,
-    depleted: z.boolean(),
-  })
-  .openapi("DeductResponse");
-
-// --- Provision ---
-
-export const ProvisionRequestSchema = z
-  .object({
-    amount_cents: PositiveCentsSchema,
-    description: z.string().min(1),
-    cost_id: z.string().uuid().optional(),
-  })
-  .openapi("ProvisionRequest");
-
-export const ProvisionResponseSchema = z
-  .object({
-    transaction_id: z.string().uuid(),
-    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
-    cost_id: z.string().uuid().nullable().optional(),
-    balance_cents: CentsStringSchema,
-    depleted: z.boolean(),
-  })
-  .openapi("ProvisionResponse");
-
-export const ConfirmProvisionRequestSchema = z
-  .object({
-    actual_amount_cents: PositiveCentsSchema.optional(),
-  })
-  .openapi("ConfirmProvisionRequest");
-
-export const ConfirmProvisionResponseSchema = z
-  .object({
-    transaction_id: z.string().uuid(),
-    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
-    cost_id: z.string().uuid().nullable().optional(),
-    status: z.literal("confirmed"),
-    original_amount_cents: CentsStringSchema,
-    final_amount_cents: CentsStringSchema,
-    adjustment_cents: CentsStringSchema,
-    balance_cents: CentsStringSchema.nullable(),
-  })
-  .openapi("ConfirmProvisionResponse");
-
-export const CancelProvisionResponseSchema = z
-  .object({
-    transaction_id: z.string().uuid(),
-    provision_id: z.string().uuid().describe("DEPRECATED alias of transaction_id; will be removed after consumers migrate"),
-    cost_id: z.string().uuid().nullable().optional(),
-    status: z.literal("cancelled"),
-    refunded_cents: CentsStringSchema,
-    balance_cents: CentsStringSchema.nullable(),
-  })
-  .openapi("CancelProvisionResponse");
-
-export const ConfirmByCostRequestSchema = z
-  .object({
-    actual_amount_cents: PositiveCentsSchema.optional(),
-  })
-  .openapi("ConfirmByCostRequest");
 
 // --- Authorize ---
 
@@ -164,6 +58,21 @@ export const AuthorizeResponseSchema = z
     required_cents: CentsStringSchema,
   })
   .openapi("AuthorizeResponse");
+
+// --- Usage Notify ---
+
+export const UsageNotifyRequestSchema = z
+  .object({
+    spent_total_cents: CentsStringSchema,
+  })
+  .openapi("UsageNotifyRequest");
+
+export const UsageNotifyResponseSchema = z
+  .object({
+    acknowledged: z.boolean(),
+    reload_triggered: z.boolean(),
+  })
+  .openapi("UsageNotifyResponse");
 
 // --- Auto-Reload ---
 
@@ -483,31 +392,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/credits/deduct",
-  summary: "Deduct credits from org balance",
-  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "Always deducts, even if it results in a negative balance. " +
-    "Does NOT auto-reload — use authorize for pre-execution checks with auto-reload.",
-  request: {
-    headers: protectedHeaders,
-    body: {
-      content: { "application/json": { schema: DeductRequestSchema } },
-    },
-  },
-  responses: {
-    200: {
-      description: "Deduction result",
-      content: { "application/json": { schema: DeductResponseSchema } },
-    },
-    502: {
-      description: "Payment provider authentication failed",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "post",
   path: "/v1/checkout-sessions",
   summary: "Create Stripe Checkout session to add payment method and credits",
   description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
@@ -537,7 +421,8 @@ registry.registerPath({
   path: "/v1/credits/authorize",
   summary: "Synchronous pre-execution authorization with auto-reload",
   description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "Resolves prices from costs-service, then checks balance. " +
+    "Resolves prices from costs-service, fetches org usage total from runs-service, then checks available credits. " +
+    "Available credits are billing-owned credit grants minus runs-service platform usage total. " +
     "If insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
     "that covers the required amount (e.g. $10 reload unit, $37 required with $2 balance → charges 4x $10 = $40). " +
     "Sends email notification on reload failure or credit depletion.",
@@ -553,7 +438,7 @@ registry.registerPath({
       content: { "application/json": { schema: AuthorizeResponseSchema } },
     },
     502: {
-      description: "Payment provider or costs-service unavailable",
+      description: "Payment provider, costs-service, or runs-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -561,135 +446,29 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/credits/provision",
-  summary: "Provision credits (deduct immediately, confirm or cancel later)",
-  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "Deducts amount immediately and creates a pending provision. " +
-    "If the post-deduction balance drops below reload_threshold_cents and auto-reload is configured, " +
-    "triggers an async reload.",
+  path: "/v1/credits/usage-notify",
+  summary: "Notify billing of an org's current usage total (hint for proactive reload)",
+  description:
+    "Fire-and-forget endpoint called by runs-service after every runs_costs write. " +
+    "Body carries the org's current spent total (actual + provisioned platform costs). " +
+    "Billing computes available = credit_grants - spent_total; if below reload_threshold " +
+    "and auto-reload is configured, fires a Stripe reload under a short row lock. " +
+    "Always returns 202 — caller does NOT rely on this for correctness; billing always " +
+    "re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: ProvisionRequestSchema } },
+      content: { "application/json": { schema: UsageNotifyRequestSchema } },
     },
   },
   responses: {
-    200: {
-      description: "Provision created",
-      content: { "application/json": { schema: ProvisionResponseSchema } },
+    202: {
+      description: "Notification acknowledged",
+      content: { "application/json": { schema: UsageNotifyResponseSchema } },
     },
-    502: {
-      description: "Payment provider authentication failed",
+    400: {
+      description: "Invalid request body",
       content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/v1/credits/provision/{id}/confirm",
-  summary: "Confirm a pending provision, optionally adjusting for actual cost",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ id: z.string().uuid() }),
-    body: {
-      content: { "application/json": { schema: ConfirmProvisionRequestSchema } },
-    },
-  },
-  responses: {
-    200: {
-      description: "Provision confirmed",
-      content: { "application/json": { schema: ConfirmProvisionResponseSchema } },
-    },
-    404: {
-      description: "Provision not found",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-    409: {
-      description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/v1/credits/provision/{id}/cancel",
-  summary: "Cancel a pending provision, re-crediting the provisioned amount",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ id: z.string().uuid() }),
-  },
-  responses: {
-    200: {
-      description: "Provision cancelled",
-      content: { "application/json": { schema: CancelProvisionResponseSchema } },
-    },
-    404: {
-      description: "Provision not found",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-    409: {
-      description: "Provision already confirmed or cancelled",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/v1/credits/provision/by-cost/{cost_id}/confirm",
-  summary: "Confirm a provision looked up by cost_id (natural key)",
-  description:
-    "Confirms the most recent provision row for the given cost_id. " +
-    "Use this when callers (e.g. runs-service) hold the cost_id but not the billing-internal provision_id. " +
-    "Idempotent: re-confirming with the same amount returns 200.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ cost_id: z.string().uuid() }),
-    body: {
-      content: { "application/json": { schema: ConfirmByCostRequestSchema } },
-    },
-  },
-  responses: {
-    200: {
-      description: "Provision confirmed",
-      content: { "application/json": { schema: ConfirmProvisionResponseSchema } },
-    },
-    404: {
-      description: "No provision found for cost_id",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-    409: {
-      description: "Existing provision is in incompatible state (cancelled, or confirmed at a different amount)",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "post",
-  path: "/v1/credits/provision/by-cost/{cost_id}/cancel",
-  summary: "Cancel a provision looked up by cost_id (natural key)",
-  description:
-    "Cancels the most recent provision row for the given cost_id. " +
-    "Idempotent: re-cancelling an already-cancelled cost_id returns 200.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ cost_id: z.string().uuid() }),
-  },
-  responses: {
-    200: {
-      description: "Provision cancelled",
-      content: { "application/json": { schema: CancelProvisionResponseSchema } },
-    },
-    404: {
-      description: "No provision found for cost_id",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
-    },
-    409: {
-      description: "Existing provision is confirmed (cannot cancel)",
-      content: { "application/json": { schema: ProvisionConflictResponseSchema } },
     },
   },
 });

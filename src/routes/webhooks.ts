@@ -6,7 +6,6 @@ import {
   constructWebhookEvent,
   retrievePaymentIntent,
 } from "../lib/stripe.js";
-import { syncStripeCeilDelta } from "../lib/ledger.js";
 import { addCents } from "../lib/cents.js";
 import type Stripe from "stripe";
 
@@ -104,8 +103,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const oldBalance = account.creditBalanceCents;
     const newBalance = addCents(oldBalance, String(reloadAmountCents));
 
-    // Insert reload ledger entry
-    const [ledgerEntry] = await db
+    // Insert reload grant entry
+    await db
       .insert(transactions)
       .values({
         orgId: account.orgId,
@@ -116,8 +115,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         source: "reload",
         stripePaymentIntentId: piId ?? null,
         description: "Initial reload credit",
-      })
-      .returning();
+      });
 
     // Update account: set payment method, update balance
     await db
@@ -130,19 +128,6 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       })
       .where(eq(billingAccounts.stripeCustomerId, customerId));
 
-    // Fire-and-forget Stripe balance sync (ceil-delta — for whole-cent reload this
-    // always fires with delta = -reloadAmountCents, but the helper handles both cases).
-    if (account.stripeCustomerId) {
-      syncStripeCeilDelta({
-        orgId: account.orgId,
-        userId: "system",
-        customerId: account.stripeCustomerId,
-        oldBalance,
-        newBalance,
-        description: "Initial reload credit",
-        ledgerEntryId: ledgerEntry.id,
-      });
-    }
   } else {
     // No reload amount — just update payment method
     await db

@@ -1,13 +1,9 @@
-/** Client for fetching expected per-run cost totals from runs-service. */
+/** Client for fetching canonical usage totals from runs-service. */
 
-export interface RunExpectedTotal {
-  run_id: string;
-  expected_cents: string;
-}
-
-export interface RunsExpectedTotalsResult {
-  total_expected_cents: string;
-  runs: RunExpectedTotal[];
+export interface RunsOrgUsageTotalResult {
+  org_id: string;
+  spent_cents: string;
+  as_of: string;
 }
 
 function getRunsServiceConfig() {
@@ -18,23 +14,23 @@ function getRunsServiceConfig() {
 }
 
 /**
- * Fetch expected per-run cost totals (platform actuals on completed/failed runs)
- * for an org. Used by reconcileBillingRuns to detect drift between billing-side
- * confirmed charges and runs-side recorded actuals.
+ * Fetch canonical org usage total from runs-service.
  *
- * Returns null when runs-service is not configured (local dev / unit tests where
- * runs-service is intentionally absent). Callers treat null as "skip reconcile".
- * Network or HTTP errors throw — callers decide whether to swallow per-org.
+ * The runs-service contract owns usage detail. `spent_cents` includes
+ * platform costs in `actual` and `provisioned` states, excludes cancelled
+ * and org/BYOK costs, and preserves fractional cents as a decimal string.
  */
-export async function fetchRunsExpectedTotals(
+export async function fetchRunsOrgUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
-): Promise<RunsExpectedTotalsResult | null> {
+): Promise<RunsOrgUsageTotalResult> {
   const config = getRunsServiceConfig();
-  if (!config) return null;
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
 
   const res = await fetch(
-    `${config.url}/internal/runs-expected-totals?org_id=${encodeURIComponent(orgId)}`,
+    `${config.url}/internal/org-usage-total?org_id=${encodeURIComponent(orgId)}`,
     {
       headers: {
         "x-api-key": config.apiKey,
@@ -46,9 +42,9 @@ export async function fetchRunsExpectedTotals(
   if (!res.ok) {
     const body = await res.text();
     throw new Error(
-      `runs-service runs-expected-totals failed for org ${orgId}: ${res.status} ${body}`
+      `runs-service org-usage-total failed for org ${orgId}: ${res.status} ${body}`
     );
   }
 
-  return (await res.json()) as RunsExpectedTotalsResult;
+  return (await res.json()) as RunsOrgUsageTotalResult;
 }

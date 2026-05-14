@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, transactions } from "../db/schema.js";
-import { createCustomer, createBalanceTransaction } from "./stripe.js";
+import { createCustomer } from "./stripe.js";
 
 const WELCOME_CREDIT_CENTS = "200";
 
@@ -53,7 +53,7 @@ export async function findOrCreateAccount(
     .returning();
 
   // Write welcome credit to ledger
-  const [welcomeEntry] = await db
+  await db
     .insert(transactions)
     .values({
       orgId,
@@ -63,31 +63,6 @@ export async function findOrCreateAccount(
       status: "confirmed",
       source: "welcome",
       description: "Trial credit: $2.00",
-    })
-    .returning();
-
-  // Fire-and-forget Stripe balance txn for welcome credit
-  createBalanceTransaction(
-    orgId,
-    userId,
-    stripeCustomer.id,
-    -200,
-    "Trial credit: $2.00",
-    undefined,
-    wfHeaders
-  )
-    .then((txn) => {
-      db.update(transactions)
-        .set({ stripeBalanceTxnId: txn.id, updatedAt: new Date() })
-        .where(eq(transactions.id, welcomeEntry.id))
-        .then(() => {})
-        .catch(() => {});
-    })
-    .catch((err) => {
-      console.error(
-        "[billing-service] Welcome credit Stripe balance txn failed:",
-        err
-      );
     });
 
   return updated;
