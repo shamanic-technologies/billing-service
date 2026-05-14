@@ -7,8 +7,6 @@ import {
   cmpCents,
   isDepleted,
   gte,
-  ceilToInt,
-  stripeCeilDelta,
 } from "../../src/lib/cents.js";
 
 describe("parsePositiveCents — input validation", () => {
@@ -109,51 +107,5 @@ describe("addCents / subCents / cmpCents", () => {
     expect(gte("100.0001", "100")).toBe(true);
     expect(gte("100", "100.0001")).toBe(false);
     expect(gte("100", "100")).toBe(true);
-  });
-});
-
-describe("stripeCeilDelta — Stripe sync sizing", () => {
-  it("returns 0 when no ceil-cent boundary crossed", () => {
-    // 1.5 → 1.4: ceil(1.5)=2, ceil(1.4)=2, delta=0
-    expect(stripeCeilDelta("1.5", "1.4")).toBe(0);
-    // 1.0 → 0.5: ceil(1.0)=1, ceil(0.5)=1, delta=0
-    expect(stripeCeilDelta("1.0", "0.5")).toBe(0);
-  });
-
-  it("returns positive int when balance dropped past a ceil-cent boundary (debit)", () => {
-    // 1.5 → 0.5: ceil(1.5)=2, ceil(0.5)=1, delta=+1
-    expect(stripeCeilDelta("1.5", "0.5")).toBe(1);
-    // 100 → 95.5: ceil(100)=100, ceil(95.5)=96, delta=+4
-    expect(stripeCeilDelta("100", "95.5")).toBe(4);
-  });
-
-  it("returns negative int when balance rose past a ceil-cent boundary (credit)", () => {
-    // 0.5 → 1.5: ceil(0.5)=1, ceil(1.5)=2, delta=-1
-    expect(stripeCeilDelta("0.5", "1.5")).toBe(-1);
-    // 95.5 → 100: ceil(95.5)=96, ceil(100)=100, delta=-4
-    expect(stripeCeilDelta("95.5", "100")).toBe(-4);
-  });
-
-  it("handles whole-cent moves exactly", () => {
-    expect(stripeCeilDelta("100", "95")).toBe(5);
-    expect(stripeCeilDelta("95", "100")).toBe(-5);
-  });
-
-  it("handles negative balances (Stripe ceil semantics)", () => {
-    // -0.5 → -1.5: ceil(-0.5)=0, ceil(-1.5)=-1, delta=+1
-    expect(stripeCeilDelta("-0.5", "-1.5")).toBe(1);
-  });
-});
-
-describe("ceilToInt", () => {
-  it("rounds up for positive fractional", () => {
-    expect(ceilToInt("1.4")).toBe(2);
-    expect(ceilToInt("0.0001")).toBe(1);
-    expect(ceilToInt("100")).toBe(100);
-  });
-
-  it("rounds toward zero for negative fractional", () => {
-    expect(ceilToInt("-1.4")).toBe(-1);
-    expect(Math.abs(ceilToInt("-0.5"))).toBe(0);
   });
 });

@@ -4,7 +4,6 @@ import healthRoutes from "../../src/routes/health.js";
 import publicStatsRoutes from "../../src/routes/public-stats.js";
 import accountsRoutes from "../../src/routes/accounts.js";
 import creditsRoutes from "../../src/routes/credits.js";
-import provisionsRoutes from "../../src/routes/provisions.js";
 import checkoutRoutes from "../../src/routes/checkout.js";
 import portalRoutes from "../../src/routes/portal.js";
 import promoRoutes from "../../src/routes/promo.js";
@@ -32,7 +31,6 @@ export function createTestApp() {
   app.use(internalRoutes);
   app.use(accountsRoutes);
   app.use(creditsRoutes);
-  app.use(provisionsRoutes);
   app.use(checkoutRoutes);
   app.use(portalRoutes);
   app.use(promoRoutes);

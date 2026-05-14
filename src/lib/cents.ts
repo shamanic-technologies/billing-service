@@ -99,31 +99,3 @@ export function isDepleted(a: string): boolean {
 export function gte(a: string, b: string): boolean {
   return new Decimal(a).greaterThanOrEqualTo(b);
 }
-
-/**
- * Ceil to integer cents — used for Stripe sync.
- * Stripe accepts only integer cents, so we ceil so Stripe is always >= ledger floor.
- * Negative balances ceil toward zero (e.g. -0.5 → 0), positive balances ceil up
- * (e.g. 1.4 → 2). This matches Decimal.ROUND_CEIL.
- */
-export function ceilToInt(a: string): number {
-  return new Decimal(a).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
-}
-
-/**
- * Compute Stripe ceil-cent delta between two balances.
- * Returns the integer delta to send to Stripe so its customer balance tracks
- * `ceil(newBalance)`. Sign convention matches `createBalanceTransaction`:
- *   - balance dropped (debit) → returns positive int
- *   - balance rose (credit)   → returns negative int
- *   - no ceil-boundary crossed → 0 (caller skips the Stripe API call)
- *
- * Stripe customer balance semantics: positive amount = customer owes,
- * negative = customer has credit. Our ledger's `creditBalanceCents` is the
- * inverse (positive = customer has credit), hence the sign flip.
- */
-export function stripeCeilDelta(oldBalance: string, newBalance: string): number {
-  const oldCeil = ceilToInt(oldBalance);
-  const newCeil = ceilToInt(newBalance);
-  return oldCeil - newCeil;
-}

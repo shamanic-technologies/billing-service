@@ -1,17 +1,16 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
+import { billingAccounts, transactions as creditGrants } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { UpdateAutoReloadRequestSchema } from "../schemas.js";
 import {
   createCustomer,
-  createBalanceTransaction,
-  listBalanceTransactions,
   isStripeAuthError,
 } from "../lib/stripe.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { isDepleted } from "../lib/cents.js";
+import { isDepleted, subCents } from "../lib/cents.js";
+import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 
 const router = Router();
 
@@ -39,7 +38,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     const account = await findOrCreateAccount(orgId, userId, wfHeaders);
     res.json(formatAccount(account));
   } catch (err) {
-    console.error("Error getting/creating account:", err);
+    console.error("[billing-service] Error getting/creating account:", err);
     if (isStripeAuthError(err)) {
       res.status(502).json({ error: "Payment provider authentication failed" });
       return;
@@ -52,6 +51,9 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
 router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
+    const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
     const [account] = await db
       .select()
@@ -64,25 +66,39 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
       return;
     }
 
+    const usage = await fetchRunsOrgUsageTotal(orgId, {
+      "x-org-id": orgId,
+      "x-user-id": userId,
+      "x-run-id": runId,
+      ...wfHeaders,
+    });
+    const available = subCents(account.creditBalanceCents, usage.spent_cents);
+
     res.json({
-      balance_cents: account.creditBalanceCents,
-      depleted: isDepleted(account.creditBalanceCents),
+      balance_cents: available,
+      depleted: isDepleted(available),
     });
   } catch (err) {
-    console.error("Error checking balance:", err);
+    console.error("[billing-service] Error checking balance:", err);
+    if (isStripeAuthError(err)) {
+      res.status(502).json({ error: "Payment provider authentication failed" });
+      return;
+    }
+    if (err instanceof Error && err.message.includes("runs-service")) {
+      res.status(502).json({ error: "Failed to fetch usage total from runs-service" });
+      return;
+    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /v1/accounts/transactions — proxy to Stripe balance transactions
+// GET /v1/accounts/transactions — local billing-owned credit grant history
 router.get(
   "/v1/accounts/transactions",
   requireOrgHeaders,
   async (req, res) => {
     try {
       const orgId = req.headers["x-org-id"] as string;
-      const userId = req.headers["x-user-id"] as string;
-      const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
       const [account] = await db
         .select()
@@ -95,24 +111,24 @@ router.get(
         return;
       }
 
-      if (!account.stripeCustomerId) {
-        res.json({ transactions: [], has_more: false });
-        return;
-      }
+      const rows = await db
+        .select()
+        .from(creditGrants)
+        .where(eq(creditGrants.orgId, orgId))
+        .orderBy(desc(creditGrants.createdAt))
+        .limit(50);
 
-      const result = await listBalanceTransactions(orgId, userId, account.stripeCustomerId, 50, wfHeaders);
-
-      const transactions = result.data.map((txn) => ({
+      const transactions = rows.map((txn) => ({
         id: txn.id,
-        amount_cents: txn.amount,
+        amount_cents: txn.amountCents,
         description: txn.description,
-        created_at: new Date(txn.created * 1000).toISOString(),
-        type: classifyTransaction(txn.amount, txn.description),
+        created_at: txn.createdAt.toISOString(),
+        type: classifyTransaction(txn.source),
       }));
 
-      res.json({ transactions, has_more: result.has_more });
+      res.json({ transactions, has_more: false });
     } catch (err) {
-      console.error("Error listing transactions:", err);
+      console.error("[billing-service] Error listing transactions:", err);
       if (isStripeAuthError(err)) {
         res.status(502).json({ error: "Payment provider authentication failed" });
         return;
@@ -122,14 +138,10 @@ router.get(
   }
 );
 
-function classifyTransaction(
-  amount: number,
-  description: string | null
-): "deduction" | "credit" | "reload" {
-  if (description?.includes("reload") || description?.includes("Reload")) {
-    return "reload";
-  }
-  return amount > 0 ? "deduction" : "credit";
+function classifyTransaction(source: string): "deduction" | "credit" | "reload" {
+  if (source === "reload") return "reload";
+  if (source === "charge") return "deduction";
+  return "credit";
 }
 
 // PATCH /v1/accounts/auto-reload — configure auto-reload settings
@@ -175,7 +187,7 @@ router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => 
 
     res.json(formatAccount(updated));
   } catch (err) {
-    console.error("Error updating auto-reload:", err);
+    console.error("[billing-service] Error updating auto-reload:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -208,7 +220,7 @@ router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) =>
 
     res.json(formatAccount(updated));
   } catch (err) {
-    console.error("Error disabling auto-reload:", err);
+    console.error("[billing-service] Error disabling auto-reload:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

@@ -42,3 +42,21 @@ There is **one** id surfaced in billing responses: `transaction_id` (= `transact
 `transactions.amount_cents` and `billing_accounts.credit_balance_cents` are `numeric(16,10)`. Drizzle returns them as JS strings — never cast with `Number()` for math (precision loss). Use `parseFloat` for display only; for arithmetic in JS, use `BigInt`-scaled or `numeric.js`-style. Do NOT round inside billing — runs-service sends raw fractional, ledger preserves it.
 
 Stripe `customers.createBalanceTransaction` only takes integer cents. The Stripe-sync layer in `src/lib/ledger.ts` ceils ledger balance and only fires a balance txn when the integer floor crosses a boundary. Stripe is fire-and-forget visibility; ledger is source of truth.
+
+## Billing/runs ownership target
+
+Runs-service owns run-level usage truth. Billing-service must not create new
+run-cost provision/confirm/cancel rows. Authorize computes available credits as:
+
+```
+billing-owned credit grants - runs-service org usage total
+```
+
+The runs-service total is fetched from `GET /internal/org-usage-total?org_id=...`
+and includes platform `actual + provisioned` costs, excluding cancelled and
+org/BYOK costs. Billing-service owns Stripe customers, payment methods, reloads,
+welcome/promo grants, and Stripe payment/refund records.
+
+Do not sync Stripe Customer Balance Transactions for internal credit balance.
+Stripe is payment processor/audit; available credits come from billing grants
+minus runs usage.

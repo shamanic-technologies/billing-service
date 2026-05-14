@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
+import { db } from "../../src/db/index.js";
+import { transactions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks, createStripeAuthError } from "../helpers/mock-stripe.js";
@@ -9,11 +11,22 @@ describe("Accounts endpoints", () => {
   const orgId = "00000000-0000-0000-0000-000000000001";
   const userId = "00000000-0000-0000-0000-000000000099";
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
+  let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     stripeMocks = setupStripeMocks();
     await cleanTestData();
+
+    const runsClient = await import("../../src/lib/runs-client.js");
+    fetchRunsOrgUsageTotalSpy = vi.fn().mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "0.0000000000",
+      as_of: "2026-05-13T00:00:00.000Z",
+    });
+    vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockImplementation(
+      fetchRunsOrgUsageTotalSpy
+    );
   });
 
   afterAll(async () => {
@@ -39,15 +52,7 @@ describe("Accounts endpoints", () => {
         undefined,
         {}
       );
-      expect(stripeMocks.createBalanceTransaction).toHaveBeenCalledWith(
-        orgId,
-        userId,
-        "cus_mock123",
-        -200,
-        "Trial credit: $2.00",
-        undefined,
-        {}
-      );
+      expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
     });
 
     it("forwards workflow headers to downstream calls", async () => {
@@ -143,10 +148,15 @@ describe("Accounts endpoints", () => {
   });
 
   describe("GET /v1/accounts/balance", () => {
-    it("returns cached balance", async () => {
+    it("returns granted credits minus runs-service spent total", async () => {
       await insertTestAccount({
         orgId,
         creditBalanceCents: 150,
+      });
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "25.0000000000",
+        as_of: "2026-05-13T00:00:00.000Z",
       });
 
       const res = await request(app)
@@ -155,7 +165,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        balance_cents: "150.0000000000",
+        balance_cents: "125.0000000000",
         depleted: false,
       });
     });
@@ -172,6 +182,18 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.depleted).toBe(true);
+    });
+
+    it("returns 502 when runs-service total is unavailable", async () => {
+      await insertTestAccount({ orgId, creditBalanceCents: 150 });
+      fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));
+
+      const res = await request(app)
+        .get("/v1/accounts/balance")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("Failed to fetch usage total from runs-service");
     });
 
     it("returns 404 for unknown org", async () => {
@@ -195,26 +217,30 @@ describe("Accounts endpoints", () => {
       expect(res.body).toEqual({ transactions: [], has_more: false });
     });
 
-    it("returns transactions from Stripe", async () => {
+    it("returns local credit grant history", async () => {
       await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
-
-      stripeMocks.listBalanceTransactions.mockResolvedValue({
-        data: [
-          {
-            id: "cbtxn_1",
-            amount: 5,
-            description: "anthropic-sonnet-4.5 tokens",
-            created: Math.floor(Date.now() / 1000),
-          },
-          {
-            id: "cbtxn_2",
-            amount: -200,
-            description: "Trial credit: $2.00",
-            created: Math.floor(Date.now() / 1000),
-          },
-        ],
-        has_more: false,
-      });
+      await db.insert(transactions).values([
+        {
+          orgId,
+          userId,
+          type: "credit",
+          amountCents: "200.0000000000",
+          status: "confirmed",
+          source: "welcome",
+          description: "Trial credit: $2.00",
+          createdAt: new Date("2026-05-13T00:00:00.000Z"),
+        },
+        {
+          orgId,
+          userId,
+          type: "credit",
+          amountCents: "500.0000000000",
+          status: "confirmed",
+          source: "reload",
+          description: "Auto-reload credit ($5.00)",
+          createdAt: new Date("2026-05-13T00:01:00.000Z"),
+        },
+      ]);
 
       const res = await request(app)
         .get("/v1/accounts/transactions")
@@ -222,22 +248,11 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.transactions).toHaveLength(2);
-      expect(res.body.transactions[0].type).toBe("deduction");
-      expect(res.body.transactions[1].type).toBe("credit");
-    });
-
-    it("returns 502 when Stripe key is expired", async () => {
-      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
-      stripeMocks.listBalanceTransactions.mockRejectedValue(
-        createStripeAuthError("Expired API Key provided")
-      );
-
-      const res = await request(app)
-        .get("/v1/accounts/transactions")
-        .set(getAuthHeaders(orgId));
-
-      expect(res.status).toBe(502);
-      expect(res.body.error).toBe("Payment provider authentication failed");
+      expect(res.body.transactions.map((txn: { type: string }) => txn.type)).toEqual([
+        "reload",
+        "credit",
+      ]);
+      expect(stripeMocks.listBalanceTransactions).not.toHaveBeenCalled();
     });
   });
 
