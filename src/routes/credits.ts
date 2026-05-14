@@ -144,7 +144,7 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
           // Cooldown: skip reload if the last reload entry is cancelled and < 15 min old.
           const RELOAD_COOLDOWN_MS = 15 * 60 * 1000;
           const [lastReload] = await tx
-            .select({ status: transactions.status, createdAt: transactions.createdAt })
+            .select({ status: transactions.status, createdAt: transactions.createdAt, description: transactions.description })
             .from(transactions)
             .where(
               and(
@@ -161,7 +161,12 @@ router.post("/v1/credits/authorize", requireOrgHeaders, async (req, res) => {
             Date.now() - new Date(lastReload.createdAt).getTime() < RELOAD_COOLDOWN_MS;
 
           if (reloadOnCooldown) {
-            console.warn(`[billing-service] Auto-reload skipped for org ${orgId}: cooldown active (last failed reload < 15 min ago)`);
+            const lastFailedAt = new Date(lastReload.createdAt).toISOString();
+            const retryAt = new Date(new Date(lastReload.createdAt).getTime() + RELOAD_COOLDOWN_MS).toISOString();
+            const rootCause = lastReload.description ?? "unknown reason";
+            console.warn(
+              `[billing-service] Auto-reload skipped for org ${orgId}: cooldown active until ${retryAt} (last failed ${lastFailedAt}, root cause: ${rootCause})`
+            );
           } else {
             const chargeAmount = computeReloadCharge(availableBalance, requiredCents, lockedAccount.reload_amount_cents);
             try {

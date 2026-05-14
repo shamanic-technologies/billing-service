@@ -90,6 +90,9 @@
           "creditBalanceCents": {
             "type": "string"
           },
+          "availableCents": {
+            "type": "string"
+          },
           "reloadAmountCents": {
             "type": "integer",
             "nullable": true
@@ -115,6 +118,7 @@
           "id",
           "orgId",
           "creditBalanceCents",
+          "availableCents",
           "reloadAmountCents",
           "reloadThresholdCents",
           "hasPaymentMethod",

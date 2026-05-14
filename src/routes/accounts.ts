@@ -14,11 +14,18 @@ import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 
 const router = Router();
 
-function formatAccount(account: typeof billingAccounts.$inferSelect) {
+function formatAccount(
+  account: typeof billingAccounts.$inferSelect,
+  availableCents?: string
+) {
   return {
     id: account.id,
     orgId: account.orgId,
+    // creditBalanceCents is the gross grants total (welcome + promo + reload top-ups,
+    // minus any historical refunds). Pre-#104 this was the displayable balance; now it
+    // does NOT account for runs-service usage. Dashboard should render availableCents.
     creditBalanceCents: account.creditBalanceCents,
+    availableCents: availableCents ?? account.creditBalanceCents,
     reloadAmountCents: account.reloadAmountCents,
     reloadThresholdCents: account.reloadThresholdCents,
     hasPaymentMethod: !!account.stripePaymentMethodId,
@@ -33,10 +40,28 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
     const account = await findOrCreateAccount(orgId, userId, wfHeaders);
-    res.json(formatAccount(account));
+
+    // Net available = grants - runs-service spent. If runs-service is unreachable,
+    // fall through with availableCents = creditBalanceCents rather than 502; this
+    // endpoint must stay responsive for dashboard rendering.
+    let availableCents = account.creditBalanceCents;
+    try {
+      const usage = await fetchRunsOrgUsageTotal(orgId, {
+        "x-org-id": orgId,
+        "x-user-id": userId,
+        "x-run-id": runId,
+        ...wfHeaders,
+      });
+      availableCents = subCents(account.creditBalanceCents, usage.spent_cents);
+    } catch (runsErr) {
+      console.warn("[billing-service] /v1/accounts: runs-service usage fetch failed, returning grants as availableCents:", runsErr);
+    }
+
+    res.json(formatAccount(account, availableCents));
   } catch (err) {
     console.error("[billing-service] Error getting/creating account:", err);
     if (isStripeAuthError(err)) {

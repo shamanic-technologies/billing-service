@@ -26,6 +26,7 @@ export const BillingAccountSchema = z
     id: z.string().uuid(),
     orgId: z.string().uuid(),
     creditBalanceCents: CentsStringSchema,
+    availableCents: CentsStringSchema,
     reloadAmountCents: z.number().int().nullable(),
     reloadThresholdCents: z.number().int().nullable(),
     hasPaymentMethod: z.boolean(),
