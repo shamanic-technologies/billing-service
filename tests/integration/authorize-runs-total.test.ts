@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { customerBalanceTransactions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
@@ -14,7 +14,7 @@ const authorizeBody = {
   description: "runs-total authorize test",
 };
 
-describe("Credits authorize — billing grants minus runs-service spent total", () => {
+describe("Customer balance authorize — billing balance minus runs-service spent total", () => {
   const app = createTestApp();
   let stripeMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
@@ -43,8 +43,8 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     await closeDb();
   });
 
-  it("authorizes from granted credits minus runs spent total", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_auth", creditBalanceCents: 100 });
+  it("authorizes from balance minus runs spent total", async () => {
+    await insertTestAccount({ orgId, stripeCustomerId: "cus_auth", balanceCents: 100 });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "40.0000000000",
@@ -52,7 +52,7 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId, userId))
       .send(authorizeBody);
 
@@ -66,8 +66,8 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
   });
 
-  it("returns insufficient when grants minus runs spent cannot cover required cost", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_insufficient", creditBalanceCents: 100 });
+  it("returns insufficient when balance minus runs spent cannot cover required cost", async () => {
+    await insertTestAccount({ orgId, stripeCustomerId: "cus_insufficient", balanceCents: 100 });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "95.0000000000",
@@ -75,7 +75,7 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId, userId))
       .send(authorizeBody);
 
@@ -88,13 +88,13 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
   });
 
-  it("auto-reloads once and records a Stripe top-up grant without Stripe customer balance sync", async () => {
+  it("auto-topups once and records a Stripe payment row without Stripe customer balance sync", async () => {
     await insertTestAccount({
       orgId,
-      stripeCustomerId: "cus_reload",
-      stripePaymentMethodId: "pm_reload",
-      reloadAmountCents: 1000,
-      creditBalanceCents: 100,
+      stripeCustomerId: "cus_topup",
+      stripePaymentMethodId: "pm_topup",
+      topupAmountCents: 1000,
+      balanceCents: 100,
     });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
@@ -103,7 +103,7 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId, userId))
       .send(authorizeBody);
 
@@ -116,19 +116,19 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledTimes(1);
     expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
 
-    const rows = await db.select().from(transactions);
+    const rows = await db.select().from(customerBalanceTransactions);
     expect(rows).toHaveLength(1);
-    expect(rows[0].source).toBe("reload");
-    expect(rows[0].type).toBe("credit");
-    expect(rows[0].amountCents).toBe("1000.0000000000");
+    expect(rows[0].type).toBe("payment");
+    expect(rows[0].status).toBe("succeeded");
+    expect(rows[0].amountCents).toBe("-1000.0000000000");
   });
 
   it("fails loud when runs-service total is unavailable", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_runs_down", creditBalanceCents: 100 });
+    await insertTestAccount({ orgId, stripeCustomerId: "cus_runs_down", balanceCents: 100 });
     fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId, userId))
       .send(authorizeBody);
 
@@ -136,7 +136,7 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
     expect(res.body.error).toBe("Failed to fetch usage total from runs-service");
   });
 
-  it("removes billing provision lifecycle endpoints", async () => {
+  it("removes legacy billing provision lifecycle + v1 credits endpoints", async () => {
     const headers = getAuthHeaders(orgId, userId);
 
     const deduct = await request(app)
@@ -155,10 +155,15 @@ describe("Credits authorize — billing grants minus runs-service spent total", 
       .post("/v1/credits/provision/00000000-0000-0000-0000-00000000ffff/cancel")
       .set(headers)
       .send({});
+    const v1Authorize = await request(app)
+      .post("/v1/credits/authorize")
+      .set(headers)
+      .send(authorizeBody);
 
     expect(deduct.status).toBe(404);
     expect(provision.status).toBe(404);
     expect(confirm.status).toBe(404);
     expect(cancel.status).toBe(404);
+    expect(v1Authorize.status).toBe(404);
   });
 });

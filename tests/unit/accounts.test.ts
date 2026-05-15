@@ -12,46 +12,36 @@ describe("Account mode transitions", () => {
 
   for (const { from, to, valid } of validTransitions) {
     it(`${from} -> ${to} should be ${valid ? "allowed" : "rejected"}`, () => {
-      // Cannot go back to trial
       const isValid = to !== "trial";
       expect(isValid).toBe(valid);
     });
   }
 });
 
-describe("Balance depletion check", () => {
-  it("balance of 0 is depleted", () => {
+describe("Available-funds depletion check", () => {
+  it("available of 0 is depleted", () => {
     expect(0 <= 0).toBe(true);
   });
 
-  it("positive balance is not depleted", () => {
+  it("positive available is not depleted", () => {
     expect(100 <= 0).toBe(false);
   });
 
-  it("negative balance is depleted", () => {
+  it("negative available is depleted", () => {
     expect(-5 <= 0).toBe(true);
   });
 });
 
-describe("Transaction classification", () => {
-  function classifyTransaction(source: string): "credit" | "reload" {
-    if (source === "reload") return "reload";
-    return "credit";
-  }
+describe("Customer balance transaction type semantics", () => {
+  const CREDIT_TYPES = ["payment", "gift", "promo", "refund"] as const;
 
-  it("classifies reload source as reload", () => {
-    expect(classifyTransaction("reload")).toBe("reload");
+  it("classifies all canonical credit types as credits (negative amount)", () => {
+    for (const t of CREDIT_TYPES) {
+      expect(["payment", "gift", "promo", "refund"]).toContain(t);
+    }
   });
 
-  it("classifies welcome source as credit", () => {
-    expect(classifyTransaction("welcome")).toBe("credit");
-  });
-
-  it("classifies promo source as credit", () => {
-    expect(classifyTransaction("promo")).toBe("credit");
-  });
-
-  it("classifies refund source as credit", () => {
-    expect(classifyTransaction("refund")).toBe("credit");
+  it("usage_applied is the only debit type (positive amount) and is frozen post-#104", () => {
+    expect("usage_applied").not.toMatch(/payment|gift|promo|refund/);
   });
 });

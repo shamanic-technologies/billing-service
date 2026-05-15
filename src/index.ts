@@ -8,10 +8,10 @@ import { db } from "./db/index.js";
 import healthRoutes from "./routes/health.js";
 import publicStatsRoutes from "./routes/public-stats.js";
 import accountsRoutes from "./routes/accounts.js";
-import creditsRoutes from "./routes/credits.js";
+import customerBalanceRoutes from "./routes/customer_balance.js";
 import checkoutRoutes from "./routes/checkout.js";
 import portalRoutes from "./routes/portal.js";
-import promoRoutes from "./routes/promo.js";
+import promotionCodesRoutes from "./routes/promotion_codes.js";
 import webhookRoutes from "./routes/webhooks.js";
 import internalRoutes from "./routes/internal.js";
 import { requireApiKey } from "./middleware/auth.js";
@@ -49,10 +49,10 @@ app.get("/openapi.json", (_req, res) => {
 app.use(requireApiKey);
 app.use(internalRoutes);
 app.use(accountsRoutes);
-app.use(creditsRoutes);
+app.use(customerBalanceRoutes);
 app.use(checkoutRoutes);
 app.use(portalRoutes);
-app.use(promoRoutes);
+app.use(promotionCodesRoutes);
 
 // 404 handler
 app.use((_req, res) => {

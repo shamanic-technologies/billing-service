@@ -1,14 +1,18 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions } from "../db/schema.js";
+import { billingAccounts, customerBalanceTransactions } from "../db/schema.js";
 import { createCustomer } from "./stripe.js";
 
-const WELCOME_CREDIT_CENTS = "200";
+// $2 trial credit on signup. Stored unsigned positive in balance_cents (cache),
+// and as a negative amount_cents row on customer_balance_transactions (since
+// credit-type rows have negative signed amounts per Stripe convention).
+const WELCOME_GIFT_CENTS = "200";
+const WELCOME_GIFT_SIGNED_CENTS = "-200";
 
 /**
  * Find or auto-create a billing account for an org.
  * Uses INSERT ON CONFLICT to prevent duplicate Stripe customers
- * and double welcome credits on concurrent requests.
+ * and double welcome gifts on concurrent requests.
  */
 export async function findOrCreateAccount(
   orgId: string,
@@ -28,7 +32,7 @@ export async function findOrCreateAccount(
     .insert(billingAccounts)
     .values({
       orgId,
-      creditBalanceCents: WELCOME_CREDIT_CENTS,
+      balanceCents: WELCOME_GIFT_CENTS,
     })
     .onConflictDoNothing()
     .returning();
@@ -52,17 +56,16 @@ export async function findOrCreateAccount(
     .where(eq(billingAccounts.orgId, orgId))
     .returning();
 
-  // Write welcome credit to ledger
+  // Write welcome gift to ledger: type='gift', signed amount (negative = credit)
   await db
-    .insert(transactions)
+    .insert(customerBalanceTransactions)
     .values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: WELCOME_CREDIT_CENTS,
-      status: "confirmed",
-      source: "welcome",
-      description: "Trial credit: $2.00",
+      type: "gift",
+      amountCents: WELCOME_GIFT_SIGNED_CENTS,
+      status: "succeeded",
+      description: "Trial gift: $2.00",
     });
 
   return updated;

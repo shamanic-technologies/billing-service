@@ -3,7 +3,7 @@ import request from "supertest";
 import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { customerBalanceTransactions } from "../../src/db/schema.js";
 
 describe("GET /public/stats/billing", () => {
   const app = createTestApp();
@@ -25,15 +25,16 @@ describe("GET /public/stats/billing", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      totalAccounts: 0,
-      accountsWithPaymentMethod: 0,
-      totalGrantsCents: "0.0000000000",
-      totalCreditedCents: "0.0000000000",
-      monthlyGrowth: [],
-      weeklyGrowth: [],
+      total_accounts: 0,
+      accounts_with_payment_method: 0,
+      total_balance_cents: "0.0000000000",
+      total_credited_cents: "0.0000000000",
+      monthly_growth: [],
+      weekly_growth: [],
     });
     expect(res.body).not.toHaveProperty("totalConsumedCents");
     expect(res.body).not.toHaveProperty("totalCreditBalanceCents");
+    expect(res.body).not.toHaveProperty("totalGrantsCents");
   });
 
   it("does not require authentication", async () => {
@@ -44,75 +45,70 @@ describe("GET /public/stats/billing", () => {
   it("aggregates across multiple orgs", async () => {
     await insertTestAccount({
       orgId: orgA,
-      creditBalanceCents: 5000,
+      balanceCents: 5000,
       stripePaymentMethodId: "pm_123",
     });
     await insertTestAccount({
       orgId: orgB,
-      creditBalanceCents: 3000,
+      balanceCents: 3000,
       stripePaymentMethodId: null,
     });
 
-    await db.insert(transactions).values([
+    await db.insert(customerBalanceTransactions).values([
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 10000,
-        source: "reload",
-        description: "reload",
+        type: "payment",
+        status: "succeeded",
+        amountCents: "-10000.0000000000",
+        description: "topup",
       },
       {
         orgId: orgB,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 5000,
-        source: "reload",
-        description: "reload",
+        type: "payment",
+        status: "succeeded",
+        amountCents: "-5000.0000000000",
+        description: "topup",
       },
       {
         orgId: orgB,
         userId,
-        type: "credit",
-        status: "cancelled",
-        amountCents: 9999,
-        source: "reload",
-        description: "should be excluded — cancelled",
+        type: "payment",
+        status: "canceled",
+        amountCents: "-9999.0000000000",
+        description: "should be excluded — canceled",
       },
     ]);
 
     const res = await request(app).get("/public/stats/billing");
 
     expect(res.status).toBe(200);
-    expect(res.body.totalAccounts).toBe(2);
-    expect(res.body.accountsWithPaymentMethod).toBe(1);
-    expect(res.body.totalGrantsCents).toBe("8000.0000000000");
-    expect(res.body.totalCreditedCents).toBe("15000.0000000000");
+    expect(res.body.total_accounts).toBe(2);
+    expect(res.body.accounts_with_payment_method).toBe(1);
+    expect(res.body.total_balance_cents).toBe("8000.0000000000");
+    expect(res.body.total_credited_cents).toBe("15000.0000000000");
     expect(res.body).not.toHaveProperty("totalConsumedCents");
   });
 
   it("returns monthly and weekly growth with credited and revenue", async () => {
-    await insertTestAccount({ orgId: orgA, creditBalanceCents: 1000 });
+    await insertTestAccount({ orgId: orgA, balanceCents: 1000 });
 
-    await db.insert(transactions).values([
+    await db.insert(customerBalanceTransactions).values([
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 5000,
-        source: "reload",
-        description: "reload — real payment",
+        type: "payment",
+        status: "succeeded",
+        amountCents: "-5000.0000000000",
+        description: "topup — real payment",
       },
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 200,
-        source: "welcome",
+        type: "gift",
+        status: "succeeded",
+        amountCents: "-200.0000000000",
         description: "welcome — not revenue",
       },
     ]);
@@ -121,27 +117,24 @@ describe("GET /public/stats/billing", () => {
 
     expect(res.status).toBe(200);
 
-    // Should have growth arrays
-    expect(res.body.monthlyGrowth).toBeInstanceOf(Array);
-    expect(res.body.monthlyGrowth.length).toBeGreaterThanOrEqual(1);
-    expect(res.body.weeklyGrowth).toBeInstanceOf(Array);
-    expect(res.body.weeklyGrowth.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.monthly_growth).toBeInstanceOf(Array);
+    expect(res.body.monthly_growth.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.weekly_growth).toBeInstanceOf(Array);
+    expect(res.body.weekly_growth.length).toBeGreaterThanOrEqual(1);
 
-    // Sum across all periods should match totals (parse string-cents to number for sum)
-    const totalMonthlyCredited = res.body.monthlyGrowth.reduce(
+    const totalMonthlyCredited = res.body.monthly_growth.reduce(
       (sum: number, r: { credited_cents: string }) => sum + parseFloat(r.credited_cents),
       0
     );
-    const totalMonthlyRevenue = res.body.monthlyGrowth.reduce(
+    const totalMonthlyRevenue = res.body.monthly_growth.reduce(
       (sum: number, r: { revenue_cents: string }) => sum + parseFloat(r.revenue_cents),
       0
     );
 
-    expect(totalMonthlyCredited).toBe(5200); // 5000 reload + 200 welcome
-    expect(totalMonthlyRevenue).toBe(5000); // only reload is revenue
+    expect(totalMonthlyCredited).toBe(5200); // 5000 payment + 200 gift
+    expect(totalMonthlyRevenue).toBe(5000); // only payment is revenue
 
-    // Each row should have the expected shape
-    for (const row of res.body.monthlyGrowth) {
+    for (const row of res.body.monthly_growth) {
       expect(row).toHaveProperty("period");
       expect(row).toHaveProperty("credited_cents");
       expect(row).toHaveProperty("revenue_cents");
@@ -149,56 +142,51 @@ describe("GET /public/stats/billing", () => {
     }
   });
 
-  // Regression: investor page was showing $1418 credited vs $870 real Stripe revenue because
-  // provision_cancel and provision_adjust credit miroirs were summed into totalCreditedCents.
-  // After the refactor, those sources no longer exist; only canonical credit sources count.
-  it("totalCreditedCents only sums canonical credit sources (no accounting noise)", async () => {
-    await insertTestAccount({ orgId: orgA, creditBalanceCents: 1000 });
+  // Regression: investor page was showing inflated credited totals when canceled
+  // and provision-adjust credit miroirs were summed. Post-v3, only succeeded
+  // credit-direction rows (amount_cents < 0) count.
+  it("total_credited_cents only sums succeeded credit-type CBTs", async () => {
+    await insertTestAccount({ orgId: orgA, balanceCents: 1000 });
 
-    await db.insert(transactions).values([
+    await db.insert(customerBalanceTransactions).values([
       // Canonical credits — all counted.
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 1000,
-        source: "reload",
+        type: "payment",
+        status: "succeeded",
+        amountCents: "-1000.0000000000",
         description: "real Stripe top-up",
       },
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 200,
-        source: "welcome",
-        description: "trial credit",
+        type: "gift",
+        status: "succeeded",
+        amountCents: "-200.0000000000",
+        description: "trial gift",
       },
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "confirmed",
-        amountCents: 50,
-        source: "promo",
+        type: "promo",
+        status: "succeeded",
+        amountCents: "-50.0000000000",
         description: "promo redemption",
       },
-      // Cancelled credit — excluded by status filter.
+      // Canceled credit — excluded by status filter.
       {
         orgId: orgA,
         userId,
-        type: "credit",
-        status: "cancelled",
-        amountCents: 9999,
-        source: "reload",
-        description: "failed reload — must not count",
+        type: "payment",
+        status: "canceled",
+        amountCents: "-9999.0000000000",
+        description: "failed topup — must not count",
       },
     ]);
 
     const res = await request(app).get("/public/stats/billing");
     expect(res.status).toBe(200);
-    expect(res.body.totalCreditedCents).toBe("1250.0000000000"); // 1000 + 200 + 50
+    expect(res.body.total_credited_cents).toBe("1250.0000000000"); // 1000 + 200 + 50
   });
-
 });

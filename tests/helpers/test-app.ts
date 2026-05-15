@@ -3,10 +3,10 @@ import cors from "cors";
 import healthRoutes from "../../src/routes/health.js";
 import publicStatsRoutes from "../../src/routes/public-stats.js";
 import accountsRoutes from "../../src/routes/accounts.js";
-import creditsRoutes from "../../src/routes/credits.js";
+import customerBalanceRoutes from "../../src/routes/customer_balance.js";
 import checkoutRoutes from "../../src/routes/checkout.js";
 import portalRoutes from "../../src/routes/portal.js";
-import promoRoutes from "../../src/routes/promo.js";
+import promotionCodesRoutes from "../../src/routes/promotion_codes.js";
 import webhookRoutes from "../../src/routes/webhooks.js";
 import internalRoutes from "../../src/routes/internal.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
@@ -30,10 +30,10 @@ export function createTestApp() {
   app.use(requireApiKey);
   app.use(internalRoutes);
   app.use(accountsRoutes);
-  app.use(creditsRoutes);
+  app.use(customerBalanceRoutes);
   app.use(checkoutRoutes);
   app.use(portalRoutes);
-  app.use(promoRoutes);
+  app.use(promotionCodesRoutes);
 
   app.use((_req: express.Request, res: express.Response) => {
     res.status(404).json({ error: "Not found" });

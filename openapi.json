@@ -34,25 +34,25 @@
       "PublicBillingStats": {
         "type": "object",
         "properties": {
-          "totalAccounts": {
+          "total_accounts": {
             "type": "integer"
           },
-          "accountsWithPaymentMethod": {
+          "accounts_with_payment_method": {
             "type": "integer"
           },
-          "totalGrantsCents": {
+          "total_balance_cents": {
             "type": "string"
           },
-          "totalCreditedCents": {
+          "total_credited_cents": {
             "type": "string"
           },
-          "monthlyGrowth": {
+          "monthly_growth": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BillingGrowthRow"
             }
           },
-          "weeklyGrowth": {
+          "weekly_growth": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BillingGrowthRow"
@@ -60,12 +60,12 @@
           }
         },
         "required": [
-          "totalAccounts",
-          "accountsWithPaymentMethod",
-          "totalGrantsCents",
-          "totalCreditedCents",
-          "monthlyGrowth",
-          "weeklyGrowth"
+          "total_accounts",
+          "accounts_with_payment_method",
+          "total_balance_cents",
+          "total_credited_cents",
+          "monthly_growth",
+          "weekly_growth"
         ]
       },
       "BillingAccount": {
@@ -75,52 +75,57 @@
             "type": "string",
             "format": "uuid"
           },
-          "orgId": {
+          "org_id": {
             "type": "string",
             "format": "uuid"
           },
-          "grantsCents": {
+          "balance_cents": {
             "type": "string"
           },
-          "runsSpentCents": {
+          "usage_cents": {
             "type": "string"
           },
-          "availableCents": {
+          "available_cents": {
             "type": "string"
           },
-          "reloadAmountCents": {
+          "topup_amount_cents": {
             "type": "integer",
             "nullable": true
           },
-          "reloadThresholdCents": {
+          "topup_threshold_cents": {
             "type": "integer",
             "nullable": true
           },
-          "hasPaymentMethod": {
+          "has_payment_method": {
             "type": "boolean"
           },
-          "hasAutoReload": {
+          "has_auto_topup": {
             "type": "boolean"
           },
-          "createdAt": {
+          "stripe_customer_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
             "type": "string"
           },
-          "updatedAt": {
+          "updated_at": {
             "type": "string"
           }
         },
         "required": [
           "id",
-          "orgId",
-          "grantsCents",
-          "runsSpentCents",
-          "availableCents",
-          "reloadAmountCents",
-          "reloadThresholdCents",
-          "hasPaymentMethod",
-          "hasAutoReload",
-          "createdAt",
-          "updatedAt"
+          "org_id",
+          "balance_cents",
+          "usage_cents",
+          "available_cents",
+          "topup_amount_cents",
+          "topup_threshold_cents",
+          "has_payment_method",
+          "has_auto_topup",
+          "stripe_customer_id",
+          "created_at",
+          "updated_at"
         ]
       },
       "ErrorResponse": {
@@ -137,7 +142,7 @@
       "BalanceResponse": {
         "type": "object",
         "properties": {
-          "balance_cents": {
+          "available_cents": {
             "type": "string"
           },
           "depleted": {
@@ -145,49 +150,91 @@
           }
         },
         "required": [
-          "balance_cents",
+          "available_cents",
           "depleted"
         ]
       },
-      "Transaction": {
+      "CustomerBalanceTransaction": {
         "type": "object",
         "properties": {
           "id": {
-            "type": "string"
+            "type": "string",
+            "format": "uuid"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "customer_balance_transaction"
+            ]
           },
           "amount_cents": {
-            "type": "integer"
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
-          },
-          "created_at": {
             "type": "string"
           },
           "type": {
             "type": "string",
             "enum": [
-              "credit",
-              "reload"
+              "payment",
+              "gift",
+              "promo",
+              "refund",
+              "usage_applied"
             ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "requires_capture",
+              "succeeded",
+              "canceled"
+            ]
+          },
+          "stripe_payment_intent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "stripe_balance_transaction_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "cost_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "created": {
+            "type": "integer"
           }
         },
         "required": [
           "id",
+          "object",
           "amount_cents",
+          "type",
+          "status",
+          "stripe_payment_intent_id",
+          "stripe_balance_transaction_id",
+          "cost_id",
           "description",
-          "created_at",
-          "type"
+          "created"
         ]
       },
-      "TransactionsResponse": {
+      "CustomerBalanceTransactionList": {
         "type": "object",
         "properties": {
-          "transactions": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "list"
+            ]
+          },
+          "data": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Transaction"
+              "$ref": "#/components/schemas/CustomerBalanceTransaction"
             }
           },
           "has_more": {
@@ -195,25 +242,26 @@
           }
         },
         "required": [
-          "transactions",
+          "object",
+          "data",
           "has_more"
         ]
       },
-      "UpdateAutoReloadRequest": {
+      "UpdateAutoTopupRequest": {
         "type": "object",
         "properties": {
-          "reload_amount_cents": {
+          "topup_amount_cents": {
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true
           },
-          "reload_threshold_cents": {
+          "topup_threshold_cents": {
             "type": "integer",
             "minimum": 0
           }
         },
         "required": [
-          "reload_amount_cents"
+          "topup_amount_cents"
         ]
       },
       "PortalSessionResponse": {
@@ -265,7 +313,7 @@
             "type": "string",
             "format": "uri"
           },
-          "reload_amount_cents": {
+          "topup_amount_cents": {
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true
@@ -274,7 +322,7 @@
         "required": [
           "success_url",
           "cancel_url",
-          "reload_amount_cents"
+          "topup_amount_cents"
         ]
       },
       "AuthorizeResponse": {
@@ -332,22 +380,22 @@
           "items"
         ]
       },
-      "UsageNotifyResponse": {
+      "UsageApplyResponse": {
         "type": "object",
         "properties": {
           "acknowledged": {
             "type": "boolean"
           },
-          "reload_triggered": {
+          "topup_triggered": {
             "type": "boolean"
           }
         },
         "required": [
           "acknowledged",
-          "reload_triggered"
+          "topup_triggered"
         ]
       },
-      "UsageNotifyRequest": {
+      "UsageApplyRequest": {
         "type": "object",
         "properties": {
           "spent_total_cents": {
@@ -358,14 +406,14 @@
           "spent_total_cents"
         ]
       },
-      "RedeemPromoResponse": {
+      "RedeemPromotionCodeResponse": {
         "type": "object",
         "properties": {
           "redeemed": {
             "type": "boolean"
           },
           "amount_cents": {
-            "type": "integer"
+            "type": "string"
           },
           "balance_cents": {
             "type": "string"
@@ -377,7 +425,7 @@
           "balance_cents"
         ]
       },
-      "RedeemPromoRequest": {
+      "RedeemPromotionCodeRequest": {
         "type": "object",
         "properties": {
           "code": {
@@ -594,7 +642,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed (e.g. expired Stripe key)",
+            "description": "Payment provider authentication failed or runs-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -608,7 +656,7 @@
     },
     "/v1/accounts/balance": {
       "get": {
-        "summary": "Quick balance check from DB cache",
+        "summary": "Quick available-funds check",
         "parameters": [
           {
             "schema": {
@@ -693,13 +741,24 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
-    "/v1/accounts/transactions": {
+    "/v1/customer_balance_transactions": {
       "get": {
-        "summary": "Get credit transaction history from Stripe",
+        "summary": "Paginated customer balance transaction history",
+        "description": "Lists the org's customer balance transactions in reverse chronological order. Excludes legacy `usage_applied` rows (frozen post-#104; runs-service owns usage truth). `amount_cents` is SIGNED: negative = credit, positive = debit.",
         "parameters": [
           {
             "schema": {
@@ -776,17 +835,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Transaction list",
+            "description": "Customer balance transaction list",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransactionsResponse"
+                  "$ref": "#/components/schemas/CustomerBalanceTransactionList"
                 }
               }
             }
           },
-          "502": {
-            "description": "Payment provider authentication failed",
+          "404": {
+            "description": "Billing account not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -798,9 +857,9 @@
         }
       }
     },
-    "/v1/accounts/auto-reload": {
+    "/v1/accounts/auto_topup": {
       "patch": {
-        "summary": "Configure auto-reload settings (requires payment method)",
+        "summary": "Configure auto-topup settings (requires payment method)",
         "parameters": [
           {
             "schema": {
@@ -879,7 +938,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateAutoReloadRequest"
+                "$ref": "#/components/schemas/UpdateAutoTopupRequest"
               }
             }
           }
@@ -918,7 +977,7 @@
         }
       },
       "delete": {
-        "summary": "Disable auto-reload",
+        "summary": "Disable auto-topup",
         "parameters": [
           {
             "schema": {
@@ -995,7 +1054,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Updated account with auto-reload disabled",
+            "description": "Updated account with auto-topup disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,8 +1208,8 @@
     },
     "/v1/checkout-sessions": {
       "post": {
-        "summary": "Create Stripe Checkout session to add payment method and credits",
-        "description": "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-reload.",
+        "summary": "Create Stripe Checkout session to add payment method and balance top-up",
+        "description": "Auto-creates the billing account with $2.00 trial gift if the org has no account yet. Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-topup.",
         "parameters": [
           {
             "schema": {
@@ -1258,10 +1317,10 @@
         }
       }
     },
-    "/v1/credits/authorize": {
+    "/v1/customer_balance/authorize": {
       "post": {
-        "summary": "Synchronous pre-execution authorization with auto-reload",
-        "description": "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. Resolves prices from costs-service, fetches org usage total from runs-service, then checks available credits. Available credits are billing-owned credit grants minus runs-service platform usage total. If insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents that covers the required amount (e.g. $10 reload unit, $37 required with $2 balance → charges 4x $10 = $40). Sends email notification on reload failure or credit depletion.",
+        "summary": "Synchronous pre-execution authorization with auto-topup",
+        "description": "Auto-creates the billing account with $2.00 trial gift if the org has no account yet. Resolves prices from costs-service, fetches org usage total from runs-service, then checks available funds. Available funds = balance_cents − usage_cents. If insufficient and auto-topup is configured, charges the smallest multiple of topup_amount_cents that covers the required amount. Sends email notification on topup failure or balance depletion.",
         "parameters": [
           {
             "schema": {
@@ -1369,10 +1428,10 @@
         }
       }
     },
-    "/v1/credits/usage-notify": {
+    "/v1/customer_balance/usage_apply": {
       "post": {
-        "summary": "Notify billing of an org's current usage total (hint for proactive reload)",
-        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Body carries the org's current spent total (actual + provisioned platform costs). Billing computes available = credit_grants - spent_total; if below reload_threshold and auto-reload is configured, fires a Stripe reload under a short row lock. Always returns 202 — caller does NOT rely on this for correctness; billing always re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+        "summary": "Notify billing of an org's current usage total (hint for proactive topup)",
+        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Body carries the org's current spent total (actual + provisioned platform costs). Billing computes available = balance - usage; if below topup_threshold and auto-topup is configured, fires a Stripe topup under a short row lock. Always returns 202 — caller does NOT rely on this for correctness; billing always re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
         "parameters": [
           {
             "schema": {
@@ -1451,7 +1510,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UsageNotifyRequest"
+                "$ref": "#/components/schemas/UsageApplyRequest"
               }
             }
           }
@@ -1462,7 +1521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UsageNotifyResponse"
+                  "$ref": "#/components/schemas/UsageApplyResponse"
                 }
               }
             }
@@ -1480,10 +1539,10 @@
         }
       }
     },
-    "/v1/promo/redeem": {
+    "/v1/promotion_codes/redeem": {
       "post": {
         "summary": "Redeem a promo code for bonus credits",
-        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and credits the bonus amount to the org's billing account. The normal $2 welcome credit is unaffected — this adds on top.",
+        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and credits the bonus amount to the org's customer balance. Inserts a `type='promo'` row with negative signed amount_cents. The normal $2 welcome gift is unaffected — this adds on top.",
         "parameters": [
           {
             "schema": {
@@ -1562,7 +1621,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RedeemPromoRequest"
+                "$ref": "#/components/schemas/RedeemPromotionCodeRequest"
               }
             }
           }
@@ -1573,7 +1632,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedeemPromoResponse"
+                  "$ref": "#/components/schemas/RedeemPromotionCodeResponse"
                 }
               }
             }

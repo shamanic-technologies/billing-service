@@ -21,14 +21,17 @@ export const billingAccounts = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
-    creditBalanceCents: numeric("credit_balance_cents", {
+    // Prepaid balance liability (what we owe the org). Stored unsigned positive
+    // in the cache column; per-row direction is encoded by amount_cents sign on
+    // the customer_balance_transactions ledger.
+    balanceCents: numeric("balance_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
     })
       .notNull()
       .default("200"),
-    reloadAmountCents: integer("reload_amount_cents"),
-    reloadThresholdCents: integer("reload_threshold_cents").default(200),
+    topupAmountCents: integer("topup_amount_cents"),
+    topupThresholdCents: integer("topup_threshold_cents").default(200),
     stripePaymentMethodId: text("stripe_payment_method_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -64,23 +67,27 @@ export const localPromoCodes = pgTable(
 export type LocalPromoCode = typeof localPromoCodes.$inferSelect;
 export type NewLocalPromoCode = typeof localPromoCodes.$inferInsert;
 
-export const transactions = pgTable(
-  "transactions",
+// `customer_balance_transactions` — Stripe-aligned ledger.
+// type: 'payment' | 'gift' | 'promo' | 'refund' | 'usage_applied' (frozen)
+// status: 'requires_capture' | 'succeeded' | 'canceled'
+// amount_cents: signed — negative = credit (balance increases), positive = debit (balance decreases).
+//   balanceCents = − SUM(amount_cents) WHERE status='succeeded'.
+export const customerBalanceTransactions = pgTable(
+  "customer_balance_transactions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     userId: uuid("user_id").notNull(),
     runId: uuid("run_id"),
     costId: uuid("cost_id"),
-    type: text("type").notNull().default("debit"),
+    type: text("type").notNull().default("payment"),
     amountCents: numeric("amount_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
     }).notNull(),
-    status: text("status").notNull().default("pending"),
-    source: text("source").notNull().default("charge"),
+    status: text("status").notNull().default("requires_capture"),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
-    stripeBalanceTxnId: text("stripe_balance_txn_id"),
+    stripeBalanceTransactionId: text("stripe_balance_transaction_id"),
     promoCodeId: uuid("promo_code_id").references(() => localPromoCodes.id),
     description: text("description"),
     campaignId: text("campaign_id"),
@@ -95,15 +102,17 @@ export const transactions = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index("idx_transactions_org_id").on(table.orgId),
-    index("idx_transactions_status").on(table.status),
-    index("idx_transactions_source").on(table.source),
-    index("idx_transactions_cost_id").on(table.costId),
-    uniqueIndex("idx_transactions_reload_pi")
+    index("idx_cbt_org_id").on(table.orgId),
+    index("idx_cbt_status").on(table.status),
+    index("idx_cbt_type").on(table.type),
+    index("idx_cbt_cost_id").on(table.costId),
+    uniqueIndex("idx_cbt_payment_pi")
       .on(table.orgId, table.stripePaymentIntentId)
-      .where(sql`source = 'reload' AND stripe_payment_intent_id IS NOT NULL`),
+      .where(sql`type = 'payment' AND stripe_payment_intent_id IS NOT NULL`),
   ]
 );
 
-export type Transaction = typeof transactions.$inferSelect;
-export type NewTransaction = typeof transactions.$inferInsert;
+export type CustomerBalanceTransaction =
+  typeof customerBalanceTransactions.$inferSelect;
+export type NewCustomerBalanceTransaction =
+  typeof customerBalanceTransactions.$inferInsert;
