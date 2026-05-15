@@ -35,6 +35,7 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.accounts_with_payment_method).toBe(0);
     expect(res.body.total_credited_cents).toBe("0.0000000000");
     expect(res.body.total_paid_cents).toBe("0.0000000000");
+    expect(res.body.total_revenue_cents).toBe("0.0000000000");
     expect(res.body.total_local_credits_cents).toBe("0.0000000000");
     expect(res.body.monthly_growth).toEqual([]);
     expect(res.body.weekly_growth).toEqual([]);
@@ -64,6 +65,7 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.total_accounts).toBe(2);
     expect(res.body.accounts_with_payment_method).toBe(1);
     expect(res.body.total_paid_cents).toBe("15000.0000000000");
+    expect(res.body.total_revenue_cents).toBe("15000.0000000000");
     expect(res.body.total_local_credits_cents).toBe("400.0000000000");
     expect(res.body.total_credited_cents).toBe("15400.0000000000");
   });

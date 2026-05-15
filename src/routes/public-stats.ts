@@ -100,6 +100,7 @@ router.get("/public/stats/billing", async (_req, res) => {
       accounts_with_payment_method: ssStats.accounts_with_payment_method,
       total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_paid_cents),
       total_paid_cents: ssStats.total_paid_cents,
+      total_revenue_cents: ssStats.total_paid_cents,
       total_local_credits_cents: localCreditStats.totalLocalCredits,
       monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth),
       weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth),
