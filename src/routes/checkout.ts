@@ -23,18 +23,16 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const { success_url, cancel_url, reload_amount_cents } = parsed.data;
+    const { success_url, cancel_url, topup_amount_cents } = parsed.data;
     const runId = req.headers["x-run-id"] as string;
 
-    traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { reload_amount_cents } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { topup_amount_cents } }, req.headers);
 
     const filter = eq(billingAccounts.orgId, orgId);
 
-    // Get or create billing account
     let account = await findOrCreateAccount(orgId, userId, wfHeaders);
 
     if (!account.stripeCustomerId) {
-      // Account exists but no Stripe customer — create one
       const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
       [account] = await db
         .update(billingAccounts)
@@ -52,15 +50,14 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       account.stripeCustomerId!,
       success_url,
       cancel_url,
-      reload_amount_cents,
+      topup_amount_cents,
       wfHeaders
     );
 
-    // Store the reload amount for when checkout completes
     await db
       .update(billingAccounts)
       .set({
-        reloadAmountCents: reload_amount_cents,
+        topupAmountCents: topup_amount_cents,
         updatedAt: new Date(),
       })
       .where(filter);

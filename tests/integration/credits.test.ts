@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq, and } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { customerBalanceTransactions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
-describe("Credits authorize endpoint", () => {
+describe("Customer balance authorize endpoint", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
   const userId = "00000000-0000-0000-0000-000000000099";
@@ -26,7 +26,6 @@ describe("Credits authorize endpoint", () => {
     stripeMocks = setupStripeMocks();
     await cleanTestData();
 
-    // Mock costs-client to return deterministic prices
     const costsClient = await import("../../src/lib/costs-client.js");
     vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("100.0000000000");
 
@@ -46,11 +45,11 @@ describe("Credits authorize endpoint", () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 500,
+      balanceCents: 500,
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -62,15 +61,15 @@ describe("Credits authorize endpoint", () => {
     });
   });
 
-  it("returns sufficient: false when balance is insufficient (no auto-reload)", async () => {
+  it("returns sufficient: false when balance is insufficient (no auto-topup)", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 50,
+      balanceCents: 50,
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -82,18 +81,18 @@ describe("Credits authorize endpoint", () => {
     });
   });
 
-  it("auto-reloads and returns sufficient after reload", async () => {
+  it("auto-topups and returns sufficient after topup", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 50,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 50,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -109,41 +108,41 @@ describe("Credits authorize endpoint", () => {
       "cus_123",
       "pm_123",
       2000,
-      "Auto-reload (1x)",
+      "Auto-topup (1x)",
       {}
     );
 
-    // Reload ledger entry should exist
-    const reloadEntries = await db
+    // Payment ledger entry should exist with signed negative amount
+    const paymentEntries = await db
       .select()
-      .from(transactions)
+      .from(customerBalanceTransactions)
       .where(
         and(
-          eq(transactions.orgId, orgId),
-          eq(transactions.source, "reload")
+          eq(customerBalanceTransactions.orgId, orgId),
+          eq(customerBalanceTransactions.type, "payment")
         )
       );
-    expect(reloadEntries).toHaveLength(1);
-    expect(reloadEntries[0].amountCents).toBe("2000.0000000000");
-    expect(reloadEntries[0].stripePaymentIntentId).toBe("pi_mock");
+    expect(paymentEntries).toHaveLength(1);
+    expect(paymentEntries[0].amountCents).toBe("-2000.0000000000");
+    expect(paymentEntries[0].stripePaymentIntentId).toBe("pi_mock");
+    expect(paymentEntries[0].status).toBe("succeeded");
   });
 
-  it("charges multiple reloads when required amount exceeds single reload", async () => {
-    // Override costs-client to return a large required amount
+  it("charges multiple topup units when required amount exceeds single topup", async () => {
     const costsClient = await import("../../src/lib/costs-client.js");
     vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("3700.0000000000");
 
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 200,
-      reloadAmountCents: 1000, // $10 reload unit
-      reloadThresholdCents: 200,
+      balanceCents: 200,
+      topupAmountCents: 1000, // $10 topup unit
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -160,18 +159,18 @@ describe("Credits authorize endpoint", () => {
       "cus_123",
       "pm_123",
       4000,
-      "Auto-reload (4x)",
+      "Auto-topup (4x)",
       {}
     );
   });
 
-  it("returns sufficient: false when auto-reload fails and writes cancelled ledger entry", async () => {
+  it("returns sufficient: false when auto-topup fails and writes canceled ledger entry", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 50,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 50,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
@@ -180,7 +179,7 @@ describe("Credits authorize endpoint", () => {
     );
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -191,45 +190,43 @@ describe("Credits authorize endpoint", () => {
       required_cents: "100.0000000000",
     });
 
-    // Verify cancelled reload entry was written
-    const reloadEntries = await db
+    const paymentEntries = await db
       .select()
-      .from(transactions)
+      .from(customerBalanceTransactions)
       .where(
         and(
-          eq(transactions.orgId, orgId),
-          eq(transactions.source, "reload")
+          eq(customerBalanceTransactions.orgId, orgId),
+          eq(customerBalanceTransactions.type, "payment")
         )
       );
-    expect(reloadEntries).toHaveLength(1);
-    expect(reloadEntries[0].status).toBe("cancelled");
-    expect(reloadEntries[0].type).toBe("credit");
+    expect(paymentEntries).toHaveLength(1);
+    expect(paymentEntries[0].status).toBe("canceled");
+    expect(paymentEntries[0].type).toBe("payment");
   });
 
-  it("skips auto-reload when a cancelled reload exists within 15 min cooldown", async () => {
+  it("skips auto-topup when a canceled payment exists within 15 min cooldown", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 50,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 50,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
-    // Insert a recent cancelled reload entry (5 min ago)
-    await db.insert(transactions).values({
+    // Insert a recent canceled payment entry (5 min ago)
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 2000,
-      status: "cancelled",
-      source: "reload",
-      description: "Auto-reload failed: Card declined",
+      type: "payment",
+      amountCents: "-2000.0000000000",
+      status: "canceled",
+      description: "Auto-topup failed: Card declined",
       createdAt: new Date(Date.now() - 5 * 60 * 1000),
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -238,41 +235,29 @@ describe("Credits authorize endpoint", () => {
     expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
   });
 
-  it("retries auto-reload when cancelled reload is older than 15 min", async () => {
+  it("retries auto-topup when canceled payment is older than 15 min", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 50,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 50,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
-    // Back up the 50 cents with a confirmed grant entry.
-    await db.insert(transactions).values({
+    // Insert an old canceled payment (20 min ago)
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 50,
-      status: "confirmed",
-      source: "welcome",
-      description: "Welcome credit",
-    });
-
-    // Insert an old cancelled reload entry (20 min ago)
-    await db.insert(transactions).values({
-      orgId,
-      userId,
-      type: "credit",
-      amountCents: 2000,
-      status: "cancelled",
-      source: "reload",
-      description: "Auto-reload failed: Card declined",
+      type: "payment",
+      amountCents: "-2000.0000000000",
+      status: "canceled",
+      description: "Auto-topup failed: Card declined",
       createdAt: new Date(Date.now() - 20 * 60 * 1000),
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -282,55 +267,41 @@ describe("Credits authorize endpoint", () => {
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalled();
   });
 
-  it("retries auto-reload when a confirmed reload is more recent than cancelled", async () => {
+  it("retries auto-topup when a succeeded payment is more recent than canceled", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 60,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 60,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
       stripePaymentMethodId: "pm_123",
     });
 
-    // Back up the grants history; account.creditBalanceCents owns the grant total.
-    await db.insert(transactions).values({
+    // Insert a canceled payment entry (3 min ago)
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 50,
-      status: "confirmed",
-      source: "welcome",
-      description: "Welcome credit",
-    });
-
-    // Insert a cancelled reload entry (3 min ago)
-    await db.insert(transactions).values({
-      orgId,
-      userId,
-      type: "credit",
-      amountCents: 100,
-      status: "cancelled",
-      source: "reload",
-      description: "Auto-reload failed: Card declined",
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "canceled",
+      description: "Auto-topup failed: Card declined",
       createdAt: new Date(Date.now() - 3 * 60 * 1000),
     });
 
-    // Insert a small confirmed reload entry (1 min ago) — resets cooldown
-    await db.insert(transactions).values({
+    // Insert a small succeeded payment entry (1 min ago) — resets cooldown
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 10,
-      status: "confirmed",
-      source: "reload",
+      type: "payment",
+      amountCents: "-10.0000000000",
+      status: "succeeded",
       stripePaymentIntentId: "pi_previous",
-      description: "Auto-reload credit",
+      description: "Auto-topup",
       createdAt: new Date(Date.now() - 1 * 60 * 1000),
     });
 
-    // Last reload is confirmed → no cooldown → charges 2000.
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -342,19 +313,18 @@ describe("Credits authorize endpoint", () => {
 
   it("auto-creates account for unknown org and authorizes from trial balance", async () => {
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    // Auto-created with 200 cents ($2), costs-service mock returns 100
     expect(res.body.balance_cents).toBe("200.0000000000");
   });
 
   it("validates request body — rejects empty items", async () => {
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send({ items: [] });
 
@@ -363,7 +333,7 @@ describe("Credits authorize endpoint", () => {
 
   it("returns 400 when x-org-id is not a UUID", async () => {
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set({
         "x-api-key": process.env.BILLING_SERVICE_API_KEY ?? "test-key",
         "x-org-id": "platform",
@@ -385,11 +355,11 @@ describe("Credits authorize endpoint", () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 500,
+      balanceCents: 500,
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -397,26 +367,25 @@ describe("Credits authorize endpoint", () => {
     expect(res.body.error).toContain("costs-service");
   });
 
-  it("uses billing grant total minus runs-service total, not ledger reconciliation", async () => {
+  it("uses billing balance minus runs-service usage, not ledger reconciliation", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 999,
+      balanceCents: 999,
     });
 
-    // Historical grant rows are not reconciled during authorize anymore.
-    await db.insert(transactions).values({
+    // Historical ledger rows are not reconciled during authorize anymore.
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 300,
-      status: "confirmed",
-      source: "welcome",
-      description: "Welcome credit",
+      type: "gift",
+      amountCents: "-300.0000000000",
+      status: "succeeded",
+      description: "Welcome gift",
     });
 
     const res = await request(app)
-      .post("/v1/credits/authorize")
+      .post("/v1/customer_balance/authorize")
       .set(getAuthHeaders(orgId))
       .send(authorizeBody);
 
@@ -426,7 +395,7 @@ describe("Credits authorize endpoint", () => {
   });
 });
 
-describe("Credits authorize — reload concurrency", () => {
+describe("Customer balance authorize — topup concurrency", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-0000000000aa";
   const userId = "00000000-0000-0000-0000-000000000099";
@@ -458,27 +427,26 @@ describe("Credits authorize — reload concurrency", () => {
     await closeDb();
   });
 
-  it("does not reconcile grant ledger rows during concurrent /authorize calls", async () => {
+  it("does not reconcile ledger rows during concurrent /authorize calls", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_race",
-      creditBalanceCents: 999, // wrong cache
+      balanceCents: 999,
     });
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 300,
-      status: "confirmed",
-      source: "welcome",
-      description: "Welcome credit",
+      type: "gift",
+      amountCents: "-300.0000000000",
+      status: "succeeded",
+      description: "Welcome gift",
     });
 
     const N = 10;
     const responses = await Promise.all(
       Array.from({ length: N }, () =>
         request(app)
-          .post("/v1/credits/authorize")
+          .post("/v1/customer_balance/authorize")
           .set(getAuthHeaders(orgId))
           .send(authorizeBody)
       )
@@ -487,30 +455,30 @@ describe("Credits authorize — reload concurrency", () => {
     for (const res of responses) {
       expect(res.status).toBe(200);
     }
-    // Only the pre-existing welcome row should exist.
+    // Only the pre-existing gift row should exist.
     const entries = await db
       .select()
-      .from(transactions)
-      .where(eq(transactions.orgId, orgId));
+      .from(customerBalanceTransactions)
+      .where(eq(customerBalanceTransactions.orgId, orgId));
     expect(entries).toHaveLength(1);
-    expect(entries[0].source).toBe("welcome");
+    expect(entries[0].type).toBe("gift");
   });
 
-  it("inserts a single reload grant under N concurrent insufficient /authorize calls", async () => {
+  it("inserts a single topup row under N concurrent insufficient /authorize calls", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_race",
       stripePaymentMethodId: "pm_race",
-      creditBalanceCents: 50,
-      reloadAmountCents: 2000,
-      reloadThresholdCents: 200,
+      balanceCents: 50,
+      topupAmountCents: 2000,
+      topupThresholdCents: 200,
     });
 
     const N = 10;
     const responses = await Promise.all(
       Array.from({ length: N }, () =>
         request(app)
-          .post("/v1/credits/authorize")
+          .post("/v1/customer_balance/authorize")
           .set(getAuthHeaders(orgId))
           .send(authorizeBody)
       )
@@ -520,44 +488,62 @@ describe("Credits authorize — reload concurrency", () => {
       expect(res.status).toBe(200);
     }
 
-    const reloadEntries = await db
+    const paymentEntries = await db
       .select()
-      .from(transactions)
+      .from(customerBalanceTransactions)
       .where(
         and(
-          eq(transactions.orgId, orgId),
-          eq(transactions.source, "reload")
+          eq(customerBalanceTransactions.orgId, orgId),
+          eq(customerBalanceTransactions.type, "payment")
         )
       );
-    expect(reloadEntries).toHaveLength(1);
-    expect(reloadEntries[0].amountCents).toBe("2000.0000000000");
+    expect(paymentEntries).toHaveLength(1);
+    expect(paymentEntries[0].amountCents).toBe("-2000.0000000000");
     expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects duplicate (org_id, stripe_payment_intent_id) reload rows at the DB level", async () => {
-    await db.insert(transactions).values({
+  it("rejects duplicate (org_id, stripe_payment_intent_id) payment rows at the DB level", async () => {
+    await db.insert(customerBalanceTransactions).values({
       orgId,
       userId,
-      type: "credit",
-      amountCents: 1000,
-      status: "confirmed",
-      source: "reload",
+      type: "payment",
+      amountCents: "-1000.0000000000",
+      status: "succeeded",
       stripePaymentIntentId: "pi_dup_test",
       description: "first",
     });
 
     await expect(
-      db.insert(transactions).values({
+      db.insert(customerBalanceTransactions).values({
         orgId,
         userId,
-        type: "credit",
-        amountCents: 1000,
-        status: "confirmed",
-        source: "reload",
+        type: "payment",
+        amountCents: "-1000.0000000000",
+        status: "succeeded",
         stripePaymentIntentId: "pi_dup_test",
         description: "duplicate",
       })
     ).rejects.toThrow();
   });
+});
 
+describe("Removed v1 routes", () => {
+  const app = createTestApp();
+  const orgId = "00000000-0000-0000-0000-00000000a001";
+
+  it("returns 404 for legacy POST /v1/credits/authorize", async () => {
+    const res = await request(app)
+      .post("/v1/credits/authorize")
+      .set(getAuthHeaders(orgId))
+      .send({ items: [{ costName: "x", quantity: 1 }] });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 for legacy POST /v1/credits/usage-notify", async () => {
+    const res = await request(app)
+      .post("/v1/credits/usage-notify")
+      .set(getAuthHeaders(orgId))
+      .send({ spent_total_cents: "0" });
+    expect(res.status).toBe(404);
+  });
 });

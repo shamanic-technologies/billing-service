@@ -9,7 +9,7 @@ import {
 } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
-describe("Promo endpoints", () => {
+describe("Promotion code endpoints", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
   const orgId2 = "00000000-0000-0000-0000-000000000002";
@@ -26,24 +26,25 @@ describe("Promo endpoints", () => {
     await closeDb();
   });
 
-  describe("POST /v1/promo/redeem", () => {
+  describe("POST /v1/promotion_codes/redeem", () => {
     it("redeems a valid promo code and credits the account", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_promo",
-        creditBalanceCents: 200,
+        balanceCents: 200,
       });
       await insertTestPromoCode({ code: "qr10", amountCents: 800 });
 
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "qr10" });
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         redeemed: true,
-        amount_cents: 800,
+        // Signed: negative on the wire (credit).
+        amount_cents: "-800",
         balance_cents: "1000.0000000000",
       });
 
@@ -54,13 +55,13 @@ describe("Promo endpoints", () => {
       await insertTestPromoCode({ code: "welcome10", amountCents: 1000 });
 
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "welcome10" });
 
       expect(res.status).toBe(200);
       expect(res.body.redeemed).toBe(true);
-      // $2 welcome + $10 promo = $12 = 1200 cents
+      // $2 welcome gift + $10 promo = $12 = 1200 cents balance.
       expect(res.body.balance_cents).toBe("1200.0000000000");
     });
 
@@ -68,7 +69,7 @@ describe("Promo endpoints", () => {
       await insertTestAccount({ orgId });
 
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "nonexistent" });
 
@@ -85,7 +86,7 @@ describe("Promo endpoints", () => {
       });
 
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "expired" });
 
@@ -96,7 +97,7 @@ describe("Promo endpoints", () => {
     it("returns 400 when max redemptions reached", async () => {
       await insertTestAccount({ orgId });
       await insertTestAccount({ orgId: orgId2 });
-      const promo = await insertTestPromoCode({
+      await insertTestPromoCode({
         code: "limited",
         amountCents: 500,
         maxRedemptions: 1,
@@ -104,13 +105,12 @@ describe("Promo endpoints", () => {
 
       // First org redeems
       await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId2))
         .send({ code: "limited" });
 
-      // Second org tries
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "limited" });
 
@@ -122,19 +122,17 @@ describe("Promo endpoints", () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_dup",
-        creditBalanceCents: 200,
+        balanceCents: 200,
       });
       await insertTestPromoCode({ code: "qr10", amountCents: 800 });
 
-      // First redemption
       await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "qr10" });
 
-      // Duplicate
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({ code: "qr10" });
 
@@ -146,7 +144,7 @@ describe("Promo endpoints", () => {
 
     it("returns 400 when code is missing from body", async () => {
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
         .send({});
 
@@ -155,11 +153,19 @@ describe("Promo endpoints", () => {
 
     it("returns 401 without API key", async () => {
       const res = await request(app)
-        .post("/v1/promo/redeem")
+        .post("/v1/promotion_codes/redeem")
         .set({ "x-org-id": orgId })
         .send({ code: "qr10" });
 
       expect(res.status).toBe(401);
+    });
+
+    it("returns 404 for legacy POST /v1/promo/redeem", async () => {
+      const res = await request(app)
+        .post("/v1/promo/redeem")
+        .set(getAuthHeaders(orgId))
+        .send({ code: "qr10" });
+      expect(res.status).toBe(404);
     });
   });
 });

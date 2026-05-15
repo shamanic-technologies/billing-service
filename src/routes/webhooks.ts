@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions } from "../db/schema.js";
+import { billingAccounts, customerBalanceTransactions } from "../db/schema.js";
 import {
   constructWebhookEvent,
   retrievePaymentIntent,
@@ -51,7 +51,6 @@ router.post("/v1/webhooks/stripe", async (req, res) => {
         break;
       }
       default:
-        // Unhandled event type — acknowledge anyway
         break;
     }
 
@@ -79,7 +78,6 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     return;
   }
 
-  // Extract payment method from the PaymentIntent (not on the session directly)
   let paymentMethodId: string | null = null;
   const piId =
     typeof session.payment_intent === "string"
@@ -93,43 +91,41 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         : paymentIntent.payment_method?.id ?? null;
   }
 
-  // Get reload amount from session metadata or account
-  const reloadAmountCents = session.metadata?.reload_amount_cents
-    ? parseInt(session.metadata.reload_amount_cents, 10)
-    : account.reloadAmountCents;
+  // Topup amount lives in session metadata (Stripe-aligned key) or on the account
+  // from a previous setup. Pre-v3 metadata key `reload_amount_cents` is still
+  // accepted for in-flight sessions; new sessions emit `topup_amount_cents`.
+  const topupRaw =
+    session.metadata?.topup_amount_cents ??
+    session.metadata?.reload_amount_cents;
+  const topupAmountCents = topupRaw ? parseInt(topupRaw, 10) : account.topupAmountCents;
 
-  // Credit the balance with the reload amount and write to ledger
-  if (reloadAmountCents) {
-    const oldBalance = account.creditBalanceCents;
-    const newBalance = addCents(oldBalance, String(reloadAmountCents));
+  if (topupAmountCents) {
+    const oldBalance = account.balanceCents;
+    const newBalance = addCents(oldBalance, String(topupAmountCents));
 
-    // Insert reload grant entry
+    // Insert payment grant entry — signed negative (credit).
     await db
-      .insert(transactions)
+      .insert(customerBalanceTransactions)
       .values({
         orgId: account.orgId,
         userId: "00000000-0000-0000-0000-000000000000",
-        type: "credit",
-        amountCents: String(reloadAmountCents),
-        status: "confirmed",
-        source: "reload",
+        type: "payment",
+        amountCents: String(-topupAmountCents),
+        status: "succeeded",
         stripePaymentIntentId: piId ?? null,
-        description: "Initial reload credit",
+        description: "Initial top-up",
       });
 
-    // Update account: set payment method, update balance
     await db
       .update(billingAccounts)
       .set({
-        creditBalanceCents: newBalance,
-        reloadAmountCents: reloadAmountCents ?? account.reloadAmountCents,
+        balanceCents: newBalance,
+        topupAmountCents: topupAmountCents ?? account.topupAmountCents,
         ...(paymentMethodId ? { stripePaymentMethodId: paymentMethodId } : {}),
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.stripeCustomerId, customerId));
-
   } else {
-    // No reload amount — just update payment method
     await db
       .update(billingAccounts)
       .set({
@@ -141,8 +137,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 }
 
 async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
-  // Only process auto-reload payment intents
-  if (paymentIntent.metadata?.type !== "auto_reload") return;
+  // Only process auto-topup payment intents (legacy metadata key: auto_reload)
+  const piType = paymentIntent.metadata?.type;
+  if (piType !== "auto_topup" && piType !== "auto_reload") return;
 
   const customerId = paymentIntent.customer as string;
   if (!customerId) return;
@@ -155,7 +152,6 @@ async function handlePaymentSucceeded(paymentIntent: Stripe.PaymentIntent) {
 
   if (!account) return;
 
-  // Update the payment method if it changed
   const pmId =
     typeof paymentIntent.payment_method === "string"
       ? paymentIntent.payment_method

@@ -48,11 +48,11 @@ describe("Stripe webhooks", () => {
     expect(res.body.error).toBe("Invalid signature");
   });
 
-  it("handles checkout.session.completed — stores payment method and credits balance", async () => {
+  it("handles checkout.session.completed — stores payment method and tops up balance", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
-      creditBalanceCents: 200,
+      balanceCents: 200,
     });
 
     stripeMocks.constructWebhookEvent.mockResolvedValue({
@@ -62,12 +62,11 @@ describe("Stripe webhooks", () => {
           customer: "cus_123",
           payment_intent: "pi_123",
           payment_method_types: ["card"],
-          metadata: { reload_amount_cents: "2000" },
+          metadata: { topup_amount_cents: "2000" },
         },
       },
     });
 
-    // The payment method is on the PaymentIntent, not the session
     stripeMocks.retrievePaymentIntent.mockResolvedValue({
       id: "pi_123",
       payment_method: "pm_new_123",
@@ -83,18 +82,17 @@ describe("Stripe webhooks", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ received: true });
 
-    // Verify account was updated
     const [account] = await db
       .select()
       .from(billingAccounts)
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
 
-    expect(account.creditBalanceCents).toBe("2200.0000000000"); // 200 + 2000
+    expect(account.balanceCents).toBe("2200.0000000000"); // 200 + 2000
     expect(account.stripePaymentMethodId).toBe("pm_new_123");
   });
 
-  it("handles payment_intent.succeeded for auto-reload", async () => {
+  it("handles payment_intent.succeeded for auto-topup", async () => {
     await insertTestAccount({
       orgId,
       stripeCustomerId: "cus_123",
@@ -107,7 +105,7 @@ describe("Stripe webhooks", () => {
         object: {
           customer: "cus_123",
           payment_method: "pm_new",
-          metadata: { type: "auto_reload" },
+          metadata: { type: "auto_topup" },
         },
       },
     });
@@ -120,7 +118,6 @@ describe("Stripe webhooks", () => {
 
     expect(res.status).toBe(200);
 
-    // Verify payment method was updated
     const [account] = await db
       .select()
       .from(billingAccounts)

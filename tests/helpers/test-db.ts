@@ -1,32 +1,34 @@
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
-  transactions,
+  customerBalanceTransactions,
   localPromoCodes,
 } from "../../src/db/schema.js";
 
 export async function cleanTestData() {
-  await db.delete(transactions);
+  await db.delete(customerBalanceTransactions);
   await db.delete(billingAccounts);
   await db.delete(localPromoCodes);
 }
 
 export async function insertTestAccount(data: {
   orgId: string;
-  stripeCustomerId?: string;
-  creditBalanceCents?: number;
-  reloadAmountCents?: number;
-  reloadThresholdCents?: number;
-  stripePaymentMethodId?: string;
+  stripeCustomerId?: string | null;
+  /** Unsigned positive balance cache value. */
+  balanceCents?: number | string;
+  topupAmountCents?: number;
+  topupThresholdCents?: number;
+  stripePaymentMethodId?: string | null;
 }) {
   const [account] = await db
     .insert(billingAccounts)
     .values({
       orgId: data.orgId,
       stripeCustomerId: data.stripeCustomerId ?? null,
-      creditBalanceCents: data.creditBalanceCents ?? 200,
-      reloadAmountCents: data.reloadAmountCents ?? null,
-      reloadThresholdCents: data.reloadThresholdCents ?? 200,
+      balanceCents:
+        data.balanceCents != null ? String(data.balanceCents) : "200",
+      topupAmountCents: data.topupAmountCents ?? null,
+      topupThresholdCents: data.topupThresholdCents ?? 200,
       stripePaymentMethodId: data.stripePaymentMethodId ?? null,
     })
     .returning();

@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions as creditGrants } from "../db/schema.js";
+import { billingAccounts, customerBalanceTransactions } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { UpdateAutoReloadRequestSchema } from "../schemas.js";
+import { UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { isStripeAuthError } from "../lib/stripe.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { isDepleted, subCents } from "../lib/cents.js";
@@ -13,20 +13,21 @@ const router = Router();
 
 function buildAccountResponse(
   account: typeof billingAccounts.$inferSelect,
-  spentCents: string
+  usageCents: string
 ) {
   return {
     id: account.id,
-    orgId: account.orgId,
-    grantsCents: account.creditBalanceCents,
-    runsSpentCents: spentCents,
-    availableCents: subCents(account.creditBalanceCents, spentCents),
-    reloadAmountCents: account.reloadAmountCents,
-    reloadThresholdCents: account.reloadThresholdCents,
-    hasPaymentMethod: !!account.stripePaymentMethodId,
-    hasAutoReload: !!(account.reloadAmountCents && account.stripePaymentMethodId),
-    createdAt: account.createdAt.toISOString(),
-    updatedAt: account.updatedAt.toISOString(),
+    org_id: account.orgId,
+    balance_cents: account.balanceCents,
+    usage_cents: usageCents,
+    available_cents: subCents(account.balanceCents, usageCents),
+    topup_amount_cents: account.topupAmountCents,
+    topup_threshold_cents: account.topupThresholdCents,
+    has_payment_method: !!account.stripePaymentMethodId,
+    has_auto_topup: !!(account.topupAmountCents && account.stripePaymentMethodId),
+    stripe_customer_id: account.stripeCustomerId,
+    created_at: account.createdAt.toISOString(),
+    updated_at: account.updatedAt.toISOString(),
   };
 }
 
@@ -82,7 +83,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// GET /v1/accounts/balance — fast balance check from DB
+// GET /v1/accounts/balance — fast available-funds check
 router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -105,11 +106,11 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
       orgId,
       buildRunsHeaders(orgId, userId, runId, wfHeaders)
     );
-    const available = subCents(account.creditBalanceCents, usage.spent_cents);
+    const availableCents = subCents(account.balanceCents, usage.spent_cents);
 
     res.json({
-      balance_cents: available,
-      depleted: isDepleted(available),
+      available_cents: availableCents,
+      depleted: isDepleted(availableCents),
     });
   } catch (err) {
     console.error("[billing-service] Error checking balance:", err);
@@ -125,9 +126,10 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// GET /v1/accounts/transactions — local billing-owned credit grant history
+// GET /v1/customer_balance_transactions — Stripe-aligned ledger history.
+// Excludes 'usage_applied' (frozen post-#104; runs-service owns usage truth).
 router.get(
-  "/v1/accounts/transactions",
+  "/v1/customer_balance_transactions",
   requireOrgHeaders,
   async (req, res) => {
     try {
@@ -144,30 +146,34 @@ router.get(
         return;
       }
 
-      // Exclude legacy `charge` rows (frozen post-#104; runs-service owns usage truth).
       const rows = await db
         .select()
-        .from(creditGrants)
+        .from(customerBalanceTransactions)
         .where(
           and(
-            eq(creditGrants.orgId, orgId),
-            ne(creditGrants.source, "charge")
+            eq(customerBalanceTransactions.orgId, orgId),
+            ne(customerBalanceTransactions.type, "usage_applied")
           )
         )
-        .orderBy(desc(creditGrants.createdAt))
+        .orderBy(desc(customerBalanceTransactions.createdAt))
         .limit(50);
 
-      const transactions = rows.map((txn) => ({
+      const data = rows.map((txn) => ({
         id: txn.id,
+        object: "customer_balance_transaction" as const,
         amount_cents: txn.amountCents,
+        type: txn.type,
+        status: txn.status,
+        stripe_payment_intent_id: txn.stripePaymentIntentId,
+        stripe_balance_transaction_id: txn.stripeBalanceTransactionId,
+        cost_id: txn.costId,
         description: txn.description,
-        created_at: txn.createdAt.toISOString(),
-        type: classifyTransaction(txn.source),
+        created: Math.floor(txn.createdAt.getTime() / 1000),
       }));
 
-      res.json({ transactions, has_more: false });
+      res.json({ object: "list", data, has_more: false });
     } catch (err) {
-      console.error("[billing-service] Error listing transactions:", err);
+      console.error("[billing-service] Error listing customer balance transactions:", err);
       if (isStripeAuthError(err)) {
         res.status(502).json({ error: "Payment provider authentication failed" });
         return;
@@ -176,11 +182,6 @@ router.get(
     }
   }
 );
-
-function classifyTransaction(source: string): "credit" | "reload" {
-  if (source === "reload") return "reload";
-  return "credit";
-}
 
 async function fetchUsageOr502(
   orgId: string,
@@ -207,21 +208,21 @@ async function fetchUsageOr502(
   }
 }
 
-// PATCH /v1/accounts/auto-reload — configure auto-reload settings
-router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
+// PATCH /v1/accounts/auto_topup — configure auto-topup settings
+router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
-    const parsed = UpdateAutoReloadRequestSchema.safeParse(req.body);
+    const parsed = UpdateAutoTopupRequestSchema.safeParse(req.body);
 
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
 
-    const { reload_amount_cents, reload_threshold_cents } = parsed.data;
+    const { topup_amount_cents, topup_threshold_cents } = parsed.data;
 
     const [account] = await db
       .select()
@@ -244,25 +245,25 @@ router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => 
     const [updated] = await db
       .update(billingAccounts)
       .set({
-        reloadAmountCents: reload_amount_cents,
-        reloadThresholdCents: reload_threshold_cents ?? 200,
+        topupAmountCents: topup_amount_cents,
+        topupThresholdCents: topup_threshold_cents ?? 200,
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
-    const spentCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
-    if (spentCents === null) return;
+    const usageCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
+    if (usageCents === null) return;
 
-    res.json(buildAccountResponse(updated, spentCents));
+    res.json(buildAccountResponse(updated, usageCents));
   } catch (err) {
-    console.error("[billing-service] Error updating auto-reload:", err);
+    console.error("[billing-service] Error updating auto-topup:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// DELETE /v1/accounts/auto-reload — disable auto-reload
-router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
+// DELETE /v1/accounts/auto_topup — disable auto-topup
+router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
@@ -283,19 +284,19 @@ router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) =>
     const [updated] = await db
       .update(billingAccounts)
       .set({
-        reloadAmountCents: null,
-        reloadThresholdCents: null,
+        topupAmountCents: null,
+        topupThresholdCents: null,
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
-    const spentCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
-    if (spentCents === null) return;
+    const usageCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
+    if (usageCents === null) return;
 
-    res.json(buildAccountResponse(updated, spentCents));
+    res.json(buildAccountResponse(updated, usageCents));
   } catch (err) {
-    console.error("[billing-service] Error disabling auto-reload:", err);
+    console.error("[billing-service] Error disabling auto-topup:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

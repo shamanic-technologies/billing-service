@@ -4,27 +4,28 @@ import { db } from "../db/index.js";
 import {
   billingAccounts,
   localPromoCodes,
-  transactions,
+  customerBalanceTransactions,
 } from "../db/schema.js";
 import {
   requireOrgHeaders,
   getWorkflowHeaders,
   forwardWorkflowHeaders,
 } from "../middleware/auth.js";
-import { RedeemPromoRequestSchema } from "../schemas.js";
+import { RedeemPromotionCodeRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const router = Router();
 
-// POST /v1/promo/redeem — redeem a promo code for bonus credits
-router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
+// POST /v1/promotion_codes/redeem — redeem a promo code for bonus credits.
+// Returns signed amount_cents (negative since credits decrement balance liability).
+router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
-    const parsed = RedeemPromoRequestSchema.safeParse(req.body);
+    const parsed = RedeemPromotionCodeRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
@@ -33,9 +34,8 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
     const { code } = parsed.data;
     const runId = req.headers["x-run-id"] as string;
 
-    traceEvent(runId, { service: "billing-service", event: "promo.redeem.start", data: { code } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "promotion_codes.redeem.start", data: { code } }, req.headers);
 
-    // Look up the promo code
     const [promo] = await db
       .select()
       .from(localPromoCodes)
@@ -47,7 +47,6 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Check expiration
     if (promo.expiresAt && promo.expiresAt < new Date()) {
       res.status(400).json({ error: "Promo code has expired" });
       return;
@@ -56,11 +55,11 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
     if (promo.maxRedemptions !== null) {
       const [countResult] = await db
         .select({ count: rawSql<number>`count(*)::int` })
-        .from(transactions)
+        .from(customerBalanceTransactions)
         .where(
           and(
-            eq(transactions.promoCodeId, promo.id),
-            eq(transactions.source, "promo")
+            eq(customerBalanceTransactions.promoCodeId, promo.id),
+            eq(customerBalanceTransactions.type, "promo")
           )
         );
       if (countResult.count >= promo.maxRedemptions) {
@@ -71,12 +70,12 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
 
     const [existing] = await db
       .select()
-      .from(transactions)
+      .from(customerBalanceTransactions)
       .where(
         and(
-          eq(transactions.promoCodeId, promo.id),
-          eq(transactions.orgId, orgId),
-          eq(transactions.source, "promo")
+          eq(customerBalanceTransactions.promoCodeId, promo.id),
+          eq(customerBalanceTransactions.orgId, orgId),
+          eq(customerBalanceTransactions.type, "promo")
         )
       )
       .limit(1);
@@ -86,37 +85,34 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // Ensure billing account exists
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
-    // Credit the promo amount inside a transaction
     const result = await db.transaction(async (tx) => {
       const [accountBefore] = await tx
-        .select({ creditBalanceCents: billingAccounts.creditBalanceCents })
+        .select({ balanceCents: billingAccounts.balanceCents })
         .from(billingAccounts)
         .where(eq(billingAccounts.orgId, orgId))
         .limit(1);
-      const oldBalance = accountBefore?.creditBalanceCents ?? "0.0000000000";
+      const oldBalance = accountBefore?.balanceCents ?? "0.0000000000";
 
       const [ledgerEntry] = await tx
-        .insert(transactions)
+        .insert(customerBalanceTransactions)
         .values({
           orgId,
           userId,
-          type: "credit",
-          amountCents: String(promo.amountCents),
-          status: "confirmed",
-          source: "promo",
+          type: "promo",
+          // Signed: negative = credit. Promo redemption = credit.
+          amountCents: String(-promo.amountCents),
+          status: "succeeded",
           promoCodeId: promo.id,
-          description: `Promo credit: ${code} ($${(promo.amountCents / 100).toFixed(2)})`,
+          description: `Promo: ${code} ($${(promo.amountCents / 100).toFixed(2)})`,
         })
         .returning();
 
-      // Credit the balance
       const [updated] = await tx
         .update(billingAccounts)
         .set({
-          creditBalanceCents: rawSql`${billingAccounts.creditBalanceCents} + ${promo.amountCents}::numeric`,
+          balanceCents: rawSql`${billingAccounts.balanceCents} + ${promo.amountCents}::numeric`,
           updatedAt: new Date(),
         })
         .where(eq(billingAccounts.orgId, orgId))
@@ -125,7 +121,7 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
       return { updated, ledgerEntryId: ledgerEntry.id, oldBalance };
     });
 
-    traceEvent(runId, { service: "billing-service", event: "promo.redeem.done", data: { code, amount_cents: promo.amountCents, balance_cents: result.updated.creditBalanceCents } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "promotion_codes.redeem.done", data: { code, amount_cents: -promo.amountCents, balance_cents: result.updated.balanceCents } }, req.headers);
 
     console.log(
       `[billing-service] Promo "${code}" redeemed by org ${orgId}: +$${(promo.amountCents / 100).toFixed(2)}`
@@ -133,14 +129,15 @@ router.post("/v1/promo/redeem", requireOrgHeaders, async (req, res) => {
 
     res.json({
       redeemed: true,
-      amount_cents: promo.amountCents,
-      balance_cents: result.updated.creditBalanceCents,
+      // Signed amount on wire matches CBT convention.
+      amount_cents: String(-promo.amountCents),
+      balance_cents: result.updated.balanceCents,
     });
   } catch (err) {
-    // Handle unique constraint violation (race condition double-dip via partial index)
     if (
       err instanceof Error &&
-      err.message.includes("idx_transactions_promo_org")
+      (err.message.includes("idx_cbt_promo_org") ||
+        err.message.includes("idx_transactions_promo_org"))
     ) {
       res.status(409).json({ error: "Promo code already redeemed by this organization" });
       return;

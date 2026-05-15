@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { customerBalanceTransactions } from "../../src/db/schema.js";
 import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 
@@ -32,12 +32,14 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("transfers solo-brand ledger entries from source to target org", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 100,
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "succeeded",
       brandIds: [sourceBrandId],
-      description: "solo brand provision",
+      description: "solo brand payment",
     });
 
     const res = await request(app)
@@ -47,18 +49,23 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
+      { tableName: "customer_balance_transactions", count: 1 },
     ]);
   });
 
   it("rewrites brand_ids when targetBrandId is provided", async () => {
-    const [provision] = await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [sourceBrandId],
-      description: "will be rewritten",
-    }).returning();
+    const [row] = await db
+      .insert(customerBalanceTransactions)
+      .values({
+        orgId: sourceOrgId,
+        userId,
+        type: "payment",
+        amountCents: "-100.0000000000",
+        status: "succeeded",
+        brandIds: [sourceBrandId],
+        description: "will be rewritten",
+      })
+      .returning();
 
     const res = await request(app)
       .post("/internal/transfer-brand")
@@ -67,26 +74,27 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
+      { tableName: "customer_balance_transactions", count: 1 },
     ]);
 
-    // Verify the brand_ids was rewritten to targetBrandId
     const [updated] = await db
       .select()
-      .from(transactions)
-      .where(eq(transactions.id, provision.id));
+      .from(customerBalanceTransactions)
+      .where(eq(customerBalanceTransactions.id, row.id));
 
     expect(updated.orgId).toBe(targetOrgId);
     expect(updated.brandIds).toEqual([targetBrandId]);
   });
 
   it("skips co-branding entries (multiple brand IDs)", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 200,
+      type: "payment",
+      amountCents: "-200.0000000000",
+      status: "succeeded",
       brandIds: [sourceBrandId, otherBrandId],
-      description: "co-brand provision",
+      description: "co-brand row",
     });
 
     const res = await request(app)
@@ -96,15 +104,17 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
+      { tableName: "customer_balance_transactions", count: 0 },
     ]);
   });
 
   it("skips entries for a different brand", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 100,
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "succeeded",
       brandIds: [otherBrandId],
       description: "different brand",
     });
@@ -116,15 +126,17 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
+      { tableName: "customer_balance_transactions", count: 0 },
     ]);
   });
 
   it("skips entries with null brand_ids", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 100,
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "succeeded",
       brandIds: null,
       description: "no brand",
     });
@@ -136,15 +148,17 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
+      { tableName: "customer_balance_transactions", count: 0 },
     ]);
   });
 
   it("is idempotent — second call is a no-op", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 100,
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "succeeded",
       brandIds: [sourceBrandId],
       description: "solo brand",
     });
@@ -156,7 +170,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res1.status).toBe(200);
     expect(res1.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
+      { tableName: "customer_balance_transactions", count: 1 },
     ]);
 
     const res2 = await request(app)
@@ -166,15 +180,17 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res2.status).toBe(200);
     expect(res2.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
+      { tableName: "customer_balance_transactions", count: 0 },
     ]);
   });
 
   it("is idempotent with targetBrandId — second call is a no-op", async () => {
-    await db.insert(transactions).values({
+    await db.insert(customerBalanceTransactions).values({
       orgId: sourceOrgId,
       userId,
-      amountCents: 100,
+      type: "payment",
+      amountCents: "-100.0000000000",
+      status: "succeeded",
       brandIds: [sourceBrandId],
       description: "solo brand",
     });
@@ -186,10 +202,9 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res1.status).toBe(200);
     expect(res1.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
+      { tableName: "customer_balance_transactions", count: 1 },
     ]);
 
-    // Second call — brand_ids is now [targetBrandId], org_id is targetOrgId, so WHERE won't match
     const res2 = await request(app)
       .post("/internal/transfer-brand")
       .set(internalHeaders)
@@ -197,7 +212,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res2.status).toBe(200);
     expect(res2.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
+      { tableName: "customer_balance_transactions", count: 0 },
     ]);
   });
 
@@ -221,25 +236,31 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("transfers multiple solo-brand entries at once", async () => {
-    await db.insert(transactions).values([
+    await db.insert(customerBalanceTransactions).values([
       {
         orgId: sourceOrgId,
         userId,
-        amountCents: 100,
+        type: "payment",
+        amountCents: "-100.0000000000",
+        status: "succeeded",
         brandIds: [sourceBrandId],
-        description: "provision 1",
+        description: "row 1",
       },
       {
         orgId: sourceOrgId,
         userId,
-        amountCents: 200,
+        type: "payment",
+        amountCents: "-200.0000000000",
+        status: "succeeded",
         brandIds: [sourceBrandId],
-        description: "provision 2",
+        description: "row 2",
       },
       {
         orgId: sourceOrgId,
         userId,
-        amountCents: 300,
+        type: "payment",
+        amountCents: "-300.0000000000",
+        status: "succeeded",
         brandIds: [sourceBrandId, otherBrandId],
         description: "co-brand — should skip",
       },
@@ -252,7 +273,7 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 2 },
+      { tableName: "customer_balance_transactions", count: 2 },
     ]);
   });
 });

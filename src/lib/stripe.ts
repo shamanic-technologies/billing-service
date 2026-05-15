@@ -133,7 +133,7 @@ export async function createCheckoutSession(
   stripeCustomerId: string,
   successUrl: string,
   cancelUrl: string,
-  reloadAmountCents: number,
+  topupAmountCents: number,
   workflowHeaders?: Record<string, string>
 ): Promise<Stripe.Checkout.Session> {
   return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
@@ -145,34 +145,34 @@ export async function createCheckoutSession(
         {
           price_data: {
             currency: "usd",
-            product_data: { name: "Credit Reload" },
-            unit_amount: reloadAmountCents,
+            product_data: { name: "Balance Top-up" },
+            unit_amount: topupAmountCents,
           },
           quantity: 1,
         },
       ],
       payment_intent_data: {
         setup_future_usage: "off_session",
-        metadata: { type: "initial_reload" },
+        metadata: { type: "initial_topup" },
       },
       success_url: successUrl,
       cancel_url: cancelUrl,
-      metadata: { reload_amount_cents: String(reloadAmountCents) },
+      metadata: { topup_amount_cents: String(topupAmountCents) },
     })
   );
 }
 
-// --- Payment (auto-reload) ---
+// --- Payment (auto-topup) ---
 
 /**
- * Deterministic idempotency key for auto-reload charges.
- * Prevents duplicate charges if the same reload is retried.
+ * Deterministic idempotency key for auto-topup charges.
+ * Prevents duplicate charges if the same topup is retried.
  * Hash includes orgId + customerId + amount + a time bucket (1-minute window)
  * so the same org can't be double-charged within the same minute.
  */
-function reloadIdempotencyKey(orgId: string, stripeCustomerId: string, amountCents: number): string {
+function topupIdempotencyKey(orgId: string, stripeCustomerId: string, amountCents: number): string {
   const timeBucket = Math.floor(Date.now() / 60_000);
-  const input = `reload:${orgId}:${stripeCustomerId}:${amountCents}:${timeBucket}`;
+  const input = `topup:${orgId}:${stripeCustomerId}:${amountCents}:${timeBucket}`;
   return crypto.createHash("sha256").update(input).digest("hex").slice(0, 32);
 }
 
@@ -185,7 +185,7 @@ export async function chargePaymentMethod(
   description: string,
   workflowHeaders?: Record<string, string>
 ): Promise<Stripe.PaymentIntent> {
-  const idempotencyKey = reloadIdempotencyKey(orgId, stripeCustomerId, amountCents);
+  const idempotencyKey = topupIdempotencyKey(orgId, stripeCustomerId, amountCents);
   return withRetry(buildIdentity(orgId, userId, workflowHeaders), (stripe) =>
     stripe.paymentIntents.create(
       {
@@ -196,7 +196,7 @@ export async function chargePaymentMethod(
         off_session: true,
         confirm: true,
         description,
-        metadata: { type: "auto_reload" },
+        metadata: { type: "auto_topup" },
       },
       { idempotencyKey }
     )

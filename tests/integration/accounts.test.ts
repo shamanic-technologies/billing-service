@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { customerBalanceTransactions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks, createStripeAuthError } from "../helpers/mock-stripe.js";
@@ -35,20 +35,22 @@ describe("Accounts endpoints", () => {
   });
 
   describe("GET /v1/accounts", () => {
-    it("auto-creates a billing account with $2 trial credit", async () => {
+    it("auto-creates a billing account with $2 trial gift", async () => {
       const res = await request(app)
         .get("/v1/accounts")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.orgId).toBe(orgId);
-      expect(res.body.grantsCents).toBe("200.0000000000");
-      expect(res.body.runsSpentCents).toBe("0.0000000000");
-      expect(res.body.availableCents).toBe("200.0000000000");
+      expect(res.body.org_id).toBe(orgId);
+      expect(res.body.balance_cents).toBe("200.0000000000");
+      expect(res.body.usage_cents).toBe("0.0000000000");
+      expect(res.body.available_cents).toBe("200.0000000000");
       expect(res.body).not.toHaveProperty("creditBalanceCents");
-      expect(res.body.hasPaymentMethod).toBe(false);
-      expect(res.body.hasAutoReload).toBe(false);
-      expect(res.body).not.toHaveProperty("billingMode");
+      expect(res.body).not.toHaveProperty("grantsCents");
+      expect(res.body).not.toHaveProperty("runsSpentCents");
+      expect(res.body).not.toHaveProperty("availableCents");
+      expect(res.body.has_payment_method).toBe(false);
+      expect(res.body.has_auto_topup).toBe(false);
       expect(stripeMocks.createCustomer).toHaveBeenCalledWith(
         orgId,
         userId,
@@ -58,11 +60,11 @@ describe("Accounts endpoints", () => {
       expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
     });
 
-    it("subtracts runs-service spent_cents to compute availableCents", async () => {
+    it("subtracts runs-service spent_cents to compute available_cents", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_existing",
-        creditBalanceCents: 150,
+        balanceCents: 150,
       });
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
@@ -75,16 +77,16 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.grantsCents).toBe("150.0000000000");
-      expect(res.body.runsSpentCents).toBe("25.0000000000");
-      expect(res.body.availableCents).toBe("125.0000000000");
+      expect(res.body.balance_cents).toBe("150.0000000000");
+      expect(res.body.usage_cents).toBe("25.0000000000");
+      expect(res.body.available_cents).toBe("125.0000000000");
     });
 
-    it("returns negative availableCents when runs spent exceeds grants", async () => {
+    it("returns negative available_cents when runs spent exceeds balance", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_existing",
-        creditBalanceCents: 75,
+        balanceCents: 75,
       });
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
@@ -97,14 +99,14 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.availableCents).toBe("-308.0000000000");
+      expect(res.body.available_cents).toBe("-308.0000000000");
     });
 
     it("returns 502 when runs-service total is unavailable", async () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_existing",
-        creditBalanceCents: 150,
+        balanceCents: 150,
       });
       fetchRunsOrgUsageTotalSpy.mockRejectedValue(
         new Error("runs-service down")
@@ -147,7 +149,7 @@ describe("Accounts endpoints", () => {
       await insertTestAccount({
         orgId,
         stripeCustomerId: "cus_existing",
-        creditBalanceCents: 150,
+        balanceCents: 150,
       });
 
       const res = await request(app)
@@ -155,7 +157,7 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.grantsCents).toBe("150.0000000000");
+      expect(res.body.balance_cents).toBe("150.0000000000");
       expect(stripeMocks.createCustomer).not.toHaveBeenCalled();
     });
 
@@ -213,10 +215,10 @@ describe("Accounts endpoints", () => {
   });
 
   describe("GET /v1/accounts/balance", () => {
-    it("returns granted credits minus runs-service spent total", async () => {
+    it("returns balance minus runs-service spent total as available_cents", async () => {
       await insertTestAccount({
         orgId,
-        creditBalanceCents: 150,
+        balanceCents: 150,
       });
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
@@ -230,7 +232,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        balance_cents: "125.0000000000",
+        available_cents: "125.0000000000",
         depleted: false,
       });
     });
@@ -238,7 +240,7 @@ describe("Accounts endpoints", () => {
     it("marks depleted when balance is 0", async () => {
       await insertTestAccount({
         orgId,
-        creditBalanceCents: 0,
+        balanceCents: 0,
       });
 
       const res = await request(app)
@@ -250,7 +252,7 @@ describe("Accounts endpoints", () => {
     });
 
     it("returns 502 when runs-service total is unavailable", async () => {
-      await insertTestAccount({ orgId, creditBalanceCents: 150 });
+      await insertTestAccount({ orgId, balanceCents: 150 });
       fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));
 
       const res = await request(app)
@@ -270,172 +272,172 @@ describe("Accounts endpoints", () => {
     });
   });
 
-  describe("GET /v1/accounts/transactions", () => {
-    it("returns empty list when no Stripe customer", async () => {
+  describe("GET /v1/customer_balance_transactions", () => {
+    it("returns empty list when no transactions exist", async () => {
       await insertTestAccount({ orgId, stripeCustomerId: undefined });
 
       const res = await request(app)
-        .get("/v1/accounts/transactions")
+        .get("/v1/customer_balance_transactions")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ transactions: [], has_more: false });
+      expect(res.body.object).toBe("list");
+      expect(res.body.data).toEqual([]);
+      expect(res.body.has_more).toBe(false);
     });
 
-    it("returns local credit grant history", async () => {
+    it("returns local customer balance transaction history", async () => {
       await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
-      await db.insert(transactions).values([
+      await db.insert(customerBalanceTransactions).values([
         {
           orgId,
           userId,
-          type: "credit",
-          amountCents: "200.0000000000",
-          status: "confirmed",
-          source: "welcome",
-          description: "Trial credit: $2.00",
+          type: "gift",
+          amountCents: "-200.0000000000",
+          status: "succeeded",
+          description: "Trial gift: $2.00",
           createdAt: new Date("2026-05-13T00:00:00.000Z"),
         },
         {
           orgId,
           userId,
-          type: "credit",
-          amountCents: "500.0000000000",
-          status: "confirmed",
-          source: "reload",
-          description: "Auto-reload credit ($5.00)",
+          type: "payment",
+          amountCents: "-500.0000000000",
+          status: "succeeded",
+          description: "Auto-topup ($5.00)",
           createdAt: new Date("2026-05-13T00:01:00.000Z"),
         },
       ]);
 
       const res = await request(app)
-        .get("/v1/accounts/transactions")
+        .get("/v1/customer_balance_transactions")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.transactions).toHaveLength(2);
-      expect(res.body.transactions.map((txn: { type: string }) => txn.type)).toEqual([
-        "reload",
-        "credit",
-      ]);
+      expect(res.body.data).toHaveLength(2);
+      // Newest first
+      expect(res.body.data[0].type).toBe("payment");
+      expect(res.body.data[0].amount_cents).toBe("-500.0000000000");
+      expect(res.body.data[0].status).toBe("succeeded");
+      expect(res.body.data[0].object).toBe("customer_balance_transaction");
+      expect(res.body.data[1].type).toBe("gift");
+      expect(res.body.data[1].amount_cents).toBe("-200.0000000000");
       expect(stripeMocks.listBalanceTransactions).not.toHaveBeenCalled();
     });
 
-    it("excludes legacy source='charge' rows from response", async () => {
+    it("excludes legacy type='usage_applied' rows from response", async () => {
       await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
-      await db.insert(transactions).values([
+      await db.insert(customerBalanceTransactions).values([
         {
           orgId,
           userId,
-          type: "credit",
-          amountCents: "200.0000000000",
-          status: "confirmed",
-          source: "welcome",
-          description: "welcome grant",
+          type: "gift",
+          amountCents: "-200.0000000000",
+          status: "succeeded",
+          description: "welcome gift",
           createdAt: new Date("2026-05-13T00:00:00.000Z"),
         },
         {
           orgId,
           userId,
-          type: "debit",
+          type: "usage_applied",
           amountCents: "50.0000000000",
-          status: "confirmed",
-          source: "charge",
-          description: "legacy pre-#104 charge row",
+          status: "succeeded",
+          description: "legacy pre-#104 usage row",
           createdAt: new Date("2026-05-13T00:01:00.000Z"),
         },
         {
           orgId,
           userId,
-          type: "debit",
+          type: "usage_applied",
           amountCents: "25.0000000000",
-          status: "pending",
-          source: "charge",
-          description: "legacy pre-#104 pending charge",
+          status: "requires_capture",
+          description: "legacy pre-#104 pending usage",
           createdAt: new Date("2026-05-13T00:02:00.000Z"),
         },
       ]);
 
       const res = await request(app)
-        .get("/v1/accounts/transactions")
+        .get("/v1/customer_balance_transactions")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.transactions).toHaveLength(1);
-      expect(res.body.transactions[0].description).toBe("welcome grant");
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].description).toBe("welcome gift");
       expect(
-        res.body.transactions.some(
-          (txn: { type: string }) => txn.type === "deduction"
+        res.body.data.some(
+          (txn: { type: string }) => txn.type === "usage_applied"
         )
       ).toBe(false);
     });
   });
 
-  describe("PATCH /v1/accounts/auto-reload", () => {
-    it("enables auto-reload when payment method exists", async () => {
+  describe("PATCH /v1/accounts/auto_topup", () => {
+    it("enables auto-topup when payment method exists", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
       });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
         .send({
-          reload_amount_cents: 5000,
-          reload_threshold_cents: 1000,
+          topup_amount_cents: 5000,
+          topup_threshold_cents: 1000,
         });
 
       expect(res.status).toBe(200);
-      expect(res.body.reloadAmountCents).toBe(5000);
-      expect(res.body.reloadThresholdCents).toBe(1000);
-      expect(res.body.hasAutoReload).toBe(true);
+      expect(res.body.topup_amount_cents).toBe(5000);
+      expect(res.body.topup_threshold_cents).toBe(1000);
+      expect(res.body.has_auto_topup).toBe(true);
     });
 
-    it("defaults reload_threshold_cents to 200 when omitted", async () => {
+    it("defaults topup_threshold_cents to 200 when omitted", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
       });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
-        .send({ reload_amount_cents: 3000 });
+        .send({ topup_amount_cents: 3000 });
 
       expect(res.status).toBe(200);
-      expect(res.body.reloadThresholdCents).toBe(200);
+      expect(res.body.topup_threshold_cents).toBe(200);
     });
 
-    it("allows reload_threshold_cents of 0", async () => {
+    it("allows topup_threshold_cents of 0", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
       });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
         .send({
-          reload_amount_cents: 5000,
-          reload_threshold_cents: 0,
+          topup_amount_cents: 5000,
+          topup_threshold_cents: 0,
         });
 
       expect(res.status).toBe(200);
-      expect(res.body.reloadThresholdCents).toBe(0);
+      expect(res.body.topup_threshold_cents).toBe(0);
     });
 
-    it("rejects negative reload_threshold_cents", async () => {
+    it("rejects negative topup_threshold_cents", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
       });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
         .send({
-          reload_amount_cents: 5000,
-          reload_threshold_cents: -100,
+          topup_amount_cents: 5000,
+          topup_threshold_cents: -100,
         });
 
       expect(res.status).toBe(400);
@@ -445,22 +447,22 @@ describe("Accounts endpoints", () => {
       await insertTestAccount({ orgId });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
-        .send({ reload_amount_cents: 2000 });
+        .send({ topup_amount_cents: 2000 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("Payment method required");
     });
 
-    it("requires reload_amount_cents", async () => {
+    it("requires topup_amount_cents", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
       });
 
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
         .send({});
 
@@ -469,38 +471,62 @@ describe("Accounts endpoints", () => {
 
     it("returns 404 for unknown org", async () => {
       const res = await request(app)
-        .patch("/v1/accounts/auto-reload")
+        .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
-        .send({ reload_amount_cents: 2000 });
+        .send({ topup_amount_cents: 2000 });
 
       expect(res.status).toBe(404);
     });
   });
 
-  describe("DELETE /v1/accounts/auto-reload", () => {
-    it("disables auto-reload", async () => {
+  describe("DELETE /v1/accounts/auto_topup", () => {
+    it("disables auto-topup", async () => {
       await insertTestAccount({
         orgId,
         stripePaymentMethodId: "pm_123",
-        reloadAmountCents: 5000,
-        reloadThresholdCents: 1000,
+        topupAmountCents: 5000,
+        topupThresholdCents: 1000,
       });
 
       const res = await request(app)
-        .delete("/v1/accounts/auto-reload")
+        .delete("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.reloadAmountCents).toBeNull();
-      expect(res.body.reloadThresholdCents).toBeNull();
-      expect(res.body.hasAutoReload).toBe(false);
+      expect(res.body.topup_amount_cents).toBeNull();
+      expect(res.body.topup_threshold_cents).toBeNull();
+      expect(res.body.has_auto_topup).toBe(false);
     });
 
     it("returns 404 for unknown org", async () => {
       const res = await request(app)
-        .delete("/v1/accounts/auto-reload")
+        .delete("/v1/accounts/auto_topup")
         .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"));
 
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("removed v1 routes", () => {
+    it("returns 404 for legacy /v1/accounts/transactions", async () => {
+      const res = await request(app)
+        .get("/v1/accounts/transactions")
+        .set(getAuthHeaders(orgId));
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 404 for legacy PATCH /v1/accounts/auto-reload", async () => {
+      const res = await request(app)
+        .patch("/v1/accounts/auto-reload")
+        .set(getAuthHeaders(orgId))
+        .send({ reload_amount_cents: 1000 });
+      expect(res.status).toBe(404);
+    });
+
+    it("returns 404 for legacy DELETE /v1/accounts/auto-reload", async () => {
+      const res = await request(app)
+        .delete("/v1/accounts/auto-reload")
+        .set(getAuthHeaders(orgId));
       expect(res.status).toBe(404);
     });
   });

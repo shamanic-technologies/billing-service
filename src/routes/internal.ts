@@ -16,7 +16,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
 
   // Step 1: Move org_id from sourceOrgId to targetOrgId for solo-brand rows
   const step1 = await db.execute(sql`
-    UPDATE transactions
+    UPDATE customer_balance_transactions
     SET org_id = ${targetOrgId},
         updated_at = NOW()
     WHERE org_id = ${sourceOrgId}
@@ -24,27 +24,26 @@ router.post("/internal/transfer-brand", async (req, res) => {
       AND brand_ids[1] = ${sourceBrandId}
   `);
 
-  let transactionsCount = Number(step1.count ?? 0);
+  let cbtCount = Number(step1.count ?? 0);
 
-  // Step 2: Rewrite brand reference when targetBrandId is provided (conflict case)
   if (targetBrandId) {
     const step2 = await db.execute(sql`
-      UPDATE transactions
+      UPDATE customer_balance_transactions
       SET brand_ids = ARRAY[${targetBrandId}],
           updated_at = NOW()
       WHERE array_length(brand_ids, 1) = 1
         AND brand_ids[1] = ${sourceBrandId}
     `);
-    transactionsCount = Math.max(transactionsCount, Number(step2.count ?? 0));
+    cbtCount = Math.max(cbtCount, Number(step2.count ?? 0));
   }
 
   console.log(
-    `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} transactions=${transactionsCount}`
+    `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} customer_balance_transactions=${cbtCount}`
   );
 
   res.json({
     updatedTables: [
-      { tableName: "transactions", count: transactionsCount },
+      { tableName: "customer_balance_transactions", count: cbtCount },
     ],
   });
 });

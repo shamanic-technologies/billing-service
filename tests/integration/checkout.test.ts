@@ -33,7 +33,7 @@ describe("Checkout endpoint", () => {
       .send({
         success_url: "https://app.example.com/success",
         cancel_url: "https://app.example.com/cancel",
-        reload_amount_cents: 2000,
+        topup_amount_cents: 2000,
       });
 
     expect(res.status).toBe(200);
@@ -57,7 +57,7 @@ describe("Checkout endpoint", () => {
       .send({
         success_url: "https://app.example.com/success",
         cancel_url: "https://app.example.com/cancel",
-        reload_amount_cents: 1000,
+        topup_amount_cents: 1000,
       });
 
     expect(res.status).toBe(200);
