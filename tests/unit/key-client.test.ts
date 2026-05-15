@@ -60,7 +60,7 @@ describe("resolvePlatformKey", () => {
     await resolvePlatformKey("stripe", TEST_IDENTITY, {
       service: "billing",
       method: "POST",
-      path: "/v1/credits/deduct",
+      path: "/v1/test/sentinel",
     });
 
     expect(mockFetch).toHaveBeenCalledWith(
@@ -69,7 +69,7 @@ describe("resolvePlatformKey", () => {
         headers: expect.objectContaining({
           "x-caller-service": "billing",
           "x-caller-method": "POST",
-          "x-caller-path": "/v1/credits/deduct",
+          "x-caller-path": "/v1/test/sentinel",
         }),
       })
     );
