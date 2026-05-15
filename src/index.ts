@@ -12,7 +12,6 @@ import customerBalanceRoutes from "./routes/customer_balance.js";
 import checkoutRoutes from "./routes/checkout.js";
 import portalRoutes from "./routes/portal.js";
 import promotionCodesRoutes from "./routes/promotion_codes.js";
-import webhookRoutes from "./routes/webhooks.js";
 import internalRoutes from "./routes/internal.js";
 import { requireApiKey } from "./middleware/auth.js";
 
@@ -22,12 +21,6 @@ const app = express();
 const PORT = process.env.PORT || 3012;
 
 app.use(cors());
-
-// Webhook route needs raw body for Stripe signature — register BEFORE express.json()
-app.use("/v1/webhooks/stripe", express.raw({ type: "application/json" }));
-app.use(webhookRoutes);
-
-// JSON parser for all other routes
 app.use(express.json());
 
 // Public routes

@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
-import { db } from "../../src/db/index.js";
-import { customerBalanceTransactions } from "../../src/db/schema.js";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
-import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
+import {
+  cleanTestData,
+  insertTestAccount,
+  insertTestPromoGrant,
+  closeDb,
+} from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
 const orgId = "00000000-0000-0000-0000-00000000a001";
@@ -14,14 +17,14 @@ const authorizeBody = {
   description: "runs-total authorize test",
 };
 
-describe("Customer balance authorize — billing balance minus runs-service spent total", () => {
+describe("Customer balance authorize — composed SS + local − usage", () => {
   const app = createTestApp();
-  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+  let ssMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    stripeMocks = setupStripeMocks();
+    ssMocks = setupStripeMocks();
     await cleanTestData();
 
     const costsClient = await import("../../src/lib/costs-client.js");
@@ -43,12 +46,14 @@ describe("Customer balance authorize — billing balance minus runs-service spen
     await closeDb();
   });
 
-  it("authorizes from balance minus runs spent total", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_auth", balanceCents: 100 });
+  it("sufficient when SS balance + local credits − usage covers required", async () => {
+    await insertTestAccount({ orgId });
+    await insertTestPromoGrant({ orgId, userId, amountCents: 100, promoCode: "welcome" });
+    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "40.0000000000",
-      as_of: "2026-05-13T00:00:00.000Z",
+      as_of: "x",
     });
 
     const res = await request(app)
@@ -57,21 +62,20 @@ describe("Customer balance authorize — billing balance minus runs-service spen
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      sufficient: true,
-      balance_cents: "60.0000000000",
-      required_cents: "10.0000000000",
-    });
-    expect(fetchRunsOrgUsageTotalSpy).toHaveBeenCalledWith(orgId, expect.any(Object));
-    expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(res.body.sufficient).toBe(true);
+    // available = 0 + 100 − 40 = 60
+    expect(res.body.balance_cents).toBe("60.0000000000");
+    expect(res.body.required_cents).toBe("10.0000000000");
+    expect(ssMocks.reload).not.toHaveBeenCalled();
   });
 
-  it("returns insufficient when balance minus runs spent cannot cover required cost", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_insufficient", balanceCents: 100 });
+  it("insufficient + no topup config → returns sufficient:false without reload", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
-      spent_cents: "95.0000000000",
-      as_of: "2026-05-13T00:00:00.000Z",
+      spent_cents: "0.0000000000",
+      as_of: "x",
     });
 
     const res = await request(app)
@@ -80,26 +84,20 @@ describe("Customer balance authorize — billing balance minus runs-service spen
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      sufficient: false,
-      balance_cents: "5.0000000000",
-      required_cents: "10.0000000000",
-    });
-    expect(stripeMocks.chargePaymentMethod).not.toHaveBeenCalled();
+    expect(res.body.sufficient).toBe(false);
+    expect(ssMocks.reload).not.toHaveBeenCalled();
   });
 
-  it("auto-topups once and records a Stripe payment row without Stripe customer balance sync", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_topup",
-      stripePaymentMethodId: "pm_topup",
-      topupAmountCents: 1000,
-      balanceCents: 100,
-    });
+  it("insufficient + topup configured + SS has PM → calls reload and re-evaluates", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.getBalance
+      .mockResolvedValueOnce({ balance_cents: "0.0000000000" })
+      .mockResolvedValueOnce({ balance_cents: "1000.0000000000" });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
-      spent_cents: "95.0000000000",
-      as_of: "2026-05-13T00:00:00.000Z",
+      spent_cents: "0.0000000000",
+      as_of: "x",
     });
 
     const res = await request(app)
@@ -108,23 +106,74 @@ describe("Customer balance authorize — billing balance minus runs-service spen
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      sufficient: true,
-      balance_cents: "1005.0000000000",
-      required_cents: "10.0000000000",
+    expect(res.body.sufficient).toBe(true);
+    expect(ssMocks.reload).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reload.mock.calls[0]?.[1]).toMatchObject({
+      amount_cents: 1000,
     });
-    expect(stripeMocks.chargePaymentMethod).toHaveBeenCalledTimes(1);
-    expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
-
-    const rows = await db.select().from(customerBalanceTransactions);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].type).toBe("payment");
-    expect(rows[0].status).toBe("succeeded");
-    expect(rows[0].amountCents).toBe("-1000.0000000000");
   });
 
-  it("fails loud when runs-service total is unavailable", async () => {
-    await insertTestAccount({ orgId, stripeCustomerId: "cus_runs_down", balanceCents: 100 });
+  it("reload status=failed → sufficient:false", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.reload.mockResolvedValue({ status: "failed", failure_reason: "card_declined" });
+    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+  });
+
+  it("reload throws (SS down) → 502", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.reload.mockRejectedValue(new Error("SS down"));
+    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(502);
+  });
+
+  it("coalesces concurrent reload calls for same org", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+
+    // Slow reload so concurrent calls fall into the coalescer before the first
+    // resolves. 100ms is plenty even with Postgres roundtrips.
+    ssMocks.reload.mockImplementation(
+      () =>
+        new Promise<{ status: "succeeded"; payment_intent_id: string }>((resolve) => {
+          setTimeout(() => resolve({ status: "succeeded", payment_intent_id: "pi_x" }), 100);
+        })
+    );
+
+    const headers = getAuthHeaders(orgId, userId);
+    const results = await Promise.all(
+      [0, 1, 2].map(() =>
+        request(app)
+          .post("/v1/customer_balance/authorize")
+          .set(headers)
+          .send(authorizeBody)
+      )
+    );
+
+    for (const r of results) {
+      expect(r.status).toBe(200);
+    }
+    expect(ssMocks.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails loud when runs-service unavailable", async () => {
+    await insertTestAccount({ orgId });
     fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));
 
     const res = await request(app)
@@ -133,37 +182,5 @@ describe("Customer balance authorize — billing balance minus runs-service spen
       .send(authorizeBody);
 
     expect(res.status).toBe(502);
-    expect(res.body.error).toBe("Failed to fetch usage total from runs-service");
-  });
-
-  it("removes legacy billing provision lifecycle + v1 credits endpoints", async () => {
-    const headers = getAuthHeaders(orgId, userId);
-
-    const deduct = await request(app)
-      .post("/v1/credits/deduct")
-      .set(headers)
-      .send({ amount_cents: "1.0000000000", description: "deleted" });
-    const provision = await request(app)
-      .post("/v1/credits/provision")
-      .set(headers)
-      .send({ amount_cents: "1.0000000000", description: "deleted" });
-    const confirm = await request(app)
-      .post("/v1/credits/provision/00000000-0000-0000-0000-00000000ffff/confirm")
-      .set(headers)
-      .send({});
-    const cancel = await request(app)
-      .post("/v1/credits/provision/00000000-0000-0000-0000-00000000ffff/cancel")
-      .set(headers)
-      .send({});
-    const v1Authorize = await request(app)
-      .post("/v1/credits/authorize")
-      .set(headers)
-      .send(authorizeBody);
-
-    expect(deduct.status).toBe(404);
-    expect(provision.status).toBe(404);
-    expect(confirm.status).toBe(404);
-    expect(cancel.status).toBe(404);
-    expect(v1Authorize.status).toBe(404);
   });
 });

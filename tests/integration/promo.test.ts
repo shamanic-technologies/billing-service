@@ -13,11 +13,11 @@ describe("Promotion code endpoints", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
   const orgId2 = "00000000-0000-0000-0000-000000000002";
-  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+  let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    stripeMocks = setupStripeMocks();
+    ssMocks = setupStripeMocks();
     await cleanTestData();
   });
 
@@ -27,12 +27,8 @@ describe("Promotion code endpoints", () => {
   });
 
   describe("POST /v1/promotion_codes/redeem", () => {
-    it("redeems a valid promo code and credits the account", async () => {
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_promo",
-        balanceCents: 200,
-      });
+    it("redeems a valid promo code and surfaces total local credits", async () => {
+      await insertTestAccount({ orgId });
       await insertTestPromoCode({ code: "qr10", amountCents: 800 });
 
       const res = await request(app)
@@ -41,17 +37,16 @@ describe("Promotion code endpoints", () => {
         .send({ code: "qr10" });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({
-        redeemed: true,
-        // Signed: negative on the wire (credit).
-        amount_cents: "-800",
-        balance_cents: "1000.0000000000",
-      });
-
-      expect(stripeMocks.createBalanceTransaction).not.toHaveBeenCalled();
+      expect(res.body.redeemed).toBe(true);
+      // Positive grant amount.
+      expect(res.body.amount_cents).toBe("800");
+      // No welcome on this account (inserted manually) → only the promo.
+      expect(res.body.local_credits_total_cents).toBe("800.0000000000");
+      expect(ssMocks.getBalance).not.toHaveBeenCalled();
+      expect(ssMocks.reload).not.toHaveBeenCalled();
     });
 
-    it("auto-creates billing account if org has none", async () => {
+    it("auto-creates billing account with welcome + applies promo on top", async () => {
       await insertTestPromoCode({ code: "welcome10", amountCents: 1000 });
 
       const res = await request(app)
@@ -61,8 +56,8 @@ describe("Promotion code endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.redeemed).toBe(true);
-      // $2 welcome gift + $10 promo = $12 = 1200 cents balance.
-      expect(res.body.balance_cents).toBe("1200.0000000000");
+      // welcome 200 + promo 1000 = 1200.
+      expect(res.body.local_credits_total_cents).toBe("1200.0000000000");
     });
 
     it("returns 400 for invalid promo code", async () => {
@@ -103,7 +98,6 @@ describe("Promotion code endpoints", () => {
         maxRedemptions: 1,
       });
 
-      // First org redeems
       await request(app)
         .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId2))
@@ -119,11 +113,7 @@ describe("Promotion code endpoints", () => {
     });
 
     it("returns 409 when org already redeemed the code", async () => {
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_dup",
-        balanceCents: 200,
-      });
+      await insertTestAccount({ orgId });
       await insertTestPromoCode({ code: "qr10", amountCents: 800 });
 
       await request(app)
@@ -137,12 +127,9 @@ describe("Promotion code endpoints", () => {
         .send({ code: "qr10" });
 
       expect(res.status).toBe(409);
-      expect(res.body.error).toBe(
-        "Promo code already redeemed by this organization"
-      );
     });
 
-    it("returns 400 when code is missing from body", async () => {
+    it("returns 400 when code is missing", async () => {
       const res = await request(app)
         .post("/v1/promotion_codes/redeem")
         .set(getAuthHeaders(orgId))
@@ -158,14 +145,6 @@ describe("Promotion code endpoints", () => {
         .send({ code: "qr10" });
 
       expect(res.status).toBe(401);
-    });
-
-    it("returns 404 for legacy POST /v1/promo/redeem", async () => {
-      const res = await request(app)
-        .post("/v1/promo/redeem")
-        .set(getAuthHeaders(orgId))
-        .send({ code: "qr10" });
-      expect(res.status).toBe(404);
     });
   });
 });

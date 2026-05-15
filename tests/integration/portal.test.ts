@@ -2,16 +2,16 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
-import { setupStripeMocks, createStripeAuthError } from "../helpers/mock-stripe.js";
+import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
-describe("Portal Sessions endpoint", () => {
+describe("POST /v1/portal-sessions", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
-  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+  let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    stripeMocks = setupStripeMocks();
+    ssMocks = setupStripeMocks();
     await cleanTestData();
   });
 
@@ -20,85 +20,54 @@ describe("Portal Sessions endpoint", () => {
     await closeDb();
   });
 
-  describe("POST /v1/portal-sessions", () => {
-    it("creates a portal session for account with Stripe customer", async () => {
-      await insertTestAccount({
-        orgId,
-        stripeCustomerId: "cus_123",
-      });
-
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({ return_url: "https://app.example.com/billing" });
-
-      expect(res.status).toBe(200);
-      expect(res.body.url).toBe("https://billing.stripe.com/p/session/test_portal");
-      expect(stripeMocks.createPortalSession).toHaveBeenCalledWith(
-        orgId,
-        "00000000-0000-0000-0000-000000000099",
-        "cus_123",
-        "https://app.example.com/billing",
-        {}
-      );
+  it("proxies to stripe-service", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.createPortalSession.mockResolvedValue({
+      url: "https://billing.stripe.com/p/session/abc",
     });
 
-    it("returns 400 for invalid return_url", async () => {
-      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
 
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({ return_url: "not-a-url" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ url: "https://billing.stripe.com/p/session/abc" });
+    expect(ssMocks.createPortalSession).toHaveBeenCalledWith(
+      expect.objectContaining({ "x-org-id": orgId }),
+      { return_url: "https://example.com/return" }
+    );
+  });
 
-      expect(res.status).toBe(400);
-    });
+  it("returns 404 when billing account doesn't exist", async () => {
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
 
-    it("returns 400 when missing return_url", async () => {
-      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
+    expect(res.status).toBe(404);
+  });
 
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({});
+  it("returns 502 when stripe-service fails", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.createPortalSession.mockRejectedValue(new Error("SS down"));
 
-      expect(res.status).toBe(400);
-    });
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
 
-    it("returns 404 when account does not exist", async () => {
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({ return_url: "https://app.example.com/billing" });
+    expect(res.status).toBe(502);
+  });
 
-      expect(res.status).toBe(404);
-    });
+  it("returns 400 for invalid request body", async () => {
+    await insertTestAccount({ orgId });
 
-    it("returns 400 when account has no Stripe customer", async () => {
-      await insertTestAccount({ orgId, stripeCustomerId: undefined });
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({});
 
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({ return_url: "https://app.example.com/billing" });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain("No Stripe customer");
-    });
-
-    it("returns 502 when Stripe key is expired", async () => {
-      await insertTestAccount({ orgId, stripeCustomerId: "cus_123" });
-      stripeMocks.createPortalSession.mockRejectedValue(
-        createStripeAuthError("Expired API Key provided")
-      );
-
-      const res = await request(app)
-        .post("/v1/portal-sessions")
-        .set(getAuthHeaders(orgId))
-        .send({ return_url: "https://app.example.com/billing" });
-
-      expect(res.status).toBe(502);
-      expect(res.body.error).toBe("Payment provider authentication failed");
-    });
+    expect(res.status).toBe(400);
   });
 });

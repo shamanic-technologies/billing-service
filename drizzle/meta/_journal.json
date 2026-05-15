@@ -113,6 +113,13 @@
       "when": 1781136000000,
       "tag": "0015_v3_stripe_naming",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789552800000,
+      "tag": "0016_drop_cbt_create_local_promos",
+      "breakpoints": true
     }
   ]
 }

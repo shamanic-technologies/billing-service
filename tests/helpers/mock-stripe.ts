@@ -1,74 +1,65 @@
 import { vi } from "vitest";
-import Stripe from "stripe";
-import * as stripeLib from "../../src/lib/stripe.js";
-import * as keyClient from "../../src/lib/key-client.js";
+import * as ssClient from "../../src/lib/stripe-service-client.js";
+import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 
-/** Create a StripeAuthenticationError for testing. */
-export function createStripeAuthError(message = "Expired API Key provided"): Stripe.errors.StripeAuthenticationError {
-  return new Stripe.errors.StripeAuthenticationError({
-    message,
-    type: "invalid_request_error",
-  });
+export interface StripeServiceMocks {
+  ensureCustomer: ReturnType<typeof vi.fn>;
+  getBalance: ReturnType<typeof vi.fn>;
+  hasPaymentMethod: ReturnType<typeof vi.fn>;
+  reload: ReturnType<typeof vi.fn>;
+  createCheckoutSession: ReturnType<typeof vi.fn>;
+  createPortalSession: ReturnType<typeof vi.fn>;
+  listTransactions: ReturnType<typeof vi.fn>;
+  transferBrand: ReturnType<typeof vi.fn>;
+  getStats: ReturnType<typeof vi.fn>;
 }
 
-/** Default mock implementations for all Stripe operations + key-service. */
-export function setupStripeMocks() {
-  const mocks = {
-    createCustomer: vi.fn().mockResolvedValue({
-      id: "cus_mock123",
-      metadata: { org_id: "test-org" },
-    }),
-    createBalanceTransaction: vi.fn(),
-    listBalanceTransactions: vi.fn(),
-    createCheckoutSession: vi.fn().mockResolvedValue({
-      id: "cs_mock_session",
-      url: "https://checkout.stripe.com/pay/cs_mock_session",
-    }),
-    chargePaymentMethod: vi.fn().mockResolvedValue({
-      id: "pi_mock",
+/**
+ * Replace every stripe-service-client export with a vi.fn() and seed sane
+ * defaults. Returns the mock collection so individual tests can assert calls
+ * or override return values.
+ */
+export function setupStripeMocks(): StripeServiceMocks {
+  _resetCoalescer();
+
+  const mocks: StripeServiceMocks = {
+    ensureCustomer: vi.fn().mockResolvedValue({ customer_id: "cus_mock_123" }),
+    getBalance: vi.fn().mockResolvedValue({ balance_cents: "0.0000000000" }),
+    hasPaymentMethod: vi.fn().mockResolvedValue({ has_payment_method: false }),
+    reload: vi.fn().mockResolvedValue({
       status: "succeeded",
-      amount: 2000,
+      payment_intent_id: "pi_mock",
+    }),
+    createCheckoutSession: vi.fn().mockResolvedValue({
+      url: "https://checkout.stripe.com/pay/cs_mock",
+      session_id: "cs_mock",
     }),
     createPortalSession: vi.fn().mockResolvedValue({
       url: "https://billing.stripe.com/p/session/test_portal",
     }),
-    retrievePaymentIntent: vi.fn().mockResolvedValue({
-      id: "pi_mock",
-      payment_method: "pm_mock",
-      status: "succeeded",
+    listTransactions: vi.fn().mockResolvedValue({
+      object: "list",
+      data: [],
+      has_more: false,
     }),
-    constructWebhookEvent: vi.fn(),
-    resolvePlatformKey: vi.fn().mockResolvedValue({
-      provider: "stripe",
-      key: "sk_test_mock_key",
+    transferBrand: vi.fn().mockResolvedValue({ count: 0 }),
+    getStats: vi.fn().mockResolvedValue({
+      total_paid_cents: "0.0000000000",
+      accounts_with_payment_method: 0,
+      monthly_growth: [],
+      weekly_growth: [],
     }),
-    isStripeAuthError: vi.fn().mockImplementation(
-      (err: unknown) => err instanceof Stripe.errors.StripeAuthenticationError
-    ),
   };
 
-  // Mock key-service so Stripe never actually calls it
-  vi.spyOn(keyClient, "resolvePlatformKey").mockImplementation(mocks.resolvePlatformKey);
-
-  vi.spyOn(stripeLib, "createCustomer").mockImplementation(mocks.createCustomer);
-  vi.spyOn(stripeLib, "createCheckoutSession").mockImplementation(
-    mocks.createCheckoutSession
-  );
-  vi.spyOn(stripeLib, "chargePaymentMethod").mockImplementation(
-    mocks.chargePaymentMethod
-  );
-  vi.spyOn(stripeLib, "createPortalSession").mockImplementation(
-    mocks.createPortalSession
-  );
-  vi.spyOn(stripeLib, "retrievePaymentIntent").mockImplementation(
-    mocks.retrievePaymentIntent
-  );
-  vi.spyOn(stripeLib, "constructWebhookEvent").mockImplementation(
-    mocks.constructWebhookEvent
-  );
-  vi.spyOn(stripeLib, "isStripeAuthError").mockImplementation(
-    mocks.isStripeAuthError
-  );
+  vi.spyOn(ssClient, "ensureCustomer").mockImplementation(mocks.ensureCustomer);
+  vi.spyOn(ssClient, "getBalance").mockImplementation(mocks.getBalance);
+  vi.spyOn(ssClient, "hasPaymentMethod").mockImplementation(mocks.hasPaymentMethod);
+  vi.spyOn(ssClient, "reload").mockImplementation(mocks.reload);
+  vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
+  vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
+  vi.spyOn(ssClient, "listTransactions").mockImplementation(mocks.listTransactions);
+  vi.spyOn(ssClient, "transferBrand").mockImplementation(mocks.transferBrand);
+  vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
 
   return mocks;
 }
