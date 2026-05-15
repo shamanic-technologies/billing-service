@@ -7,7 +7,11 @@ import {
   insertTestPromoGrant,
   closeDb,
 } from "../helpers/test-db.js";
-import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import {
+  setupStripeMocks,
+  customerWithBillingCredits,
+  customerWithDefaultPM,
+} from "../helpers/mock-stripe.js";
 
 const orgId = "00000000-0000-0000-0000-00000000a001";
 const userId = "00000000-0000-0000-0000-000000000099";
@@ -49,7 +53,7 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
   it("sufficient when SS balance + local credits − usage covers required", async () => {
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({ orgId, userId, amountCents: 100, promoCode: "welcome" });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(0));
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "40.0000000000",
@@ -66,12 +70,12 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
     // available = 0 + 100 − 40 = 60
     expect(res.body.balance_cents).toBe("60.0000000000");
     expect(res.body.required_cents).toBe("10.0000000000");
-    expect(ssMocks.reload).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
   it("insufficient + no topup config → returns sufficient:false without reload", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(0));
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "0.0000000000",
@@ -85,15 +89,22 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
-    expect(ssMocks.reload).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
   it("insufficient + topup configured + SS has PM → calls reload and re-evaluates", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
-    ssMocks.getBalance
-      .mockResolvedValueOnce({ balance_cents: "0.0000000000" })
-      .mockResolvedValueOnce({ balance_cents: "1000.0000000000" });
+    ssMocks.getCustomerByOrg
+      .mockResolvedValueOnce({
+        ...customerWithBillingCredits(0),
+        ...customerWithDefaultPM(),
+        balance: 0,
+      })
+      .mockResolvedValueOnce({
+        ...customerWithBillingCredits(1000),
+        ...customerWithDefaultPM(),
+        balance: -1000,
+      });
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "0.0000000000",
@@ -107,17 +118,21 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(ssMocks.reload).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reload.mock.calls[0]?.[1]).toMatchObject({
-      amount_cents: 1000,
-    });
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(1000);
   });
 
   it("reload status=failed → sufficient:false", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
-    ssMocks.reload.mockResolvedValue({ status: "failed", failure_reason: "card_declined" });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(0),
+      ...customerWithDefaultPM(),
+      balance: 0,
+    });
+    ssMocks.reloadViaPaymentIntent.mockResolvedValue({
+      status: "failed",
+      failure_reason: "card_declined",
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -130,9 +145,12 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
 
   it("reload throws (SS down) → 502", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
-    ssMocks.reload.mockRejectedValue(new Error("SS down"));
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(0),
+      ...customerWithDefaultPM(),
+      balance: 0,
+    });
+    ssMocks.reloadViaPaymentIntent.mockRejectedValue(new Error("SS down"));
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -144,12 +162,13 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
 
   it("coalesces concurrent reload calls for same org", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(0),
+      ...customerWithDefaultPM(),
+      balance: 0,
+    });
 
-    // Slow reload so concurrent calls fall into the coalescer before the first
-    // resolves. 100ms is plenty even with Postgres roundtrips.
-    ssMocks.reload.mockImplementation(
+    ssMocks.reloadViaPaymentIntent.mockImplementation(
       () =>
         new Promise<{ status: "succeeded"; payment_intent_id: string }>((resolve) => {
           setTimeout(() => resolve({ status: "succeeded", payment_intent_id: "pi_x" }), 100);
@@ -169,7 +188,7 @@ describe("Customer balance authorize — composed SS + local − usage", () => {
     for (const r of results) {
       expect(r.status).toBe(200);
     }
-    expect(ssMocks.reload).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
   });
 
   it("fails loud when runs-service unavailable", async () => {

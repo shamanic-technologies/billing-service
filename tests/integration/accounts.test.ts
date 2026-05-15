@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
-import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import {
+  setupStripeMocks,
+  customerWithStripeBalance,
+  customerWithBillingCredits,
+  customerWithDefaultPM,
+} from "../helpers/mock-stripe.js";
 
 describe("Accounts endpoints", () => {
   const app = createTestApp();
@@ -51,7 +56,7 @@ describe("Accounts endpoints", () => {
 
     it("composes balance = SS.balance + local credits, available = balance − usage", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getBalance.mockResolvedValue({ balance_cents: "1000.0000000000" });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(1000));
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "75.0000000000",
@@ -71,7 +76,7 @@ describe("Accounts endpoints", () => {
 
     it("returns negative available_cents when usage > balance", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getBalance.mockResolvedValue({ balance_cents: "75.0000000000" });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(75));
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "383.0000000000",
@@ -84,6 +89,31 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.available_cents).toBe("-308.0000000000");
+    });
+
+    it("derives has_payment_method from invoice_settings.default_payment_method", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.has_payment_method).toBe(true);
+    });
+
+    it("Stripe customer.balance sign-flipped: negative balance = credit", async () => {
+      await insertTestAccount({ orgId });
+      // Stripe convention: balance=-500 means customer has 500 cents of credit.
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithStripeBalance(-500));
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.balance_cents).toBe("500.0000000000");
     });
 
     it("returns 502 when runs-service unavailable", async () => {
@@ -99,7 +129,7 @@ describe("Accounts endpoints", () => {
 
     it("returns 502 when stripe-service unavailable", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getBalance.mockRejectedValue(new Error("stripe-service down"));
+      ssMocks.getCustomerByOrg.mockRejectedValue(new Error("stripe-service down"));
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -137,7 +167,7 @@ describe("Accounts endpoints", () => {
   describe("GET /v1/accounts/balance", () => {
     it("returns balance minus usage", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getBalance.mockResolvedValue({ balance_cents: "150.0000000000" });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(150));
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "25.0000000000",
@@ -157,7 +187,7 @@ describe("Accounts endpoints", () => {
 
     it("marks depleted when available <= 0", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getBalance.mockResolvedValue({ balance_cents: "0.0000000000" });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(0));
 
       const res = await request(app)
         .get("/v1/accounts/balance")
@@ -178,7 +208,7 @@ describe("Accounts endpoints", () => {
   describe("PATCH /v1/accounts/auto_topup", () => {
     it("enables auto-topup when SS reports payment method present", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")
@@ -193,7 +223,7 @@ describe("Accounts endpoints", () => {
 
     it("rejects when SS reports no payment method", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: false });
+      // default mock has invoice_settings.default_payment_method = null
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")

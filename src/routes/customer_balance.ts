@@ -1,9 +1,6 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import crypto from "crypto";
-import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { AuthorizeRequestSchema, UsageApplyRequestSchema } from "../schemas.js";
 import { sendEmail } from "../lib/email-client.js";
@@ -14,10 +11,12 @@ import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
-  getBalance as ssGetBalance,
-  hasPaymentMethod as ssHasPaymentMethod,
-  reload as ssReload,
+  getCustomerByOrg,
+  deriveBalanceCents,
+  deriveHasPaymentMethod,
+  type StripeCustomer,
 } from "../lib/stripe-service-client.js";
+import { reloadViaPaymentIntent } from "../lib/reload.js";
 import { coalesceReload } from "../lib/reload-coalescer.js";
 
 const router = Router();
@@ -25,10 +24,6 @@ const router = Router();
 const RELOAD_TIMEOUT_MS = 30_000;
 const RELOAD_IDEMPOTENCY_BUCKET_MS = 60_000;
 
-/**
- * Compute the topup charge needed to cover `requiredCents` given `currentAvailable`.
- * Returns the smallest multiple of `topupUnit` such that available + charge >= required.
- */
 function computeTopupCharge(currentAvailable: string, requiredCents: string, topupUnit: number): number {
   const deficit = new Decimal(requiredCents).minus(currentAvailable);
   if (deficit.lessThanOrEqualTo(0)) return 0;
@@ -65,26 +60,28 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
   });
 }
 
-/**
- * Compose available funds: SS.balance + sum(local_promos) − runs.usage.
- * Returns the gross balance (SS + local) AND the available (balance − usage).
- */
+interface AvailableSnapshot {
+  customer: StripeCustomer;
+  balanceCents: string;
+  usageCents: string;
+  availableCents: string;
+}
+
 async function computeAvailable(
   orgId: string,
   identity: Record<string, string>
-): Promise<{ balanceCents: string; usageCents: string; availableCents: string }> {
-  const [ssBalance, localCredits, runsUsage] = await Promise.all([
-    ssGetBalance(identity),
+): Promise<AvailableSnapshot> {
+  const [customer, localCredits, runsUsage] = await Promise.all([
+    getCustomerByOrg(identity),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
   ]);
-  const balanceCents = addCents(ssBalance.balance_cents, localCredits);
+  const ssBalance = deriveBalanceCents(customer);
+  const balanceCents = addCents(ssBalance, localCredits);
   const availableCents = subCents(balanceCents, runsUsage.spent_cents);
-  return { balanceCents, usageCents: runsUsage.spent_cents, availableCents };
+  return { customer, balanceCents, usageCents: runsUsage.spent_cents, availableCents };
 }
 
-// POST /v1/customer_balance/authorize — synchronous pre-execution authorization
-// with auto-topup attempt against stripe-service.
 router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -147,16 +144,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    let pmCheck;
-    try {
-      pmCheck = await ssHasPaymentMethod(identity);
-    } catch (err) {
-      console.error("[billing-service] Failed has-payment-method check:", err);
-      res.status(502).json({ error: "Failed to query payment method status" });
-      return;
-    }
-
-    if (!pmCheck.has_payment_method) {
+    if (!deriveHasPaymentMethod(available.customer)) {
       sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
       res.json({
         sufficient: false,
@@ -181,14 +169,11 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       reloadResult = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          ssReload(identity, {
-            amount_cents: chargeAmount,
-            idempotency_key: reloadIdempotencyKey(orgId, chargeAmount),
-          })
+          reloadViaPaymentIntent(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
     } catch (err) {
-      console.error("[billing-service] stripe-service reload failed:", err);
+      console.error("[billing-service] reload via PaymentIntent failed:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(err) }, req.headers);
       sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
       res.status(502).json({ error: "Reload via stripe-service failed" });
@@ -233,9 +218,6 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
   }
 });
 
-// POST /v1/customer_balance/usage_apply — runs-service hint for proactive topup.
-// Caller correctness does not depend on this; billing always re-pulls truth
-// from runs-service at authorize time.
 router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -268,18 +250,18 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       return;
     }
 
-    const [ssBalance, localCredits, pmCheck] = await Promise.all([
-      ssGetBalance(identity),
+    const [customer, localCredits] = await Promise.all([
+      getCustomerByOrg(identity),
       sumLocalPromoCreditsForOrg(orgId),
-      ssHasPaymentMethod(identity),
     ]);
 
-    if (!pmCheck.has_payment_method) {
+    if (!deriveHasPaymentMethod(customer)) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const balanceCents = addCents(ssBalance.balance_cents, localCredits);
+    const ssBalance = deriveBalanceCents(customer);
+    const balanceCents = addCents(ssBalance, localCredits);
     const availableCents = subCents(balanceCents, spentTotalCents);
     const thresholdCents = String(account.topupThresholdCents);
 
@@ -300,10 +282,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       const result = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          ssReload(identity, {
-            amount_cents: chargeAmount,
-            idempotency_key: reloadIdempotencyKey(orgId, chargeAmount),
-          })
+          reloadViaPaymentIntent(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
       topupTriggered = result.status === "succeeded";
