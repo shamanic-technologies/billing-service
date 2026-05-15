@@ -40,10 +40,13 @@
           "accounts_with_payment_method": {
             "type": "integer"
           },
-          "total_balance_cents": {
+          "total_credited_cents": {
             "type": "string"
           },
-          "total_credited_cents": {
+          "total_paid_cents": {
+            "type": "string"
+          },
+          "total_local_credits_cents": {
             "type": "string"
           },
           "monthly_growth": {
@@ -62,8 +65,9 @@
         "required": [
           "total_accounts",
           "accounts_with_payment_method",
-          "total_balance_cents",
           "total_credited_cents",
+          "total_paid_cents",
+          "total_local_credits_cents",
           "monthly_growth",
           "weekly_growth"
         ]
@@ -102,10 +106,6 @@
           "has_auto_topup": {
             "type": "boolean"
           },
-          "stripe_customer_id": {
-            "type": "string",
-            "nullable": true
-          },
           "created_at": {
             "type": "string"
           },
@@ -123,7 +123,6 @@
           "topup_threshold_cents",
           "has_payment_method",
           "has_auto_topup",
-          "stripe_customer_id",
           "created_at",
           "updated_at"
         ]
@@ -152,99 +151,6 @@
         "required": [
           "available_cents",
           "depleted"
-        ]
-      },
-      "CustomerBalanceTransaction": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "object": {
-            "type": "string",
-            "enum": [
-              "customer_balance_transaction"
-            ]
-          },
-          "amount_cents": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "payment",
-              "gift",
-              "promo",
-              "refund",
-              "usage_applied"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "requires_capture",
-              "succeeded",
-              "canceled"
-            ]
-          },
-          "stripe_payment_intent_id": {
-            "type": "string",
-            "nullable": true
-          },
-          "stripe_balance_transaction_id": {
-            "type": "string",
-            "nullable": true
-          },
-          "cost_id": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid"
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
-          },
-          "created": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "object",
-          "amount_cents",
-          "type",
-          "status",
-          "stripe_payment_intent_id",
-          "stripe_balance_transaction_id",
-          "cost_id",
-          "description",
-          "created"
-        ]
-      },
-      "CustomerBalanceTransactionList": {
-        "type": "object",
-        "properties": {
-          "object": {
-            "type": "string",
-            "enum": [
-              "list"
-            ]
-          },
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CustomerBalanceTransaction"
-            }
-          },
-          "has_more": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "object",
-          "data",
-          "has_more"
         ]
       },
       "UpdateAutoTopupRequest": {
@@ -415,14 +321,14 @@
           "amount_cents": {
             "type": "string"
           },
-          "balance_cents": {
+          "local_credits_total_cents": {
             "type": "string"
           }
         },
         "required": [
           "redeemed",
           "amount_cents",
-          "balance_cents"
+          "local_credits_total_cents"
         ]
       },
       "RedeemPromotionCodeRequest": {
@@ -528,7 +434,7 @@
     "/public/stats/billing": {
       "get": {
         "summary": "Aggregate billing stats (no auth)",
-        "description": "Cross-tenant aggregate billing statistics. No authentication required.",
+        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.",
         "responses": {
           "200": {
             "description": "Billing stats",
@@ -642,7 +548,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed or runs-service unavailable",
+            "description": "stripe-service or runs-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -755,111 +661,9 @@
         }
       }
     },
-    "/v1/customer_balance_transactions": {
-      "get": {
-        "summary": "Paginated customer balance transaction history",
-        "description": "Lists the org's customer balance transactions in reverse chronological order. Excludes legacy `usage_applied` rows (frozen post-#104; runs-service owns usage truth). `amount_cents` is SIGNED: negative = credit, positive = debit.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
-              "example": "uuid1,uuid2,uuid3"
-            },
-            "required": false,
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking"
-            },
-            "required": false,
-            "name": "x-feature-slug",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Customer balance transaction list",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CustomerBalanceTransactionList"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Billing account not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/accounts/auto_topup": {
       "patch": {
-        "summary": "Configure auto-topup settings (requires payment method)",
+        "summary": "Configure auto-topup settings (requires payment method via stripe-service)",
         "parameters": [
           {
             "schema": {
@@ -1078,7 +882,7 @@
     },
     "/v1/portal-sessions": {
       "post": {
-        "summary": "Create Stripe Customer Portal session for payment method management",
+        "summary": "Create Stripe Customer Portal session via stripe-service",
         "parameters": [
           {
             "schema": {
@@ -1174,7 +978,7 @@
             }
           },
           "400": {
-            "description": "No Stripe customer or invalid request",
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -1194,7 +998,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed",
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1208,8 +1012,8 @@
     },
     "/v1/checkout-sessions": {
       "post": {
-        "summary": "Create Stripe Checkout session to add payment method and balance top-up",
-        "description": "Auto-creates the billing account with $2.00 trial gift if the org has no account yet. Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-topup.",
+        "summary": "Create Stripe Checkout session via stripe-service",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service.",
         "parameters": [
           {
             "schema": {
@@ -1305,7 +1109,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed",
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1320,7 +1124,7 @@
     "/v1/customer_balance/authorize": {
       "post": {
         "summary": "Synchronous pre-execution authorization with auto-topup",
-        "description": "Auto-creates the billing account with $2.00 trial gift if the org has no account yet. Resolves prices from costs-service, fetches org usage total from runs-service, then checks available funds. Available funds = balance_cents − usage_cents. If insufficient and auto-topup is configured, charges the smallest multiple of topup_amount_cents that covers the required amount. Sends email notification on topup failure or balance depletion.",
+        "description": "Resolves prices from costs-service, fetches usage from runs-service, fetches paid balance from stripe-service, and composes with local promo credits. If insufficient and auto-topup is configured, calls stripe-service reload (synchronous, with per-org coalescing).",
         "parameters": [
           {
             "schema": {
@@ -1416,7 +1220,7 @@
             }
           },
           "502": {
-            "description": "Payment provider, costs-service, or runs-service unavailable",
+            "description": "Downstream service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1431,7 +1235,7 @@
     "/v1/customer_balance/usage_apply": {
       "post": {
         "summary": "Notify billing of an org's current usage total (hint for proactive topup)",
-        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Body carries the org's current spent total (actual + provisioned platform costs). Billing computes available = balance - usage; if below topup_threshold and auto-topup is configured, fires a Stripe topup under a short row lock. Always returns 202 — caller does NOT rely on this for correctness; billing always re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Billing computes available = stripe paid balance + local credits − usage; if below topup_threshold and auto-topup is configured, fires a stripe-service reload. Always returns 202.",
         "parameters": [
           {
             "schema": {
@@ -1541,8 +1345,8 @@
     },
     "/v1/promotion_codes/redeem": {
       "post": {
-        "summary": "Redeem a promo code for bonus credits",
-        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and credits the bonus amount to the org's customer balance. Inserts a `type='promo'` row with negative signed amount_cents. The normal $2 welcome gift is unaffected — this adds on top.",
+        "summary": "Redeem a promo code for bonus credits (billing-local)",
+        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and inserts a `local_promos` row. No Stripe call — credit composes into available_cents at read time.",
         "parameters": [
           {
             "schema": {
@@ -1660,24 +1464,10 @@
         }
       }
     },
-    "/v1/webhooks/stripe": {
-      "post": {
-        "summary": "Stripe webhook handler",
-        "description": "Fixed URL for Stripe webhook. Organization is resolved from the Stripe customer ID in the event payload.",
-        "responses": {
-          "200": {
-            "description": "Webhook processed"
-          },
-          "400": {
-            "description": "Invalid signature or missing stripe-signature header"
-          }
-        }
-      }
-    },
     "/internal/transfer-brand": {
       "post": {
-        "summary": "Transfer all solo-brand rows from one org to another",
-        "description": "For every table that stores brand references alongside org_id, re-assigns rows where org_id = sourceOrgId and the row references only sourceBrandId. When targetBrandId is provided, also rewrites the brand reference to targetBrandId. Skips co-branding rows (multiple brand IDs). Idempotent.",
+        "summary": "Transfer all solo-brand rows from one org to another (billing + stripe-service)",
+        "description": "Updates local_promos in billing AND proxies to stripe-service for ledger rows. Skips co-branding rows. Idempotent.",
         "parameters": [
           {
             "schema": {
@@ -1710,6 +1500,16 @@
           },
           "400": {
             "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {

@@ -4,15 +4,14 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
-describe("Checkout endpoint", () => {
+describe("POST /v1/checkout-sessions", () => {
   const app = createTestApp();
   const orgId = "00000000-0000-0000-0000-000000000001";
-  const userId = "00000000-0000-0000-0000-000000000099";
-  let stripeMocks: ReturnType<typeof setupStripeMocks>;
+  let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    stripeMocks = setupStripeMocks();
+    ssMocks = setupStripeMocks();
     await cleanTestData();
   });
 
@@ -21,55 +20,71 @@ describe("Checkout endpoint", () => {
     await closeDb();
   });
 
-  it("creates a checkout session for existing account", async () => {
-    await insertTestAccount({
-      orgId,
-      stripeCustomerId: "cus_123",
+  it("proxies to stripe-service and returns session", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      url: "https://checkout.stripe.com/pay/cs_abc",
+      session_id: "cs_abc",
     });
 
     const res = await request(app)
       .post("/v1/checkout-sessions")
       .set(getAuthHeaders(orgId))
       .send({
-        success_url: "https://app.example.com/success",
-        cancel_url: "https://app.example.com/cancel",
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
         topup_amount_cents: 2000,
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toContain("checkout.stripe.com");
-    expect(res.body.session_id).toBe("cs_mock_session");
-    expect(stripeMocks.createCheckoutSession).toHaveBeenCalledWith(
-      orgId,
-      userId,
-      "cus_123",
-      "https://app.example.com/success",
-      "https://app.example.com/cancel",
-      2000,
-      {}
+    expect(res.body).toEqual({
+      url: "https://checkout.stripe.com/pay/cs_abc",
+      session_id: "cs_abc",
+    });
+    expect(ssMocks.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ "x-org-id": orgId }),
+      expect.objectContaining({
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        topup_amount_cents: 2000,
+      })
     );
   });
 
-  it("auto-creates account if none exists", async () => {
+  it("auto-creates billing account on first checkout", async () => {
     const res = await request(app)
       .post("/v1/checkout-sessions")
       .set(getAuthHeaders(orgId))
       .send({
-        success_url: "https://app.example.com/success",
-        cancel_url: "https://app.example.com/cancel",
-        topup_amount_cents: 1000,
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        topup_amount_cents: 2000,
       });
 
     expect(res.status).toBe(200);
-    expect(stripeMocks.createCustomer).toHaveBeenCalled();
-    expect(stripeMocks.createCheckoutSession).toHaveBeenCalled();
+    expect(ssMocks.ensureCustomer).toHaveBeenCalled();
   });
 
-  it("validates request body", async () => {
+  it("returns 502 when stripe-service fails", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.createCheckoutSession.mockRejectedValue(new Error("SS down"));
+
     const res = await request(app)
       .post("/v1/checkout-sessions")
       .set(getAuthHeaders(orgId))
-      .send({ success_url: "not-a-url" });
+      .send({
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        topup_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(502);
+  });
+
+  it("returns 400 for invalid request body", async () => {
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({});
 
     expect(res.status).toBe(400);
   });
