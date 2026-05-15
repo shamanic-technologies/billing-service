@@ -136,10 +136,16 @@ All three balance/usage/available endpoints fail loud (502) when runs-service is
 
 ### `GET /public/stats/billing`
 
+Composed from stripe-service `getStats()` + local `localPromos` (post-#112):
+
 ```jsonc
 {
-  "total_balance_cents": "14514.0000000000",        // SUM(billing_accounts.balance_cents)
-  "total_credited_cents": "254500.0000000000",      // lifetime POSITIVE sum of succeeded credit-type CBTs
+  "total_accounts": 2,
+  "accounts_with_payment_method": 1,                // from stripe-service
+  "total_credited_cents": "15400.0000000000",       // total_paid_cents + total_local_credits_cents
+  "total_paid_cents": "15000.0000000000",           // stripe-service Stripe payments (gross)
+  "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue (currently = total_paid_cents; will become net once stripe-service exposes refund totals)
+  "total_local_credits_cents": "400.0000000000",    // SUM(local_promos.amount_cents)
   "monthly_growth": [
     { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000" }
   ],
@@ -147,7 +153,7 @@ All three balance/usage/available endpoints fail loud (502) when runs-service is
 }
 ```
 
-Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed lives in runs-service.
+Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
 
 ## Endpoints reference
 

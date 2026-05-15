@@ -188,6 +188,12 @@ export const PublicBillingStatsSchema = z
     total_credited_cents: CentsStringSchema,
     /** Lifetime stripe-service paid only. */
     total_paid_cents: CentsStringSchema,
+    /**
+     * Cumulative all-time Stripe revenue, top-level alias for investor/landing-page consumers.
+     * Currently equals `total_paid_cents` (gross — refunds not subtracted). Will become net
+     * (paid − refunded) once stripe-service exposes refund totals.
+     */
+    total_revenue_cents: CentsStringSchema,
     /** Lifetime local promo credits only. */
     total_local_credits_cents: CentsStringSchema,
     monthly_growth: z.array(BillingGrowthRowSchema),
