@@ -6,7 +6,7 @@
 
 | `cost_source` | Who paid AI provider | We bill the org? |
 |---|---|---|
-| `platform` | Distribute (our API key) | **Yes** — debits balance via `POST /v1/credits/deduct` |
+| `platform` | Distribute (our API key) | **Yes** — counted in usage from runs-service `/internal/org-usage-total` (no per-row debit on billing side post-#104) |
 | `org` | The org (their own API key) | **No** — tracking only, never deducted |
 
 When reconciling or computing real cost: `WHERE rc.status='actual' AND rc.cost_source='platform'`. Including `org` rows would over-state.
@@ -29,11 +29,9 @@ Post-#107: legacy `charge` rows were deleted from prod and copied to `transactio
 
 ## `cost_id` natural key (post-#92)
 
-`transactions.cost_id` (uuid, nullable, indexed) decouples external callers from the billing-internal `transactions.id`. runs-service issues one provision per `runs_costs.id` and confirms/cancels via `POST /v1/credits/provision/by-cost/:cost_id/{confirm,cancel}` — no billing-side id needed.
+`transactions.cost_id` (uuid, nullable, indexed) decouples external callers from the billing-internal `transactions.id`. Pre-#104, runs-service issued one provision per `runs_costs.id` and confirmed/cancelled by `cost_id` via internal endpoints. Those endpoints (`POST /v1/credits/deduct`, `POST /v1/credits/provision`, `POST /v1/credits/provision/by-cost/:cost_id/{confirm,cancel}`, `POST /v1/credits/provision/:id/{confirm,cancel}`) **were removed post-#104** — runs-service now owns usage truth. The `cost_id` column is retained on legacy rows for audit.
 
-By-cost lookup picks the **most recent** row by `created_at` (one cost_id can produce a `pending → cancelled` row plus a fresh `confirmed` replacement when the actual amount differs). Only one row per cost_id is non-terminal at a time. Replacement rows carry the same `cost_id` so subsequent calls still hit the active row.
-
-When confirm produces a replacement (amount mismatch), the `transaction_id` field in the response points to the **new** confirmed row, not the cancelled original. By-id endpoints (`/provision/:id/{confirm,cancel}`) remain unchanged for back-compat.
+Historical (pre-#104) by-cost lookup picked the **most recent** row by `created_at` (one cost_id could produce a `pending → cancelled` row plus a fresh `confirmed` replacement when the actual amount differed). The endpoints implementing this logic are gone; `cost_id` survives on archived rows only.
 
 ## `transaction_id` canonical key, `provision_id` deprecated alias (post-#96)
 
