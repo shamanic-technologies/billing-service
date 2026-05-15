@@ -1,7 +1,12 @@
 import { Router } from "express";
 import { sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions } from "../db/schema.js";
+import { billingAccounts, localPromos } from "../db/schema.js";
+import { addCents } from "../lib/cents.js";
+import {
+  getStats as ssGetStats,
+  type StripeBillingStatsGrowthRow,
+} from "../lib/stripe-service-client.js";
 
 const router = Router();
 
@@ -9,61 +14,96 @@ const router = Router();
 // Investor/dashboard consumers wanting a display-rounded integer should
 // `Math.ceil(parseFloat(...))` at the presentation layer.
 
-interface GrowthRow {
+interface BillingGrowthRow {
   period: string;
   credited_cents: string;
   revenue_cents: string;
 }
 
-async function queryGrowth(truncTo: "month" | "week"): Promise<GrowthRow[]> {
+interface LocalGrowthRow {
+  period: string;
+  credited_cents: string;
+}
+
+async function queryLocalGrowth(truncTo: "month" | "week"): Promise<LocalGrowthRow[]> {
   const rows = await db.execute(
     rawSql`SELECT
-      to_char(date_trunc(${truncTo}, ${transactions.createdAt}), 'YYYY-MM-DD') AS period,
-      COALESCE(SUM(${transactions.amountCents}) FILTER (
-        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
-      ), 0)::numeric(16,10)::text AS credited_cents,
-      COALESCE(SUM(${transactions.amountCents}) FILTER (
-        WHERE ${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'
-          AND ${transactions.source} = 'reload'
-      ), 0)::numeric(16,10)::text AS revenue_cents
-    FROM ${transactions}
+      to_char(date_trunc(${truncTo}, ${localPromos.createdAt}), 'YYYY-MM-DD') AS period,
+      COALESCE(SUM(${localPromos.amountCents}), 0)::numeric(16,10)::text AS credited_cents
+    FROM ${localPromos}
     GROUP BY 1
     ORDER BY 1`
   );
-  return rows as unknown as GrowthRow[];
+  return rows as unknown as LocalGrowthRow[];
 }
 
+function mergeGrowthRows(
+  localRows: LocalGrowthRow[],
+  ssRows: StripeBillingStatsGrowthRow[]
+): BillingGrowthRow[] {
+  const merged = new Map<string, { credited: string; revenue: string }>();
+  for (const r of localRows) {
+    merged.set(r.period, { credited: r.credited_cents, revenue: "0.0000000000" });
+  }
+  for (const r of ssRows) {
+    const existing = merged.get(r.period);
+    if (existing) {
+      existing.credited = addCents(existing.credited, r.paid_cents);
+      existing.revenue = addCents(existing.revenue, r.paid_cents);
+    } else {
+      merged.set(r.period, { credited: r.paid_cents, revenue: r.paid_cents });
+    }
+  }
+  return [...merged.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, v]) => ({
+      period,
+      credited_cents: v.credited,
+      revenue_cents: v.revenue,
+    }));
+}
+
+// GET /public/stats/billing — composed: stripe-service paid + local promo credits + billing accounts.
 router.get("/public/stats/billing", async (_req, res) => {
   try {
     const [accountStats] = await db
       .select({
         totalAccounts: rawSql<number>`COUNT(*)::int`,
-        accountsWithPaymentMethod: rawSql<number>`COUNT(*) FILTER (WHERE ${billingAccounts.stripePaymentMethodId} IS NOT NULL)::int`,
-        totalGrantsCents: rawSql<string>`COALESCE(SUM(${billingAccounts.creditBalanceCents}), 0)::numeric(16,10)::text`,
       })
       .from(billingAccounts);
 
-    const [creditStats] = await db
+    const [localCreditStats] = await db
       .select({
-        totalCreditedCents: rawSql<string>`COALESCE(SUM(${transactions.amountCents}), 0)::numeric(16,10)::text`,
+        totalLocalCredits: rawSql<string>`COALESCE(SUM(${localPromos.amountCents}), 0)::numeric(16,10)::text`,
       })
-      .from(transactions)
-      .where(
-        rawSql`${transactions.type} = 'credit' AND ${transactions.status} = 'confirmed'`
-      );
+      .from(localPromos);
 
-    const [monthlyGrowth, weeklyGrowth] = await Promise.all([
-      queryGrowth("month"),
-      queryGrowth("week"),
+    let ssStats;
+    try {
+      ssStats = await ssGetStats({
+        "x-org-id": "00000000-0000-0000-0000-000000000000",
+        "x-user-id": "00000000-0000-0000-0000-000000000000",
+      });
+    } catch (err) {
+      console.error("[billing-service] stripe-service getStats failed:", err);
+      res.status(502).json({ error: "Failed to fetch stats from stripe-service" });
+      return;
+    }
+
+    const [monthlyLocal, weeklyLocal] = await Promise.all([
+      queryLocalGrowth("month"),
+      queryLocalGrowth("week"),
     ]);
 
     res.json({
-      totalAccounts: accountStats.totalAccounts,
-      accountsWithPaymentMethod: accountStats.accountsWithPaymentMethod,
-      totalGrantsCents: accountStats.totalGrantsCents,
-      totalCreditedCents: creditStats.totalCreditedCents,
-      monthlyGrowth,
-      weeklyGrowth,
+      total_accounts: accountStats.totalAccounts,
+      accounts_with_payment_method: ssStats.accounts_with_payment_method,
+      total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_paid_cents),
+      total_paid_cents: ssStats.total_paid_cents,
+      total_revenue_cents: ssStats.total_paid_cents,
+      total_local_credits_cents: localCreditStats.totalLocalCredits,
+      monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth),
+      weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth),
     });
   } catch (err) {
     console.error("[billing-service] GET /public/stats/billing failed:", err);

@@ -34,25 +34,31 @@
       "PublicBillingStats": {
         "type": "object",
         "properties": {
-          "totalAccounts": {
+          "total_accounts": {
             "type": "integer"
           },
-          "accountsWithPaymentMethod": {
+          "accounts_with_payment_method": {
             "type": "integer"
           },
-          "totalGrantsCents": {
+          "total_credited_cents": {
             "type": "string"
           },
-          "totalCreditedCents": {
+          "total_paid_cents": {
             "type": "string"
           },
-          "monthlyGrowth": {
+          "total_revenue_cents": {
+            "type": "string"
+          },
+          "total_local_credits_cents": {
+            "type": "string"
+          },
+          "monthly_growth": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BillingGrowthRow"
             }
           },
-          "weeklyGrowth": {
+          "weekly_growth": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BillingGrowthRow"
@@ -60,12 +66,14 @@
           }
         },
         "required": [
-          "totalAccounts",
-          "accountsWithPaymentMethod",
-          "totalGrantsCents",
-          "totalCreditedCents",
-          "monthlyGrowth",
-          "weeklyGrowth"
+          "total_accounts",
+          "accounts_with_payment_method",
+          "total_credited_cents",
+          "total_paid_cents",
+          "total_revenue_cents",
+          "total_local_credits_cents",
+          "monthly_growth",
+          "weekly_growth"
         ]
       },
       "BillingAccount": {
@@ -75,52 +83,52 @@
             "type": "string",
             "format": "uuid"
           },
-          "orgId": {
+          "org_id": {
             "type": "string",
             "format": "uuid"
           },
-          "grantsCents": {
+          "balance_cents": {
             "type": "string"
           },
-          "runsSpentCents": {
+          "usage_cents": {
             "type": "string"
           },
-          "availableCents": {
+          "available_cents": {
             "type": "string"
           },
-          "reloadAmountCents": {
+          "topup_amount_cents": {
             "type": "integer",
             "nullable": true
           },
-          "reloadThresholdCents": {
+          "topup_threshold_cents": {
             "type": "integer",
             "nullable": true
           },
-          "hasPaymentMethod": {
+          "has_payment_method": {
             "type": "boolean"
           },
-          "hasAutoReload": {
+          "has_auto_topup": {
             "type": "boolean"
           },
-          "createdAt": {
+          "created_at": {
             "type": "string"
           },
-          "updatedAt": {
+          "updated_at": {
             "type": "string"
           }
         },
         "required": [
           "id",
-          "orgId",
-          "grantsCents",
-          "runsSpentCents",
-          "availableCents",
-          "reloadAmountCents",
-          "reloadThresholdCents",
-          "hasPaymentMethod",
-          "hasAutoReload",
-          "createdAt",
-          "updatedAt"
+          "org_id",
+          "balance_cents",
+          "usage_cents",
+          "available_cents",
+          "topup_amount_cents",
+          "topup_threshold_cents",
+          "has_payment_method",
+          "has_auto_topup",
+          "created_at",
+          "updated_at"
         ]
       },
       "ErrorResponse": {
@@ -137,7 +145,7 @@
       "BalanceResponse": {
         "type": "object",
         "properties": {
-          "balance_cents": {
+          "available_cents": {
             "type": "string"
           },
           "depleted": {
@@ -145,75 +153,25 @@
           }
         },
         "required": [
-          "balance_cents",
+          "available_cents",
           "depleted"
         ]
       },
-      "Transaction": {
+      "UpdateAutoTopupRequest": {
         "type": "object",
         "properties": {
-          "id": {
-            "type": "string"
-          },
-          "amount_cents": {
-            "type": "integer"
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
-          },
-          "created_at": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "credit",
-              "reload"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "amount_cents",
-          "description",
-          "created_at",
-          "type"
-        ]
-      },
-      "TransactionsResponse": {
-        "type": "object",
-        "properties": {
-          "transactions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Transaction"
-            }
-          },
-          "has_more": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "transactions",
-          "has_more"
-        ]
-      },
-      "UpdateAutoReloadRequest": {
-        "type": "object",
-        "properties": {
-          "reload_amount_cents": {
+          "topup_amount_cents": {
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true
           },
-          "reload_threshold_cents": {
+          "topup_threshold_cents": {
             "type": "integer",
             "minimum": 0
           }
         },
         "required": [
-          "reload_amount_cents"
+          "topup_amount_cents"
         ]
       },
       "PortalSessionResponse": {
@@ -265,7 +223,7 @@
             "type": "string",
             "format": "uri"
           },
-          "reload_amount_cents": {
+          "topup_amount_cents": {
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true
@@ -274,7 +232,7 @@
         "required": [
           "success_url",
           "cancel_url",
-          "reload_amount_cents"
+          "topup_amount_cents"
         ]
       },
       "AuthorizeResponse": {
@@ -332,22 +290,22 @@
           "items"
         ]
       },
-      "UsageNotifyResponse": {
+      "UsageApplyResponse": {
         "type": "object",
         "properties": {
           "acknowledged": {
             "type": "boolean"
           },
-          "reload_triggered": {
+          "topup_triggered": {
             "type": "boolean"
           }
         },
         "required": [
           "acknowledged",
-          "reload_triggered"
+          "topup_triggered"
         ]
       },
-      "UsageNotifyRequest": {
+      "UsageApplyRequest": {
         "type": "object",
         "properties": {
           "spent_total_cents": {
@@ -358,26 +316,26 @@
           "spent_total_cents"
         ]
       },
-      "RedeemPromoResponse": {
+      "RedeemPromotionCodeResponse": {
         "type": "object",
         "properties": {
           "redeemed": {
             "type": "boolean"
           },
           "amount_cents": {
-            "type": "integer"
+            "type": "string"
           },
-          "balance_cents": {
+          "local_credits_total_cents": {
             "type": "string"
           }
         },
         "required": [
           "redeemed",
           "amount_cents",
-          "balance_cents"
+          "local_credits_total_cents"
         ]
       },
-      "RedeemPromoRequest": {
+      "RedeemPromotionCodeRequest": {
         "type": "object",
         "properties": {
           "code": {
@@ -480,7 +438,7 @@
     "/public/stats/billing": {
       "get": {
         "summary": "Aggregate billing stats (no auth)",
-        "description": "Cross-tenant aggregate billing statistics. No authentication required.",
+        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.",
         "responses": {
           "200": {
             "description": "Billing stats",
@@ -594,7 +552,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed (e.g. expired Stripe key)",
+            "description": "stripe-service or runs-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -608,7 +566,7 @@
     },
     "/v1/accounts/balance": {
       "get": {
-        "summary": "Quick balance check from DB cache",
+        "summary": "Quick available-funds check",
         "parameters": [
           {
             "schema": {
@@ -693,100 +651,9 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/v1/accounts/transactions": {
-      "get": {
-        "summary": "Get credit transaction history from Stripe",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
           },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
-              "example": "uuid1,uuid2,uuid3"
-            },
-            "required": false,
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking"
-            },
-            "required": false,
-            "name": "x-feature-slug",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Transaction list",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransactionsResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "Payment provider authentication failed",
+          "404": {
+            "description": "Billing account not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -798,9 +665,9 @@
         }
       }
     },
-    "/v1/accounts/auto-reload": {
+    "/v1/accounts/auto_topup": {
       "patch": {
-        "summary": "Configure auto-reload settings (requires payment method)",
+        "summary": "Configure auto-topup settings (requires payment method via stripe-service)",
         "parameters": [
           {
             "schema": {
@@ -879,7 +746,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateAutoReloadRequest"
+                "$ref": "#/components/schemas/UpdateAutoTopupRequest"
               }
             }
           }
@@ -918,7 +785,7 @@
         }
       },
       "delete": {
-        "summary": "Disable auto-reload",
+        "summary": "Disable auto-topup",
         "parameters": [
           {
             "schema": {
@@ -995,7 +862,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Updated account with auto-reload disabled",
+            "description": "Updated account with auto-topup disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -1019,7 +886,7 @@
     },
     "/v1/portal-sessions": {
       "post": {
-        "summary": "Create Stripe Customer Portal session for payment method management",
+        "summary": "Create Stripe Customer Portal session via stripe-service",
         "parameters": [
           {
             "schema": {
@@ -1115,7 +982,7 @@
             }
           },
           "400": {
-            "description": "No Stripe customer or invalid request",
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -1135,7 +1002,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed",
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1149,8 +1016,8 @@
     },
     "/v1/checkout-sessions": {
       "post": {
-        "summary": "Create Stripe Checkout session to add payment method and credits",
-        "description": "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-reload.",
+        "summary": "Create Stripe Checkout session via stripe-service",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service.",
         "parameters": [
           {
             "schema": {
@@ -1246,7 +1113,7 @@
             }
           },
           "502": {
-            "description": "Payment provider authentication failed",
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1258,10 +1125,10 @@
         }
       }
     },
-    "/v1/credits/authorize": {
+    "/v1/customer_balance/authorize": {
       "post": {
-        "summary": "Synchronous pre-execution authorization with auto-reload",
-        "description": "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. Resolves prices from costs-service, fetches org usage total from runs-service, then checks available credits. Available credits are billing-owned credit grants minus runs-service platform usage total. If insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents that covers the required amount (e.g. $10 reload unit, $37 required with $2 balance → charges 4x $10 = $40). Sends email notification on reload failure or credit depletion.",
+        "summary": "Synchronous pre-execution authorization with auto-topup",
+        "description": "Resolves prices from costs-service, fetches usage from runs-service, fetches paid balance from stripe-service, and composes with local promo credits. If insufficient and auto-topup is configured, calls stripe-service reload (synchronous, with per-org coalescing).",
         "parameters": [
           {
             "schema": {
@@ -1357,7 +1224,7 @@
             }
           },
           "502": {
-            "description": "Payment provider, costs-service, or runs-service unavailable",
+            "description": "Downstream service unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1369,10 +1236,10 @@
         }
       }
     },
-    "/v1/credits/usage-notify": {
+    "/v1/customer_balance/usage_apply": {
       "post": {
-        "summary": "Notify billing of an org's current usage total (hint for proactive reload)",
-        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Body carries the org's current spent total (actual + provisioned platform costs). Billing computes available = credit_grants - spent_total; if below reload_threshold and auto-reload is configured, fires a Stripe reload under a short row lock. Always returns 202 — caller does NOT rely on this for correctness; billing always re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+        "summary": "Notify billing of an org's current usage total (hint for proactive topup)",
+        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Billing computes available = stripe paid balance + local credits − usage; if below topup_threshold and auto-topup is configured, fires a stripe-service reload. Always returns 202.",
         "parameters": [
           {
             "schema": {
@@ -1451,7 +1318,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UsageNotifyRequest"
+                "$ref": "#/components/schemas/UsageApplyRequest"
               }
             }
           }
@@ -1462,7 +1329,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UsageNotifyResponse"
+                  "$ref": "#/components/schemas/UsageApplyResponse"
                 }
               }
             }
@@ -1480,10 +1347,10 @@
         }
       }
     },
-    "/v1/promo/redeem": {
+    "/v1/promotion_codes/redeem": {
       "post": {
-        "summary": "Redeem a promo code for bonus credits",
-        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and credits the bonus amount to the org's billing account. The normal $2 welcome credit is unaffected — this adds on top.",
+        "summary": "Redeem a promo code for bonus credits (billing-local)",
+        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and inserts a `local_promos` row. No Stripe call — credit composes into available_cents at read time.",
         "parameters": [
           {
             "schema": {
@@ -1562,7 +1429,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RedeemPromoRequest"
+                "$ref": "#/components/schemas/RedeemPromotionCodeRequest"
               }
             }
           }
@@ -1573,7 +1440,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RedeemPromoResponse"
+                  "$ref": "#/components/schemas/RedeemPromotionCodeResponse"
                 }
               }
             }
@@ -1601,24 +1468,10 @@
         }
       }
     },
-    "/v1/webhooks/stripe": {
-      "post": {
-        "summary": "Stripe webhook handler",
-        "description": "Fixed URL for Stripe webhook. Organization is resolved from the Stripe customer ID in the event payload.",
-        "responses": {
-          "200": {
-            "description": "Webhook processed"
-          },
-          "400": {
-            "description": "Invalid signature or missing stripe-signature header"
-          }
-        }
-      }
-    },
     "/internal/transfer-brand": {
       "post": {
-        "summary": "Transfer all solo-brand rows from one org to another",
-        "description": "For every table that stores brand references alongside org_id, re-assigns rows where org_id = sourceOrgId and the row references only sourceBrandId. When targetBrandId is provided, also rewrites the brand reference to targetBrandId. Skips co-branding rows (multiple brand IDs). Idempotent.",
+        "summary": "Transfer all solo-brand rows from one org to another (billing + stripe-service)",
+        "description": "Updates local_promos in billing AND proxies to stripe-service for ledger rows. Skips co-branding rows. Idempotent.",
         "parameters": [
           {
             "schema": {
@@ -1651,6 +1504,16 @@
           },
           "400": {
             "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unavailable",
             "content": {
               "application/json": {
                 "schema": {

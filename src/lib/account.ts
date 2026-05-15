@@ -1,14 +1,18 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions } from "../db/schema.js";
-import { createCustomer } from "./stripe.js";
-
-const WELCOME_CREDIT_CENTS = "200";
+import { billingAccounts, WELCOME_PROMO_CODE } from "../db/schema.js";
+import { redeemPromoCode, PromoAlreadyRedeemedError } from "./promos.js";
+import { ensureCustomer } from "./stripe-service-client.js";
 
 /**
- * Find or auto-create a billing account for an org.
- * Uses INSERT ON CONFLICT to prevent duplicate Stripe customers
- * and double welcome credits on concurrent requests.
+ * Find or atomically create a billing account for an org.
+ *
+ * On fresh-create the winner:
+ *   1. INSERT billing_accounts via ON CONFLICT DO NOTHING
+ *   2. Ensures Stripe customer exists in stripe-service (idempotent SS-side)
+ *   3. Redeems the welcome promo (UNIQUE (org_id, promo_code_id) makes this idempotent)
+ *
+ * Lost-race readers refetch and return the existing row with no side effects.
  */
 export async function findOrCreateAccount(
   orgId: string,
@@ -23,18 +27,13 @@ export async function findOrCreateAccount(
 
   if (existing) return existing;
 
-  // Atomic insert — only one concurrent request wins
   const [inserted] = await db
     .insert(billingAccounts)
-    .values({
-      orgId,
-      creditBalanceCents: WELCOME_CREDIT_CENTS,
-    })
+    .values({ orgId })
     .onConflictDoNothing()
     .returning();
 
   if (!inserted) {
-    // Lost the race — another request created the account
     const [refetched] = await db
       .select()
       .from(billingAccounts)
@@ -43,27 +42,17 @@ export async function findOrCreateAccount(
     return refetched;
   }
 
-  // We won — create Stripe customer and update the row
-  const stripeCustomer = await createCustomer(orgId, userId, undefined, wfHeaders);
+  await ensureCustomer({
+    "x-org-id": orgId,
+    "x-user-id": userId,
+    ...wfHeaders,
+  });
 
-  const [updated] = await db
-    .update(billingAccounts)
-    .set({ stripeCustomerId: stripeCustomer.id, updatedAt: new Date() })
-    .where(eq(billingAccounts.orgId, orgId))
-    .returning();
+  try {
+    await redeemPromoCode(orgId, userId, WELCOME_PROMO_CODE);
+  } catch (err) {
+    if (!(err instanceof PromoAlreadyRedeemedError)) throw err;
+  }
 
-  // Write welcome credit to ledger
-  await db
-    .insert(transactions)
-    .values({
-      orgId,
-      userId,
-      type: "credit",
-      amountCents: WELCOME_CREDIT_CENTS,
-      status: "confirmed",
-      source: "welcome",
-      description: "Trial credit: $2.00",
-    });
-
-  return updated;
+  return inserted;
 }

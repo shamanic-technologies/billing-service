@@ -1,33 +1,30 @@
+import { eq, ne } from "drizzle-orm";
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
-  transactions,
   localPromoCodes,
+  localPromos,
+  WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 
 export async function cleanTestData() {
-  await db.delete(transactions);
+  await db.delete(localPromos);
   await db.delete(billingAccounts);
-  await db.delete(localPromoCodes);
+  // Keep the seeded welcome code; remove any test-created codes.
+  await db.delete(localPromoCodes).where(ne(localPromoCodes.code, WELCOME_PROMO_CODE));
 }
 
 export async function insertTestAccount(data: {
   orgId: string;
-  stripeCustomerId?: string;
-  creditBalanceCents?: number;
-  reloadAmountCents?: number;
-  reloadThresholdCents?: number;
-  stripePaymentMethodId?: string;
+  topupAmountCents?: number;
+  topupThresholdCents?: number;
 }) {
   const [account] = await db
     .insert(billingAccounts)
     .values({
       orgId: data.orgId,
-      stripeCustomerId: data.stripeCustomerId ?? null,
-      creditBalanceCents: data.creditBalanceCents ?? 200,
-      reloadAmountCents: data.reloadAmountCents ?? null,
-      reloadThresholdCents: data.reloadThresholdCents ?? 200,
-      stripePaymentMethodId: data.stripePaymentMethodId ?? null,
+      topupAmountCents: data.topupAmountCents ?? null,
+      topupThresholdCents: data.topupThresholdCents ?? 200,
     })
     .returning();
   return account;
@@ -49,6 +46,32 @@ export async function insertTestPromoCode(data: {
     })
     .returning();
   return promo;
+}
+
+export async function insertTestPromoGrant(data: {
+  orgId: string;
+  userId: string;
+  amountCents: number | string;
+  promoCode: string;
+  description?: string;
+}) {
+  const [code] = await db
+    .select()
+    .from(localPromoCodes)
+    .where(eq(localPromoCodes.code, data.promoCode))
+    .limit(1);
+  if (!code) throw new Error(`promo code not found: ${data.promoCode}`);
+  const [row] = await db
+    .insert(localPromos)
+    .values({
+      orgId: data.orgId,
+      userId: data.userId,
+      amountCents: String(data.amountCents),
+      promoCodeId: code.id,
+      description: data.description ?? null,
+    })
+    .returning();
+  return row;
 }
 
 export async function closeDb() {

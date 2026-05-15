@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -15,21 +14,15 @@ import {
 const FRACTIONAL_PRECISION = 16;
 const FRACTIONAL_SCALE = 10;
 
+// billing_accounts: org ↔ topup config only. All Stripe state (customer id,
+// payment method, paid balance) lives in stripe-service post-#0016.
 export const billingAccounts = pgTable(
   "billing_accounts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
-    stripeCustomerId: text("stripe_customer_id"),
-    creditBalanceCents: numeric("credit_balance_cents", {
-      precision: FRACTIONAL_PRECISION,
-      scale: FRACTIONAL_SCALE,
-    })
-      .notNull()
-      .default("200"),
-    reloadAmountCents: integer("reload_amount_cents"),
-    reloadThresholdCents: integer("reload_threshold_cents").default(200),
-    stripePaymentMethodId: text("stripe_payment_method_id"),
+    topupAmountCents: integer("topup_amount_cents"),
+    topupThresholdCents: integer("topup_threshold_cents").default(200),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -39,13 +32,13 @@ export const billingAccounts = pgTable(
   },
   (table) => [
     uniqueIndex("idx_billing_accounts_org_id").on(table.orgId),
-    index("idx_billing_accounts_stripe_customer").on(table.stripeCustomerId),
   ]
 );
 
 export type BillingAccount = typeof billingAccounts.$inferSelect;
 export type NewBillingAccount = typeof billingAccounts.$inferInsert;
 
+// local_promo_codes: code definitions. Welcome gift is seeded as code='welcome'.
 export const localPromoCodes = pgTable(
   "local_promo_codes",
   {
@@ -64,46 +57,36 @@ export const localPromoCodes = pgTable(
 export type LocalPromoCode = typeof localPromoCodes.$inferSelect;
 export type NewLocalPromoCode = typeof localPromoCodes.$inferInsert;
 
-export const transactions = pgTable(
-  "transactions",
+// local_promos: per-org credit grants from promo codes (incl. welcome).
+// One row per (org, promo_code) UNIQUE. Welcome is just another promo code.
+// amount_cents is positive — these are credits, no sign convention needed.
+export const localPromos = pgTable(
+  "local_promos",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     userId: uuid("user_id").notNull(),
-    runId: uuid("run_id"),
-    costId: uuid("cost_id"),
-    type: text("type").notNull().default("debit"),
     amountCents: numeric("amount_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
     }).notNull(),
-    status: text("status").notNull().default("pending"),
-    source: text("source").notNull().default("charge"),
-    stripePaymentIntentId: text("stripe_payment_intent_id"),
-    stripeBalanceTxnId: text("stripe_balance_txn_id"),
-    promoCodeId: uuid("promo_code_id").references(() => localPromoCodes.id),
-    description: text("description"),
-    campaignId: text("campaign_id"),
-    brandIds: text("brand_ids").array(),
-    workflowSlug: text("workflow_slug"),
-    featureSlug: text("feature_slug"),
-    createdAt: timestamp("created_at", { withTimezone: true })
+    promoCodeId: uuid("promo_code_id")
       .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .references(() => localPromoCodes.id),
+    description: text("description"),
+    brandIds: text("brand_ids").array(),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
-    index("idx_transactions_org_id").on(table.orgId),
-    index("idx_transactions_status").on(table.status),
-    index("idx_transactions_source").on(table.source),
-    index("idx_transactions_cost_id").on(table.costId),
-    uniqueIndex("idx_transactions_reload_pi")
-      .on(table.orgId, table.stripePaymentIntentId)
-      .where(sql`source = 'reload' AND stripe_payment_intent_id IS NOT NULL`),
+    uniqueIndex("idx_local_promos_org_promo").on(table.orgId, table.promoCodeId),
+    index("idx_local_promos_org").on(table.orgId),
   ]
 );
 
-export type Transaction = typeof transactions.$inferSelect;
-export type NewTransaction = typeof transactions.$inferInsert;
+export type LocalPromo = typeof localPromos.$inferSelect;
+export type NewLocalPromo = typeof localPromos.$inferInsert;
+
+export const WELCOME_PROMO_CODE = "welcome";
+export const WELCOME_PROMO_AMOUNT_CENTS = 200;

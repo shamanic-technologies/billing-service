@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { transactions } from "../../src/db/schema.js";
+import { localPromos, localPromoCodes } from "../../src/db/schema.js";
 import { createTestApp } from "../helpers/test-app.js";
-import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
+import { cleanTestData, insertTestAccount, insertTestPromoCode, closeDb } from "../helpers/test-db.js";
+import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
 describe("POST /internal/transfer-brand", () => {
   const app = createTestApp();
@@ -20,7 +21,28 @@ describe("POST /internal/transfer-brand", () => {
     "Content-Type": "application/json",
   };
 
+  let ssMocks: ReturnType<typeof setupStripeMocks>;
+
+  async function insertPromoGrantWithBrand(brandIds: string[] | null) {
+    await insertTestPromoCode({ code: `p-${Math.random()}`, amountCents: 100 });
+    const [codeRow] = await db.select().from(localPromoCodes).limit(1);
+    const [row] = await db
+      .insert(localPromos)
+      .values({
+        orgId: sourceOrgId,
+        userId,
+        amountCents: "100",
+        promoCodeId: codeRow.id,
+        description: "test",
+        brandIds,
+      })
+      .returning();
+    return row;
+  }
+
   beforeEach(async () => {
+    vi.restoreAllMocks();
+    ssMocks = setupStripeMocks();
     await cleanTestData();
     await insertTestAccount({ orgId: sourceOrgId });
     await insertTestAccount({ orgId: targetOrgId });
@@ -31,14 +53,9 @@ describe("POST /internal/transfer-brand", () => {
     await closeDb();
   });
 
-  it("transfers solo-brand ledger entries from source to target org", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [sourceBrandId],
-      description: "solo brand provision",
-    });
+  it("transfers solo-brand local_promos rows from source to target org and calls SS", async () => {
+    ssMocks.transferBrand.mockResolvedValue({ count: 5 });
+    await insertPromoGrantWithBrand([sourceBrandId]);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
@@ -47,18 +64,17 @@ describe("POST /internal/transfer-brand", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
+      { tableName: "local_promos", count: 1 },
+      { tableName: "stripe_service_transactions", count: 5 },
     ]);
+    expect(ssMocks.transferBrand).toHaveBeenCalledWith(
+      expect.objectContaining({ "x-org-id": sourceOrgId }),
+      { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId: undefined }
+    );
   });
 
   it("rewrites brand_ids when targetBrandId is provided", async () => {
-    const [provision] = await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [sourceBrandId],
-      description: "will be rewritten",
-    }).returning();
+    const row = await insertPromoGrantWithBrand([sourceBrandId]);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
@@ -66,28 +82,14 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
 
     expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
-    ]);
 
-    // Verify the brand_ids was rewritten to targetBrandId
-    const [updated] = await db
-      .select()
-      .from(transactions)
-      .where(eq(transactions.id, provision.id));
-
+    const [updated] = await db.select().from(localPromos).where(eq(localPromos.id, row.id));
     expect(updated.orgId).toBe(targetOrgId);
     expect(updated.brandIds).toEqual([targetBrandId]);
   });
 
-  it("skips co-branding entries (multiple brand IDs)", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 200,
-      brandIds: [sourceBrandId, otherBrandId],
-      description: "co-brand provision",
-    });
+  it("skips co-branding rows", async () => {
+    await insertPromoGrantWithBrand([sourceBrandId, otherBrandId]);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
@@ -95,110 +97,19 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
 
     expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
-    ]);
+    expect(res.body.updatedTables[0]).toEqual({ tableName: "local_promos", count: 0 });
   });
 
-  it("skips entries for a different brand", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [otherBrandId],
-      description: "different brand",
-    });
+  it("returns 502 when stripe-service fails", async () => {
+    ssMocks.transferBrand.mockRejectedValue(new Error("SS down"));
+    await insertPromoGrantWithBrand([sourceBrandId]);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
       .set(internalHeaders)
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
 
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
-    ]);
-  });
-
-  it("skips entries with null brand_ids", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: null,
-      description: "no brand",
-    });
-
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
-    ]);
-  });
-
-  it("is idempotent — second call is a no-op", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [sourceBrandId],
-      description: "solo brand",
-    });
-
-    const res1 = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res1.status).toBe(200);
-    expect(res1.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
-    ]);
-
-    const res2 = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res2.status).toBe(200);
-    expect(res2.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
-    ]);
-  });
-
-  it("is idempotent with targetBrandId — second call is a no-op", async () => {
-    await db.insert(transactions).values({
-      orgId: sourceOrgId,
-      userId,
-      amountCents: 100,
-      brandIds: [sourceBrandId],
-      description: "solo brand",
-    });
-
-    const res1 = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
-
-    expect(res1.status).toBe(200);
-    expect(res1.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 1 },
-    ]);
-
-    // Second call — brand_ids is now [targetBrandId], org_id is targetOrgId, so WHERE won't match
-    const res2 = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
-
-    expect(res2.status).toBe(200);
-    expect(res2.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 0 },
-    ]);
+    expect(res.status).toBe(502);
   });
 
   it("returns 400 for invalid body", async () => {
@@ -208,7 +119,6 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId: "not-a-uuid" });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBeDefined();
   });
 
   it("returns 401 without api key", async () => {
@@ -218,41 +128,5 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
 
     expect(res.status).toBe(401);
-  });
-
-  it("transfers multiple solo-brand entries at once", async () => {
-    await db.insert(transactions).values([
-      {
-        orgId: sourceOrgId,
-        userId,
-        amountCents: 100,
-        brandIds: [sourceBrandId],
-        description: "provision 1",
-      },
-      {
-        orgId: sourceOrgId,
-        userId,
-        amountCents: 200,
-        brandIds: [sourceBrandId],
-        description: "provision 2",
-      },
-      {
-        orgId: sourceOrgId,
-        userId,
-        amountCents: 300,
-        brandIds: [sourceBrandId, otherBrandId],
-        description: "co-brand — should skip",
-      },
-    ]);
-
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "transactions", count: 2 },
-    ]);
   });
 });

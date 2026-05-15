@@ -1,94 +1,114 @@
 import { Router } from "express";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, transactions as creditGrants } from "../db/schema.js";
+import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { UpdateAutoReloadRequestSchema } from "../schemas.js";
-import { isStripeAuthError } from "../lib/stripe.js";
+import { UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { isDepleted, subCents } from "../lib/cents.js";
+import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
+import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import {
+  getBalance as ssGetBalance,
+  hasPaymentMethod as ssHasPaymentMethod,
+} from "../lib/stripe-service-client.js";
 
 const router = Router();
 
+function buildIdentity(
+  orgId: string,
+  userId: string,
+  runId: string | undefined,
+  wfHeaders: Record<string, string>
+): Record<string, string> {
+  const out: Record<string, string> = {
+    "x-org-id": orgId,
+    "x-user-id": userId,
+    ...wfHeaders,
+  };
+  if (runId) out["x-run-id"] = runId;
+  return out;
+}
+
+async function composeAccountFunds(
+  orgId: string,
+  identity: Record<string, string>
+): Promise<{
+  balanceCents: string;
+  usageCents: string;
+  availableCents: string;
+  hasPaymentMethod: boolean;
+}> {
+  const [ssBalance, localCredits, runsUsage, pmCheck] = await Promise.all([
+    ssGetBalance(identity),
+    sumLocalPromoCreditsForOrg(orgId),
+    fetchRunsOrgUsageTotal(orgId, identity),
+    ssHasPaymentMethod(identity),
+  ]);
+  const balanceCents = addCents(ssBalance.balance_cents, localCredits);
+  const availableCents = subCents(balanceCents, runsUsage.spent_cents);
+  return {
+    balanceCents,
+    usageCents: runsUsage.spent_cents,
+    availableCents,
+    hasPaymentMethod: pmCheck.has_payment_method,
+  };
+}
+
 function buildAccountResponse(
   account: typeof billingAccounts.$inferSelect,
-  spentCents: string
+  funds: { balanceCents: string; usageCents: string; availableCents: string; hasPaymentMethod: boolean }
 ) {
   return {
     id: account.id,
-    orgId: account.orgId,
-    grantsCents: account.creditBalanceCents,
-    runsSpentCents: spentCents,
-    availableCents: subCents(account.creditBalanceCents, spentCents),
-    reloadAmountCents: account.reloadAmountCents,
-    reloadThresholdCents: account.reloadThresholdCents,
-    hasPaymentMethod: !!account.stripePaymentMethodId,
-    hasAutoReload: !!(account.reloadAmountCents && account.stripePaymentMethodId),
-    createdAt: account.createdAt.toISOString(),
-    updatedAt: account.updatedAt.toISOString(),
+    org_id: account.orgId,
+    balance_cents: funds.balanceCents,
+    usage_cents: funds.usageCents,
+    available_cents: funds.availableCents,
+    topup_amount_cents: account.topupAmountCents,
+    topup_threshold_cents: account.topupThresholdCents,
+    has_payment_method: funds.hasPaymentMethod,
+    has_auto_topup: !!(account.topupAmountCents && funds.hasPaymentMethod),
+    created_at: account.createdAt.toISOString(),
+    updated_at: account.updatedAt.toISOString(),
   };
 }
 
-function buildRunsHeaders(
-  orgId: string,
-  userId: string,
-  runId: string,
-  wfHeaders: Record<string, string>
-): Record<string, string> {
-  return {
-    "x-org-id": orgId,
-    "x-user-id": userId,
-    "x-run-id": runId,
-    ...wfHeaders,
-  };
-}
-
-// GET /v1/accounts — get or auto-create billing account
+// GET /v1/accounts — get or auto-create billing account.
 router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
     const account = await findOrCreateAccount(orgId, userId, wfHeaders);
 
-    let usage;
+    let funds;
     try {
-      usage = await fetchRunsOrgUsageTotal(
-        orgId,
-        buildRunsHeaders(orgId, userId, runId, wfHeaders)
-      );
-    } catch (runsErr) {
-      console.error(
-        "[billing-service] Failed to fetch usage total from runs-service:",
-        runsErr
-      );
-      res
-        .status(502)
-        .json({ error: "Failed to fetch usage total from runs-service" });
+      funds = await composeAccountFunds(orgId, identity);
+    } catch (err) {
+      console.error("[billing-service] Failed to compose account funds:", err);
+      res.status(502).json({ error: "Failed to compose account funds" });
       return;
     }
 
-    res.json(buildAccountResponse(account, usage.spent_cents));
+    res.json(buildAccountResponse(account, funds));
   } catch (err) {
     console.error("[billing-service] Error getting/creating account:", err);
-    if (isStripeAuthError(err)) {
-      res.status(502).json({ error: "Payment provider authentication failed" });
-      return;
-    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /v1/accounts/balance — fast balance check from DB
+// GET /v1/accounts/balance — fast available-funds check.
 router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
     const [account] = await db
       .select()
@@ -101,127 +121,41 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const usage = await fetchRunsOrgUsageTotal(
-      orgId,
-      buildRunsHeaders(orgId, userId, runId, wfHeaders)
-    );
-    const available = subCents(account.creditBalanceCents, usage.spent_cents);
+    let funds;
+    try {
+      funds = await composeAccountFunds(orgId, identity);
+    } catch (err) {
+      console.error("[billing-service] Failed to compose account funds:", err);
+      res.status(502).json({ error: "Failed to compose account funds" });
+      return;
+    }
 
     res.json({
-      balance_cents: available,
-      depleted: isDepleted(available),
+      available_cents: funds.availableCents,
+      depleted: isDepleted(funds.availableCents),
     });
   } catch (err) {
     console.error("[billing-service] Error checking balance:", err);
-    if (isStripeAuthError(err)) {
-      res.status(502).json({ error: "Payment provider authentication failed" });
-      return;
-    }
-    if (err instanceof Error && err.message.includes("runs-service")) {
-      res.status(502).json({ error: "Failed to fetch usage total from runs-service" });
-      return;
-    }
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /v1/accounts/transactions — local billing-owned credit grant history
-router.get(
-  "/v1/accounts/transactions",
-  requireOrgHeaders,
-  async (req, res) => {
-    try {
-      const orgId = req.headers["x-org-id"] as string;
-
-      const [account] = await db
-        .select()
-        .from(billingAccounts)
-        .where(eq(billingAccounts.orgId, orgId))
-        .limit(1);
-
-      if (!account) {
-        res.status(404).json({ error: "Billing account not found" });
-        return;
-      }
-
-      // Exclude legacy `charge` rows (frozen post-#104; runs-service owns usage truth).
-      const rows = await db
-        .select()
-        .from(creditGrants)
-        .where(
-          and(
-            eq(creditGrants.orgId, orgId),
-            ne(creditGrants.source, "charge")
-          )
-        )
-        .orderBy(desc(creditGrants.createdAt))
-        .limit(50);
-
-      const transactions = rows.map((txn) => ({
-        id: txn.id,
-        amount_cents: txn.amountCents,
-        description: txn.description,
-        created_at: txn.createdAt.toISOString(),
-        type: classifyTransaction(txn.source),
-      }));
-
-      res.json({ transactions, has_more: false });
-    } catch (err) {
-      console.error("[billing-service] Error listing transactions:", err);
-      if (isStripeAuthError(err)) {
-        res.status(502).json({ error: "Payment provider authentication failed" });
-        return;
-      }
-      res.status(500).json({ error: "Internal server error" });
-    }
-  }
-);
-
-function classifyTransaction(source: string): "credit" | "reload" {
-  if (source === "reload") return "reload";
-  return "credit";
-}
-
-async function fetchUsageOr502(
-  orgId: string,
-  userId: string,
-  runId: string,
-  wfHeaders: Record<string, string>,
-  res: import("express").Response
-): Promise<string | null> {
-  try {
-    const usage = await fetchRunsOrgUsageTotal(
-      orgId,
-      buildRunsHeaders(orgId, userId, runId, wfHeaders)
-    );
-    return usage.spent_cents;
-  } catch (runsErr) {
-    console.error(
-      "[billing-service] Failed to fetch usage total from runs-service:",
-      runsErr
-    );
-    res
-      .status(502)
-      .json({ error: "Failed to fetch usage total from runs-service" });
-    return null;
-  }
-}
-
-// PATCH /v1/accounts/auto-reload — configure auto-reload settings
-router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
+// PATCH /v1/accounts/auto_topup — configure auto-topup settings.
+// Stripe payment method existence is checked via stripe-service.
+router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
-    const parsed = UpdateAutoReloadRequestSchema.safeParse(req.body);
+    const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
+    const parsed = UpdateAutoTopupRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-
-    const { reload_amount_cents, reload_threshold_cents } = parsed.data;
+    const { topup_amount_cents, topup_threshold_cents } = parsed.data;
 
     const [account] = await db
       .select()
@@ -234,7 +168,16 @@ router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => 
       return;
     }
 
-    if (!account.stripePaymentMethodId) {
+    let pmCheck;
+    try {
+      pmCheck = await ssHasPaymentMethod(identity);
+    } catch (err) {
+      console.error("[billing-service] Failed has-payment-method check:", err);
+      res.status(502).json({ error: "Failed to query payment method status" });
+      return;
+    }
+
+    if (!pmCheck.has_payment_method) {
       res.status(400).json({
         error: "Payment method required. Create a checkout session first.",
       });
@@ -244,30 +187,37 @@ router.patch("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => 
     const [updated] = await db
       .update(billingAccounts)
       .set({
-        reloadAmountCents: reload_amount_cents,
-        reloadThresholdCents: reload_threshold_cents ?? 200,
+        topupAmountCents: topup_amount_cents,
+        topupThresholdCents: topup_threshold_cents ?? 200,
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
-    const spentCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
-    if (spentCents === null) return;
+    let funds;
+    try {
+      funds = await composeAccountFunds(orgId, identity);
+    } catch (err) {
+      console.error("[billing-service] Failed to compose account funds:", err);
+      res.status(502).json({ error: "Failed to compose account funds" });
+      return;
+    }
 
-    res.json(buildAccountResponse(updated, spentCents));
+    res.json(buildAccountResponse(updated, funds));
   } catch (err) {
-    console.error("[billing-service] Error updating auto-reload:", err);
+    console.error("[billing-service] Error updating auto-topup:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// DELETE /v1/accounts/auto-reload — disable auto-reload
-router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) => {
+// DELETE /v1/accounts/auto_topup — disable auto-topup.
+router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
     const [account] = await db
       .select()
@@ -283,19 +233,25 @@ router.delete("/v1/accounts/auto-reload", requireOrgHeaders, async (req, res) =>
     const [updated] = await db
       .update(billingAccounts)
       .set({
-        reloadAmountCents: null,
-        reloadThresholdCents: null,
+        topupAmountCents: null,
+        topupThresholdCents: null,
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
 
-    const spentCents = await fetchUsageOr502(orgId, userId, runId, wfHeaders, res);
-    if (spentCents === null) return;
+    let funds;
+    try {
+      funds = await composeAccountFunds(orgId, identity);
+    } catch (err) {
+      console.error("[billing-service] Failed to compose account funds:", err);
+      res.status(502).json({ error: "Failed to compose account funds" });
+      return;
+    }
 
-    res.json(buildAccountResponse(updated, spentCents));
+    res.json(buildAccountResponse(updated, funds));
   } catch (err) {
-    console.error("[billing-service] Error disabling auto-reload:", err);
+    console.error("[billing-service] Error disabling auto-topup:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

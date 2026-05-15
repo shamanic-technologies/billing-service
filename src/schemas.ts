@@ -24,19 +24,19 @@ const CentsStringSchema = z.string();
 export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
-    orgId: z.string().uuid(),
-    /** Billing-owned credit grants (welcome + promo + Stripe top-ups − refunds). */
-    grantsCents: CentsStringSchema,
-    /** Mirrored from runs-service /internal/org-usage-total.spent_cents (platform actual + provisioned, excludes cancelled and org/BYOK). */
-    runsSpentCents: CentsStringSchema,
-    /** grantsCents − runsSpentCents. The number to display as the org's effective credit balance. */
-    availableCents: CentsStringSchema,
-    reloadAmountCents: z.number().int().nullable(),
-    reloadThresholdCents: z.number().int().nullable(),
-    hasPaymentMethod: z.boolean(),
-    hasAutoReload: z.boolean(),
-    createdAt: z.string(),
-    updatedAt: z.string(),
+    org_id: z.string().uuid(),
+    /** Gross balance = stripe-service paid balance + sum(local_promos). */
+    balance_cents: CentsStringSchema,
+    /** Lifetime platform usage from runs-service /internal/org-usage-total. */
+    usage_cents: CentsStringSchema,
+    /** balance_cents − usage_cents. Use this for depletion/budget gates. */
+    available_cents: CentsStringSchema,
+    topup_amount_cents: z.number().int().nullable(),
+    topup_threshold_cents: z.number().int().nullable(),
+    has_payment_method: z.boolean(),
+    has_auto_topup: z.boolean(),
+    created_at: z.string(),
+    updated_at: z.string(),
   })
   .openapi("BillingAccount");
 
@@ -64,29 +64,29 @@ export const AuthorizeResponseSchema = z
   })
   .openapi("AuthorizeResponse");
 
-// --- Usage Notify ---
+// --- Usage Apply ---
 
-export const UsageNotifyRequestSchema = z
+export const UsageApplyRequestSchema = z
   .object({
     spent_total_cents: CentsStringSchema,
   })
-  .openapi("UsageNotifyRequest");
+  .openapi("UsageApplyRequest");
 
-export const UsageNotifyResponseSchema = z
+export const UsageApplyResponseSchema = z
   .object({
     acknowledged: z.boolean(),
-    reload_triggered: z.boolean(),
+    topup_triggered: z.boolean(),
   })
-  .openapi("UsageNotifyResponse");
+  .openapi("UsageApplyResponse");
 
-// --- Auto-Reload ---
+// --- Auto-Topup ---
 
-export const UpdateAutoReloadRequestSchema = z
+export const UpdateAutoTopupRequestSchema = z
   .object({
-    reload_amount_cents: z.number().int().positive(),
-    reload_threshold_cents: z.number().int().min(0).optional(),
+    topup_amount_cents: z.number().int().positive(),
+    topup_threshold_cents: z.number().int().min(0).optional(),
   })
-  .openapi("UpdateAutoReloadRequest");
+  .openapi("UpdateAutoTopupRequest");
 
 // --- Checkout ---
 
@@ -94,7 +94,7 @@ export const CreateCheckoutRequestSchema = z
   .object({
     success_url: z.string().url(),
     cancel_url: z.string().url(),
-    reload_amount_cents: z.number().int().positive(),
+    topup_amount_cents: z.number().int().positive(),
   })
   .openapi("CreateCheckoutRequest");
 
@@ -123,45 +123,28 @@ export const PortalSessionResponseSchema = z
 
 export const BalanceResponseSchema = z
   .object({
-    balance_cents: CentsStringSchema,
+    available_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
   .openapi("BalanceResponse");
 
-// --- Transactions ---
+// --- Promotion Codes ---
 
-export const TransactionSchema = z
-  .object({
-    id: z.string(),
-    amount_cents: z.number().int(),
-    description: z.string().nullable(),
-    created_at: z.string(),
-    type: z.enum(["credit", "reload"]),
-  })
-  .openapi("Transaction");
-
-export const TransactionsResponseSchema = z
-  .object({
-    transactions: z.array(TransactionSchema),
-    has_more: z.boolean(),
-  })
-  .openapi("TransactionsResponse");
-
-// --- Promo ---
-
-export const RedeemPromoRequestSchema = z
+export const RedeemPromotionCodeRequestSchema = z
   .object({
     code: z.string().min(1),
   })
-  .openapi("RedeemPromoRequest");
+  .openapi("RedeemPromotionCodeRequest");
 
-export const RedeemPromoResponseSchema = z
+export const RedeemPromotionCodeResponseSchema = z
   .object({
     redeemed: z.boolean(),
-    amount_cents: z.number().int(),
-    balance_cents: CentsStringSchema,
+    /** Positive grant amount (welcome gift or promo credit). */
+    amount_cents: CentsStringSchema,
+    /** Lifetime sum of all local promo credits for this org after redemption. */
+    local_credits_total_cents: CentsStringSchema,
   })
-  .openapi("RedeemPromoResponse");
+  .openapi("RedeemPromotionCodeResponse");
 
 // --- Transfer Brand ---
 
@@ -189,9 +172,6 @@ export const TransferBrandResponseSchema = z
 
 // --- Public Stats ---
 
-// Public-stats values are full-precision decimal strings to preserve sub-cent
-// fidelity in JSON. Consumers wanting display-rounded integers should
-// `Math.ceil(parseFloat(...))` at the presentation layer.
 export const BillingGrowthRowSchema = z
   .object({
     period: z.string(),
@@ -202,14 +182,22 @@ export const BillingGrowthRowSchema = z
 
 export const PublicBillingStatsSchema = z
   .object({
-    totalAccounts: z.number().int(),
-    accountsWithPaymentMethod: z.number().int(),
-    /** Sum of billing_accounts.credit_balance_cents — billing-owned grants only, not net of runs-service usage. */
-    totalGrantsCents: CentsStringSchema,
-    /** Lifetime sum of confirmed credit transactions (welcome + promo + reload − refunds counted as credits). */
-    totalCreditedCents: CentsStringSchema,
-    monthlyGrowth: z.array(BillingGrowthRowSchema),
-    weeklyGrowth: z.array(BillingGrowthRowSchema),
+    total_accounts: z.number().int(),
+    accounts_with_payment_method: z.number().int(),
+    /** Lifetime sum of paid + local credits (combined). */
+    total_credited_cents: CentsStringSchema,
+    /** Lifetime stripe-service paid only. */
+    total_paid_cents: CentsStringSchema,
+    /**
+     * Cumulative all-time Stripe revenue, top-level alias for investor/landing-page consumers.
+     * Currently equals `total_paid_cents` (gross — refunds not subtracted). Will become net
+     * (paid − refunded) once stripe-service exposes refund totals.
+     */
+    total_revenue_cents: CentsStringSchema,
+    /** Lifetime local promo credits only. */
+    total_local_credits_cents: CentsStringSchema,
+    monthly_growth: z.array(BillingGrowthRowSchema),
+    weekly_growth: z.array(BillingGrowthRowSchema),
   })
   .openapi("PublicBillingStats");
 
@@ -250,7 +238,7 @@ registry.registerPath({
   path: "/public/stats/billing",
   summary: "Aggregate billing stats (no auth)",
   description:
-    "Cross-tenant aggregate billing statistics. No authentication required.",
+    "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.",
   responses: {
     200: {
       description: "Billing stats",
@@ -278,7 +266,7 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
-      description: "Payment provider authentication failed (e.g. expired Stripe key)",
+      description: "stripe-service or runs-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -287,7 +275,7 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/v1/accounts/balance",
-  summary: "Quick balance check from DB cache",
+  summary: "Quick available-funds check",
   request: {
     headers: protectedHeaders,
   },
@@ -296,23 +284,8 @@ registry.registerPath({
       description: "Balance info",
       content: { "application/json": { schema: BalanceResponseSchema } },
     },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/v1/accounts/transactions",
-  summary: "Get credit transaction history from Stripe",
-  request: {
-    headers: protectedHeaders,
-  },
-  responses: {
-    200: {
-      description: "Transaction list",
-      content: { "application/json": { schema: TransactionsResponseSchema } },
-    },
-    502: {
-      description: "Payment provider authentication failed",
+    404: {
+      description: "Billing account not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -320,12 +293,12 @@ registry.registerPath({
 
 registry.registerPath({
   method: "patch",
-  path: "/v1/accounts/auto-reload",
-  summary: "Configure auto-reload settings (requires payment method)",
+  path: "/v1/accounts/auto_topup",
+  summary: "Configure auto-topup settings (requires payment method via stripe-service)",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: UpdateAutoReloadRequestSchema } },
+      content: { "application/json": { schema: UpdateAutoTopupRequestSchema } },
     },
   },
   responses: {
@@ -346,14 +319,14 @@ registry.registerPath({
 
 registry.registerPath({
   method: "delete",
-  path: "/v1/accounts/auto-reload",
-  summary: "Disable auto-reload",
+  path: "/v1/accounts/auto_topup",
+  summary: "Disable auto-topup",
   request: {
     headers: protectedHeaders,
   },
   responses: {
     200: {
-      description: "Updated account with auto-reload disabled",
+      description: "Updated account with auto-topup disabled",
       content: { "application/json": { schema: BillingAccountSchema } },
     },
     404: {
@@ -366,7 +339,7 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/portal-sessions",
-  summary: "Create Stripe Customer Portal session for payment method management",
+  summary: "Create Stripe Customer Portal session via stripe-service",
   request: {
     headers: protectedHeaders,
     body: {
@@ -381,7 +354,7 @@ registry.registerPath({
       content: { "application/json": { schema: PortalSessionResponseSchema } },
     },
     400: {
-      description: "No Stripe customer or invalid request",
+      description: "Invalid request",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -389,7 +362,7 @@ registry.registerPath({
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     502: {
-      description: "Payment provider authentication failed",
+      description: "stripe-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -398,9 +371,8 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/checkout-sessions",
-  summary: "Create Stripe Checkout session to add payment method and credits",
-  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "Creates a Stripe Checkout session in setup mode to collect a payment method and configure auto-reload.",
+  summary: "Create Stripe Checkout session via stripe-service",
+  description: "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -415,7 +387,7 @@ registry.registerPath({
       content: { "application/json": { schema: CheckoutResponseSchema } },
     },
     502: {
-      description: "Payment provider authentication failed",
+      description: "stripe-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -423,14 +395,10 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/credits/authorize",
-  summary: "Synchronous pre-execution authorization with auto-reload",
-  description: "Auto-creates the billing account with $2.00 trial credit if the org has no account yet. " +
-    "Resolves prices from costs-service, fetches org usage total from runs-service, then checks available credits. " +
-    "Available credits are billing-owned credit grants minus runs-service platform usage total. " +
-    "If insufficient and auto-reload is configured, charges the smallest multiple of reload_amount_cents " +
-    "that covers the required amount (e.g. $10 reload unit, $37 required with $2 balance → charges 4x $10 = $40). " +
-    "Sends email notification on reload failure or credit depletion.",
+  path: "/v1/customer_balance/authorize",
+  summary: "Synchronous pre-execution authorization with auto-topup",
+  description: "Resolves prices from costs-service, fetches usage from runs-service, fetches paid balance from stripe-service, and composes with local promo credits. " +
+    "If insufficient and auto-topup is configured, calls stripe-service reload (synchronous, with per-org coalescing).",
   request: {
     headers: protectedHeaders,
     body: {
@@ -443,7 +411,7 @@ registry.registerPath({
       content: { "application/json": { schema: AuthorizeResponseSchema } },
     },
     502: {
-      description: "Payment provider, costs-service, or runs-service unavailable",
+      description: "Downstream service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -451,25 +419,23 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/credits/usage-notify",
-  summary: "Notify billing of an org's current usage total (hint for proactive reload)",
+  path: "/v1/customer_balance/usage_apply",
+  summary: "Notify billing of an org's current usage total (hint for proactive topup)",
   description:
     "Fire-and-forget endpoint called by runs-service after every runs_costs write. " +
-    "Body carries the org's current spent total (actual + provisioned platform costs). " +
-    "Billing computes available = credit_grants - spent_total; if below reload_threshold " +
-    "and auto-reload is configured, fires a Stripe reload under a short row lock. " +
-    "Always returns 202 — caller does NOT rely on this for correctness; billing always " +
-    "re-pulls truth from runs-service /internal/org-usage-total at authorize time.",
+    "Billing computes available = stripe paid balance + local credits − usage; if below " +
+    "topup_threshold and auto-topup is configured, fires a stripe-service reload. " +
+    "Always returns 202.",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: UsageNotifyRequestSchema } },
+      content: { "application/json": { schema: UsageApplyRequestSchema } },
     },
   },
   responses: {
     202: {
       description: "Notification acknowledged",
-      content: { "application/json": { schema: UsageNotifyResponseSchema } },
+      content: { "application/json": { schema: UsageApplyResponseSchema } },
     },
     400: {
       description: "Invalid request body",
@@ -480,22 +446,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: "post",
-  path: "/v1/promo/redeem",
-  summary: "Redeem a promo code for bonus credits",
+  path: "/v1/promotion_codes/redeem",
+  summary: "Redeem a promo code for bonus credits (billing-local)",
   description:
     "Validates the promo code, checks it hasn't been redeemed by this org, " +
-    "and credits the bonus amount to the org's billing account. " +
-    "The normal $2 welcome credit is unaffected — this adds on top.",
+    "and inserts a `local_promos` row. No Stripe call — credit composes into available_cents at read time.",
   request: {
     headers: protectedHeaders,
     body: {
-      content: { "application/json": { schema: RedeemPromoRequestSchema } },
+      content: { "application/json": { schema: RedeemPromotionCodeRequestSchema } },
     },
   },
   responses: {
     200: {
       description: "Promo redeemed successfully",
-      content: { "application/json": { schema: RedeemPromoResponseSchema } },
+      content: { "application/json": { schema: RedeemPromotionCodeResponseSchema } },
     },
     400: {
       description: "Invalid or expired promo code",
@@ -508,18 +473,6 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
-  method: "post",
-  path: "/v1/webhooks/stripe",
-  summary: "Stripe webhook handler",
-  description:
-    "Fixed URL for Stripe webhook. Organization is resolved from the Stripe customer ID in the event payload.",
-  responses: {
-    200: { description: "Webhook processed" },
-    400: { description: "Invalid signature or missing stripe-signature header" },
-  },
-});
-
 const internalHeaders = z.object({
   "x-api-key": z.string(),
 });
@@ -527,12 +480,10 @@ const internalHeaders = z.object({
 registry.registerPath({
   method: "post",
   path: "/internal/transfer-brand",
-  summary: "Transfer all solo-brand rows from one org to another",
+  summary: "Transfer all solo-brand rows from one org to another (billing + stripe-service)",
   description:
-    "For every table that stores brand references alongside org_id, " +
-    "re-assigns rows where org_id = sourceOrgId and the row references only sourceBrandId. " +
-    "When targetBrandId is provided, also rewrites the brand reference to targetBrandId. " +
-    "Skips co-branding rows (multiple brand IDs). Idempotent.",
+    "Updates local_promos in billing AND proxies to stripe-service for ledger rows. " +
+    "Skips co-branding rows. Idempotent.",
   request: {
     headers: internalHeaders,
     body: {
@@ -546,6 +497,10 @@ registry.registerPath({
     },
     400: {
       description: "Invalid request body",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
