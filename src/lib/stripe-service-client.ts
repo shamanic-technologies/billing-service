@@ -4,40 +4,77 @@
  * Stripe-service wraps all Stripe SDK calls + webhook handling. Billing-service
  * never touches Stripe directly post-#0016.
  *
- * Paths follow Stripe-natural resource naming where it maps cleanly
- * (`/v1/customers`, `/v1/checkout/sessions`, `/v1/billing_portal/sessions`).
- * Custom endpoints (`/balance`, `/has-payment-method`, `/reload`,
- * `/transfer-brand`, `/stats/billing`) live under `/v1/customers/*` and
- * `/internal/*` because they have no native Stripe analogue.
- *
- * REBASE NOTE: the stripe-service OpenAPI was not yet indexed in api-registry
- * at write time. Once it lands, re-align this file against the canonical spec
- * — it is the single integration point.
+ * Endpoint surface mirrors Stripe verbatim where possible. Composite operations
+ * (balance/PM checks, reloads, brand transfers) live billing-side and call
+ * Stripe-shape primitives — stripe-service refuses to add billing-only shortcuts.
  */
 
-/**
- * Identity headers for downstream service calls. Callers MUST include
- * `x-org-id` and `x-user-id`; other workflow-tracking headers are optional.
- * Typed as a plain string record so it composes with `forwardWorkflowHeaders`.
- */
+import { Decimal } from "decimal.js";
+
 export type IdentityHeaders = Record<string, string>;
+
+// --- Stripe-shape types ---
+
+export interface StripeCustomer {
+  id: string;
+  object: "customer";
+  balance: number;
+  metadata: Record<string, string>;
+  invoice_settings: {
+    default_payment_method: string | null;
+  } | null;
+}
+
+export interface StripeCustomerList {
+  object: "list";
+  data: StripeCustomer[];
+  has_more: boolean;
+  url: string;
+}
+
+export type StripePaymentIntentStatus =
+  | "requires_payment_method"
+  | "requires_confirmation"
+  | "requires_action"
+  | "processing"
+  | "requires_capture"
+  | "canceled"
+  | "succeeded";
+
+export interface StripePaymentIntent {
+  id: string;
+  object: "payment_intent";
+  amount: number;
+  currency: string;
+  customer: string | null;
+  status: StripePaymentIntentStatus;
+  last_payment_error: { code?: string; message?: string } | null;
+}
+
+export interface StripeBalanceTransaction {
+  id: string;
+  object: "customer_balance_transaction";
+  amount: number;
+  currency: string;
+  type: string;
+  customer: string;
+  credit_note: string | null;
+  invoice: string | null;
+  description: string | null;
+  metadata: Record<string, string>;
+  created: number;
+  livemode: boolean;
+}
+
+export interface StripeBalanceTransactionList {
+  object: "list";
+  url: string;
+  data: StripeBalanceTransaction[];
+  has_more: boolean;
+}
 
 export interface CustomerEnsureResult {
   customer_id: string;
-}
-
-export interface CustomerBalanceResult {
-  balance_cents: string;
-}
-
-export interface HasPaymentMethodResult {
-  has_payment_method: boolean;
-}
-
-export interface ReloadResult {
-  status: "succeeded" | "failed";
-  payment_intent_id?: string;
-  failure_reason?: string;
 }
 
 export interface CheckoutSessionResult {
@@ -47,28 +84,6 @@ export interface CheckoutSessionResult {
 
 export interface PortalSessionResult {
   url: string;
-}
-
-export interface StripeTransactionRow {
-  id: string;
-  object: "customer_balance_transaction";
-  amount_cents: string;
-  type: "payment" | "refund";
-  status: "requires_capture" | "succeeded" | "canceled";
-  stripe_payment_intent_id: string | null;
-  stripe_balance_transaction_id: string | null;
-  description: string | null;
-  created: number;
-}
-
-export interface ListTransactionsResult {
-  object: "list";
-  data: StripeTransactionRow[];
-  has_more: boolean;
-}
-
-export interface TransferBrandResult {
-  count: number;
 }
 
 export interface StripeBillingStatsGrowthRow {
@@ -92,10 +107,19 @@ function getConfig() {
   return { url, apiKey };
 }
 
-function buildHeaders(identity: IdentityHeaders, apiKey: string): Record<string, string> {
+function buildHeaders(
+  identity: IdentityHeaders,
+  apiKey: string,
+  extra?: Record<string, string>
+): Record<string, string> {
   const out: Record<string, string> = { "x-api-key": apiKey, "content-type": "application/json" };
   for (const [k, v] of Object.entries(identity)) {
     if (typeof v === "string" && v.length > 0) out[k] = v;
+  }
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      if (typeof v === "string" && v.length > 0) out[k] = v;
+    }
   }
   return out;
 }
@@ -104,12 +128,13 @@ async function call<T>(
   method: "GET" | "POST",
   path: string,
   identity: IdentityHeaders,
-  body?: unknown
+  body?: unknown,
+  extraHeaders?: Record<string, string>
 ): Promise<T> {
   const { url, apiKey } = getConfig();
   const res = await fetch(`${url}${path}`, {
     method,
-    headers: buildHeaders(identity, apiKey),
+    headers: buildHeaders(identity, apiKey, extraHeaders),
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -119,24 +144,67 @@ async function call<T>(
   return (await res.json()) as T;
 }
 
+// --- Customer ---
+
 export async function ensureCustomer(identity: IdentityHeaders): Promise<CustomerEnsureResult> {
   return call("POST", "/v1/customers", identity, {});
 }
 
-export async function getBalance(identity: IdentityHeaders): Promise<CustomerBalanceResult> {
-  return call("GET", "/v1/customers/balance", identity);
+/**
+ * Org-implicit customer fetch. Stripe-service resolves the org's Stripe customer
+ * server-side from x-org-id (1:1 org ↔ customer assumption).
+ *
+ * Returns the first (and only) customer in the list. Throws if none exists.
+ */
+export async function getCustomerByOrg(identity: IdentityHeaders): Promise<StripeCustomer> {
+  const list = await call<StripeCustomerList>("GET", "/v1/customers?limit=1", identity);
+  const customer = list.data[0];
+  if (!customer) {
+    throw new Error("stripe-service returned empty customer list for org");
+  }
+  return customer;
 }
 
-export async function hasPaymentMethod(identity: IdentityHeaders): Promise<HasPaymentMethodResult> {
-  return call("GET", "/v1/customers/has-payment-method", identity);
-}
+// --- PaymentIntent ---
 
-export async function reload(
+export async function createPaymentIntent(
   identity: IdentityHeaders,
-  body: { amount_cents: number; idempotency_key: string }
-): Promise<ReloadResult> {
-  return call("POST", "/v1/customers/reload", identity, body);
+  body: {
+    amount: number;
+    currency: string;
+    customer: string;
+    confirm: boolean;
+    off_session: boolean;
+    metadata?: Record<string, string>;
+  },
+  idempotencyKey?: string
+): Promise<StripePaymentIntent> {
+  const extra = idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined;
+  return call("POST", "/v1/payment_intents", identity, body, extra);
 }
+
+export async function getPaymentIntent(
+  id: string,
+  identity: IdentityHeaders
+): Promise<StripePaymentIntent> {
+  return call("GET", `/v1/payment_intents/${id}`, identity);
+}
+
+// --- Balance Transactions (org-implicit) ---
+
+export async function listBalanceTransactions(
+  identity: IdentityHeaders,
+  query: { limit?: number; starting_after?: string; ending_before?: string } = {}
+): Promise<StripeBalanceTransactionList> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.starting_after) params.set("starting_after", query.starting_after);
+  if (query.ending_before) params.set("ending_before", query.ending_before);
+  const qs = params.toString();
+  return call("GET", `/v1/balance_transactions${qs ? `?${qs}` : ""}`, identity);
+}
+
+// --- Checkout / Portal ---
 
 export async function createCheckoutSession(
   identity: IdentityHeaders,
@@ -152,16 +220,25 @@ export async function createPortalSession(
   return call("POST", "/v1/billing_portal/sessions", identity, body);
 }
 
-export async function listTransactions(
-  identity: IdentityHeaders,
-  query: { limit?: number } = {}
-): Promise<ListTransactionsResult> {
-  const params = new URLSearchParams();
-  if (query.limit !== undefined) params.set("limit", String(query.limit));
-  const qs = params.toString();
-  return call("GET", `/v1/customer_balance_transactions${qs ? `?${qs}` : ""}`, identity);
+// --- Public Stats ---
+
+export async function getStats(identity: IdentityHeaders): Promise<StripeBillingStatsResult> {
+  return call("GET", "/public/stats/billing", identity);
 }
 
+// --- DEPRECATED: transfer-brand ---
+
+export interface TransferBrandResult {
+  count: number;
+}
+
+/**
+ * @deprecated stripe-service no longer exposes /internal/transfer-brand.
+ * Replacement is a billing-side compose: list customers via
+ * `GET /v1/customers?metadata[org_id]=...` then PATCH each via
+ * `POST /v1/customers/:id`. Blocked on stripe-service wiring the
+ * `metadata[*]` query filter on the list endpoint. See follow-up T5.
+ */
 export async function transferBrand(
   identity: IdentityHeaders,
   body: {
@@ -174,6 +251,19 @@ export async function transferBrand(
   return call("POST", "/internal/transfer-brand", identity, body);
 }
 
-export async function getStats(identity: IdentityHeaders): Promise<StripeBillingStatsResult> {
-  return call("GET", "/public/stats/billing", identity);
+// --- Derivations from Stripe customer ---
+
+/**
+ * Derive billing-side balance_cents (positive=credit) from Stripe customer.balance
+ * (positive=customer-owes, negative=customer-credit). Sign-flip mirrors the
+ * old getBalance semantics. Returned as numeric(16,10)-formatted string for
+ * arithmetic-compatibility with addCents/subCents helpers.
+ */
+export function deriveBalanceCents(customer: StripeCustomer): string {
+  const stripeBalance = customer.balance ?? 0;
+  return new Decimal(-stripeBalance).toFixed(10);
+}
+
+export function deriveHasPaymentMethod(customer: StripeCustomer): boolean {
+  return Boolean(customer.invoice_settings?.default_payment_method);
 }

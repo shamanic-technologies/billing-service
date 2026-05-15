@@ -9,8 +9,9 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
-  getBalance as ssGetBalance,
-  hasPaymentMethod as ssHasPaymentMethod,
+  getCustomerByOrg,
+  deriveBalanceCents,
+  deriveHasPaymentMethod,
 } from "../lib/stripe-service-client.js";
 
 const router = Router();
@@ -39,19 +40,19 @@ async function composeAccountFunds(
   availableCents: string;
   hasPaymentMethod: boolean;
 }> {
-  const [ssBalance, localCredits, runsUsage, pmCheck] = await Promise.all([
-    ssGetBalance(identity),
+  const [customer, localCredits, runsUsage] = await Promise.all([
+    getCustomerByOrg(identity),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
-    ssHasPaymentMethod(identity),
   ]);
-  const balanceCents = addCents(ssBalance.balance_cents, localCredits);
+  const ssBalance = deriveBalanceCents(customer);
+  const balanceCents = addCents(ssBalance, localCredits);
   const availableCents = subCents(balanceCents, runsUsage.spent_cents);
   return {
     balanceCents,
     usageCents: runsUsage.spent_cents,
     availableCents,
-    hasPaymentMethod: pmCheck.has_payment_method,
+    hasPaymentMethod: deriveHasPaymentMethod(customer),
   };
 }
 
@@ -74,7 +75,6 @@ function buildAccountResponse(
   };
 }
 
-// GET /v1/accounts — get or auto-create billing account.
 router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -101,7 +101,6 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// GET /v1/accounts/balance — fast available-funds check.
 router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -140,8 +139,6 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// PATCH /v1/accounts/auto_topup — configure auto-topup settings.
-// Stripe payment method existence is checked via stripe-service.
 router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -168,16 +165,16 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    let pmCheck;
+    let customer;
     try {
-      pmCheck = await ssHasPaymentMethod(identity);
+      customer = await getCustomerByOrg(identity);
     } catch (err) {
-      console.error("[billing-service] Failed has-payment-method check:", err);
+      console.error("[billing-service] Failed to fetch customer for PM check:", err);
       res.status(502).json({ error: "Failed to query payment method status" });
       return;
     }
 
-    if (!pmCheck.has_payment_method) {
+    if (!deriveHasPaymentMethod(customer)) {
       res.status(400).json({
         error: "Payment method required. Create a checkout session first.",
       });
@@ -210,7 +207,6 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   }
 });
 
-// DELETE /v1/accounts/auto_topup — disable auto-topup.
 router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;

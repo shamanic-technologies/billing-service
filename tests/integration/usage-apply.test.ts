@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
-import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import {
+  setupStripeMocks,
+  customerWithBillingCredits,
+  customerWithDefaultPM,
+} from "../helpers/mock-stripe.js";
 
 const orgId = "00000000-0000-0000-0000-00000000b001";
 const userId = "00000000-0000-0000-0000-000000000099";
@@ -28,8 +32,11 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "1000.0000000000" });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(1000),
+      ...customerWithDefaultPM(),
+      balance: -1000,
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -38,7 +45,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reload).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
   it("triggers reload when available < threshold and PM present", async () => {
@@ -47,8 +54,11 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "600.0000000000" });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(600),
+      ...customerWithDefaultPM(),
+      balance: -600,
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -57,7 +67,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
-    expect(ssMocks.reload).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
   });
 
   it("does not topup when PM missing", async () => {
@@ -66,8 +76,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "100.0000000000" });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: false });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(100));
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -76,7 +85,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reload).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
   it("does not topup when no topup config", async () => {
@@ -89,18 +98,24 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body.topup_triggered).toBe(false);
-    expect(ssMocks.reload).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("topup_triggered=false when SS.reload returns failed", async () => {
+  it("topup_triggered=false when reload returns failed", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getBalance.mockResolvedValue({ balance_cents: "600.0000000000" });
-    ssMocks.hasPaymentMethod.mockResolvedValue({ has_payment_method: true });
-    ssMocks.reload.mockResolvedValue({ status: "failed", failure_reason: "decline" });
+    ssMocks.getCustomerByOrg.mockResolvedValue({
+      ...customerWithBillingCredits(600),
+      ...customerWithDefaultPM(),
+      balance: -600,
+    });
+    ssMocks.reloadViaPaymentIntent.mockResolvedValue({
+      status: "failed",
+      failure_reason: "decline",
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")

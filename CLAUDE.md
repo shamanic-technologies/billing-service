@@ -105,13 +105,14 @@ Do not sync Stripe Customer Balance Transactions for internal balance. Stripe is
   "available_cents": "-134712.0000000000", // balance − usage; USE THIS for depletion/budget gates
   "topup_amount_cents": 2500,             // auto-topup amount per Stripe Topups API
   "topup_threshold_cents": 500,           // auto-topup triggers when available_cents < threshold
-  "has_payment_method": true,
-  "has_auto_topup": true,
-  "stripe_customer_id": "cus_xxx"
+  "has_payment_method": true,                // derived from customer.invoice_settings.default_payment_method != null
+  "has_auto_topup": true
 }
 ```
 
-All three balance/usage/available endpoints fail loud (502) when runs-service is unreachable. PATCH/DELETE call runs-service to keep the response shape consistent.
+All three balance/usage/available endpoints fail loud (502) when runs-service or stripe-service is unreachable. PATCH/DELETE call runs-service to keep the response shape consistent.
+
+`balance_cents` is derived from Stripe `customer.balance` with sign-flipped semantics: Stripe convention is `balance > 0` = customer owes, `balance < 0` = customer has credit. Billing surfaces the credit-positive value (`balance_cents = -customer.balance`).
 
 ### `GET /v1/customer_balance_transactions`
 

@@ -42,8 +42,8 @@ describe("Promotion code endpoints", () => {
       expect(res.body.amount_cents).toBe("800");
       // No welcome on this account (inserted manually) → only the promo.
       expect(res.body.local_credits_total_cents).toBe("800.0000000000");
-      expect(ssMocks.getBalance).not.toHaveBeenCalled();
-      expect(ssMocks.reload).not.toHaveBeenCalled();
+      expect(ssMocks.getCustomerByOrg).not.toHaveBeenCalled();
+      expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
     });
 
     it("auto-creates billing account with welcome + applies promo on top", async () => {
