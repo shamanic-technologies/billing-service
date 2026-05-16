@@ -4,8 +4,6 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import {
   setupStripeMocks,
-  customerWithStripeBalance,
-  customerWithBillingCredits,
   customerWithDefaultPM,
 } from "../helpers/mock-stripe.js";
 
@@ -54,9 +52,9 @@ describe("Accounts endpoints", () => {
       expect(ssMocks.ensureCustomer).toHaveBeenCalled();
     });
 
-    it("composes balance = SS.balance + local credits, available = balance − usage", async () => {
+    it("composes balance = paid topups + local credits, available = balance − usage", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(1000));
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "75.0000000000",
@@ -76,7 +74,7 @@ describe("Accounts endpoints", () => {
 
     it("returns negative available_cents when usage > balance", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(75));
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("75.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "383.0000000000",
@@ -103,17 +101,24 @@ describe("Accounts endpoints", () => {
       expect(res.body.has_payment_method).toBe(true);
     });
 
-    it("Stripe customer.balance sign-flipped: negative balance = credit", async () => {
+    it("balance reflects only succeeded payment intents (failed PIs excluded)", async () => {
       await insertTestAccount({ orgId });
-      // Stripe convention: balance=-500 means customer has 500 cents of credit.
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithStripeBalance(-500));
+      // Helper already filters succeeded — assert by configuring its return.
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("55000.0000000000");
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "38289.2958000000",
+        as_of: "2026-05-13T00:00:00.000Z",
+      });
 
       const res = await request(app)
         .get("/v1/accounts")
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.balance_cents).toBe("500.0000000000");
+      // 55000 paid + 0 local + (-38289.2958 usage) = 16710.7042
+      expect(res.body.balance_cents).toBe("55000.0000000000");
+      expect(res.body.available_cents).toBe("16710.7042000000");
     });
 
     it("returns 502 when runs-service unavailable", async () => {
@@ -130,6 +135,19 @@ describe("Accounts endpoints", () => {
     it("returns 502 when stripe-service unavailable", async () => {
       await insertTestAccount({ orgId });
       ssMocks.getCustomerByOrg.mockRejectedValue(new Error("stripe-service down"));
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+    });
+
+    it("returns 502 when payment_intents listing fails", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.sumSucceededTopupsForCustomer.mockRejectedValue(
+        new Error("stripe-service /v1/payment_intents 500")
+      );
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -167,7 +185,7 @@ describe("Accounts endpoints", () => {
   describe("GET /v1/accounts/balance", () => {
     it("returns balance minus usage", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(150));
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("150.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "25.0000000000",
@@ -187,7 +205,7 @@ describe("Accounts endpoints", () => {
 
     it("marks depleted when available <= 0", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(0));
+      // Default sum mock returns "0", default usage 0 → available = 0 → depleted.
 
       const res = await request(app)
         .get("/v1/accounts/balance")

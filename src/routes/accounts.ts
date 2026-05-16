@@ -10,7 +10,7 @@ import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
   getCustomerByOrg,
-  deriveBalanceCents,
+  sumSucceededTopupsForCustomer,
   deriveHasPaymentMethod,
 } from "../lib/stripe-service-client.js";
 
@@ -40,13 +40,13 @@ async function composeAccountFunds(
   availableCents: string;
   hasPaymentMethod: boolean;
 }> {
-  const [customer, localCredits, runsUsage] = await Promise.all([
-    getCustomerByOrg(identity),
+  const customer = await getCustomerByOrg(identity);
+  const [paidTopups, localCredits, runsUsage] = await Promise.all([
+    sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
   ]);
-  const ssBalance = deriveBalanceCents(customer);
-  const balanceCents = addCents(ssBalance, localCredits);
+  const balanceCents = addCents(paidTopups, localCredits);
   const availableCents = subCents(balanceCents, runsUsage.spent_cents);
   return {
     balanceCents,

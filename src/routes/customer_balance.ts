@@ -12,7 +12,7 @@ import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../l
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
   getCustomerByOrg,
-  deriveBalanceCents,
+  sumSucceededTopupsForCustomer,
   deriveHasPaymentMethod,
   type StripeCustomer,
 } from "../lib/stripe-service-client.js";
@@ -71,13 +71,13 @@ async function computeAvailable(
   orgId: string,
   identity: Record<string, string>
 ): Promise<AvailableSnapshot> {
-  const [customer, localCredits, runsUsage] = await Promise.all([
-    getCustomerByOrg(identity),
+  const customer = await getCustomerByOrg(identity);
+  const [paidTopups, localCredits, runsUsage] = await Promise.all([
+    sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
   ]);
-  const ssBalance = deriveBalanceCents(customer);
-  const balanceCents = addCents(ssBalance, localCredits);
+  const balanceCents = addCents(paidTopups, localCredits);
   const availableCents = subCents(balanceCents, runsUsage.spent_cents);
   return { customer, balanceCents, usageCents: runsUsage.spent_cents, availableCents };
 }
@@ -250,18 +250,19 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       return;
     }
 
-    const [customer, localCredits] = await Promise.all([
-      getCustomerByOrg(identity),
-      sumLocalPromoCreditsForOrg(orgId),
-    ]);
+    const customer = await getCustomerByOrg(identity);
 
     if (!deriveHasPaymentMethod(customer)) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const ssBalance = deriveBalanceCents(customer);
-    const balanceCents = addCents(ssBalance, localCredits);
+    const [paidTopups, localCredits] = await Promise.all([
+      sumSucceededTopupsForCustomer(identity, customer.id),
+      sumLocalPromoCreditsForOrg(orgId),
+    ]);
+
+    const balanceCents = addCents(paidTopups, localCredits);
     const availableCents = subCents(balanceCents, spentTotalCents);
     const thresholdCents = String(account.topupThresholdCents);
 

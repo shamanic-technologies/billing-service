@@ -4,7 +4,6 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import {
   setupStripeMocks,
-  customerWithBillingCredits,
   customerWithDefaultPM,
 } from "../helpers/mock-stripe.js";
 
@@ -32,11 +31,8 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getCustomerByOrg.mockResolvedValue({
-      ...customerWithBillingCredits(1000),
-      ...customerWithDefaultPM(),
-      balance: -1000,
-    });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -54,11 +50,8 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getCustomerByOrg.mockResolvedValue({
-      ...customerWithBillingCredits(600),
-      ...customerWithDefaultPM(),
-      balance: -600,
-    });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -76,7 +69,8 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithBillingCredits(100));
+    // default mock customer has no PM
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -107,11 +101,8 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    ssMocks.getCustomerByOrg.mockResolvedValue({
-      ...customerWithBillingCredits(600),
-      ...customerWithDefaultPM(),
-      balance: -600,
-    });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
     ssMocks.reloadViaPaymentIntent.mockResolvedValue({
       status: "failed",
       failure_reason: "decline",
