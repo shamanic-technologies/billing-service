@@ -8,16 +8,16 @@ Naming follows Stripe Topups + Refunds APIs. When in doubt, search Stripe docs f
 
 | Term | Definition | Source of truth |
 |---|---|---|
-| **balance** | Org's prepaid credit liability (what we owe the org). | `SUM(succeeded payment_intents.amount_received)` via stripe-service + `SUM(local_promos.amount_cents)` |
+| **credited** | Lifetime credits added to org (paid topups + promos). | `SUM(succeeded payment_intents.amount_received)` via stripe-service + `SUM(local_promos.amount_cents)` |
 | **usage** | Platform AI cost consumed by org. Lifetime, all-time. | runs-service `GET /internal/org-usage-total` |
-| **available** | Funds usable right now for new work. `balance − usage`. | computed at request time |
-| **topup** | Auto/manual Stripe payment that increases balance. | stripe-service `payment_intents` (status='succeeded') |
+| **balance** | Funds usable right now for new work. `credited − usage`. **Use this for depletion/budget gates.** | computed at request time |
+| **topup** | Auto/manual Stripe payment that increases credited. | stripe-service `payment_intents` (status='succeeded') |
 | **gift / promo** | Non-payment credit (welcome bonus, promo redemption, manual adjustment). | `local_promos.amount_cents` |
-| **refund** | Funds returned to org. | stripe-service `refunds` (visibility only — does not auto-deduct from billing balance) |
+| **refund** | Funds returned to org. | stripe-service `refunds` (visibility only — does not auto-deduct from billing) |
 
 ### Stripe `customer.balance` is NOT used
 
-Pre-#104, billing-service wrote `usage_applied` CBTs to Stripe via `customers.createBalanceTransaction`. Those debits contaminated `customer.balance` (it no longer represented pure prepaid credit). Post-#0016 stripe-service v0.16.3 dropped `customer.balance` from its API surface entirely. Billing-service must **never read `customer.balance`** — derive `balance` from `payment_intents.amount_received` (real money paid) plus local promo grants.
+Pre-#104, billing-service wrote `usage_applied` CBTs to Stripe via `customers.createBalanceTransaction`. Those debits contaminated `customer.balance` (it no longer represented pure prepaid credit). Post-#0016 stripe-service v0.16.3 dropped `customer.balance` from its API surface entirely. Billing-service must **never read `customer.balance`** — derive `credited` from `payment_intents.amount_received` (real money paid) plus local promo grants.
 
 ## BYOK (Bring Your Own Key) cost source
 
@@ -79,11 +79,11 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
 {
   "id": "<uuid>",
   "org_id": "<uuid>",
-  "balance_cents": "55200.0000000000",       // SUM(succeeded PI.amount_received) + SUM(local_promos.amount_cents)
+  "credited_cents": "55200.0000000000",      // SUM(succeeded PI.amount_received) + SUM(local_promos.amount_cents)
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned)
-  "available_cents": "16910.7042000000",     // balance_cents − usage_cents; USE THIS for depletion/budget gates
+  "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "topup_amount_cents": 2500,                // auto-topup amount
-  "topup_threshold_cents": 500,              // auto-topup triggers when available_cents < threshold
+  "topup_threshold_cents": 500,              // auto-topup triggers when balance_cents < threshold
   "has_payment_method": true,                // derived from customer.invoice_settings.default_payment_method != null
   "has_auto_topup": true,
   "created_at": "...",
@@ -91,14 +91,14 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
 }
 ```
 
-All three balance/usage/available endpoints fail loud (502) when runs-service or stripe-service is unreachable.
+All three credited/usage/balance endpoints fail loud (502) when runs-service or stripe-service is unreachable.
 
-`balance_cents` composition (`src/routes/accounts.ts:composeAccountFunds`):
+Composition (`src/routes/accounts.ts:composeAccountFunds`):
 1. `getCustomerByOrg(identity)` → Stripe customer (for `id` and `default_payment_method`)
 2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received` where `status='succeeded'`
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → runs-service `spent_cents`
-5. `balance_cents = paid_topups + local_credits` ; `available_cents = balance_cents − usage`
+5. `credited_cents = paid_topups + local_credits` ; `balance_cents = credited_cents − usage`
 
 ### `GET /public/stats/billing`
 
@@ -125,12 +125,12 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/accounts` | account snapshot (balance, usage, available, topup config) |
-| `GET` | `/v1/accounts/balance` | shortcut: `{ available_cents, depleted }` |
+| `GET` | `/v1/accounts` | account snapshot (credited, usage, balance, topup config) |
+| `GET` | `/v1/accounts/balance` | shortcut: `{ balance_cents, depleted }` |
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
 | `POST` | `/v1/checkout-sessions` | one-shot top-up via Stripe Checkout |
 | `POST` | `/v1/portal-sessions` | Stripe Customer Portal session |
-| `POST` | `/v1/customer_balance/authorize` | check if `available_cents >= amount` ; auto-reload via PI if configured |
+| `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
