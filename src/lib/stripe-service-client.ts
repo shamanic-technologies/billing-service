@@ -18,7 +18,6 @@ export type IdentityHeaders = Record<string, string>;
 export interface StripeCustomer {
   id: string;
   object: "customer";
-  balance: number;
   metadata: Record<string, string>;
   invoice_settings: {
     default_payment_method: string | null;
@@ -45,31 +44,17 @@ export interface StripePaymentIntent {
   id: string;
   object: "payment_intent";
   amount: number;
+  amount_received: number | null;
   currency: string;
   customer: string | null;
   status: StripePaymentIntentStatus;
   last_payment_error: { code?: string; message?: string } | null;
 }
 
-export interface StripeBalanceTransaction {
-  id: string;
-  object: "customer_balance_transaction";
-  amount: number;
-  currency: string;
-  type: string;
-  customer: string;
-  credit_note: string | null;
-  invoice: string | null;
-  description: string | null;
-  metadata: Record<string, string>;
-  created: number;
-  livemode: boolean;
-}
-
-export interface StripeBalanceTransactionList {
+export interface StripePaymentIntentList {
   object: "list";
   url: string;
-  data: StripeBalanceTransaction[];
+  data: StripePaymentIntent[];
   has_more: boolean;
 }
 
@@ -190,18 +175,63 @@ export async function getPaymentIntent(
   return call("GET", `/v1/payment_intents/${id}`, identity);
 }
 
-// --- Balance Transactions (org-implicit) ---
-
-export async function listBalanceTransactions(
+export async function listPaymentIntents(
   identity: IdentityHeaders,
-  query: { limit?: number; starting_after?: string; ending_before?: string } = {}
-): Promise<StripeBalanceTransactionList> {
+  query: { customer: string; limit?: number; starting_after?: string }
+): Promise<StripePaymentIntentList> {
   const params = new URLSearchParams();
+  params.set("customer", query.customer);
   if (query.limit !== undefined) params.set("limit", String(query.limit));
   if (query.starting_after) params.set("starting_after", query.starting_after);
-  if (query.ending_before) params.set("ending_before", query.ending_before);
-  const qs = params.toString();
-  return call("GET", `/v1/balance_transactions${qs ? `?${qs}` : ""}`, identity);
+  return call("GET", `/v1/payment_intents?${params.toString()}`, identity);
+}
+
+const TOPUP_PAGE_LIMIT = 100;
+const TOPUP_PAGE_CAP = 200;
+
+/**
+ * Paginate every payment_intent for `customerId` and sum `amount_received`
+ * across rows with `status === 'succeeded'`. The result is the total money
+ * the org has actually paid into Stripe — the source of truth for the
+ * billing-side `balance_cents` post-#0016.
+ *
+ * Returns a numeric(16,10)-formatted string for arithmetic-compatibility
+ * with addCents/subCents helpers.
+ *
+ * Throws if pagination loops past TOPUP_PAGE_CAP pages or if stripe-service
+ * reports `has_more=true` with an empty page (broken contract).
+ */
+export async function sumSucceededTopupsForCustomer(
+  identity: IdentityHeaders,
+  customerId: string
+): Promise<string> {
+  let total = new Decimal(0);
+  let startingAfter: string | undefined;
+  for (let i = 0; i < TOPUP_PAGE_CAP; i += 1) {
+    const page = await listPaymentIntents(identity, {
+      customer: customerId,
+      limit: TOPUP_PAGE_LIMIT,
+      starting_after: startingAfter,
+    });
+    for (const pi of page.data) {
+      if (pi.status === "succeeded" && typeof pi.amount_received === "number") {
+        total = total.plus(pi.amount_received);
+      }
+    }
+    if (!page.has_more) {
+      return total.toFixed(10);
+    }
+    const last = page.data[page.data.length - 1];
+    if (!last) {
+      throw new Error(
+        "stripe-service /v1/payment_intents returned has_more=true with empty page"
+      );
+    }
+    startingAfter = last.id;
+  }
+  throw new Error(
+    `stripe-service /v1/payment_intents pagination exceeded ${TOPUP_PAGE_CAP} pages for customer ${customerId}`
+  );
 }
 
 // --- Checkout / Portal ---
@@ -258,17 +288,6 @@ export async function updateCustomer(
 }
 
 // --- Derivations from Stripe customer ---
-
-/**
- * Derive billing-side balance_cents (positive=credit) from Stripe customer.balance
- * (positive=customer-owes, negative=customer-credit). Sign-flip mirrors the
- * old getBalance semantics. Returned as numeric(16,10)-formatted string for
- * arithmetic-compatibility with addCents/subCents helpers.
- */
-export function deriveBalanceCents(customer: StripeCustomer): string {
-  const stripeBalance = customer.balance ?? 0;
-  return new Decimal(-stripeBalance).toFixed(10);
-}
 
 export function deriveHasPaymentMethod(customer: StripeCustomer): boolean {
   return Boolean(customer.invoice_settings?.default_payment_method);
