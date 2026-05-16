@@ -20,7 +20,7 @@ const router = Router();
 
 // POST /v1/promotion_codes/redeem — redeem a promo code for bonus credits.
 // Pure billing-local op: no Stripe call. The credit lives in `local_promos` and
-// composes into `available_cents` via sum at read time.
+// composes into `credited_cents` (and therefore `balance_cents`) at read time.
 router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) => {
   const orgId = req.headers["x-org-id"] as string;
   const userId = req.headers["x-user-id"] as string;

@@ -87,13 +87,13 @@
             "type": "string",
             "format": "uuid"
           },
-          "balance_cents": {
+          "credited_cents": {
             "type": "string"
           },
           "usage_cents": {
             "type": "string"
           },
-          "available_cents": {
+          "balance_cents": {
             "type": "string"
           },
           "topup_amount_cents": {
@@ -120,9 +120,9 @@
         "required": [
           "id",
           "org_id",
-          "balance_cents",
+          "credited_cents",
           "usage_cents",
-          "available_cents",
+          "balance_cents",
           "topup_amount_cents",
           "topup_threshold_cents",
           "has_payment_method",
@@ -145,7 +145,7 @@
       "BalanceResponse": {
         "type": "object",
         "properties": {
-          "available_cents": {
+          "balance_cents": {
             "type": "string"
           },
           "depleted": {
@@ -153,7 +153,7 @@
           }
         },
         "required": [
-          "available_cents",
+          "balance_cents",
           "depleted"
         ]
       },
@@ -566,7 +566,7 @@
     },
     "/v1/accounts/balance": {
       "get": {
-        "summary": "Quick available-funds check",
+        "summary": "Quick balance check (spendable funds)",
         "parameters": [
           {
             "schema": {
@@ -1239,7 +1239,7 @@
     "/v1/customer_balance/usage_apply": {
       "post": {
         "summary": "Notify billing of an org's current usage total (hint for proactive topup)",
-        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Billing computes available = stripe paid balance + local credits − usage; if below topup_threshold and auto-topup is configured, fires a stripe-service reload. Always returns 202.",
+        "description": "Fire-and-forget endpoint called by runs-service after every runs_costs write. Billing computes balance = stripe paid topups + local credits − usage; if below topup_threshold and auto-topup is configured, fires a stripe-service reload. Always returns 202.",
         "parameters": [
           {
             "schema": {
@@ -1350,7 +1350,7 @@
     "/v1/promotion_codes/redeem": {
       "post": {
         "summary": "Redeem a promo code for bonus credits (billing-local)",
-        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and inserts a `local_promos` row. No Stripe call — credit composes into available_cents at read time.",
+        "description": "Validates the promo code, checks it hasn't been redeemed by this org, and inserts a `local_promos` row. No Stripe call — credit composes into balance_cents at read time.",
         "parameters": [
           {
             "schema": {

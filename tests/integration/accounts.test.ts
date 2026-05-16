@@ -43,16 +43,16 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.org_id).toBe(orgId);
-      // SS paid = 0, local welcome = 200, usage = 0 → balance 200, available 200.
-      expect(res.body.balance_cents).toBe("200.0000000000");
+      // SS paid = 0, local welcome = 200, usage = 0 → credited 200, balance 200.
+      expect(res.body.credited_cents).toBe("200.0000000000");
       expect(res.body.usage_cents).toBe("0.0000000000");
-      expect(res.body.available_cents).toBe("200.0000000000");
+      expect(res.body.balance_cents).toBe("200.0000000000");
       expect(res.body.has_payment_method).toBe(false);
       expect(res.body.has_auto_topup).toBe(false);
       expect(ssMocks.ensureCustomer).toHaveBeenCalled();
     });
 
-    it("composes balance = paid topups + local credits, available = balance − usage", async () => {
+    it("composes credited = paid topups + local credits, balance = credited − usage", async () => {
       await insertTestAccount({ orgId });
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
@@ -67,12 +67,12 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       // No local credits (account inserted without welcome) → 1000 + 0 = 1000.
-      expect(res.body.balance_cents).toBe("1000.0000000000");
+      expect(res.body.credited_cents).toBe("1000.0000000000");
       expect(res.body.usage_cents).toBe("75.0000000000");
-      expect(res.body.available_cents).toBe("925.0000000000");
+      expect(res.body.balance_cents).toBe("925.0000000000");
     });
 
-    it("returns negative available_cents when usage > balance", async () => {
+    it("returns negative balance_cents when usage > credited", async () => {
       await insertTestAccount({ orgId });
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("75.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
@@ -86,7 +86,7 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.available_cents).toBe("-308.0000000000");
+      expect(res.body.balance_cents).toBe("-308.0000000000");
     });
 
     it("derives has_payment_method from invoice_settings.default_payment_method", async () => {
@@ -101,7 +101,7 @@ describe("Accounts endpoints", () => {
       expect(res.body.has_payment_method).toBe(true);
     });
 
-    it("balance reflects only succeeded payment intents (failed PIs excluded)", async () => {
+    it("credited reflects only succeeded payment intents (failed PIs excluded)", async () => {
       await insertTestAccount({ orgId });
       // Helper already filters succeeded — assert by configuring its return.
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("55000.0000000000");
@@ -116,9 +116,9 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      // 55000 paid + 0 local + (-38289.2958 usage) = 16710.7042
-      expect(res.body.balance_cents).toBe("55000.0000000000");
-      expect(res.body.available_cents).toBe("16710.7042000000");
+      // 55000 paid + 0 local − 38289.2958 usage = 16710.7042 spendable
+      expect(res.body.credited_cents).toBe("55000.0000000000");
+      expect(res.body.balance_cents).toBe("16710.7042000000");
     });
 
     it("returns 502 when runs-service unavailable", async () => {
@@ -183,7 +183,7 @@ describe("Accounts endpoints", () => {
   });
 
   describe("GET /v1/accounts/balance", () => {
-    it("returns balance minus usage", async () => {
+    it("returns credited minus usage as balance", async () => {
       await insertTestAccount({ orgId });
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("150.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
@@ -198,12 +198,12 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        available_cents: "125.0000000000",
+        balance_cents: "125.0000000000",
         depleted: false,
       });
     });
 
-    it("marks depleted when available <= 0", async () => {
+    it("marks depleted when balance <= 0", async () => {
       await insertTestAccount({ orgId });
       // Default sum mock returns "0", default usage 0 → available = 0 → depleted.
 
