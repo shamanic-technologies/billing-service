@@ -226,29 +226,35 @@ export async function getStats(identity: IdentityHeaders): Promise<StripeBilling
   return call("GET", "/public/stats/billing", identity);
 }
 
-// --- DEPRECATED: transfer-brand ---
-
-export interface TransferBrandResult {
-  count: number;
-}
+// --- Customer list-by-metadata + update ---
 
 /**
- * @deprecated stripe-service no longer exposes /internal/transfer-brand.
- * Replacement is a billing-side compose: list customers via
- * `GET /v1/customers?metadata[org_id]=...` then PATCH each via
- * `POST /v1/customers/:id`. Blocked on stripe-service wiring the
- * `metadata[*]` query filter on the list endpoint. See follow-up T5.
+ * List customers whose Stripe metadata matches every key/value pair in `metadata`.
+ * stripe-service AND's multiple metadata keys server-side. Values must be strings.
  */
-export async function transferBrand(
+export async function listCustomersByMetadata(
   identity: IdentityHeaders,
-  body: {
-    sourceBrandId: string;
-    sourceOrgId: string;
-    targetOrgId: string;
-    targetBrandId?: string;
+  query: {
+    metadata: Record<string, string>;
+    limit?: number;
+    starting_after?: string;
   }
-): Promise<TransferBrandResult> {
-  return call("POST", "/internal/transfer-brand", identity, body);
+): Promise<StripeCustomerList> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query.metadata)) {
+    params.set(`metadata[${k}]`, v);
+  }
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.starting_after) params.set("starting_after", query.starting_after);
+  return call("GET", `/v1/customers?${params.toString()}`, identity);
+}
+
+export async function updateCustomer(
+  customerId: string,
+  identity: IdentityHeaders,
+  body: { metadata: Record<string, string> }
+): Promise<StripeCustomer> {
+  return call("POST", `/v1/customers/${customerId}`, identity, body);
 }
 
 // --- Derivations from Stripe customer ---
