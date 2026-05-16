@@ -24,8 +24,8 @@ const router = Router();
 const RELOAD_TIMEOUT_MS = 30_000;
 const RELOAD_IDEMPOTENCY_BUCKET_MS = 60_000;
 
-function computeTopupCharge(currentAvailable: string, requiredCents: string, topupUnit: number): number {
-  const deficit = new Decimal(requiredCents).minus(currentAvailable);
+function computeTopupCharge(currentBalance: string, requiredCents: string, topupUnit: number): number {
+  const deficit = new Decimal(requiredCents).minus(currentBalance);
   if (deficit.lessThanOrEqualTo(0)) return 0;
   const multiples = deficit.dividedBy(topupUnit).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
   return multiples * topupUnit;
@@ -60,26 +60,26 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
   });
 }
 
-interface AvailableSnapshot {
+interface BalanceSnapshot {
   customer: StripeCustomer;
-  balanceCents: string;
+  creditedCents: string;
   usageCents: string;
-  availableCents: string;
+  balanceCents: string;
 }
 
-async function computeAvailable(
+async function computeBalance(
   orgId: string,
   identity: Record<string, string>
-): Promise<AvailableSnapshot> {
+): Promise<BalanceSnapshot> {
   const customer = await getCustomerByOrg(identity);
   const [paidTopups, localCredits, runsUsage] = await Promise.all([
     sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
   ]);
-  const balanceCents = addCents(paidTopups, localCredits);
-  const availableCents = subCents(balanceCents, runsUsage.spent_cents);
-  return { customer, balanceCents, usageCents: runsUsage.spent_cents, availableCents };
+  const creditedCents = addCents(paidTopups, localCredits);
+  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
+  return { customer, creditedCents, usageCents: runsUsage.spent_cents, balanceCents };
 }
 
 router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res) => {
@@ -113,21 +113,21 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     const account = await findOrCreateAccount(orgId, userId, wfHeaders);
 
-    let available;
+    let snapshot;
     try {
-      available = await computeAvailable(orgId, identity);
+      snapshot = await computeBalance(orgId, identity);
     } catch (err) {
-      console.error("[billing-service] Failed to compute available funds:", err);
+      console.error("[billing-service] Failed to compute balance:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
-      res.status(502).json({ error: "Failed to compute available funds" });
+      res.status(502).json({ error: "Failed to compute balance" });
       return;
     }
 
-    if (gteCents(available.availableCents, requiredCents)) {
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, balance_cents: available.availableCents, required_cents: requiredCents } }, req.headers);
+    if (gteCents(snapshot.balanceCents, requiredCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
       res.json({
         sufficient: true,
-        balance_cents: available.availableCents,
+        balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });
       return;
@@ -138,27 +138,27 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "no_topup_config" } }, req.headers);
       res.json({
         sufficient: false,
-        balance_cents: available.availableCents,
+        balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });
       return;
     }
 
-    if (!deriveHasPaymentMethod(available.customer)) {
+    if (!deriveHasPaymentMethod(snapshot.customer)) {
       sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
       res.json({
         sufficient: false,
-        balance_cents: available.availableCents,
+        balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });
       return;
     }
 
-    const chargeAmount = computeTopupCharge(available.availableCents, requiredCents, account.topupAmountCents);
+    const chargeAmount = computeTopupCharge(snapshot.balanceCents, requiredCents, account.topupAmountCents);
     if (chargeAmount <= 0) {
       res.json({
         sufficient: false,
-        balance_cents: available.availableCents,
+        balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });
       return;
@@ -185,7 +185,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
       res.json({
         sufficient: false,
-        balance_cents: available.availableCents,
+        balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });
       return;
@@ -193,23 +193,23 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     let after;
     try {
-      after = await computeAvailable(orgId, identity);
+      after = await computeBalance(orgId, identity);
     } catch (err) {
-      console.error("[billing-service] Failed to recompute available after reload:", err);
-      res.status(502).json({ error: "Failed to recompute available funds after reload" });
+      console.error("[billing-service] Failed to recompute balance after reload:", err);
+      res.status(502).json({ error: "Failed to recompute balance after reload" });
       return;
     }
 
-    const sufficient = gteCents(after.availableCents, requiredCents);
+    const sufficient = gteCents(after.balanceCents, requiredCents);
     if (!sufficient) {
       sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
     }
 
-    traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient, balance_cents: after.availableCents, required_cents: requiredCents, reloaded_cents: chargeAmount } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient, balance_cents: after.balanceCents, required_cents: requiredCents, reloaded_cents: chargeAmount } }, req.headers);
 
     res.json({
       sufficient,
-      balance_cents: after.availableCents,
+      balance_cents: after.balanceCents,
       required_cents: requiredCents,
     });
   } catch (err) {
@@ -262,17 +262,17 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       sumLocalPromoCreditsForOrg(orgId),
     ]);
 
-    const balanceCents = addCents(paidTopups, localCredits);
-    const availableCents = subCents(balanceCents, spentTotalCents);
+    const creditedCents = addCents(paidTopups, localCredits);
+    const balanceCents = subCents(creditedCents, spentTotalCents);
     const thresholdCents = String(account.topupThresholdCents);
 
-    if (gteCents(availableCents, thresholdCents)) {
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { available_cents: availableCents, threshold_cents: thresholdCents } }, req.headers);
+    if (gteCents(balanceCents, thresholdCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: balanceCents, threshold_cents: thresholdCents } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const chargeAmount = computeTopupCharge(availableCents, thresholdCents, account.topupAmountCents);
+    const chargeAmount = computeTopupCharge(balanceCents, thresholdCents, account.topupAmountCents);
     if (chargeAmount <= 0) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;

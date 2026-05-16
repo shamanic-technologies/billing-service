@@ -35,9 +35,9 @@ async function composeAccountFunds(
   orgId: string,
   identity: Record<string, string>
 ): Promise<{
-  balanceCents: string;
+  creditedCents: string;
   usageCents: string;
-  availableCents: string;
+  balanceCents: string;
   hasPaymentMethod: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
@@ -46,26 +46,26 @@ async function composeAccountFunds(
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
   ]);
-  const balanceCents = addCents(paidTopups, localCredits);
-  const availableCents = subCents(balanceCents, runsUsage.spent_cents);
+  const creditedCents = addCents(paidTopups, localCredits);
+  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
   return {
-    balanceCents,
+    creditedCents,
     usageCents: runsUsage.spent_cents,
-    availableCents,
+    balanceCents,
     hasPaymentMethod: deriveHasPaymentMethod(customer),
   };
 }
 
 function buildAccountResponse(
   account: typeof billingAccounts.$inferSelect,
-  funds: { balanceCents: string; usageCents: string; availableCents: string; hasPaymentMethod: boolean }
+  funds: { creditedCents: string; usageCents: string; balanceCents: string; hasPaymentMethod: boolean }
 ) {
   return {
     id: account.id,
     org_id: account.orgId,
-    balance_cents: funds.balanceCents,
+    credited_cents: funds.creditedCents,
     usage_cents: funds.usageCents,
-    available_cents: funds.availableCents,
+    balance_cents: funds.balanceCents,
     topup_amount_cents: account.topupAmountCents,
     topup_threshold_cents: account.topupThresholdCents,
     has_payment_method: funds.hasPaymentMethod,
@@ -130,8 +130,8 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
     }
 
     res.json({
-      available_cents: funds.availableCents,
-      depleted: isDepleted(funds.availableCents),
+      balance_cents: funds.balanceCents,
+      depleted: isDepleted(funds.balanceCents),
     });
   } catch (err) {
     console.error("[billing-service] Error checking balance:", err);

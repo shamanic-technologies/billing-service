@@ -192,8 +192,8 @@ const TOPUP_PAGE_CAP = 200;
 /**
  * Paginate every payment_intent for `customerId` and sum `amount_received`
  * across rows with `status === 'succeeded'`. The result is the total money
- * the org has actually paid into Stripe — the source of truth for the
- * billing-side `balance_cents` post-#0016.
+ * the org has actually paid into Stripe — the paid-topups component of
+ * billing-side `credited_cents`.
  *
  * Returns a numeric(16,10)-formatted string for arithmetic-compatibility
  * with addCents/subCents helpers.

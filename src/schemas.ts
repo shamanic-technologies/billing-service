@@ -25,12 +25,12 @@ export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     org_id: z.string().uuid(),
-    /** Gross balance = stripe-service paid balance + sum(local_promos). */
-    balance_cents: CentsStringSchema,
+    /** Lifetime credits added: stripe-service paid topups + sum(local_promos). */
+    credited_cents: CentsStringSchema,
     /** Lifetime platform usage from runs-service /internal/org-usage-total. */
     usage_cents: CentsStringSchema,
-    /** balance_cents − usage_cents. Use this for depletion/budget gates. */
-    available_cents: CentsStringSchema,
+    /** Spendable funds = credited_cents − usage_cents. Use this for depletion/budget gates. */
+    balance_cents: CentsStringSchema,
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
     has_payment_method: z.boolean(),
@@ -123,7 +123,7 @@ export const PortalSessionResponseSchema = z
 
 export const BalanceResponseSchema = z
   .object({
-    available_cents: CentsStringSchema,
+    balance_cents: CentsStringSchema,
     depleted: z.boolean(),
   })
   .openapi("BalanceResponse");
@@ -275,7 +275,7 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/v1/accounts/balance",
-  summary: "Quick available-funds check",
+  summary: "Quick balance check (spendable funds)",
   request: {
     headers: protectedHeaders,
   },
@@ -423,7 +423,7 @@ registry.registerPath({
   summary: "Notify billing of an org's current usage total (hint for proactive topup)",
   description:
     "Fire-and-forget endpoint called by runs-service after every runs_costs write. " +
-    "Billing computes available = stripe paid balance + local credits − usage; if below " +
+    "Billing computes balance = stripe paid topups + local credits − usage; if below " +
     "topup_threshold and auto-topup is configured, fires a stripe-service reload. " +
     "Always returns 202.",
   request: {
@@ -450,7 +450,7 @@ registry.registerPath({
   summary: "Redeem a promo code for bonus credits (billing-local)",
   description:
     "Validates the promo code, checks it hasn't been redeemed by this org, " +
-    "and inserts a `local_promos` row. No Stripe call — credit composes into available_cents at read time.",
+    "and inserts a `local_promos` row. No Stripe call — credit composes into balance_cents at read time.",
   request: {
     headers: protectedHeaders,
     body: {
