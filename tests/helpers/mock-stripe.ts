@@ -9,9 +9,10 @@ export interface StripeServiceMocks {
   createPaymentIntent: ReturnType<typeof vi.fn>;
   getPaymentIntent: ReturnType<typeof vi.fn>;
   listBalanceTransactions: ReturnType<typeof vi.fn>;
+  listCustomersByMetadata: ReturnType<typeof vi.fn>;
+  updateCustomer: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
-  transferBrand: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   reloadViaPaymentIntent: ReturnType<typeof vi.fn>;
 }
@@ -74,7 +75,15 @@ export function setupStripeMocks(): StripeServiceMocks {
     createPortalSession: vi.fn().mockResolvedValue({
       url: "https://billing.stripe.com/p/session/test_portal",
     }),
-    transferBrand: vi.fn().mockResolvedValue({ count: 0 }),
+    listCustomersByMetadata: vi.fn().mockResolvedValue({
+      object: "list",
+      url: "/v1/customers",
+      data: [],
+      has_more: false,
+    }),
+    updateCustomer: vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(buildMockCustomer({ id }))
+    ),
     getStats: vi.fn().mockResolvedValue({
       total_paid_cents: "0.0000000000",
       accounts_with_payment_method: 0,
@@ -94,7 +103,8 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "listBalanceTransactions").mockImplementation(mocks.listBalanceTransactions);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
-  vi.spyOn(ssClient, "transferBrand").mockImplementation(mocks.transferBrand);
+  vi.spyOn(ssClient, "listCustomersByMetadata").mockImplementation(mocks.listCustomersByMetadata);
+  vi.spyOn(ssClient, "updateCustomer").mockImplementation(mocks.updateCustomer);
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
   vi.spyOn(reload, "reloadViaPaymentIntent").mockImplementation(mocks.reloadViaPaymentIntent);
 
