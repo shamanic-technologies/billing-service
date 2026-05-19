@@ -20,7 +20,7 @@ describe("POST /v1/checkout-sessions", () => {
     await closeDb();
   });
 
-  it("proxies to stripe-service and returns session", async () => {
+  it("proxies to stripe-service with Stripe-shape payload and returns session", async () => {
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_abc",
       session_id: "cs_abc",
@@ -42,12 +42,53 @@ describe("POST /v1/checkout-sessions", () => {
     });
     expect(ssMocks.createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({ "x-org-id": orgId }),
-      expect.objectContaining({
+      {
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Distribute credit top-up" },
+              unit_amount: 2000,
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        customer: "cus_mock_123",
+        metadata: { org_id: orgId },
+        payment_intent_data: { metadata: { org_id: orgId } },
+      }
+    );
+  });
+
+  it("resolves Stripe customer before creating checkout session", async () => {
+    const callOrder: string[] = [];
+    ssMocks.getCustomerByOrg.mockImplementation(async () => {
+      callOrder.push("getCustomerByOrg");
+      return {
+        id: "cus_mock_123",
+        object: "customer",
+        metadata: {},
+        invoice_settings: { default_payment_method: null },
+      };
+    });
+    ssMocks.createCheckoutSession.mockImplementation(async () => {
+      callOrder.push("createCheckoutSession");
+      return { url: "https://checkout.stripe.com/pay/cs_abc", session_id: "cs_abc" };
+    });
+
+    await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
         success_url: "https://example.com/success",
         cancel_url: "https://example.com/cancel",
         topup_amount_cents: 2000,
-      })
-    );
+      });
+
+    expect(callOrder).toEqual(["getCustomerByOrg", "createCheckoutSession"]);
   });
 
   it("auto-creates billing account on first checkout", async () => {
