@@ -236,9 +236,28 @@ export async function sumSucceededTopupsForCustomer(
 
 // --- Checkout / Portal ---
 
+export interface CheckoutLineItem {
+  price_data: {
+    currency: string;
+    product_data: { name: string };
+    unit_amount: number;
+  };
+  quantity: number;
+}
+
+export interface CheckoutSessionBody {
+  mode: "payment" | "subscription" | "setup";
+  line_items: CheckoutLineItem[];
+  success_url: string;
+  cancel_url: string;
+  customer: string;
+  metadata: Record<string, string>;
+  payment_intent_data: { metadata: Record<string, string> };
+}
+
 export async function createCheckoutSession(
   identity: IdentityHeaders,
-  body: { success_url: string; cancel_url: string; topup_amount_cents: number }
+  body: CheckoutSessionBody
 ): Promise<CheckoutSessionResult> {
   return call("POST", "/v1/checkout/sessions", identity, body);
 }
