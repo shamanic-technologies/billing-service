@@ -50,6 +50,27 @@ Billing never duplicates Stripe state and never persists run-level usage rows.
 
 `payment_intents.amount_received` from Stripe is **integer cents** (Stripe's `amount` minor unit). Sum returns a `Decimal.toFixed(10)` string for arithmetic-compatibility with the helpers above.
 
+## stripe-service integration shape
+
+`src/lib/stripe-service-client.ts` only calls Stripe-shape primitives. stripe-service deliberately exposes no billing-specific shortcuts.
+
+- Customer fetch is **org-implicit** via `GET /v1/customers?limit=1` (resolved server-side from `x-org-id`). No `stripe_customer_id` is stored in billing.
+- Balance is derived from the Stripe customer object: `balance_cents = -customer.balance` (sign-flip, Stripe convention is `balance > 0` = customer owes).
+- `has_payment_method` is derived from `customer.invoice_settings.default_payment_method != null`.
+- Reload is composed billing-side via `POST /v1/payment_intents` with `confirm:true, off_session:true` + `Idempotency-Key` header. Stripe status flattened to `{succeeded|failed}` in `src/lib/reload.ts`.
+- Balance transactions list uses the org-implicit `GET /v1/balance_transactions` (no customer id needed).
+
+## transfer-brand SS-side semantics
+
+`POST /internal/transfer-brand` patches Stripe customer metadata via list-by-metadata + per-customer PATCH:
+
+- **List filter:** `GET /v1/customers?metadata[org_id]=sourceOrgId` (org-scoped, paginated 100/page).
+- **Brand filter (client-side):** `customer.metadata.brand_id` is treated as a **comma-separated UUID string**. Only customers whose `brand_id` parses to exactly one UUID matching `sourceBrandId` are patched. Multi-brand customers are skipped and logged (would orphan co-brands). Mirrors the `local_promos array_length(brand_ids,1)=1` solo-brand semantics on the billing-DB side.
+- **PATCH:** sets `metadata.org_id=targetOrgId` (and `brand_id=targetBrandId` if provided). Preserves other metadata keys.
+- **Partial failure:** if a PATCH fails mid-loop, returns 502 with `{ partial: { stripe_service_customers_patched, total_targets } }`. Stripe metadata PATCH is idempotent — caller can resume.
+
+The same CSV convention applies to the `x-brand-id` header forwarded by workflow-service for multi-brand campaigns.
+
 ## Public surface field names
 
 ### `GET /v1/accounts` and `PATCH/DELETE /v1/accounts/auto_topup`
