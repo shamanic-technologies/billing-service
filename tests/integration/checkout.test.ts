@@ -58,7 +58,10 @@ describe("POST /v1/checkout-sessions", () => {
         cancel_url: "https://example.com/cancel",
         customer: "cus_mock_123",
         metadata: { org_id: orgId },
-        payment_intent_data: { metadata: { org_id: orgId } },
+        payment_intent_data: {
+          metadata: { org_id: orgId },
+          setup_future_usage: "off_session",
+        },
       }
     );
   });

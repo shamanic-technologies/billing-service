@@ -252,7 +252,10 @@ export interface CheckoutSessionBody {
   cancel_url: string;
   customer: string;
   metadata: Record<string, string>;
-  payment_intent_data: { metadata: Record<string, string> };
+  payment_intent_data: {
+    metadata: Record<string, string>;
+    setup_future_usage?: "off_session" | "on_session";
+  };
 }
 
 export async function createCheckoutSession(
