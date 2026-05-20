@@ -58,7 +58,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         cancel_url,
         customer: customer.id,
         metadata: { org_id: orgId },
-        payment_intent_data: { metadata: { org_id: orgId } },
+        payment_intent_data: {
+          metadata: { org_id: orgId },
+          setup_future_usage: "off_session",
+        },
       });
     } catch (err) {
       console.error("[billing-service] stripe-service createCheckoutSession failed:", err);
