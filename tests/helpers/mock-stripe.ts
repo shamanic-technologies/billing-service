@@ -9,6 +9,7 @@ export interface StripeServiceMocks {
   createPaymentIntent: ReturnType<typeof vi.fn>;
   getPaymentIntent: ReturnType<typeof vi.fn>;
   listPaymentIntents: ReturnType<typeof vi.fn>;
+  listPaymentMethods: ReturnType<typeof vi.fn>;
   sumSucceededTopupsForCustomer: ReturnType<typeof vi.fn>;
   listCustomersByMetadata: ReturnType<typeof vi.fn>;
   updateCustomer: ReturnType<typeof vi.fn>;
@@ -70,6 +71,14 @@ export function setupStripeMocks(): StripeServiceMocks {
       data: [],
       has_more: false,
     }),
+    listPaymentMethods: vi.fn().mockResolvedValue({
+      object: "list",
+      url: "/v1/payment_methods",
+      data: [
+        { id: "pm_mock_card", object: "payment_method", type: "card" },
+      ],
+      has_more: false,
+    }),
     sumSucceededTopupsForCustomer: vi.fn().mockResolvedValue("0.0000000000"),
     createCheckoutSession: vi.fn().mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_mock",
@@ -104,6 +113,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "createPaymentIntent").mockImplementation(mocks.createPaymentIntent);
   vi.spyOn(ssClient, "getPaymentIntent").mockImplementation(mocks.getPaymentIntent);
   vi.spyOn(ssClient, "listPaymentIntents").mockImplementation(mocks.listPaymentIntents);
+  vi.spyOn(ssClient, "listPaymentMethods").mockImplementation(mocks.listPaymentMethods);
   vi.spyOn(ssClient, "sumSucceededTopupsForCustomer").mockImplementation(
     mocks.sumSucceededTopupsForCustomer
   );

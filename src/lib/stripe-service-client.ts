@@ -58,6 +58,19 @@ export interface StripePaymentIntentList {
   has_more: boolean;
 }
 
+export interface StripePaymentMethod {
+  id: string;
+  object: "payment_method";
+  type: string;
+}
+
+export interface StripePaymentMethodList {
+  object: "list";
+  url: string;
+  data: StripePaymentMethod[];
+  has_more: boolean;
+}
+
 export interface CustomerEnsureResult {
   customer_id: string;
 }
@@ -160,6 +173,7 @@ export async function createPaymentIntent(
     customer: string;
     confirm: boolean;
     off_session: boolean;
+    payment_method?: string;
     metadata?: Record<string, string>;
   },
   idempotencyKey?: string
@@ -184,6 +198,24 @@ export async function listPaymentIntents(
   if (query.limit !== undefined) params.set("limit", String(query.limit));
   if (query.starting_after) params.set("starting_after", query.starting_after);
   return call("GET", `/v1/payment_intents?${params.toString()}`, identity);
+}
+
+/**
+ * List a customer's attached PaymentMethods via stripe-service.
+ * Live passthrough to Stripe `paymentMethods.list({ customer, type? })`.
+ *
+ * Used by reload.ts to pick an explicit `payment_method` for off_session PIs
+ * instead of relying on `customer.invoice_settings.default_payment_method`
+ * (which may be a Link / wallet PM Stripe refuses to charge off_session).
+ */
+export async function listPaymentMethods(
+  identity: IdentityHeaders,
+  query: { customer: string; type?: string }
+): Promise<StripePaymentMethodList> {
+  const params = new URLSearchParams();
+  params.set("customer", query.customer);
+  if (query.type) params.set("type", query.type);
+  return call("GET", `/v1/payment_methods?${params.toString()}`, identity);
 }
 
 const TOPUP_PAGE_LIMIT = 100;
