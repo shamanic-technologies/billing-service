@@ -75,6 +75,14 @@ beforeAll(async () => {
     ON CONFLICT ("code") DO NOTHING
   `;
 
+  // Seed platform-issued grant promo codes (matches migration 0017).
+  await sql`
+    INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
+    VALUES ('invite_reward', 2500, NULL, NULL),
+           ('invite_welcome', 2500, NULL, NULL)
+    ON CONFLICT ("code") DO NOTHING
+  `;
+
   // Drop legacy tables that may linger.
   await sql`DROP TABLE IF EXISTS "customer_balance_transactions"`;
   await sql`DROP TABLE IF EXISTS "cbt_archive_pre104_usage"`;
