@@ -5,6 +5,9 @@ import {
   localPromoCodes,
   localPromos,
   WELCOME_PROMO_CODE,
+  INVITE_WELCOME_CODE,
+  PLATFORM_GRANT_REASONS,
+  type PlatformGrantReason,
 } from "../db/schema.js";
 
 export class PromoNotFoundError extends Error {
@@ -124,6 +127,136 @@ export async function hasRedeemed(orgId: string, promoCodeId: string): Promise<b
     .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, promoCodeId)))
     .limit(1);
   return !!row;
+}
+
+// System sentinel — internal grants have no human user. Matches the convention
+// used in /internal/transfer-brand (see routes/internal.ts).
+const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+export class UnknownGrantReasonError extends Error {
+  constructor(reason: string) {
+    super(`unknown grant reason: ${reason}`);
+  }
+}
+
+export class GrantPromoCodeMissingError extends Error {
+  constructor(code: string) {
+    super(`grant promo code seed missing: ${code} (run migration 0017)`);
+  }
+}
+
+export interface GrantResult {
+  localPromoId: string;
+  promoCodeId: string;
+  alreadyGranted: boolean;
+}
+
+/**
+ * Platform-issued credit grant. Used by `/internal/credits/grant` to add credits
+ * without requiring a user-redeemable promo code.
+ *
+ * Idempotency: the UNIQUE (org_id, promo_code_id) index on local_promos makes
+ * repeated calls with the same (orgId, reason) a no-op (no double-grant).
+ *
+ * `invite_welcome` semantics: replaces (not stacks with) the $2 welcome row.
+ * The tx (a) inserts billing_accounts ON CONFLICT DO NOTHING so a concurrent
+ * findOrCreateAccount won't fire its own welcome-redeem branch, then (b)
+ * deletes any existing welcome row, then (c) inserts the invite_welcome row.
+ *
+ * `invite_reward` is purely additive — no override.
+ *
+ * Fails loud on unknown reasons (rejected upstream at the route).
+ */
+export async function grantCredit(
+  orgId: string,
+  amountCents: number,
+  reason: PlatformGrantReason
+): Promise<GrantResult> {
+  if (!PLATFORM_GRANT_REASONS.includes(reason)) {
+    throw new UnknownGrantReasonError(reason);
+  }
+
+  const codeRows = await db
+    .select()
+    .from(localPromoCodes)
+    .where(
+      reason === INVITE_WELCOME_CODE
+        ? rawSql`${localPromoCodes.code} IN (${reason}, ${WELCOME_PROMO_CODE})`
+        : eq(localPromoCodes.code, reason)
+    );
+
+  const grantCode = codeRows.find((r) => r.code === reason);
+  if (!grantCode) throw new GrantPromoCodeMissingError(reason);
+
+  const welcomeCode =
+    reason === INVITE_WELCOME_CODE
+      ? codeRows.find((r) => r.code === WELCOME_PROMO_CODE)
+      : undefined;
+
+  const description =
+    reason === INVITE_WELCOME_CODE
+      ? `Invite welcome: $${(amountCents / 100).toFixed(2)}`
+      : `Invite reward: $${(amountCents / 100).toFixed(2)}`;
+
+  return await db.transaction(async (tx) => {
+    // Pre-create the billing_accounts row so a concurrent findOrCreateAccount
+    // sees an existing row and skips its welcome-redeem side-effect path.
+    await tx
+      .insert(billingAccounts)
+      .values({ orgId })
+      .onConflictDoNothing();
+
+    if (reason === INVITE_WELCOME_CODE && welcomeCode) {
+      await tx
+        .delete(localPromos)
+        .where(
+          and(
+            eq(localPromos.orgId, orgId),
+            eq(localPromos.promoCodeId, welcomeCode.id)
+          )
+        );
+    }
+
+    const inserted = await tx
+      .insert(localPromos)
+      .values({
+        orgId,
+        userId: SYSTEM_USER_ID,
+        amountCents: String(amountCents),
+        promoCodeId: grantCode.id,
+        description,
+      })
+      .onConflictDoNothing({
+        target: [localPromos.orgId, localPromos.promoCodeId],
+      })
+      .returning();
+
+    if (inserted.length > 0) {
+      return {
+        localPromoId: inserted[0].id,
+        promoCodeId: grantCode.id,
+        alreadyGranted: false,
+      };
+    }
+
+    // Already granted — fetch existing row for the returned id.
+    const [existing] = await tx
+      .select({ id: localPromos.id })
+      .from(localPromos)
+      .where(
+        and(
+          eq(localPromos.orgId, orgId),
+          eq(localPromos.promoCodeId, grantCode.id)
+        )
+      )
+      .limit(1);
+
+    return {
+      localPromoId: existing.id,
+      promoCodeId: grantCode.id,
+      alreadyGranted: true,
+    };
+  });
 }
 
 /** Re-export billing_accounts table for callers that need it alongside promo helpers. */

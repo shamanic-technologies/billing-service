@@ -1,17 +1,28 @@
-import { eq, ne } from "drizzle-orm";
+import { eq, notInArray } from "drizzle-orm";
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
   localPromoCodes,
   localPromos,
   WELCOME_PROMO_CODE,
+  INVITE_REWARD_CODE,
+  INVITE_WELCOME_CODE,
 } from "../../src/db/schema.js";
+
+const SEEDED_PROMO_CODES = [
+  WELCOME_PROMO_CODE,
+  INVITE_REWARD_CODE,
+  INVITE_WELCOME_CODE,
+];
 
 export async function cleanTestData() {
   await db.delete(localPromos);
   await db.delete(billingAccounts);
-  // Keep the seeded welcome code; remove any test-created codes.
-  await db.delete(localPromoCodes).where(ne(localPromoCodes.code, WELCOME_PROMO_CODE));
+  // Keep seeded codes (welcome + invite_reward + invite_welcome); remove any
+  // test-created codes.
+  await db
+    .delete(localPromoCodes)
+    .where(notInArray(localPromoCodes.code, SEEDED_PROMO_CODES));
 }
 
 export async function insertTestAccount(data: {

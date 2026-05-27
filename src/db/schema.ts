@@ -90,3 +90,16 @@ export type NewLocalPromo = typeof localPromos.$inferInsert;
 
 export const WELCOME_PROMO_CODE = "welcome";
 export const WELCOME_PROMO_AMOUNT_CENTS = 200;
+
+// Platform-issued grant codes (DIS-64 Wave 0.5 invite-only gate).
+// Backed by migration 0017. The invite_welcome grant replaces (not stacks)
+// the $2 welcome row at grant time — see lib/promos.ts grantCredit.
+export const INVITE_REWARD_CODE = "invite_reward";
+export const INVITE_WELCOME_CODE = "invite_welcome";
+export const INVITE_GRANT_AMOUNT_CENTS = 2500;
+
+export const PLATFORM_GRANT_REASONS = [
+  INVITE_REWARD_CODE,
+  INVITE_WELCOME_CODE,
+] as const;
+export type PlatformGrantReason = (typeof PLATFORM_GRANT_REASONS)[number];

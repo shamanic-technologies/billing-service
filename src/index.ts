@@ -13,6 +13,7 @@ import checkoutRoutes from "./routes/checkout.js";
 import portalRoutes from "./routes/portal.js";
 import promotionCodesRoutes from "./routes/promotion_codes.js";
 import internalRoutes from "./routes/internal.js";
+import creditsRoutes from "./routes/credits.js";
 import { requireApiKey } from "./middleware/auth.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,7 @@ app.get("/openapi.json", (_req, res) => {
 // Protected routes (service-to-service)
 app.use(requireApiKey);
 app.use(internalRoutes);
+app.use(creditsRoutes);
 app.use(accountsRoutes);
 app.use(customerBalanceRoutes);
 app.use(checkoutRoutes);
