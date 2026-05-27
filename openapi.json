@@ -347,6 +347,50 @@
           "code"
         ]
       },
+      "CreditGrantResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "newBalanceCents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "newBalanceCents"
+        ]
+      },
+      "CreditGrantRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invite_reward",
+              "invite_welcome"
+            ]
+          }
+        },
+        "required": [
+          "orgId",
+          "amountCents",
+          "reason"
+        ]
+      },
       "TransferBrandTableResult": {
         "type": "object",
         "properties": {
@@ -1457,6 +1501,63 @@
           },
           "409": {
             "description": "Promo code already redeemed by this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/credits/grant": {
+      "post": {
+        "summary": "Grant platform-issued credit to an org (no user-redeemable code required)",
+        "description": "Inserts a local_promos row for an org under a reserved platform reason. Idempotent on (orgId, reason). When reason='invite_welcome', the existing $2 welcome row (if any) is deleted in the same tx so the invitee ends at the grant amount (not stacked). Returns the org's spendable balance after the grant.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grant applied (or already applied — idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditGrantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or unknown reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service unavailable (balance compose failed)",
             "content": {
               "application/json": {
                 "schema": {

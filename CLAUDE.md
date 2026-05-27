@@ -134,3 +134,4 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
+| `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$2` welcome row. Used by api-service invite claim handler (DIS-64). |

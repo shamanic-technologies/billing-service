@@ -146,6 +146,24 @@ export const RedeemPromotionCodeResponseSchema = z
   })
   .openapi("RedeemPromotionCodeResponse");
 
+// --- Internal Credit Grant (DIS-64 platform-issued grants) ---
+
+export const CreditGrantRequestSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+    reason: z.enum(["invite_reward", "invite_welcome"]),
+  })
+  .openapi("CreditGrantRequest");
+
+export const CreditGrantResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Spendable funds after the grant (credited_cents − usage_cents). */
+    newBalanceCents: CentsStringSchema,
+  })
+  .openapi("CreditGrantResponse");
+
 // --- Transfer Brand ---
 
 export const TransferBrandRequestSchema = z
@@ -475,6 +493,38 @@ registry.registerPath({
 
 const internalHeaders = z.object({
   "x-api-key": z.string(),
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/credits/grant",
+  summary: "Grant platform-issued credit to an org (no user-redeemable code required)",
+  description:
+    "Inserts a local_promos row for an org under a reserved platform reason. " +
+    "Idempotent on (orgId, reason). " +
+    "When reason='invite_welcome', the existing $2 welcome row (if any) is deleted " +
+    "in the same tx so the invitee ends at the grant amount (not stacked). " +
+    "Returns the org's spendable balance after the grant.",
+  request: {
+    headers: internalHeaders,
+    body: {
+      content: { "application/json": { schema: CreditGrantRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Grant applied (or already applied — idempotent)",
+      content: { "application/json": { schema: CreditGrantResponseSchema } },
+    },
+    400: {
+      description: "Invalid body or unknown reason",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
 });
 
 registry.registerPath({
