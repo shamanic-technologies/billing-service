@@ -11,7 +11,7 @@ import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
-  deriveHasPaymentMethod,
+  hasAttachedCardPm,
 } from "../lib/stripe-service-client.js";
 
 const router = Router();
@@ -41,10 +41,11 @@ async function composeAccountFunds(
   hasPaymentMethod: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage] = await Promise.all([
+  const [paidTopups, localCredits, runsUsage, hasCardPm] = await Promise.all([
     sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
+    hasAttachedCardPm(identity, customer.id),
   ]);
   const creditedCents = addCents(paidTopups, localCredits);
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
@@ -52,7 +53,7 @@ async function composeAccountFunds(
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,
-    hasPaymentMethod: deriveHasPaymentMethod(customer),
+    hasPaymentMethod: hasCardPm,
   };
 }
 
@@ -165,16 +166,17 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    let customer;
+    let hasCardPm: boolean;
     try {
-      customer = await getCustomerByOrg(identity);
+      const customer = await getCustomerByOrg(identity);
+      hasCardPm = await hasAttachedCardPm(identity, customer.id);
     } catch (err) {
       console.error("[billing-service] Failed to fetch customer for PM check:", err);
       res.status(502).json({ error: "Failed to query payment method status" });
       return;
     }
 
-    if (!deriveHasPaymentMethod(customer)) {
+    if (!hasCardPm) {
       res.status(400).json({
         error: "Payment method required. Create a checkout session first.",
       });

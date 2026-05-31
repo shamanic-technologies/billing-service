@@ -5,6 +5,7 @@ import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js
 import {
   setupStripeMocks,
   customerWithDefaultPM,
+  customerWithoutPM,
 } from "../helpers/mock-stripe.js";
 
 describe("Accounts endpoints", () => {
@@ -37,6 +38,8 @@ describe("Accounts endpoints", () => {
 
   describe("GET /v1/accounts", () => {
     it("auto-creates a billing account with welcome promo redemption", async () => {
+      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
+
       const res = await request(app)
         .get("/v1/accounts")
         .set(getAuthHeaders(orgId));
@@ -89,9 +92,11 @@ describe("Accounts endpoints", () => {
       expect(res.body.balance_cents).toBe("-308.0000000000");
     });
 
-    it("derives has_payment_method from invoice_settings.default_payment_method", async () => {
+    it("derives has_payment_method from attached card PMs (ignores default_payment_method)", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+      // No default PM set, but a card is attached → has_payment_method must be true.
+      ssMocks.getCustomerByOrg.mockResolvedValue(customerWithoutPM());
+      ssMocks.hasAttachedCardPm.mockResolvedValue(true);
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -241,7 +246,7 @@ describe("Accounts endpoints", () => {
 
     it("rejects when SS reports no payment method", async () => {
       await insertTestAccount({ orgId });
-      // default mock has invoice_settings.default_payment_method = null
+      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")

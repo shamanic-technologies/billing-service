@@ -104,6 +104,56 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(1000);
   });
 
+  it("insufficient + topup + card attached but no default PM → fires reload (regression)", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    // Customer has NO default_payment_method, but a card is attached. The gate now
+    // keys on the attached card (hasAttachedCardPm), not invoice_settings.default.
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
+    ssMocks.hasAttachedCardPm.mockResolvedValue(true);
+    ssMocks.sumSucceededTopupsForCustomer
+      .mockResolvedValueOnce("0.0000000000")
+      .mockResolvedValueOnce("1000.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(1000);
+  });
+
+  it("insufficient + topup + no card attached → graceful sufficient:false, no reload", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasAttachedCardPm.mockResolvedValue(false);
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("PM lookup errors (stripe-service down) → 502, never silent no-PM", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.hasAttachedCardPm.mockRejectedValue(new Error("stripe-service down"));
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(502);
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
   it("reload status=failed → sufficient:false", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());

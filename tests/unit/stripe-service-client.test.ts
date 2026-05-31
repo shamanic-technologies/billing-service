@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   sumSucceededTopupsForCustomer,
+  hasAttachedCardPm,
   type StripePaymentIntent,
   type StripePaymentIntentList,
+  type StripePaymentMethod,
 } from "../../src/lib/stripe-service-client.js";
 
 function pi(
@@ -147,5 +149,57 @@ describe("sumSucceededTopupsForCustomer", () => {
     const total = await sumSucceededTopupsForCustomer({}, "cus_test");
 
     expect(total).toBe("55200.0000000000");
+  });
+});
+
+describe("hasAttachedCardPm", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function pmListBody(data: StripePaymentMethod[]) {
+    return { object: "list", url: "/v1/payment_methods", data, has_more: false };
+  }
+
+  it("returns true when a card payment method is attached", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(pmListBody([{ id: "pm_1", object: "payment_method", type: "card" }]))
+    );
+
+    expect(await hasAttachedCardPm({}, "cus_test")).toBe(true);
+  });
+
+  it("returns false when no payment methods are attached", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+
+    expect(await hasAttachedCardPm({}, "cus_test")).toBe(false);
+  });
+
+  it("requests only card-type payment methods for the customer", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+
+    await hasAttachedCardPm({}, "cus_test");
+
+    const url = fetchMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain("/v1/payment_methods");
+    expect(url).toContain("customer=cus_test");
+    expect(url).toContain("type=card");
+  });
+
+  it("propagates stripe-service errors — never collapses to false (fail-loud)", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("not found", { status: 404, headers: { "content-type": "text/plain" } })
+    );
+
+    await expect(hasAttachedCardPm({}, "cus_test")).rejects.toThrow(
+      /stripe-service GET \/v1\/payment_methods.*failed: 404/
+    );
   });
 });
