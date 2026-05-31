@@ -63,13 +63,34 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not topup when PM missing", async () => {
+  it("triggers reload when card attached but no default PM (regression)", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    // default mock customer has no PM
+    // Customer has no default_payment_method, but a card is attached.
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
+    ssMocks.hasAttachedCardPm.mockResolvedValue(true);
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/usage_apply")
+      .set(getAuthHeaders(orgId, userId))
+      .send({ spent_total_cents: "200.0000000000" });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not topup when no card attached", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.hasAttachedCardPm.mockResolvedValue(false);
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100.0000000000");
 
     const res = await request(app)

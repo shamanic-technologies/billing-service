@@ -13,7 +13,7 @@ import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
-  deriveHasPaymentMethod,
+  hasAttachedCardPm,
   type StripeCustomer,
 } from "../lib/stripe-service-client.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
@@ -62,6 +62,7 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
 
 interface BalanceSnapshot {
   customer: StripeCustomer;
+  hasCardPm: boolean;
   creditedCents: string;
   usageCents: string;
   balanceCents: string;
@@ -72,14 +73,15 @@ async function computeBalance(
   identity: Record<string, string>
 ): Promise<BalanceSnapshot> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage] = await Promise.all([
+  const [paidTopups, localCredits, runsUsage, hasCardPm] = await Promise.all([
     sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
+    hasAttachedCardPm(identity, customer.id),
   ]);
   const creditedCents = addCents(paidTopups, localCredits);
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
-  return { customer, creditedCents, usageCents: runsUsage.spent_cents, balanceCents };
+  return { customer, hasCardPm, creditedCents, usageCents: runsUsage.spent_cents, balanceCents };
 }
 
 router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res) => {
@@ -144,7 +146,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    if (!deriveHasPaymentMethod(snapshot.customer)) {
+    if (!snapshot.hasCardPm) {
       sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
       res.json({
         sufficient: false,
@@ -252,7 +254,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
 
     const customer = await getCustomerByOrg(identity);
 
-    if (!deriveHasPaymentMethod(customer)) {
+    if (!(await hasAttachedCardPm(identity, customer.id))) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }

@@ -56,7 +56,7 @@ Billing never duplicates Stripe state and never persists run-level usage rows.
 
 - Customer fetch is **org-implicit** via `GET /v1/customers?limit=1` (resolved server-side from `x-org-id`). No `stripe_customer_id` is stored in billing.
 - Balance is derived from the Stripe customer object: `balance_cents = -customer.balance` (sign-flip, Stripe convention is `balance > 0` = customer owes).
-- `has_payment_method` is derived from `customer.invoice_settings.default_payment_method != null`.
+- `has_payment_method` is derived from whether the customer has ≥1 attached **card** PM (`hasAttachedCardPm` → `GET /v1/payment_methods?customer=cus_X&type=card`). It deliberately does **not** read `customer.invoice_settings.default_payment_method`: Stripe leaves the default null after a normal `setup_future_usage` checkout and refuses to charge Link/wallet default PMs off_session, so a default-PM check blocks reloads for orgs that in fact have a chargeable card. This mirrors exactly what `reload.ts` charges (first attached card). The same `hasAttachedCardPm` gate fronts auto-reload in `authorize` + `usage_apply` and the `PATCH /v1/accounts/auto_topup` PM requirement. Fail-loud: a stripe-service error propagates (502); only an empty card list → false.
 - Reload is composed billing-side via `POST /v1/payment_intents` with `confirm:true, off_session:true` + `Idempotency-Key` header. Stripe status flattened to `{succeeded|failed}` in `src/lib/reload.ts`.
 - Balance transactions list uses the org-implicit `GET /v1/balance_transactions` (no customer id needed).
 
@@ -84,7 +84,7 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "topup_amount_cents": 2500,                // auto-topup amount
   "topup_threshold_cents": 500,              // auto-topup triggers when balance_cents < threshold
-  "has_payment_method": true,                // derived from customer.invoice_settings.default_payment_method != null
+  "has_payment_method": true,                // ≥1 attached card PM (GET /v1/payment_methods?type=card); NOT invoice_settings.default_payment_method
   "has_auto_topup": true,
   "created_at": "...",
   "updated_at": "..."
@@ -94,11 +94,12 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
 All three credited/usage/balance endpoints fail loud (502) when runs-service or stripe-service is unreachable.
 
 Composition (`src/routes/accounts.ts:composeAccountFunds`):
-1. `getCustomerByOrg(identity)` → Stripe customer (for `id` and `default_payment_method`)
+1. `getCustomerByOrg(identity)` → Stripe customer (for `id`)
 2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received` where `status='succeeded'`
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → runs-service `spent_cents`
-5. `credited_cents = paid_topups + local_credits` ; `balance_cents = credited_cents − usage`
+5. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 attached card PM)
+6. `credited_cents = paid_topups + local_credits` ; `balance_cents = credited_cents − usage`
 
 ### `GET /public/stats/billing`
 
