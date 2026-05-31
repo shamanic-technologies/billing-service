@@ -343,6 +343,28 @@ export async function updateCustomer(
 
 // --- Derivations from Stripe customer ---
 
-export function deriveHasPaymentMethod(customer: StripeCustomer): boolean {
-  return Boolean(customer.invoice_settings?.default_payment_method);
+/**
+ * True iff the org's Stripe customer has at least one attached CARD payment method.
+ *
+ * This is the chargeable-PM definition shared by the reload gates (authorize /
+ * usage_apply) and the public `has_payment_method` surface. It MUST mirror what
+ * `reload.ts` actually charges — the first attached card from
+ * `GET /v1/payment_methods?type=card`.
+ *
+ * Deliberately NOT keyed on `customer.invoice_settings.default_payment_method`:
+ * Stripe leaves that null after a normal `setup_future_usage` checkout, and refuses
+ * to charge Link / wallet default PMs off_session. A default-PM gate therefore blocks
+ * auto-reloads for customers who in fact have a chargeable card attached (the bug
+ * this replaces — gate read `default_payment_method`, charge read the card list).
+ *
+ * Fail-loud: a stripe-service error (404 customer-not-in-mirror, timeout, 5xx) is
+ * propagated by `listPaymentMethods`. ONLY an empty card list returns false — an
+ * error is never collapsed into "no payment method".
+ */
+export async function hasAttachedCardPm(
+  identity: IdentityHeaders,
+  customerId: string
+): Promise<boolean> {
+  const methods = await listPaymentMethods(identity, { customer: customerId, type: "card" });
+  return methods.data.length > 0;
 }
