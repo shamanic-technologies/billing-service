@@ -68,11 +68,13 @@ beforeAll(async () => {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promos_org_promo" ON "local_promos" ("org_id", "promo_code_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_local_promos_org" ON "local_promos" ("org_id")`;
 
-  // Seed welcome promo code (matches migration 0016).
+  // Seed welcome promo code (matches migration 0016 + 0018 bump to 2500).
+  // DO UPDATE (not DO NOTHING) so a stale local DB seeded at the old 200 gets
+  // bumped to 2500 on re-run — keeps welcome-amount assertions deterministic.
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
-    VALUES ('welcome', 200, NULL, NULL)
-    ON CONFLICT ("code") DO NOTHING
+    VALUES ('welcome', 2500, NULL, NULL)
+    ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
   // Seed platform-issued grant promo codes (matches migration 0017).

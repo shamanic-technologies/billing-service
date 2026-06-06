@@ -1,0 +1,12 @@
+-- Bump the welcome trial gift from $2 (200¢) to $25 (2500¢).
+--
+-- distribute.you landing pages advertise "$25 welcome credits", but new signups
+-- received only $2. redeemPromoCode('welcome') (lib/account.ts findOrCreateAccount)
+-- reads local_promo_codes.amount_cents at redeem time, so bumping this row makes
+-- all NEW redemptions grant $25.
+--
+-- No backfill: orgs that already redeemed the $2 welcome keep their existing
+-- $2 local_promos row (new signups only).
+--
+-- Idempotent: single-row UPDATE keyed on a unique code, re-running is a no-op.
+UPDATE "local_promo_codes" SET "amount_cents" = 2500 WHERE "code" = 'welcome';

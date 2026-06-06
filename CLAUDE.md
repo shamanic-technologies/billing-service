@@ -1,5 +1,16 @@
 # billing-service — repo conventions
 
+## Migrations are hand-authored AND hand-journaled — the journal is the apply-gate
+
+This repo does NOT use `drizzle-kit generate`. `drizzle/meta/` snapshots stop at `0007`; every migration from `0008` onward is hand-written SQL, and `drizzle/meta/_journal.json` is maintained by hand. The boot migrator (`drizzle-orm/postgres-js/migrator` in `src/index.ts`, run before `app.listen()`) applies **only migrations listed in `_journal.json`** — a `drizzle/NNNN_*.sql` file with **no journal entry is silently skipped at boot and never runs in prod.**
+
+When adding a migration:
+1. Write `drizzle/NNNN_<name>.sql` (idempotent — `IF NOT EXISTS` / `ON CONFLICT` / single-row `UPDATE`).
+2. Add a matching `_journal.json` entry with `when` **strictly greater than the previous entry's `when`** (the migrator gates on `when > last_applied.created_at`; the `idx`/filename number is cosmetic, drizzle reads by `tag`).
+3. Verify on a Neon temp branch off production: run the real `migrate()` and confirm the row count / column change, plus that no unintended rows moved.
+
+**Known live trap:** `0017_invite_promo_codes.sql` is unjournaled → it **never ran in prod**, so `invite_reward`/`invite_welcome` codes are absent and `POST /internal/credits/grant` throws `GrantPromoCodeMissingError` in prod (DIS-64 latent bug). Don't copy the "just drop a .sql file" pattern — always journal. (`0018` bumped the welcome gift to $25 and IS journaled.)
+
 ## Vocabulary (Stripe-aligned)
 
 Naming follows Stripe Topups + Refunds APIs. When in doubt, search Stripe docs for the same term.
@@ -32,7 +43,7 @@ When reconciling or computing real cost: `WHERE rc.status='actual' AND rc.cost_s
 
 ## Local promos (`local_promos` table)
 
-The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($2 grant), seeded by migration 0016. Other codes are admin-managed.
+The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($25 grant; seeded @$2 by migration 0016, bumped to $25 by 0018). Other codes are admin-managed.
 
 `amount_cents` is positive (these are credits). `numeric(16,10)` — Drizzle returns it as a JS string. Use Decimal.js (via `src/lib/cents.ts` helpers) for arithmetic; never cast to Number for math.
 
@@ -135,4 +146,4 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
-| `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$2` welcome row. Used by api-service invite claim handler (DIS-64). |
+| `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$25` welcome row. Used by api-service invite claim handler (DIS-64). |
