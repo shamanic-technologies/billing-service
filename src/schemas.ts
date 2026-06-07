@@ -94,7 +94,17 @@ export const CreateCheckoutRequestSchema = z
   .object({
     success_url: z.string().url(),
     cancel_url: z.string().url(),
-    topup_amount_cents: z.number().int().positive(),
+    /**
+     * Checkout flavor. Absent or "payment" → charge `topup_amount_cents` (unchanged
+     * behavior). "setup" → no-charge Stripe Checkout that saves a reusable off-session
+     * card so the org can enable auto-topup without buying credits.
+     */
+    mode: z.enum(["payment", "setup"]).optional(),
+    /**
+     * Required for payment-mode (validated in the route — fail loud with 400 when
+     * absent). Omitted for setup-mode (no charge).
+     */
+    topup_amount_cents: z.number().int().positive().optional(),
   })
   .openapi("CreateCheckoutRequest");
 
@@ -390,7 +400,10 @@ registry.registerPath({
   method: "post",
   path: "/v1/checkout-sessions",
   summary: "Create Stripe Checkout session via stripe-service",
-  description: "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service.",
+  description:
+    "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. " +
+    "mode='payment' (default) charges topup_amount_cents and persists it as the auto-topup amount. " +
+    "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
   request: {
     headers: protectedHeaders,
     body: {
