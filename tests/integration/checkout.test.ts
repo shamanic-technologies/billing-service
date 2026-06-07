@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
+import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import { db } from "../../src/db/index.js";
+import { billingAccounts } from "../../src/db/schema.js";
 
 describe("POST /v1/checkout-sessions", () => {
   const app = createTestApp();
@@ -131,5 +134,81 @@ describe("POST /v1/checkout-sessions", () => {
       .send({});
 
     expect(res.status).toBe(400);
+  });
+
+  // --- Setup-mode ($0 card capture) ---
+
+  it("setup-mode: creates a no-charge setup session with no amount", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      url: "https://checkout.stripe.com/pay/cs_setup",
+      session_id: "cs_setup",
+    });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        mode: "setup",
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      url: "https://checkout.stripe.com/pay/cs_setup",
+      session_id: "cs_setup",
+    });
+    expect(ssMocks.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ "x-org-id": orgId }),
+      {
+        mode: "setup",
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        customer: "cus_mock_123",
+        metadata: { org_id: orgId },
+      }
+    );
+    // No charge fields on a setup session.
+    const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
+    expect(sentBody).not.toHaveProperty("line_items");
+    expect(sentBody).not.toHaveProperty("payment_intent_data");
+  });
+
+  it("setup-mode: does NOT write a topup amount to the account", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 7777 });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        mode: "setup",
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+      });
+
+    expect(res.status).toBe(200);
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId));
+    expect(account.topupAmountCents).toBe(7777);
+  });
+
+  it("setup-mode: returns 502 when stripe-service fails (no charge fallback)", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.createCheckoutSession.mockRejectedValue(new Error("SS down"));
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        mode: "setup",
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+      });
+
+    expect(res.status).toBe(502);
+    // Never falls back to a charge.
+    expect(ssMocks.createPaymentIntent).not.toHaveBeenCalled();
   });
 });

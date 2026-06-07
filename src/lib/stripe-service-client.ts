@@ -279,12 +279,14 @@ export interface CheckoutLineItem {
 
 export interface CheckoutSessionBody {
   mode: "payment" | "subscription" | "setup";
-  line_items: CheckoutLineItem[];
+  /** Required for payment mode; omitted for setup mode (no charge). */
+  line_items?: CheckoutLineItem[];
   success_url: string;
   cancel_url: string;
   customer: string;
   metadata: Record<string, string>;
-  payment_intent_data: {
+  /** Payment-mode charge config; omitted for setup mode (no PaymentIntent created). */
+  payment_intent_data?: {
     metadata: Record<string, string>;
     setup_future_usage?: "off_session" | "on_session";
   };
