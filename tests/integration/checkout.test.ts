@@ -162,6 +162,7 @@ describe("POST /v1/checkout-sessions", () => {
       expect.objectContaining({ "x-org-id": orgId }),
       {
         mode: "setup",
+        currency: "usd",
         success_url: "https://example.com/success",
         cancel_url: "https://example.com/cancel",
         customer: "cus_mock_123",
