@@ -5,6 +5,13 @@ interface SendEmailParams {
   orgId: string;
   userId: string;
   runId: string;
+  /**
+   * Explicit recipient (overrides email-service's x-user-id → client-service
+   * resolution). Used by the dunning engine to target the org's Stripe billing
+   * email. When absent/null, the email-service resolves the recipient from
+   * x-user-id.
+   */
+  recipientEmail?: string | null;
   metadata?: Record<string, string | null>;
   workflowHeaders?: Record<string, string>;
 }
@@ -32,14 +39,17 @@ export function sendEmail(params: SendEmailParams): void {
     ...params.workflowHeaders,
   };
 
+  const body: Record<string, unknown> = {
+    eventType: params.eventType,
+    metadata: params.metadata,
+  };
+  if (params.recipientEmail) body.recipientEmail = params.recipientEmail;
+
   fetch(`${config.url}/send`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      eventType: params.eventType,
-      metadata: params.metadata,
-    }),
+    body: JSON.stringify(body),
   }).catch((err) => {
-    console.error(`Failed to send ${params.eventType} email:`, err);
+    console.error(`[billing-service] Failed to send ${params.eventType} email:`, err);
   });
 }

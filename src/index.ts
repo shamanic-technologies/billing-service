@@ -15,6 +15,7 @@ import promotionCodesRoutes from "./routes/promotion_codes.js";
 import internalRoutes from "./routes/internal.js";
 import creditsRoutes from "./routes/credits.js";
 import { requireApiKey } from "./middleware/auth.js";
+import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +60,8 @@ if (process.env.NODE_ENV !== "test") {
   migrate(db, { migrationsFolder: "./drizzle" })
     .then(() => {
       console.log("Migrations complete");
+      // Self-rescheduling, non-blocking — first tick deferred past boot.
+      startDunningScheduler();
       app.listen(Number(PORT), "::", () => {
         console.log(`Billing service running on port ${PORT}`);
       });

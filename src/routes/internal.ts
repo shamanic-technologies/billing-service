@@ -7,6 +7,7 @@ import {
   updateCustomer,
   type StripeCustomer,
 } from "../lib/stripe-service-client.js";
+import { runDunningTick } from "../lib/dunning.js";
 
 const router = Router();
 
@@ -151,6 +152,21 @@ router.post("/internal/transfer-brand", async (req, res) => {
       { tableName: "stripe_service_customers", count: ssCount },
     ],
   });
+});
+
+// POST /internal/dunning/tick — manually run one dunning scheduler pass.
+//
+// The same pass runs automatically on the in-process hourly scheduler; this
+// route is for ops ("re-run dunning now") and integration testing. Fail-loud:
+// a tick-level error (not a per-episode skip) surfaces as 502.
+router.post("/internal/dunning/tick", async (_req, res) => {
+  try {
+    const result = await runDunningTick();
+    res.json(result);
+  } catch (err) {
+    console.error("[billing-service] dunning tick (manual) failed:", err);
+    res.status(502).json({ error: "Dunning tick failed" });
+  }
 });
 
 export default router;
