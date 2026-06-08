@@ -397,6 +397,29 @@
           "reason"
         ]
       },
+      "DunningTickResponse": {
+        "type": "object",
+        "properties": {
+          "processed": {
+            "type": "integer"
+          },
+          "recovered": {
+            "type": "integer"
+          },
+          "followup3dSent": {
+            "type": "integer"
+          },
+          "followup10dSent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "recovered",
+          "followup3dSent",
+          "followup10dSent"
+        ]
+      },
       "TransferBrandTableResult": {
         "type": "object",
         "properties": {
@@ -1564,6 +1587,44 @@
           },
           "502": {
             "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/dunning/tick": {
+      "post": {
+        "summary": "Run one out-of-credit dunning scheduler pass (ops / manual trigger)",
+        "description": "Processes every open depletion episode: closes those whose balance was restored (stop-on-recharge, no email) and sends due +3d / +10d follow-ups. The same pass runs automatically on the in-process hourly scheduler; this route is for ops and testing. Idempotent — re-running never double-sends a stage.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tick summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DunningTickResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Tick failed",
             "content": {
               "application/json": {
                 "schema": {

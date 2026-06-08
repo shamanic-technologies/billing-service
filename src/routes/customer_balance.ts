@@ -7,15 +7,15 @@ import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
-import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
   hasAttachedCardPm,
-  type StripeCustomer,
 } from "../lib/stripe-service-client.js";
+import { computeBalance } from "../lib/balance.js";
+import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import { coalesceReload } from "../lib/reload-coalescer.js";
 
@@ -60,36 +60,13 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
   });
 }
 
-interface BalanceSnapshot {
-  customer: StripeCustomer;
-  hasCardPm: boolean;
-  creditedCents: string;
-  usageCents: string;
-  balanceCents: string;
-}
-
-async function computeBalance(
-  orgId: string,
-  identity: Record<string, string>
-): Promise<BalanceSnapshot> {
-  const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, hasCardPm] = await Promise.all([
-    sumSucceededTopupsForCustomer(identity, customer.id),
-    sumLocalPromoCreditsForOrg(orgId),
-    fetchRunsOrgUsageTotal(orgId, identity),
-    hasAttachedCardPm(identity, customer.id),
-  ]);
-  const creditedCents = addCents(paidTopups, localCredits);
-  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
-  return { customer, hasCardPm, creditedCents, usageCents: runsUsage.spent_cents, balanceCents };
-}
-
 router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
     const runId = req.headers["x-run-id"] as string;
-    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const wf = getWorkflowHeaders(req);
+    const wfHeaders = forwardWorkflowHeaders(wf);
     const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
     const parsed = AuthorizeRequestSchema.safeParse(req.body);
@@ -136,7 +113,13 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     }
 
     if (!account.topupAmountCents) {
-      sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: snapshot.balanceCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: snapshot.customer.email,
+      });
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "no_topup_config" } }, req.headers);
       res.json({
         sufficient: false,
@@ -147,7 +130,13 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     }
 
     if (!snapshot.hasCardPm) {
-      sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: snapshot.balanceCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: snapshot.customer.email,
+      });
       res.json({
         sufficient: false,
         balance_cents: snapshot.balanceCents,
@@ -158,6 +147,13 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     const chargeAmount = computeTopupCharge(snapshot.balanceCents, requiredCents, account.topupAmountCents);
     if (chargeAmount <= 0) {
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: snapshot.balanceCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: snapshot.customer.email,
+      });
       res.json({
         sufficient: false,
         balance_cents: snapshot.balanceCents,
@@ -185,6 +181,13 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     if (reloadResult.status !== "succeeded") {
       console.warn(`[billing-service] reload status=${reloadResult.status} for org ${orgId}: ${reloadResult.failure_reason ?? ""}`);
       sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: snapshot.balanceCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: snapshot.customer.email,
+      });
       res.json({
         sufficient: false,
         balance_cents: snapshot.balanceCents,
@@ -204,7 +207,13 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     const sufficient = gteCents(after.balanceCents, requiredCents);
     if (!sufficient) {
-      sendEmail({ eventType: "credits-depleted", orgId, userId, runId, workflowHeaders: wfHeaders });
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: after.balanceCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: after.customer.email,
+      });
     }
 
     traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient, balance_cents: after.balanceCents, required_cents: requiredCents, reloaded_cents: chargeAmount } }, req.headers);

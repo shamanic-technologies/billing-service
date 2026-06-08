@@ -18,6 +18,9 @@ export type IdentityHeaders = Record<string, string>;
 export interface StripeCustomer {
   id: string;
   object: "customer";
+  /** Stripe customer billing email. Present in the raw customer object
+   * stripe-service returns; used as the dunning recipient (issue #147). */
+  email: string | null;
   metadata: Record<string, string>;
   invoice_settings: {
     default_payment_method: string | null;

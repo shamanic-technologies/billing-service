@@ -198,6 +198,17 @@ export const TransferBrandResponseSchema = z
   })
   .openapi("TransferBrandResponse");
 
+// --- Dunning tick (out-of-credit engine, issue #147) ---
+
+export const DunningTickResponseSchema = z
+  .object({
+    processed: z.number().int(),
+    recovered: z.number().int(),
+    followup3dSent: z.number().int(),
+    followup10dSent: z.number().int(),
+  })
+  .openapi("DunningTickResponse");
+
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -535,6 +546,30 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/dunning/tick",
+  summary: "Run one out-of-credit dunning scheduler pass (ops / manual trigger)",
+  description:
+    "Processes every open depletion episode: closes those whose balance was restored " +
+    "(stop-on-recharge, no email) and sends due +3d / +10d follow-ups. The same pass runs " +
+    "automatically on the in-process hourly scheduler; this route is for ops and testing. " +
+    "Idempotent — re-running never double-sends a stage.",
+  request: {
+    headers: internalHeaders,
+  },
+  responses: {
+    200: {
+      description: "Tick summary",
+      content: { "application/json": { schema: DunningTickResponseSchema } },
+    },
+    502: {
+      description: "Tick failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

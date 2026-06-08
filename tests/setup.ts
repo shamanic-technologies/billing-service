@@ -68,6 +68,26 @@ beforeAll(async () => {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promos_org_promo" ON "local_promos" ("org_id", "promo_code_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_local_promos_org" ON "local_promos" ("org_id")`;
 
+  // credit_depletion_episodes (out-of-credit dunning engine, migration 0019).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "credit_depletion_episodes" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "org_id" uuid NOT NULL,
+      "user_id" uuid NOT NULL,
+      "run_id" uuid,
+      "campaign_id" uuid,
+      "started_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "t0_sent_at" timestamp with time zone,
+      "followup_3d_sent_at" timestamp with time zone,
+      "followup_10d_sent_at" timestamp with time zone,
+      "recovered_at" timestamp with time zone,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_one_open_episode_per_org" ON "credit_depletion_episodes" ("org_id") WHERE "recovered_at" IS NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_credit_depletion_open" ON "credit_depletion_episodes" ("recovered_at")`;
+
   // Seed welcome promo code (matches migration 0016 + 0018 bump to 2500).
   // DO UPDATE (not DO NOTHING) so a stale local DB seeded at the old 200 gets
   // bumped to 2500 on re-run — keeps welcome-amount assertions deterministic.
