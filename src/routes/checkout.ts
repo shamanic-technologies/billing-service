@@ -58,6 +58,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // enable auto-topup later. No line_items, no payment_intent_data.
         body = {
           mode: "setup",
+          currency: CHECKOUT_CURRENCY,
           success_url,
           cancel_url,
           customer: customer.id,
