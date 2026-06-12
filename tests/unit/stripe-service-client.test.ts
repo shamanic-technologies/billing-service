@@ -176,21 +176,40 @@ describe("hasAttachedCardPm", () => {
     expect(await hasAttachedCardPm({}, "cus_test")).toBe(true);
   });
 
-  it("returns false when no payment methods are attached", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+  it("returns true when only a link PM is attached (no card) — Link is chargeable off_session", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        jsonResponse(
+          url.includes("type=card")
+            ? pmListBody([])
+            : pmListBody([{ id: "pm_link", object: "payment_method", type: "link" }])
+        )
+      )
+    );
+
+    expect(await hasAttachedCardPm({}, "cus_test")).toBe(true);
+  });
+
+  it("returns false when neither a card nor a link PM is attached", async () => {
+    // Fresh Response per call — both card and link queries read a body.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pmListBody([]))));
 
     expect(await hasAttachedCardPm({}, "cus_test")).toBe(false);
   });
 
-  it("requests only card-type payment methods for the customer", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+  it("queries card first, then link as fallback, scoped to the customer", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pmListBody([]))));
 
     await hasAttachedCardPm({}, "cus_test");
 
-    const url = fetchMock.mock.calls[0]?.[0] as string;
-    expect(url).toContain("/v1/payment_methods");
-    expect(url).toContain("customer=cus_test");
-    expect(url).toContain("type=card");
+    const cardUrl = fetchMock.mock.calls[0]?.[0] as string;
+    expect(cardUrl).toContain("/v1/payment_methods");
+    expect(cardUrl).toContain("customer=cus_test");
+    expect(cardUrl).toContain("type=card");
+
+    const linkUrl = fetchMock.mock.calls[1]?.[0] as string;
+    expect(linkUrl).toContain("customer=cus_test");
+    expect(linkUrl).toContain("type=link");
   });
 
   it("propagates stripe-service errors — never collapses to false (fail-loud)", async () => {

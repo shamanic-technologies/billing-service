@@ -88,13 +88,34 @@ describe("reloadViaPaymentIntent", () => {
     expect(body.payment_method).toBe("pm_card_only");
   });
 
-  it("throws when the PM list is empty (no silent default-PM fallback)", async () => {
+  it("throws when no card AND no link PM is attached (no silent default-PM fallback)", async () => {
     listPaymentMethods.mockResolvedValue(buildPMList([]));
 
     await expect(
       reloadViaPaymentIntent({ "x-org-id": "org_test" }, 2500, IDEMPOTENCY_KEY)
-    ).rejects.toThrow(/no card payment_method attached/);
+    ).rejects.toThrow(/no chargeable payment_method \(card or link\)/);
     expect(createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a link PM when the customer has no card (Link-only org)", async () => {
+    // Card query → empty; link query → one link PM. Stripe charges link off_session.
+    listPaymentMethods.mockImplementation((_identity: unknown, query: { type?: string }) =>
+      Promise.resolve(
+        query.type === "card"
+          ? buildPMList([])
+          : buildPMList([buildPM("pm_link_only", "link")])
+      )
+    );
+
+    await reloadViaPaymentIntent({ "x-org-id": "org_test" }, 2500, IDEMPOTENCY_KEY);
+
+    expect(listPaymentMethods).toHaveBeenCalledTimes(2);
+    const [, body] = createPaymentIntent.mock.calls[0]!;
+    expect(body).toMatchObject({
+      payment_method: "pm_link_only",
+      confirm: true,
+      off_session: true,
+    });
   });
 
   it("flattens a succeeded PI to {status:succeeded, payment_intent_id}", async () => {
