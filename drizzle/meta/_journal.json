@@ -131,7 +131,14 @@
     {
       "idx": 18,
       "version": "7",
-      "when": 1789725600000,
+      "when": 1789812000000,
+      "tag": "0019_welcome_amount_200",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789898400000,
       "tag": "0019_credit_depletion_episodes",
       "breakpoints": true
     }
