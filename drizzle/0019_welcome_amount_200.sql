@@ -1,0 +1,14 @@
+-- Revert the welcome trial gift from $25 (2500¢) back to $2 (200¢).
+--
+-- distribute.you landing + dashboard messaging is reframed (separate PR) to
+-- "50 free emails" with no dollar figure shown, so the welcome credit drops
+-- back to $2. redeemPromoCode('welcome') (lib/account.ts findOrCreateAccount)
+-- reads local_promo_codes.amount_cents at redeem time, so updating this row
+-- makes all NEW redemptions grant $2. Exact reverse of migration 0018.
+--
+-- No backfill: orgs that already redeemed the $25 welcome keep their existing
+-- local_promos row (new signups only). Does NOT touch the referral/invite
+-- grant path (INVITE_GRANT_AMOUNT_CENTS stays 2500).
+--
+-- Idempotent: single-row UPDATE keyed on a unique code, re-running is a no-op.
+UPDATE "local_promo_codes" SET "amount_cents" = 200 WHERE "code" = 'welcome';

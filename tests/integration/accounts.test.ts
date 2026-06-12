@@ -46,10 +46,10 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.org_id).toBe(orgId);
-      // SS paid = 0, local welcome = 2500, usage = 0 → credited 2500, balance 2500.
-      expect(res.body.credited_cents).toBe("2500.0000000000");
+      // SS paid = 0, local welcome = 200, usage = 0 → credited 200, balance 200.
+      expect(res.body.credited_cents).toBe("200.0000000000");
       expect(res.body.usage_cents).toBe("0.0000000000");
-      expect(res.body.balance_cents).toBe("2500.0000000000");
+      expect(res.body.balance_cents).toBe("200.0000000000");
       expect(res.body.has_payment_method).toBe(false);
       expect(res.body.has_auto_topup).toBe(false);
       expect(ssMocks.ensureCustomer).toHaveBeenCalled();
