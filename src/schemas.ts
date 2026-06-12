@@ -174,6 +174,22 @@ export const CreditGrantResponseSchema = z
   })
   .openapi("CreditGrantResponse");
 
+// --- Internal Promo-code config (re-price welcome / admin codes, no migration) ---
+
+export const PromoCodeSchema = z
+  .object({
+    code: z.string(),
+    /** Current grant amount (integer cents) read at redeem time. */
+    amount_cents: z.number().int(),
+  })
+  .openapi("PromoCode");
+
+export const UpdatePromoCodeRequestSchema = z
+  .object({
+    amountCents: z.number().int().nonnegative(),
+  })
+  .openapi("UpdatePromoCodeRequest");
+
 // --- Transfer Brand ---
 
 export const TransferBrandRequestSchema = z
@@ -546,6 +562,61 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/promo-codes/{code}",
+  summary: "Read a promo code's current grant amount",
+  description:
+    "Returns the live grant amount for a promo code (e.g. 'welcome'). This is the " +
+    "value read at redeem time, so it reflects exactly what a new redemption grants.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ code: z.string() }),
+  },
+  responses: {
+    200: {
+      description: "Promo code amount",
+      content: { "application/json": { schema: PromoCodeSchema } },
+    },
+    404: {
+      description: "Promo code not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/internal/promo-codes/{code}",
+  summary: "Set a promo code's grant amount (re-price without a migration)",
+  description:
+    "Updates the grant amount for an admin-managed promo code (e.g. re-price the " +
+    "'welcome' gift). Applies to NEW redemptions only — orgs that already redeemed " +
+    "keep their existing grant. Lets the dashboard change the welcome amount with no " +
+    "migration or deploy. Should be gated to staff on the gateway side.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ code: z.string() }),
+    body: {
+      content: { "application/json": { schema: UpdatePromoCodeRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Updated promo code amount",
+      content: { "application/json": { schema: PromoCodeSchema } },
+    },
+    400: {
+      description: "Invalid body (amountCents must be a non-negative integer)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Promo code not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
