@@ -1,5 +1,7 @@
 /** Client for fetching canonical usage totals from runs-service. */
 
+import { fetchWithRetry } from "./fetch-retry.js";
+
 export interface RunsOrgUsageTotalResult {
   org_id: string;
   spent_cents: string;
@@ -29,7 +31,7 @@ export async function fetchRunsOrgUsageTotal(
     throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
   }
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${config.url}/internal/org-usage-total?org_id=${encodeURIComponent(orgId)}`,
     {
       headers: {

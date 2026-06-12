@@ -10,6 +10,7 @@
  */
 
 import { Decimal } from "decimal.js";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 export type IdentityHeaders = Record<string, string>;
 
@@ -133,7 +134,7 @@ async function call<T>(
   extraHeaders?: Record<string, string>
 ): Promise<T> {
   const { url, apiKey } = getConfig();
-  const res = await fetch(`${url}${path}`, {
+  const res = await fetchWithRetry(`${url}${path}`, {
     method,
     headers: buildHeaders(identity, apiKey, extraHeaders),
     body: body !== undefined ? JSON.stringify(body) : undefined,
