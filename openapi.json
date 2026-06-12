@@ -397,6 +397,33 @@
           "reason"
         ]
       },
+      "PromoCode": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "amount_cents"
+        ]
+      },
+      "UpdatePromoCodeRequest": {
+        "type": "object",
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "amountCents"
+        ]
+      },
       "DunningTickResponse": {
         "type": "object",
         "properties": {
@@ -1587,6 +1614,115 @@
           },
           "502": {
             "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/promo-codes/{code}": {
+      "get": {
+        "summary": "Read a promo code's current grant amount",
+        "description": "Returns the live grant amount for a promo code (e.g. 'welcome'). This is the value read at redeem time, so it reflects exactly what a new redemption grants.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Promo code amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoCode"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Promo code not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Set a promo code's grant amount (re-price without a migration)",
+        "description": "Updates the grant amount for an admin-managed promo code (e.g. re-price the 'welcome' gift). Applies to NEW redemptions only — orgs that already redeemed keep their existing grant. Lets the dashboard change the welcome amount with no migration or deploy. Should be gated to staff on the gateway side.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePromoCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated promo code amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoCode"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body (amountCents must be a non-negative integer)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Promo code not found",
             "content": {
               "application/json": {
                 "schema": {

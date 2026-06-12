@@ -119,6 +119,47 @@ export async function getWelcomePromoCode() {
   return row;
 }
 
+export interface PromoCodeView {
+  code: string;
+  amountCents: number;
+}
+
+/**
+ * Read a promo code's current grant amount (admin/config surface).
+ * The `local_promo_codes` row is the live source of truth read at redeem time,
+ * so this reflects exactly what a new redemption would grant. Throws
+ * PromoNotFoundError if the code does not exist.
+ */
+export async function getPromoCode(code: string): Promise<PromoCodeView> {
+  const [row] = await db
+    .select()
+    .from(localPromoCodes)
+    .where(eq(localPromoCodes.code, code))
+    .limit(1);
+  if (!row) throw new PromoNotFoundError(code);
+  return { code: row.code, amountCents: row.amountCents };
+}
+
+/**
+ * Set a promo code's grant amount (admin/config surface) — lets the welcome
+ * gift (or any admin-managed code) be re-priced WITHOUT a migration or deploy.
+ * Single-row UPDATE keyed on the unique code. Throws PromoNotFoundError if the
+ * code does not exist (never creates a row). Applies to NEW redemptions only;
+ * orgs that already redeemed keep their existing local_promos grant.
+ */
+export async function setPromoCodeAmount(
+  code: string,
+  amountCents: number
+): Promise<PromoCodeView> {
+  const [row] = await db
+    .update(localPromoCodes)
+    .set({ amountCents })
+    .where(eq(localPromoCodes.code, code))
+    .returning();
+  if (!row) throw new PromoNotFoundError(code);
+  return { code: row.code, amountCents: row.amountCents };
+}
+
 /** True if this org has already redeemed the given promo code. */
 export async function hasRedeemed(orgId: string, promoCodeId: string): Promise<boolean> {
   const [row] = await db
