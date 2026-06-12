@@ -11,6 +11,8 @@ When adding a migration:
 
 **Known live trap:** `0017_invite_promo_codes.sql` is unjournaled → it **never ran in prod**, so `invite_reward`/`invite_welcome` codes are absent and `POST /internal/credits/grant` throws `GrantPromoCodeMissingError` in prod (DIS-64 latent bug). Don't copy the "just drop a .sql file" pattern — always journal. (`0018` bumped the welcome gift to $25 and IS journaled.)
 
+**Parallel-branch collision (Conductor):** because both the filename number AND `when` are hand-picked, two branches developed in parallel routinely both claim the same next number (`0019`) with the **same `when`**. They merge cleanly as files (different tag = different filename) but the journal entries collide: each branch's boot already recorded its own migration at that `when`, so the OTHER migration fails the `when > max` gate and is **silently skipped forever** on that branch. Resolution at sync time: keep BOTH journal entries and give each a `when` **strictly greater than the highest already-applied** (e.g. `+86400000` apart). This forces a one-time **idempotent re-apply** of the already-applied one on its own branch — which is why migrations MUST be idempotent (step 1). Verify both tags appear in `_journal.json` with strictly increasing `when` before merging the sync PR. (Incident 2026-06-12: `0019_welcome_amount_200` (main, v0.28.3) vs `0019_credit_depletion_episodes` (staging, dunning) both at `when:1789725600000` → main→staging auto-sync PR #153 conflicted; resolved in #154.)
+
 ## Vocabulary (Stripe-aligned)
 
 Naming follows Stripe Topups + Refunds APIs. When in doubt, search Stripe docs for the same term.
