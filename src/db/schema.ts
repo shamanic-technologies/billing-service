@@ -89,10 +89,11 @@ export type LocalPromo = typeof localPromos.$inferSelect;
 export type NewLocalPromo = typeof localPromos.$inferInsert;
 
 export const WELCOME_PROMO_CODE = "welcome";
-// $25 welcome trial gift. Source of truth for live redemptions is the
+// $2 welcome trial gift. Source of truth for live redemptions is the
 // local_promo_codes row (seeded by migration 0016 @200, bumped to 2500 by
-// migration 0018); this constant documents the canonical amount.
-export const WELCOME_PROMO_AMOUNT_CENTS = 2500;
+// migration 0018, reverted to 200 by migration 0019); this constant documents
+// the canonical amount.
+export const WELCOME_PROMO_AMOUNT_CENTS = 200;
 
 // Platform-issued grant codes (DIS-64 Wave 0.5 invite-only gate).
 // Backed by migration 0017. The invite_welcome grant replaces (not stacks)

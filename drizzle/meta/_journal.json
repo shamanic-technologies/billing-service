@@ -127,6 +127,13 @@
       "when": 1789639200000,
       "tag": "0018_welcome_amount_2500",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789725600000,
+      "tag": "0019_welcome_amount_200",
+      "breakpoints": true
     }
   ]
 }

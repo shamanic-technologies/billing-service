@@ -43,7 +43,9 @@ When reconciling or computing real cost: `WHERE rc.status='actual' AND rc.cost_s
 
 ## Local promos (`local_promos` table)
 
-The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($25 grant; seeded @$2 by migration 0016, bumped to $25 by 0018). Other codes are admin-managed.
+The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($2 grant; seeded @$2 by migration 0016, bumped to $25 by 0018, reverted to $2 by 0019). Other codes are admin-managed.
+
+**Changing the welcome amount = 4 sites in lockstep (tests do NOT run drizzle migrations — they hand-build schema + seed in `tests/setup.ts`):** (1) `drizzle/NNNN_*.sql` migration row + journal entry, (2) `WELCOME_PROMO_AMOUNT_CENTS` in `src/db/schema.ts` + its comment, (3) the `local_promo_codes` welcome seed in `tests/setup.ts`, (4) the welcome-amount assertions in `tests/integration/{promo,accounts}.test.ts`. Miss (3)/(4) and the suite goes red (or worse, silently asserts the old amount). The `INVITE_GRANT_AMOUNT_CENTS` / `invite_welcome` / `invite_reward` path is independent — leave it at 2500.
 
 `amount_cents` is positive (these are credits). `numeric(16,10)` — Drizzle returns it as a JS string. Use Decimal.js (via `src/lib/cents.ts` helpers) for arithmetic; never cast to Number for math.
 
