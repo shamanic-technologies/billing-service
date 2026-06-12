@@ -4,9 +4,11 @@ import {
   billingAccounts,
   localPromoCodes,
   localPromos,
+  creditDepletionEpisodes,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
+  type CreditDepletionEpisode,
 } from "../../src/db/schema.js";
 
 const SEEDED_PROMO_CODES = [
@@ -16,6 +18,7 @@ const SEEDED_PROMO_CODES = [
 ];
 
 export async function cleanTestData() {
+  await db.delete(creditDepletionEpisodes);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep seeded codes (welcome + invite_reward + invite_welcome); remove any
@@ -23,6 +26,42 @@ export async function cleanTestData() {
   await db
     .delete(localPromoCodes)
     .where(notInArray(localPromoCodes.code, SEEDED_PROMO_CODES));
+}
+
+/** Insert a depletion episode directly (lets tests back-date started_at). */
+export async function insertTestEpisode(data: {
+  orgId: string;
+  userId: string;
+  runId?: string | null;
+  campaignId?: string | null;
+  startedAt?: Date;
+  t0SentAt?: Date | null;
+  followup3dSentAt?: Date | null;
+  followup10dSentAt?: Date | null;
+  recoveredAt?: Date | null;
+}): Promise<CreditDepletionEpisode> {
+  const [row] = await db
+    .insert(creditDepletionEpisodes)
+    .values({
+      orgId: data.orgId,
+      userId: data.userId,
+      runId: data.runId ?? null,
+      campaignId: data.campaignId ?? null,
+      startedAt: data.startedAt ?? new Date(),
+      t0SentAt: data.t0SentAt ?? new Date(),
+      followup3dSentAt: data.followup3dSentAt ?? null,
+      followup10dSentAt: data.followup10dSentAt ?? null,
+      recoveredAt: data.recoveredAt ?? null,
+    })
+    .returning();
+  return row;
+}
+
+export async function listEpisodes(orgId: string): Promise<CreditDepletionEpisode[]> {
+  return db
+    .select()
+    .from(creditDepletionEpisodes)
+    .where(eq(creditDepletionEpisodes.orgId, orgId));
 }
 
 export async function insertTestAccount(data: {

@@ -397,6 +397,56 @@
           "reason"
         ]
       },
+      "PromoCode": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "amount_cents"
+        ]
+      },
+      "UpdatePromoCodeRequest": {
+        "type": "object",
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "amountCents"
+        ]
+      },
+      "DunningTickResponse": {
+        "type": "object",
+        "properties": {
+          "processed": {
+            "type": "integer"
+          },
+          "recovered": {
+            "type": "integer"
+          },
+          "followup3dSent": {
+            "type": "integer"
+          },
+          "followup10dSent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "processed",
+          "recovered",
+          "followup3dSent",
+          "followup10dSent"
+        ]
+      },
       "TransferBrandTableResult": {
         "type": "object",
         "properties": {
@@ -1564,6 +1614,153 @@
           },
           "502": {
             "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/promo-codes/{code}": {
+      "get": {
+        "summary": "Read a promo code's current grant amount",
+        "description": "Returns the live grant amount for a promo code (e.g. 'welcome'). This is the value read at redeem time, so it reflects exactly what a new redemption grants.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Promo code amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoCode"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Promo code not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Set a promo code's grant amount (re-price without a migration)",
+        "description": "Updates the grant amount for an admin-managed promo code (e.g. re-price the 'welcome' gift). Applies to NEW redemptions only — orgs that already redeemed keep their existing grant. Lets the dashboard change the welcome amount with no migration or deploy. Should be gated to staff on the gateway side.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "code",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePromoCodeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated promo code amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoCode"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body (amountCents must be a non-negative integer)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Promo code not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/dunning/tick": {
+      "post": {
+        "summary": "Run one out-of-credit dunning scheduler pass (ops / manual trigger)",
+        "description": "Processes every open depletion episode: closes those whose balance was restored (stop-on-recharge, no email) and sends due +3d / +10d follow-ups. The same pass runs automatically on the in-process hourly scheduler; this route is for ops and testing. Idempotent — re-running never double-sends a stage.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tick summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DunningTickResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Tick failed",
             "content": {
               "application/json": {
                 "schema": {

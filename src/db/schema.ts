@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // Sub-cent fractional cents — see migration 0013.
 // Drizzle returns numeric columns as JS strings to preserve precision.
@@ -107,3 +108,56 @@ export const PLATFORM_GRANT_REASONS = [
   INVITE_WELCOME_CODE,
 ] as const;
 export type PlatformGrantReason = (typeof PLATFORM_GRANT_REASONS)[number];
+
+// credit_depletion_episodes: out-of-credit dunning state machine (issue #147).
+// One OPEN episode per org at a time — enforced by the partial unique index
+// `(org_id) WHERE recovered_at IS NULL`. An episode opens when an authorize
+// call concludes depleted (balance <= 0) AND the request carries campaign /
+// workflow activity. It closes (recovered_at set) when the scheduler observes
+// the balance restored. A new depletion after a recovery opens a fresh episode
+// → the whole sequence re-arms.
+//
+// Per-stage `*_sent_at` stamps give at-most-once-per-stage idempotency; the
+// scheduler atomic-claims each stage via `UPDATE ... WHERE <stage> IS NULL
+// RETURNING` so overlapping ticks / multiple replicas never double-send.
+export const creditDepletionEpisodes = pgTable(
+  "credit_depletion_episodes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    // Captured at depletion — used for recipient resolution (x-user-id fallback)
+    // and to rebuild the identity for the scheduler's balance recompute.
+    userId: uuid("user_id").notNull(),
+    // The run + campaign that detected depletion (tracking / x-run-id reuse).
+    runId: uuid("run_id"),
+    campaignId: uuid("campaign_id"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    t0SentAt: timestamp("t0_sent_at", { withTimezone: true }),
+    followup3dSentAt: timestamp("followup_3d_sent_at", { withTimezone: true }),
+    followup10dSentAt: timestamp("followup_10d_sent_at", { withTimezone: true }),
+    recoveredAt: timestamp("recovered_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_one_open_episode_per_org")
+      .on(table.orgId)
+      .where(sql`recovered_at IS NULL`),
+    index("idx_credit_depletion_open").on(table.recoveredAt),
+  ]
+);
+
+export type CreditDepletionEpisode = typeof creditDepletionEpisodes.$inferSelect;
+export type NewCreditDepletionEpisode = typeof creditDepletionEpisodes.$inferInsert;
+
+// Dunning eventTypes — byte-equal to the templates registered by the dashboard
+// app (distribute.you#1420). LOCKED contract; do not rename.
+export const DUNNING_EVENT_T0 = "credit-depleted";
+export const DUNNING_EVENT_3D = "credit-depleted-followup-3d";
+export const DUNNING_EVENT_10D = "credit-depleted-followup-10d";

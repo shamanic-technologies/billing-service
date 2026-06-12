@@ -26,10 +26,19 @@ function buildMockCustomer(overrides: Partial<ssClient.StripeCustomer> = {}): ss
   return {
     id: MOCK_CUSTOMER_ID,
     object: "customer",
+    email: null,
     metadata: {},
     invoice_settings: { default_payment_method: null },
     ...overrides,
   };
+}
+
+/** Build a customer carrying a billing email (dunning recipient). */
+export function customerWithEmail(
+  email: string,
+  overrides: Partial<ssClient.StripeCustomer> = {}
+): ssClient.StripeCustomer {
+  return buildMockCustomer({ email, ...overrides });
 }
 
 /**
