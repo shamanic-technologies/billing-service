@@ -56,14 +56,14 @@ describe("Promotion code endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.redeemed).toBe(true);
-      // welcome 2500 + promo 1000 = 3500.
-      expect(res.body.local_credits_total_cents).toBe("3500.0000000000");
+      // welcome 200 + promo 1000 = 1200.
+      expect(res.body.local_credits_total_cents).toBe("1200.0000000000");
     });
 
-    it("auto-created welcome trial gift is $25 (2500)", async () => {
+    it("auto-created welcome trial gift is $2 (200)", async () => {
       // Redeem a tiny promo on a virgin org → findOrCreateAccount auto-redeems
-      // welcome first, then the requested promo. welcome 2500 + tiny 1 = 2501,
-      // pinning the welcome grant at exactly 2500.
+      // welcome first, then the requested promo. welcome 200 + tiny 1 = 201,
+      // pinning the welcome grant at exactly 200.
       await insertTestPromoCode({ code: "tiny", amountCents: 1 });
 
       const res = await request(app)
@@ -72,7 +72,7 @@ describe("Promotion code endpoints", () => {
         .send({ code: "tiny" });
 
       expect(res.status).toBe(200);
-      expect(res.body.local_credits_total_cents).toBe("2501.0000000000");
+      expect(res.body.local_credits_total_cents).toBe("201.0000000000");
     });
 
     it("returns 400 for invalid promo code", async () => {
