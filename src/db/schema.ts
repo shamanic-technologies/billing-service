@@ -113,9 +113,14 @@ export type PlatformGrantReason = (typeof PLATFORM_GRANT_REASONS)[number];
 // One OPEN episode per org at a time — enforced by the partial unique index
 // `(org_id) WHERE recovered_at IS NULL`. An episode opens when an authorize
 // call concludes depleted (balance <= 0) AND the request carries campaign /
-// workflow activity. It closes (recovered_at set) when the scheduler observes
-// the balance restored. A new depletion after a recovery opens a fresh episode
-// → the whole sequence re-arms.
+// workflow activity. It closes (recovered_at set) when the scheduler observes a
+// REAL recharge — `credited` increased above `credited_cents_at_open` (migration
+// 0020). It deliberately does NOT close on balance > 0: balance flutters around
+// zero from provisioned-cost churn (usage includes provisioned holds), and a
+// balance-based recovery false-closed episodes and re-armed a fresh T0 email on
+// every oscillation → customers got duplicate "out of credit" emails. `credited`
+// only ever rises on a paid topup / promo, so it never flutters. A new depletion
+// after a real recovery opens a fresh episode → the whole sequence re-arms.
 //
 // Per-stage `*_sent_at` stamps give at-most-once-per-stage idempotency; the
 // scheduler atomic-claims each stage via `UPDATE ... WHERE <stage> IS NULL
@@ -134,6 +139,13 @@ export const creditDepletionEpisodes = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // `credited` snapshot at depletion. Recovery = current credited > this value
+    // (a real recharge). Nullable for rows opened before migration 0020 — the
+    // scheduler lazily backfills the baseline on its next tick.
+    creditedCentsAtOpen: numeric("credited_cents_at_open", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
     t0SentAt: timestamp("t0_sent_at", { withTimezone: true }),
     followup3dSentAt: timestamp("followup_3d_sent_at", { withTimezone: true }),
     followup10dSentAt: timestamp("followup_10d_sent_at", { withTimezone: true }),

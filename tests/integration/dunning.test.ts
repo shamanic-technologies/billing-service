@@ -63,8 +63,9 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     await closeDb();
   });
 
-  // depleted = balance <= 0. paidTopups − usage; default usage 0, so paidTopups
-  // controls the balance. 0 → depleted, positive → restored.
+  // balance = credited − usage. credited = paidTopups (no promos in these tests).
+  // setBalance controls credited (the recovery baseline); setUsage controls usage
+  // (the provisioned-churn axis that flutters balance WITHOUT changing credited).
   function setBalance(paidTopupsCents: string) {
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
   }
@@ -245,6 +246,77 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     // T0 fired for both episodes
     const t0Count = sendEmailSpy.mock.calls.filter((c) => c[0].eventType === "credit-depleted").length;
     expect(t0Count).toBe(2);
+  });
+
+  it("11: balance flutters positive via usage drop (no recharge) → NOT recovered, no 2nd T0", async () => {
+    await insertTestAccount({ orgId }); // no topup config
+    // credited 50, usage 60 → balance -10 depleted. Opens episode, baseline credited 50.
+    setBalance("50.0000000000");
+    setUsage("60.0000000000");
+    await request(app).post("/v1/customer_balance/authorize").set(campaignHeaders()).send(authorizeBody);
+    expect(await listEpisodes(orgId)).toHaveLength(1);
+    expect(sendEmailSpy).toHaveBeenCalledTimes(1);
+
+    // Provisioned hold released: usage drops to 40 → balance +10, but credited
+    // unchanged (still 50). Tick must NOT recover (this was the duplicate-email bug).
+    setUsage("40.0000000000");
+    const res = await tick();
+    expect(res.body).toMatchObject({ processed: 1, recovered: 0 });
+    const [stillOpen] = await listEpisodes(orgId);
+    expect(stillOpen.recoveredAt).toBeNull();
+
+    // New provision: usage back to 60 → depleted again. The open episode blocks a
+    // re-arm (partial-unique) → still one episode, still one T0.
+    setUsage("60.0000000000");
+    await request(app).post("/v1/customer_balance/authorize").set(campaignHeaders()).send(authorizeBody);
+    expect(await listEpisodes(orgId)).toHaveLength(1);
+    const t0Count = sendEmailSpy.mock.calls.filter((c) => c[0].eventType === "credit-depleted").length;
+    expect(t0Count).toBe(1);
+  });
+
+  it("12: real recharge (credited rises above baseline) → recovered, episode closed", async () => {
+    setBalance("50.0000000000");
+    await insertTestEpisode({
+      orgId,
+      userId,
+      campaignId,
+      creditedCentsAtOpen: "50.0000000000",
+      startedAt: new Date(Date.now() - 4 * DAY_MS),
+    });
+
+    // Paid topup lands: credited 50 → 200 (> baseline). Recover, no email.
+    setBalance("200.0000000000");
+    const res = await tick();
+    expect(res.body).toMatchObject({ processed: 1, recovered: 1, followup3dSent: 0 });
+    const [ep] = await listEpisodes(orgId);
+    expect(ep.recoveredAt).not.toBeNull();
+    expect(sendEmailSpy).not.toHaveBeenCalled();
+  });
+
+  it("13: pre-0020 episode (null baseline) → tick lazily backfills, no recovery; real recharge still recovers", async () => {
+    // Row opened before migration 0020: no baseline. Balance positive at tick.
+    setBalance("50.0000000000");
+    await insertTestEpisode({
+      orgId,
+      userId,
+      campaignId,
+      creditedCentsAtOpen: null,
+    });
+
+    // First tick captures baseline = current credited (50); does NOT recover.
+    const first = await tick();
+    expect(first.body).toMatchObject({ processed: 1, recovered: 0 });
+    const [afterBackfill] = await listEpisodes(orgId);
+    expect(afterBackfill.recoveredAt).toBeNull();
+    expect(afterBackfill.creditedCentsAtOpen).toBe("50.0000000000");
+    expect(sendEmailSpy).not.toHaveBeenCalled();
+
+    // Real recharge above the now-captured baseline → recover.
+    setBalance("300.0000000000");
+    const second = await tick();
+    expect(second.body).toMatchObject({ processed: 1, recovered: 1 });
+    const [recovered] = await listEpisodes(orgId);
+    expect(recovered.recoveredAt).not.toBeNull();
   });
 
   it("10: tick endpoint returns a summary over multiple open episodes", async () => {
