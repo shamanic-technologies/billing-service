@@ -116,6 +116,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
@@ -133,6 +134,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
@@ -150,6 +152,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
@@ -184,6 +187,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
@@ -210,6 +214,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: after.balanceCents,
+        creditedCents: after.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: after.customer.email,

@@ -22,7 +22,7 @@ import {
   DUNNING_EVENT_3D,
   DUNNING_EVENT_10D,
 } from "../db/schema.js";
-import { isDepleted } from "./cents.js";
+import { isDepleted, cmpCents } from "./cents.js";
 import { computeBalance } from "./balance.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
@@ -49,6 +49,8 @@ export interface OpenEpisodeParams {
   runId: string;
   /** Balance snapshot at the failing authorize. */
   balanceCents: string;
+  /** Credited snapshot at the failing authorize — the recovery baseline. */
+  creditedCents: string;
   /** Parsed workflow headers — gates the open on campaign activity. */
   workflow: WorkflowHeaders;
   /** Forwarded tracking headers for the email-service call. */
@@ -78,6 +80,7 @@ export async function openDepletionEpisodeIfDepleted(
       userId: params.userId,
       runId: toUuidOrNull(params.runId),
       campaignId: toUuidOrNull(params.workflow.campaignId),
+      creditedCentsAtOpen: params.creditedCents,
       t0SentAt: new Date(),
     });
   } catch (err) {
@@ -146,8 +149,24 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       continue;
     }
 
-    // Stop-on-recharge: balance restored → close the episode, send nothing.
-    if (!isDepleted(snapshot.balanceCents)) {
+    // Recovery is keyed on a REAL recharge — `credited` rising above its
+    // snapshot at depletion — NOT on balance > 0. Balance flutters around zero
+    // from provisioned-cost churn (usage includes provisioned holds); a
+    // balance-based recovery false-closed episodes and re-armed a fresh T0 email
+    // on every oscillation (duplicate "out of credit" emails). `credited` only
+    // rises on a paid topup / promo, so it never flutters.
+    const creditedAtOpen = ep.creditedCentsAtOpen;
+    if (creditedAtOpen == null) {
+      // Row opened before migration 0020 — no baseline yet. Capture it from the
+      // current credited and treat this tick as neither recovery nor a missed
+      // send (we have no pre-depletion reference). Follow-ups below still fire
+      // if due AND still depleted.
+      await db
+        .update(creditDepletionEpisodes)
+        .set({ creditedCentsAtOpen: snapshot.creditedCents, updatedAt: new Date() })
+        .where(eq(creditDepletionEpisodes.id, ep.id));
+    } else if (cmpCents(snapshot.creditedCents, creditedAtOpen) > 0) {
+      // Real recharge → close the episode, send nothing (stop-on-recharge).
       const [closed] = await db
         .update(creditDepletionEpisodes)
         .set({ recoveredAt: new Date(), updatedAt: new Date() })
@@ -161,11 +180,16 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       if (closed) {
         result.recovered += 1;
         console.log(
-          `[billing-service] dunning: org ${ep.orgId} recovered (balance ${snapshot.balanceCents}), episode closed`
+          `[billing-service] dunning: org ${ep.orgId} recovered (credited ${creditedAtOpen} → ${snapshot.creditedCents}), episode closed`
         );
       }
       continue;
     }
+
+    // No recharge. Only dun while ACTUALLY depleted right now — a transient
+    // positive balance (provisioned holds released) sends nothing and leaves the
+    // episode open to re-evaluate next tick (no false recovery, no re-arm).
+    if (!isDepleted(snapshot.balanceCents)) continue;
 
     const ageMs = now - ep.startedAt.getTime();
     const recipientEmail = snapshot.customer.email ?? undefined;

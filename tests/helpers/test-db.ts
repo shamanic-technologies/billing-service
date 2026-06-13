@@ -35,6 +35,9 @@ export async function insertTestEpisode(data: {
   runId?: string | null;
   campaignId?: string | null;
   startedAt?: Date;
+  // Recovery baseline. Defaults to "0" so a test that raises credited recovers;
+  // pass null to exercise the pre-0020 lazy-backfill path.
+  creditedCentsAtOpen?: string | null;
   t0SentAt?: Date | null;
   followup3dSentAt?: Date | null;
   followup10dSentAt?: Date | null;
@@ -48,6 +51,10 @@ export async function insertTestEpisode(data: {
       runId: data.runId ?? null,
       campaignId: data.campaignId ?? null,
       startedAt: data.startedAt ?? new Date(),
+      creditedCentsAtOpen:
+        data.creditedCentsAtOpen === undefined
+          ? "0.0000000000"
+          : data.creditedCentsAtOpen,
       t0SentAt: data.t0SentAt ?? new Date(),
       followup3dSentAt: data.followup3dSentAt ?? null,
       followup10dSentAt: data.followup10dSentAt ?? null,
