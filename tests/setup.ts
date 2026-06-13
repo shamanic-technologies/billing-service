@@ -77,6 +77,7 @@ beforeAll(async () => {
       "run_id" uuid,
       "campaign_id" uuid,
       "started_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "credited_cents_at_open" numeric(16,10),
       "t0_sent_at" timestamp with time zone,
       "followup_3d_sent_at" timestamp with time zone,
       "followup_10d_sent_at" timestamp with time zone,
@@ -85,6 +86,8 @@ beforeAll(async () => {
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL
     )
   `;
+  // Stale-DB path: add the migration-0020 column if an older local DB predates it.
+  await sql`ALTER TABLE "credit_depletion_episodes" ADD COLUMN IF NOT EXISTS "credited_cents_at_open" numeric(16,10)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_one_open_episode_per_org" ON "credit_depletion_episodes" ("org_id") WHERE "recovered_at" IS NULL`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_depletion_open" ON "credit_depletion_episodes" ("recovered_at")`;
 
