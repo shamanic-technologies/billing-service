@@ -208,9 +208,12 @@ export async function listPaymentIntents(
  * List a customer's attached PaymentMethods via stripe-service.
  * Live passthrough to Stripe `paymentMethods.list({ customer, type? })`.
  *
- * Used by reload.ts to pick an explicit `payment_method` for off_session PIs
- * instead of relying on `customer.invoice_settings.default_payment_method`
- * (which may be a Link / wallet PM Stripe refuses to charge off_session).
+ * Used by reload.ts + hasAttachedCardPm to pick an explicit `payment_method`
+ * (card, then link fallback) for off_session PIs instead of relying on
+ * `customer.invoice_settings.default_payment_method`. Note: a saved `type:link`
+ * PM IS chargeable off_session when passed as an explicit id (Stripe docs:
+ * payments/link/save-and-reuse); only the *default-PM fallback* path fails for
+ * Link, which is why we pass an explicit id rather than read the default.
  */
 export async function listPaymentMethods(
   identity: IdentityHeaders,
