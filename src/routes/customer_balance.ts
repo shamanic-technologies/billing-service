@@ -15,6 +15,7 @@ import {
   hasAttachedCardPm,
 } from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
+import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import { coalesceReload } from "../lib/reload-coalescer.js";
@@ -89,6 +90,16 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     }
 
     traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.resolved", data: { required_cents: requiredCents } }, req.headers);
+
+    // Record this campaign's latest authorize cost (best estimate of its next
+    // run's cost) for the read-only affordability pre-flight gate. Upserted on
+    // both sufficient and insufficient outcomes; skipped for non-campaign
+    // authorizes (no x-campaign-id, e.g. dashboard chats). Fail-loud — a write
+    // failure surfaces, never silently drops the estimate. Does not touch the
+    // reload / depletion control flow below.
+    if (wf.campaignId) {
+      await upsertCampaignAuthorizeCost(wf.campaignId, orgId, requiredCents);
+    }
 
     const account = await findOrCreateAccount(orgId, userId, wfHeaders);
 

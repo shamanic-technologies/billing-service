@@ -8,6 +8,9 @@ import {
   type StripeCustomer,
 } from "../lib/stripe-service-client.js";
 import { runDunningTick } from "../lib/dunning.js";
+import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
+import { computeBalance } from "../lib/balance.js";
+import { gte as gteCents } from "../lib/cents.js";
 
 const router = Router();
 
@@ -15,6 +18,9 @@ const SS_LIST_PAGE_LIMIT = 100;
 const INTERNAL_IDENTITY: Record<string, string> = {
   "x-user-id": "00000000-0000-0000-0000-000000000000",
 };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Parse a Stripe customer's `metadata.brand_id` value. We store it as a
@@ -151,6 +157,62 @@ router.post("/internal/transfer-brand", async (req, res) => {
       { tableName: "local_promos", count: localCount },
       { tableName: "stripe_service_customers", count: ssCount },
     ],
+  });
+});
+
+// GET /internal/campaigns/:campaignId/affordability
+//
+// Read-only pre-flight gate for campaign-service: "can this org afford another
+// run of campaign X right now?". ZERO side effects — no charge, no reload, no
+// depletion-episode mutation. The cost estimate is the required_cents of the
+// LAST authorize attempt for the campaign (stored by the authorize route); a
+// campaign re-runs the same workflow → ~constant cost.
+//
+//   - No stored cost (hasHistory=false) → affordable=true (first-run default:
+//     a brand-new campaign runs once to establish its cost). balanceCents is
+//     "0" because the org isn't resolvable without a stored row.
+//   - else affordable = (live balance >= lastRequiredCents).
+//
+// Fail-loud: a balance-compose failure surfaces as 502.
+const ZERO_CENTS = "0.0000000000";
+
+router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => {
+  const { campaignId } = req.params;
+  if (!UUID_RE.test(campaignId)) {
+    res.status(400).json({ error: "campaignId must be a valid UUID" });
+    return;
+  }
+
+  const stored = await getCampaignAuthorizeCost(campaignId);
+
+  if (!stored) {
+    res.json({
+      affordable: true,
+      balanceCents: ZERO_CENTS,
+      lastRequiredCents: null,
+      hasHistory: false,
+    });
+    return;
+  }
+
+  let snapshot;
+  try {
+    snapshot = await computeBalance(stored.orgId, { "x-org-id": stored.orgId });
+  } catch (err) {
+    console.error(
+      `[billing-service] affordability: balance compose failed for campaign ${campaignId} (org ${stored.orgId}):`,
+      err
+    );
+    res.status(502).json({ error: "Failed to compute balance" });
+    return;
+  }
+
+  const lastRequiredCents = stored.lastAuthorizeRequiredCents;
+  res.json({
+    affordable: gteCents(snapshot.balanceCents, lastRequiredCents),
+    balanceCents: snapshot.balanceCents,
+    lastRequiredCents,
+    hasHistory: true,
   });
 });
 

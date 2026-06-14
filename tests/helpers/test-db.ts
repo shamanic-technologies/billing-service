@@ -5,10 +5,12 @@ import {
   localPromoCodes,
   localPromos,
   creditDepletionEpisodes,
+  campaignAuthorizeCosts,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
   type CreditDepletionEpisode,
+  type CampaignAuthorizeCost,
 } from "../../src/db/schema.js";
 
 const SEEDED_PROMO_CODES = [
@@ -19,6 +21,7 @@ const SEEDED_PROMO_CODES = [
 
 export async function cleanTestData() {
   await db.delete(creditDepletionEpisodes);
+  await db.delete(campaignAuthorizeCosts);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep seeded codes (welcome + invite_reward + invite_welcome); remove any
@@ -126,6 +129,33 @@ export async function insertTestPromoGrant(data: {
       amountCents: String(data.amountCents),
       promoCodeId: code.id,
       description: data.description ?? null,
+    })
+    .returning();
+  return row;
+}
+
+export async function getCampaignCost(
+  campaignId: string
+): Promise<CampaignAuthorizeCost | null> {
+  const [row] = await db
+    .select()
+    .from(campaignAuthorizeCosts)
+    .where(eq(campaignAuthorizeCosts.campaignId, campaignId))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function insertTestCampaignCost(data: {
+  campaignId: string;
+  orgId: string;
+  lastAuthorizeRequiredCents: string;
+}): Promise<CampaignAuthorizeCost> {
+  const [row] = await db
+    .insert(campaignAuthorizeCosts)
+    .values({
+      campaignId: data.campaignId,
+      orgId: data.orgId,
+      lastAuthorizeRequiredCents: data.lastAuthorizeRequiredCents,
     })
     .returning();
   return row;

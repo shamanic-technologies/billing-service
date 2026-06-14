@@ -225,6 +225,21 @@ export const DunningTickResponseSchema = z
   })
   .openapi("DunningTickResponse");
 
+// --- Campaign affordability (read-only pre-flight gate) ---
+
+export const CampaignAffordabilitySchema = z
+  .object({
+    /** true when hasHistory=false (first-run default) OR balance >= lastRequired. */
+    affordable: z.boolean(),
+    /** Live balance (credited − usage), decimal string. "0" when hasHistory=false. */
+    balanceCents: CentsStringSchema,
+    /** Stored required_cents of the last authorize for this campaign; null if none. */
+    lastRequiredCents: CentsStringSchema.nullable(),
+    /** false when no authorize was ever recorded for this campaign. */
+    hasHistory: z.boolean(),
+  })
+  .openapi("CampaignAffordability");
+
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -641,6 +656,37 @@ registry.registerPath({
     },
     502: {
       description: "Tick failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/campaigns/{campaignId}/affordability",
+  summary: "Read-only pre-flight: can this org afford another run of campaign X?",
+  description:
+    "Answers campaign-service's affordability question WITHOUT charging or reloading. " +
+    "Zero side effects — no charge, no reload, no depletion-episode mutation. " +
+    "Estimates the next run's cost as the required_cents of the campaign's LAST authorize " +
+    "attempt (a campaign re-runs the same workflow → ~constant cost). " +
+    "hasHistory=false (no authorize recorded yet) → affordable=true so a brand-new campaign " +
+    "can run once to establish its cost. Otherwise affordable = live balance >= lastRequiredCents.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ campaignId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Affordability verdict",
+      content: { "application/json": { schema: CampaignAffordabilitySchema } },
+    },
+    400: {
+      description: "campaignId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unavailable (balance compose failed)",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
