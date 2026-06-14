@@ -83,6 +83,16 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       lastRequiredCents: "10.0000000000",
       hasHistory: true,
     });
+    // Regression: stripe-service requires x-user-id on GET /v1/customers; the
+    // identity built from the stored row MUST carry it (else prod 400 → 502).
+    expect(ssMocks.getCustomerByOrg).toHaveBeenCalledWith(
+      expect.objectContaining({
+        "x-org-id": orgId,
+        "x-user-id": expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        ),
+      })
+    );
   });
 
   it("stored cost, live balance < lastRequired → affordable=false", async () => {

@@ -195,9 +195,15 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     return;
   }
 
+  // Customer is org-implicit (1:1 org↔customer); the user-id value is irrelevant
+  // to the lookup, but stripe-service's header validation REQUIRES x-user-id to
+  // be present (else 400). Carry the internal sentinel user-id alongside x-org-id.
   let snapshot;
   try {
-    snapshot = await computeBalance(stored.orgId, { "x-org-id": stored.orgId });
+    snapshot = await computeBalance(stored.orgId, {
+      "x-org-id": stored.orgId,
+      ...INTERNAL_IDENTITY,
+    });
   } catch (err) {
     console.error(
       `[billing-service] affordability: balance compose failed for campaign ${campaignId} (org ${stored.orgId}):`,
