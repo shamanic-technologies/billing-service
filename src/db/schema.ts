@@ -168,6 +168,29 @@ export const creditDepletionEpisodes = pgTable(
 export type CreditDepletionEpisode = typeof creditDepletionEpisodes.$inferSelect;
 export type NewCreditDepletionEpisode = typeof creditDepletionEpisodes.$inferInsert;
 
+// campaign_authorize_costs: per-campaign estimate of the next run's cost.
+// One row per campaign — the `required_cents` resolved by the MOST RECENT
+// authorize attempt for that campaign (upserted on BOTH sufficient and
+// insufficient outcomes). A campaign re-runs the same workflow, so the last
+// attempt's cost is the best estimate of the next run's cost. Read by the
+// read-only `GET /internal/campaigns/:campaignId/affordability` pre-flight gate
+// (campaign-service consumes it to skip re-triggering a run an out-of-credit org
+// cannot afford). No row → no history → first-run-affordable default.
+export const campaignAuthorizeCosts = pgTable("campaign_authorize_costs", {
+  campaignId: uuid("campaign_id").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  lastAuthorizeRequiredCents: numeric("last_authorize_required_cents", {
+    precision: FRACTIONAL_PRECISION,
+    scale: FRACTIONAL_SCALE,
+  }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type CampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferSelect;
+export type NewCampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferInsert;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 export const DUNNING_EVENT_T0 = "credit-depleted";

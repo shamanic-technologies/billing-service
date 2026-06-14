@@ -101,6 +101,16 @@ beforeAll(async () => {
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
+  // campaign_authorize_costs (per-campaign affordability estimate, migration 0021).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "campaign_authorize_costs" (
+      "campaign_id" uuid PRIMARY KEY NOT NULL,
+      "org_id" uuid NOT NULL,
+      "last_authorize_required_cents" numeric(16,10) NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+
   // Seed platform-issued grant promo codes (matches migration 0017).
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
