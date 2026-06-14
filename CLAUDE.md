@@ -154,6 +154,19 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
 | `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$25` welcome row. Used by api-service invite claim handler (DIS-64). |
 | `POST` | `/internal/dunning/tick` | run one out-of-credit dunning pass (ops/manual). Same pass runs on the in-process hourly scheduler. → `{processed, recovered, followup3dSent, followup10dSent}`. |
+| `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
+
+## Campaign affordability gate (read-only pre-flight)
+
+Stops a credit "retry storm": an out-of-credit org's recurring campaign was re-triggered every minute by campaign-service, each run doing paid Apollo enrichment then 402-ing at the LLM step. campaign-service now asks billing "can this org afford another run of campaign X?" BEFORE dispatching — billing answers live, per-campaign, **without charging or reloading**.
+
+**Cost estimate (no up-front truth).** The run's cost isn't known before the run. We use the `required_cents` of the **LAST authorize attempt for that campaign** as the estimate — a campaign re-runs the same workflow, so cost is ~constant. The estimate is upserted in `POST /v1/customer_balance/authorize`: when `x-campaign-id` is present, `upsertCampaignAuthorizeCost(campaignId, orgId, requiredCents)` runs right after `requiredCents` resolves, on **both sufficient and insufficient** outcomes (it's the cost of the last attempted run). Absent `x-campaign-id` (dashboard chats) → skipped; never fails the authorize. Fail-loud on a write error. Does NOT touch the reload / depletion / response-shape flow.
+
+**State:** one table, `campaign_authorize_costs` (migration `0021`, hand-journaled) — `campaign_id` PK, `org_id`, `last_authorize_required_cents numeric(16,10)`, `updated_at`. One row per campaign, upserted in place (`ON CONFLICT (campaign_id) DO UPDATE`). `src/lib/campaign-costs.ts` owns the upsert + read.
+
+**`GET /internal/campaigns/:campaignId/affordability`** (`src/routes/internal.ts`, service-auth, READ-ONLY — no charge, no reload, no episode mutation):
+- No stored cost → `{affordable:true, balanceCents:"0", lastRequiredCents:null, hasHistory:false}` (first-run default — a brand-new campaign runs once to establish its cost; the org isn't resolvable without a stored row, hence `balanceCents:"0"`).
+- Stored cost → live balance via `computeBalance` (identity `{x-org-id: stored.orgId}`); `affordable = balanceCents >= lastRequiredCents`, `hasHistory:true`. Fail-loud 502 if stripe/runs unreachable. 400 on non-UUID `campaignId`.
 
 ## Out-of-credit dunning engine (issue #147)
 
