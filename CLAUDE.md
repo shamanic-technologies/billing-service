@@ -1,5 +1,17 @@
 # billing-service — repo conventions
 
+## Tests need a local Postgres (not mocked) — start it before `pnpm test`
+
+The suite hits a real Postgres: `tests/setup.ts` connects to `process.env.BILLING_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/test"` and hand-builds the schema in `beforeAll`. With no DB running, EVERY suite that imports `src/db` fails with `AggregateError [ECONNREFUSED] ::1:5432` (looks like a code break — it is NOT). First-time setup on this machine:
+
+```bash
+brew services start postgresql@14
+psql -d postgres -c "CREATE ROLE test LOGIN PASSWORD 'test' SUPERUSER"
+createdb -O test test
+```
+
+Then `pnpm test` (vitest, `fileParallelism:false`, `maxWorkers:1`). Diagnose an ECONNREFUSED as "Postgres not running", never as a regression from the diff.
+
 ## Migrations are hand-authored AND hand-journaled — the journal is the apply-gate
 
 This repo does NOT use `drizzle-kit generate`. `drizzle/meta/` snapshots stop at `0007`; every migration from `0008` onward is hand-written SQL, and `drizzle/meta/_journal.json` is maintained by hand. The boot migrator (`drizzle-orm/postgres-js/migrator` in `src/index.ts`, run before `app.listen()`) applies **only migrations listed in `_journal.json`** — a `drizzle/NNNN_*.sql` file with **no journal entry is silently skipped at boot and never runs in prod.**
