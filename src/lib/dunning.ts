@@ -135,11 +135,10 @@ export async function runDunningTick(): Promise<DunningTickResult> {
 
   for (const ep of open) {
     result.processed += 1;
-    const identity = { "x-org-id": ep.orgId, "x-user-id": ep.userId };
 
     let snapshot;
     try {
-      snapshot = await computeBalance(ep.orgId, identity);
+      snapshot = await computeBalance(ep.orgId);
     } catch (err) {
       console.error(
         `[billing-service] dunning tick: balance recompute failed for org ${ep.orgId}, ` +

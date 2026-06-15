@@ -27,7 +27,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
   beforeEach(async () => {
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithEmail("founder@acme.test"));
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithEmail("founder@acme.test"));
     await cleanTestData();
 
     const runsClient = await import("../../src/lib/runs-client.js");
@@ -60,7 +60,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       hasHistory: false,
     });
     // Read-only: no downstream balance compose for an unknown campaign.
-    expect(ssMocks.getCustomerByOrg).not.toHaveBeenCalled();
+    expect(ssMocks.fetchOrgCustomer).not.toHaveBeenCalled();
   });
 
   it("stored cost, live balance >= lastRequired → affordable=true, hasHistory=true", async () => {
@@ -69,7 +69,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       orgId,
       lastAuthorizeRequiredCents: "10.0000000000",
     });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
     setUsage("40.0000000000"); // balance = 100 − 40 = 60 >= 10
 
     const res = await request(app)
@@ -83,16 +83,9 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       lastRequiredCents: "10.0000000000",
       hasHistory: true,
     });
-    // Regression: stripe-service requires x-user-id on GET /v1/customers; the
-    // identity built from the stored row MUST carry it (else prod 400 → 502).
-    expect(ssMocks.getCustomerByOrg).toHaveBeenCalledWith(
-      expect.objectContaining({
-        "x-org-id": orgId,
-        "x-user-id": expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-        ),
-      })
-    );
+    // User-less balance path: computeBalance reads stripe-service via the
+    // org-keyed /internal route — keyed off orgId ONLY, no x-user-id/sentinel.
+    expect(ssMocks.fetchOrgCustomer).toHaveBeenCalledWith(orgId);
   });
 
   it("stored cost, live balance < lastRequired → affordable=false", async () => {
@@ -101,7 +94,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       orgId,
       lastAuthorizeRequiredCents: "50.0000000000",
     });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
     setUsage("90.0000000000"); // balance = 100 − 90 = 10 < 50
 
     const res = await request(app)
@@ -121,7 +114,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
       orgId,
       lastAuthorizeRequiredCents: "50.0000000000",
     });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage("100.0000000000"); // balance = −100, depleted
 
     const res = await request(app)

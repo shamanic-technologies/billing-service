@@ -384,3 +384,71 @@ export async function hasAttachedCardPm(
   const links = await listPaymentMethods(identity, { customer: customerId, type: "link" });
   return links.data.length > 0;
 }
+
+// --- User-less org-scoped reads (balance path only) ---
+//
+// stripe-service exposes a service-authenticated, org-scoped read surface under
+// `/internal/<resource>/by-org/{orgId}` (stripe-service#77/#79). These take X-API-Key
+// ONLY — NO x-user-id, NO x-org-id (org is in the path) — and let the
+// balance-compute path (computeBalance) read an org's customer / topups /
+// chargeable PM without inventing a fake user identity. The org-implicit `/v1/*`
+// reads above (getCustomerByOrg etc.) still require x-user-id and remain in use
+// on the real-user paths (accounts, credits, checkout, reload). Do NOT collapse
+// these into those — the user-less path is deliberately separate.
+//
+// `call(..., {})` sends an empty identity → buildHeaders emits only x-api-key +
+// content-type. Fail-loud: `call` throws on any non-2xx (incl. 404 no-customer).
+
+/**
+ * Fetch the org's Stripe customer object verbatim via the user-less
+ * `/internal/customers/by-org/{orgId}` route. The response is the customer
+ * object directly (NOT a list). Throws (404) if the org has no customer.
+ */
+export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
+  return call<StripeCustomer>(
+    "GET",
+    `/internal/customers/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+}
+
+/**
+ * Sum `amount_received` across all the org's `status === 'succeeded'`
+ * PaymentIntents — the paid-topups component of `credited_cents`. The
+ * `/internal/payment_intents/by-org/{orgId}` route returns ALL PIs in one list
+ * (no limit, no pagination), so there is no page loop.
+ *
+ * Returns a numeric(16,10)-formatted string for arithmetic-compatibility with
+ * the cents helpers.
+ */
+export async function sumSucceededTopupsForOrg(orgId: string): Promise<string> {
+  const list = await call<StripePaymentIntentList>(
+    "GET",
+    `/internal/payment_intents/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+  let total = new Decimal(0);
+  for (const pi of list.data) {
+    if (pi.status === "succeeded" && typeof pi.amount_received === "number") {
+      total = total.plus(pi.amount_received);
+    }
+  }
+  return total.toFixed(10);
+}
+
+/**
+ * True iff the org's Stripe customer has ≥1 chargeable attached PM (card OR
+ * link), via the user-less `/internal/payment_methods/by-org/{orgId}?type=`
+ * route. Mirrors `hasAttachedCardPm` (card first, then link fallback) — see its
+ * doc for why a saved `type:link` PM is chargeable off_session.
+ *
+ * Fail-loud: a stripe-service error (404, timeout, 5xx) propagates. ONLY an
+ * empty card AND link list returns false.
+ */
+export async function hasChargeablePmForOrg(orgId: string): Promise<boolean> {
+  const path = `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}`;
+  const cards = await call<StripePaymentMethodList>("GET", `${path}?type=card`, {});
+  if (cards.data.length > 0) return true;
+  const links = await call<StripePaymentMethodList>("GET", `${path}?type=link`, {});
+  return links.data.length > 0;
+}

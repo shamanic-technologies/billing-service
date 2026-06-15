@@ -105,7 +105,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     let snapshot;
     try {
-      snapshot = await computeBalance(orgId, identity);
+      snapshot = await computeBalance(orgId);
     } catch (err) {
       console.error("[billing-service] Failed to compute balance:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
@@ -213,7 +213,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     let after;
     try {
-      after = await computeBalance(orgId, identity);
+      after = await computeBalance(orgId);
     } catch (err) {
       console.error("[billing-service] Failed to recompute balance after reload:", err);
       res.status(502).json({ error: "Failed to recompute balance after reload" });
