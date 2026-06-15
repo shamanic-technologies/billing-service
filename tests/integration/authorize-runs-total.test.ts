@@ -52,7 +52,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
   it("sufficient when paid topups + local credits − usage covers required", async () => {
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({ orgId, userId, amountCents: 100, promoCode: "welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "40.0000000000",
@@ -74,7 +74,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("insufficient + no topup config → returns sufficient:false without reload", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -88,8 +88,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("insufficient + topup configured + SS has PM → calls reload and re-evaluates", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg
       .mockResolvedValueOnce("0.0000000000")
       .mockResolvedValueOnce("1000.0000000000");
 
@@ -108,9 +108,9 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     // Customer has NO default_payment_method, but a card is attached. The gate now
     // keys on the attached card (hasAttachedCardPm), not invoice_settings.default.
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
-    ssMocks.hasAttachedCardPm.mockResolvedValue(true);
-    ssMocks.sumSucceededTopupsForCustomer
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    ssMocks.sumSucceededTopupsForOrg
       .mockResolvedValueOnce("0.0000000000")
       .mockResolvedValueOnce("1000.0000000000");
 
@@ -127,8 +127,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("insufficient + topup + no card attached → graceful sufficient:false, no reload", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasAttachedCardPm.mockResolvedValue(false);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -142,8 +142,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("PM lookup errors (stripe-service down) → 502, never silent no-PM", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.hasAttachedCardPm.mockRejectedValue(new Error("stripe-service down"));
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.hasChargeablePmForOrg.mockRejectedValue(new Error("stripe-service down"));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -156,8 +156,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("reload status=failed → sufficient:false", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.reloadViaPaymentIntent.mockResolvedValue({
       status: "failed",
       failure_reason: "card_declined",
@@ -174,8 +174,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("reload throws (SS down) → 502", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.reloadViaPaymentIntent.mockRejectedValue(new Error("SS down"));
 
     const res = await request(app)
@@ -188,8 +188,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
   it("coalesces concurrent reload calls for same org", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     ssMocks.reloadViaPaymentIntent.mockImplementation(
       () =>
