@@ -1,5 +1,17 @@
 # billing-service — repo conventions
 
+## Tests need a local Postgres (not mocked) — start it before `pnpm test`
+
+The suite hits a real Postgres: `tests/setup.ts` connects to `process.env.BILLING_SERVICE_DATABASE_URL || "postgresql://test:test@localhost/test"` and hand-builds the schema in `beforeAll`. With no DB running, EVERY suite that imports `src/db` fails with `AggregateError [ECONNREFUSED] ::1:5432` (looks like a code break — it is NOT). First-time setup on this machine:
+
+```bash
+brew services start postgresql@14
+psql -d postgres -c "CREATE ROLE test LOGIN PASSWORD 'test' SUPERUSER"
+createdb -O test test
+```
+
+Then `pnpm test` (vitest, `fileParallelism:false`, `maxWorkers:1`). Diagnose an ECONNREFUSED as "Postgres not running", never as a regression from the diff.
+
 ## Migrations are hand-authored AND hand-journaled — the journal is the apply-gate
 
 This repo does NOT use `drizzle-kit generate`. `drizzle/meta/` snapshots stop at `0007`; every migration from `0008` onward is hand-written SQL, and `drizzle/meta/_journal.json` is maintained by hand. The boot migrator (`drizzle-orm/postgres-js/migrator` in `src/index.ts`, run before `app.listen()`) applies **only migrations listed in `_journal.json`** — a `drizzle/NNNN_*.sql` file with **no journal entry is silently skipped at boot and never runs in prod.**
@@ -71,7 +83,9 @@ Billing never duplicates Stripe state and never persists run-level usage rows.
 
 `src/lib/stripe-service-client.ts` only calls Stripe-shape primitives. stripe-service deliberately exposes no billing-specific shortcuts.
 
-- Customer fetch is **org-implicit** via `GET /v1/customers?limit=1` (resolved server-side from `x-org-id`). No `stripe_customer_id` is stored in billing. **stripe-service still REQUIRES `x-user-id` on the request (its header validation 400s without it) even though the customer lookup keys on `x-org-id` only** — so any identity passed to `computeBalance`/`getCustomerByOrg` MUST carry `x-user-id`. When there's no real user in context (scheduler, internal pre-flight), pass the `INTERNAL_IDENTITY` sentinel (`x-user-id: 00000000-0000-0000-0000-000000000000`). Tests that mock `getCustomerByOrg` do NOT catch a missing `x-user-id` — it 500s only against the live service. (v0.31.1 hotfix: the affordability gate shipped `{x-org-id}`-only and 502'd every with-history check in prod.)
+- **Two read surfaces, split by whether an end-user is in context:**
+  - **Real-user paths** (`GET /v1/accounts`, `POST /v1/customer_balance/usage_apply` direct compose, `redeem`, `checkout`, `reload`): customer fetch is **org-implicit** via `GET /v1/customers?limit=1` (resolved server-side from `x-org-id`). **stripe-service still REQUIRES `x-user-id` on these `/v1/*` reads (its header validation 400s without it) even though the lookup keys on `x-org-id` only** — so any identity passed to `getCustomerByOrg`/`sumSucceededTopupsForCustomer`/`hasAttachedCardPm`/`listCustomersByMetadata`/`updateCustomer` MUST carry `x-user-id`. When there's no real user (the `transfer-brand` admin op), pass the `INTERNAL_IDENTITY` sentinel (`x-user-id: 00000000-0000-0000-0000-000000000000`). Tests that mock these do NOT catch a missing `x-user-id` — it 500s only against the live service.
+  - **Balance path** (`computeBalance` → affordability gate + dunning scheduler + authorize): reads stripe-service via the **user-less, org-keyed `/internal/<resource>/by-org/{orgId}` routes** (stripe-service#77/#79) — `fetchOrgCustomer` / `sumSucceededTopupsForOrg` / `hasChargeablePmForOrg` send **X-API-Key + org ONLY: NO `x-user-id`, NO sentinel**. There is no end-user on this path, so no fake identity is invented. `computeBalance(orgId)` takes no `identity` arg (the runs-service `/internal/org-usage-total` read needs only `org_id`). **Never reintroduce an `x-user-id` sentinel on the balance path** — that was the v0.31.1 band-aid (PR #176/#178), superseded once stripe-service shipped the user-less surface. The `/v1/*` real-user reads above are a SEPARATE surface — do not collapse `computeBalance` onto them, and do not move the `/v1/*` callers onto `/internal/*by-org`.
 - Balance is derived from the Stripe customer object: `balance_cents = -customer.balance` (sign-flip, Stripe convention is `balance > 0` = customer owes).
 - `has_payment_method` is derived from whether the customer has ≥1 attached **chargeable** PM — a `card` **or** a `link` PM (`hasAttachedCardPm` → `GET /v1/payment_methods?type=card`, then `type=link` if no card). **Link PMs ARE chargeable off_session** when passed as an explicit `payment_method` id (Stripe documents `off_session:true, confirm:true` on a saved `type:link` PM exactly like a card — https://docs.stripe.com/payments/link/save-and-reuse). A normal Checkout setup-mode flow offers card+link and saves `type:link` for Link-enabled emails, so a **card-only gate wrongly reported "no payment method"** for those orgs and 400'd `PATCH /v1/accounts/auto_topup` forever (v0.29.1 fix, GH #162). It deliberately does **not** read `customer.invoice_settings.default_payment_method`: Stripe leaves it null after `setup_future_usage`, AND the **default-PM *fallback* path** (PI with no explicit `payment_method`) genuinely fails for Link (the original DIS-43 400) — but that is the fallback, not an explicit link-PM charge. We list PMs by type and pass an explicit id instead. This mirrors exactly what `reload.ts` charges (first card, then link fallback). The same `hasAttachedCardPm` gate fronts auto-reload in `authorize` + `usage_apply` and the `PATCH /v1/accounts/auto_topup` PM requirement. Fail-loud: a stripe-service error propagates (502); only an empty card AND link list → false.
 - Reload is composed billing-side via `POST /v1/payment_intents` with `confirm:true, off_session:true` + `Idempotency-Key` header. Stripe status flattened to `{succeeded|failed}` in `src/lib/reload.ts`.
@@ -166,7 +180,7 @@ Stops a credit "retry storm": an out-of-credit org's recurring campaign was re-t
 
 **`GET /internal/campaigns/:campaignId/affordability`** (`src/routes/internal.ts`, service-auth, READ-ONLY — no charge, no reload, no episode mutation):
 - No stored cost → `{affordable:true, balanceCents:"0", lastRequiredCents:null, hasHistory:false}` (first-run default — a brand-new campaign runs once to establish its cost; the org isn't resolvable without a stored row, hence `balanceCents:"0"`).
-- Stored cost → live balance via `computeBalance` (identity `{x-org-id: stored.orgId, ...INTERNAL_IDENTITY}` — `x-user-id` sentinel is mandatory, see stripe-service integration shape); `affordable = balanceCents >= lastRequiredCents`, `hasHistory:true`. Fail-loud 502 if stripe/runs unreachable. 400 on non-UUID `campaignId`.
+- Stored cost → live balance via `computeBalance(stored.orgId)` (user-less balance path — X-API-Key + org only, NO `x-user-id`/sentinel, see stripe-service integration shape); `affordable = balanceCents >= lastRequiredCents`, `hasHistory:true`. Fail-loud 502 if stripe/runs unreachable. 400 on non-UUID `campaignId`.
 
 ## Out-of-credit dunning engine (issue #147)
 

@@ -56,7 +56,7 @@ describe("authorize upserts campaign_authorize_costs when x-campaign-id present"
 
   it("sufficient outcome → upserts the resolved required_cents with org_id", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -74,7 +74,7 @@ describe("authorize upserts campaign_authorize_costs when x-campaign-id present"
 
   it("insufficient outcome (no topup config) → still upserts the required_cents", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -91,7 +91,7 @@ describe("authorize upserts campaign_authorize_costs when x-campaign-id present"
 
   it("no x-campaign-id → no upsert (non-campaign authorize)", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -105,7 +105,7 @@ describe("authorize upserts campaign_authorize_costs when x-campaign-id present"
 
   it("re-run with a new required_cents → upserts in place (latest wins)", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
 
     setRequired("10.0000000000");
     await request(app)

@@ -36,7 +36,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithEmail(billingEmail));
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithEmail(billingEmail));
     await cleanTestData();
 
     const costsClient = await import("../../src/lib/costs-client.js");
@@ -67,7 +67,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   // setBalance controls credited (the recovery baseline); setUsage controls usage
   // (the provisioned-churn axis that flutters balance WITHOUT changing credited).
   function setBalance(paidTopupsCents: string) {
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
   }
 
   async function tick() {
