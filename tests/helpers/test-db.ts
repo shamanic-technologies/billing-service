@@ -7,9 +7,11 @@ import {
   creditDepletionEpisodes,
   campaignAuthorizeCosts,
   brandDailyBudgets,
+  welcomeCreditClaims,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
+  BRAND_WELCOME_CODE,
   type CreditDepletionEpisode,
   type CampaignAuthorizeCost,
 } from "../../src/db/schema.js";
@@ -18,12 +20,14 @@ const SEEDED_PROMO_CODES = [
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
+  BRAND_WELCOME_CODE,
 ];
 
 export async function cleanTestData() {
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignAuthorizeCosts);
   await db.delete(brandDailyBudgets);
+  await db.delete(welcomeCreditClaims);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep seeded codes (welcome + invite_reward + invite_welcome); remove any

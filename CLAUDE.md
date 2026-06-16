@@ -171,6 +171,11 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget` | READ a brand's current daily budget (campaign-service, api-key only, no user). → `{brandId, dailyBudgetCents, updatedAt}`; unset brand → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
 | `PATCH` | `/v1/brands/:brandId/daily-budget` | SET/UPDATE a brand's daily budget (user via gateway, org headers). body `{dailyBudgetCents}` (non-negative; 0 = pause). → `{brandId, orgId, dailyBudgetCents, updatedAt}`. |
+| `POST` | `/v1/brands/:brandId/subscription` | Onboard a brand at a chosen daily amount (user via gateway). body `{dailyAmountCents}` (positive int). Creates the daily Stripe subscription (stripe-service) + sets daily-budget = amount. → `{brandId, orgId, subscriptionId, status, dailyAmountCents, dailyBudgetCents}`. |
+| `PATCH` | `/v1/brands/:brandId/subscription` | Change the daily amount. Updates the Stripe subscription amount AND the daily-budget together. body `{dailyAmountCents}`. → same shape. |
+| `POST` | `/v1/brands/:brandId/subscription/pause` | Brand dry → pause Stripe collection + set daily-budget `0`. → `{brandId, orgId, status, dailyBudgetCents}`. |
+| `POST` | `/v1/brands/:brandId/subscription/resume` | Reverse pause → resume collection + restore daily-budget to the subscription amount (read back from stripe-service). → `{brandId, orgId, status, dailyAmountCents, dailyBudgetCents}`. |
+| `POST` | `/internal/brands/:brandId/subscription/card-confirmed` | stripe-service signal (Stripe webhook → SS → here) on card add/confirm. Grants the one-time **$25** welcome gift, deduped 4-key. api-key only; body `{orgId, userId, cardFingerprint}`. → `{ok, granted, amountCents, newBalanceCents}`. |
 
 ## Per-brand daily budget (pacing ceiling — NOT affordability)
 
@@ -182,6 +187,27 @@ Each brand carries exactly ONE current **daily budget** — the per-day spend ce
 - **Write** (`PATCH /v1/brands/:brandId/daily-budget`, requireOrgHeaders): the user via the gateway. `org_id` captured from `x-org-id` for provenance; value keyed by brandId. `dailyBudgetCents` validated via `parseNonNegativeCents` (allows 0, rejects negative; fractional cents OK). A subsequent read reflects the latest write.
 
 **Follow-ups (other repos, not built here):** api-service gateway proxy for the user `PATCH`; campaign-service reads the internal `GET` per loop + enforces; dashboard UI to set it.
+
+## Per-brand daily subscription wiring + $25 welcome gift
+
+A founder onboards a brand at a chosen daily amount (presets $25/$125/$625/day, custom min $1/day). Stripe bills that amount DAILY per brand. billing is the **conductor**: it never touches Stripe (the subscription object + webhooks live in **stripe-service**), it calls stripe-service's by-brand passthrough and keeps **three dials in lock-step** — the Stripe subscription amount, the brand daily-budget (`brand_daily_budgets`, `0`=pause), and the pause/resume state.
+
+**No billing-stored subscription id/amount** (CLAUDE.md: never duplicate Stripe state). stripe-service resolves the subscription by **brand metadata**; resume reads the amount back from stripe-service to restore the budget. `src/lib/subscription-service-client.ts` calls the LOCKED contract (same `STRIPE_SERVICE_URL` + `X-API-Key`, byte-equal both sides):
+- `POST /internal/subscriptions/by-brand/:brandId` body `{orgId, userId, dailyAmountCents}` (org/user/brand stored in subscription metadata).
+- `PATCH /internal/subscriptions/by-brand/:brandId` body `{dailyAmountCents}`.
+- `POST /internal/subscriptions/by-brand/:brandId/{pause,resume}` (resume returns `dailyAmountCents`).
+
+**`src/routes/brand_subscriptions.ts`** owns the 4 user-facing lifecycle routes (`requireOrgHeaders`) + the internal card-confirmed receiver. Each lifecycle op = stripe-service call + `upsertBrandDailyBudget` in one handler, fail-loud `502` on any stripe-service error (explicit try/catch → 502; this service has NO global async error middleware — match `accounts.ts`).
+
+**Paid daily invoice → credit is AUTOMATIC, no receiver.** A daily subscription invoice settles as a Stripe `payment_intent` on the customer → already summed by `sumSucceededTopupsForOrg` into `credited`. So there is deliberately **no invoice-paid receiver** (would double-count). Brand attribution is metadata-only; org balance has no brand dimension.
+
+**$25 welcome gift — 4-key un-farmable grant (`src/lib/brand-welcome.ts` + `welcome_credit_claims`, migration 0023).** Granted once on card-confirmed, deduped across **org_id, user_id, brand_id, AND card_fingerprint** — a prior claim on ANY key → `granted:false, $0`. Each key has its OWN unique index, so the grant is a plain INSERT the DB rejects (`23505`) when any key was already claimed (race-safe, no SELECT-then-insert window). card_fingerprint is the un-spoofable key (supplied by stripe-service from the confirmed PM). The money is a `local_promos` row under the **new** `brand_welcome` code ($2500, seeded by 0023) — DISTINCT from the org-level `welcome` $2 code (0019), do NOT conflate. `local_promo_id` back-references the credit. `newBalanceCents` recomputed via `computeBalance(orgId)`; fail-loud `502` if compose fails after a committed grant (grant is idempotent — caller may retry).
+
+**Per-brand spend gate (DEFERRED, not built here):** the authorize/affordability gate stays ORG-level. If brand-scoped funding needs brand-scoped spend, that belongs at the source (runs-service `GET /internal/brand-usage-total?brand_id=`), NOT synthesized client-side — filed as a runs-service follow-up.
+
+**Cross-repo dependencies (must ship before this is live):** stripe-service (the by-brand subscription passthrough + Stripe webhooks → the card-confirmed callback + card-fingerprint exposure) and runs-service (per-brand spend, deferred). The user routes 502-if-called until stripe-service ships; the card-confirmed receiver just isn't called. No new env vars (reuses `STRIPE_SERVICE_*`, `RUNS_SERVICE_*`, `BILLING_SERVICE_API_KEY`).
+
+**Follow-ups (other repos):** stripe-service subscription passthrough + webhooks; api-service gateway proxy for the 4 user routes; dashboard onboarding UI (preset picker, `daysFree = floor(25/daily)`).
 
 ## Campaign affordability gate (read-only pre-flight)
 
