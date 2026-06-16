@@ -471,6 +471,71 @@
           "hasHistory"
         ]
       },
+      "ReadBrandDailyBudget": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "brandId",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
+      "BrandDailyBudget": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "brandId",
+          "orgId",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
+      "SetBrandDailyBudgetRequest": {
+        "type": "object",
+        "properties": {
+          "dailyBudgetCents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dailyBudgetCents"
+        ]
+      },
       "TransferBrandTableResult": {
         "type": "object",
         "properties": {
@@ -1842,6 +1907,173 @@
           },
           "502": {
             "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/daily-budget": {
+      "get": {
+        "summary": "Read a brand's current daily budget (per-day spend ceiling)",
+        "description": "Returns the brand's current daily spend ceiling, keyed by brandId. User-less service-to-service read (x-api-key only) — campaign-service calls this once per loop on a scheduler. A brand with no configured budget returns dailyBudgetCents: null (a legitimate unset state; the consumer decides how to handle it). billing-service only stores + serves this value; enforcement is campaign-service's job.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brand daily budget (dailyBudgetCents null when unset)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/daily-budget": {
+      "patch": {
+        "summary": "Set / update a brand's daily budget (per-day spend ceiling)",
+        "description": "Sets the brand's daily spend ceiling. One mutable scalar per brand, upserted in place — a subsequent read reflects the latest write. dailyBudgetCents is non-negative (0 = explicit pause). This is an allocation / pacing ceiling, a SEPARATE concept from org credit balance/affordability (which is unchanged). org_id is captured from x-org-id for provenance.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBrandDailyBudgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated brand daily budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or dailyBudgetCents",
             "content": {
               "application/json": {
                 "schema": {

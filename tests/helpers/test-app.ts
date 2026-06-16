@@ -10,6 +10,7 @@ import promotionCodesRoutes from "../../src/routes/promotion_codes.js";
 import internalRoutes from "../../src/routes/internal.js";
 import creditsRoutes from "../../src/routes/credits.js";
 import promoCodesRoutes from "../../src/routes/promo_codes.js";
+import brandBudgetsRoutes from "../../src/routes/brand_budgets.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 
 export function createTestApp() {
@@ -24,6 +25,7 @@ export function createTestApp() {
   app.use(internalRoutes);
   app.use(creditsRoutes);
   app.use(promoCodesRoutes);
+  app.use(brandBudgetsRoutes);
   app.use(accountsRoutes);
   app.use(customerBalanceRoutes);
   app.use(checkoutRoutes);
