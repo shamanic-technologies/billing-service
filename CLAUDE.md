@@ -169,6 +169,19 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$25` welcome row. Used by api-service invite claim handler (DIS-64). |
 | `POST` | `/internal/dunning/tick` | run one out-of-credit dunning pass (ops/manual). Same pass runs on the in-process hourly scheduler. → `{processed, recovered, followup3dSent, followup10dSent}`. |
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
+| `GET` | `/internal/brands/:brandId/daily-budget` | READ a brand's current daily budget (campaign-service, api-key only, no user). → `{brandId, dailyBudgetCents, updatedAt}`; unset brand → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
+| `PATCH` | `/v1/brands/:brandId/daily-budget` | SET/UPDATE a brand's daily budget (user via gateway, org headers). body `{dailyBudgetCents}` (non-negative; 0 = pause). → `{brandId, orgId, dailyBudgetCents, updatedAt}`. |
+
+## Per-brand daily budget (pacing ceiling — NOT affordability)
+
+Each brand carries exactly ONE current **daily budget** — the per-day spend ceiling for that brand's active work. A scalar, mutable: changing it re-paces future work on campaign-service's next loop. This is an **allocation / pacing** concept ("how much should THIS brand spend per day"), DISTINCT from the org credit balance/affordability ("can the org pay right now") — the two never mix. billing-service only **stores + serves** this value; **enforcement** (summing today's spend vs the ceiling, stop-when-exceeded) is **campaign-service's job**.
+
+**State:** one table, `brand_daily_budgets` (migration `0022`, hand-journaled) — `brand_id` PK, `org_id`, `daily_budget_cents numeric(16,10)`, `updated_at`. One row per brand, upserted in place (`ON CONFLICT (brand_id) DO UPDATE`). `src/lib/brand-budgets.ts` owns the upsert + read. Mirrors the per-campaign `campaign_authorize_costs` single-row pattern.
+
+- **Read** (`GET /internal/brands/:brandId/daily-budget`, `src/routes/brand_budgets.ts`, **api-key only — no user context**): campaign-service calls this per loop on a scheduler, keyed by brandId. No row → `dailyBudgetCents:null` (a legitimate unset state, distinct from an explicit `0` pause). 400 on a non-UUID brandId.
+- **Write** (`PATCH /v1/brands/:brandId/daily-budget`, requireOrgHeaders): the user via the gateway. `org_id` captured from `x-org-id` for provenance; value keyed by brandId. `dailyBudgetCents` validated via `parseNonNegativeCents` (allows 0, rejects negative; fractional cents OK). A subsequent read reflects the latest write.
+
+**Follow-ups (other repos, not built here):** api-service gateway proxy for the user `PATCH`; campaign-service reads the internal `GET` per loop + enforces; dashboard UI to set it.
 
 ## Campaign affordability gate (read-only pre-flight)
 

@@ -240,6 +240,39 @@ export const CampaignAffordabilitySchema = z
   })
   .openapi("CampaignAffordability");
 
+// --- Brand daily budget (per-brand spend ceiling / pacing) ---
+
+export const SetBrandDailyBudgetRequestSchema = z
+  .object({
+    /**
+     * The per-day spend ceiling for this brand, in cents. Non-negative
+     * (0 = explicit pause). Accepts a number or decimal string; stored at
+     * numeric(16,10) precision.
+     */
+    dailyBudgetCents: z.union([z.string(), z.number()]),
+  })
+  .openapi("SetBrandDailyBudgetRequest");
+
+export const BrandDailyBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    /** Current daily spend ceiling, decimal string (numeric(16,10)). */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("BrandDailyBudget");
+
+export const ReadBrandDailyBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /** Current daily spend ceiling; null when no budget has been set. */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** Last-set timestamp; null when no budget has been set. */
+    updatedAt: z.string().nullable(),
+  })
+  .openapi("ReadBrandDailyBudget");
+
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -687,6 +720,63 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/daily-budget",
+  summary: "Read a brand's current daily budget (per-day spend ceiling)",
+  description:
+    "Returns the brand's current daily spend ceiling, keyed by brandId. User-less " +
+    "service-to-service read (x-api-key only) — campaign-service calls this once per " +
+    "loop on a scheduler. A brand with no configured budget returns dailyBudgetCents: " +
+    "null (a legitimate unset state; the consumer decides how to handle it). " +
+    "billing-service only stores + serves this value; enforcement is campaign-service's job.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Brand daily budget (dailyBudgetCents null when unset)",
+      content: { "application/json": { schema: ReadBrandDailyBudgetSchema } },
+    },
+    400: {
+      description: "brandId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/v1/brands/{brandId}/daily-budget",
+  summary: "Set / update a brand's daily budget (per-day spend ceiling)",
+  description:
+    "Sets the brand's daily spend ceiling. One mutable scalar per brand, upserted in " +
+    "place — a subsequent read reflects the latest write. dailyBudgetCents is " +
+    "non-negative (0 = explicit pause). This is an allocation / pacing ceiling, a " +
+    "SEPARATE concept from org credit balance/affordability (which is unchanged). " +
+    "org_id is captured from x-org-id for provenance.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    body: {
+      content: {
+        "application/json": { schema: SetBrandDailyBudgetRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Updated brand daily budget",
+      content: { "application/json": { schema: BrandDailyBudgetSchema } },
+    },
+    400: {
+      description: "Invalid brandId or dailyBudgetCents",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

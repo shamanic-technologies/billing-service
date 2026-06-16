@@ -111,6 +111,16 @@ beforeAll(async () => {
     )
   `;
 
+  // brand_daily_budgets (per-brand daily spend ceiling, migration 0022).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "brand_daily_budgets" (
+      "brand_id" uuid PRIMARY KEY NOT NULL,
+      "org_id" uuid NOT NULL,
+      "daily_budget_cents" numeric(16,10) NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+
   // Seed platform-issued grant promo codes (matches migration 0017).
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
