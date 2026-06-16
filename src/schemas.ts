@@ -273,6 +273,68 @@ export const ReadBrandDailyBudgetSchema = z
   })
   .openapi("ReadBrandDailyBudget");
 
+// --- Per-brand daily subscription wiring ---
+
+export const SubscriptionAmountRequestSchema = z
+  .object({
+    /** Chosen per-day subscription amount in integer cents (min $1/day). */
+    dailyAmountCents: z.number().int().positive(),
+  })
+  .openapi("SubscriptionAmountRequest");
+
+export const BrandSubscriptionResponseSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    subscriptionId: z.string(),
+    status: z.string(),
+    dailyAmountCents: z.number().int(),
+    /** Brand daily-budget after the sync (numeric(16,10) string). */
+    dailyBudgetCents: CentsStringSchema,
+  })
+  .openapi("BrandSubscriptionResponse");
+
+export const BrandSubscriptionPauseResponseSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    status: z.string(),
+    /** "0.0000000000" after pause; the restored amount after resume. */
+    dailyBudgetCents: CentsStringSchema,
+  })
+  .openapi("BrandSubscriptionPauseResponse");
+
+export const BrandSubscriptionResumeResponseSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    status: z.string(),
+    dailyAmountCents: z.number().int(),
+    dailyBudgetCents: CentsStringSchema,
+  })
+  .openapi("BrandSubscriptionResumeResponse");
+
+export const CardConfirmedRequestSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    userId: z.string().uuid(),
+    /** Stripe card fingerprint — the un-spoofable dedup key. */
+    cardFingerprint: z.string().min(1),
+  })
+  .openapi("CardConfirmedRequest");
+
+export const CardConfirmedResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** false when any of the 4 keys (org/user/brand/card) already claimed. */
+    granted: z.boolean(),
+    /** Granted amount as a numeric(16,10) string; "0.0000000000" when suppressed. */
+    amountCents: CentsStringSchema,
+    /** Spendable balance after the grant. */
+    newBalanceCents: CentsStringSchema,
+  })
+  .openapi("CardConfirmedResponse");
+
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -777,6 +839,172 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId or dailyBudgetCents",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+const brandIdParam = z.object({ brandId: z.string().uuid() });
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/brands/{brandId}/subscription",
+  summary: "Onboard a brand at a chosen daily subscription amount",
+  description:
+    "Creates the brand's recurring daily Stripe subscription (via stripe-service) " +
+    "AND sets the brand daily-budget = the chosen amount. The $25 welcome gift is " +
+    "NOT granted here — it fires asynchronously on the card-confirmed signal.",
+  request: {
+    headers: protectedHeaders,
+    params: brandIdParam,
+    body: {
+      content: {
+        "application/json": { schema: SubscriptionAmountRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Subscription created + budget set",
+      content: {
+        "application/json": { schema: BrandSubscriptionResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId or dailyAmountCents",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/v1/brands/{brandId}/subscription",
+  summary: "Change the brand's daily subscription amount",
+  description:
+    "Updates the Stripe subscription amount AND the brand daily-budget together " +
+    "(one logical operation).",
+  request: {
+    headers: protectedHeaders,
+    params: brandIdParam,
+    body: {
+      content: {
+        "application/json": { schema: SubscriptionAmountRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Amount updated + budget synced",
+      content: {
+        "application/json": { schema: BrandSubscriptionResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId or dailyAmountCents",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/brands/{brandId}/subscription/pause",
+  summary: "Pause the brand subscription (brand went dry)",
+  description:
+    "Pauses Stripe collection AND sets the brand daily-budget to 0 (the existing " +
+    "pause sentinel).",
+  request: {
+    headers: protectedHeaders,
+    params: brandIdParam,
+  },
+  responses: {
+    200: {
+      description: "Paused + budget set to 0",
+      content: {
+        "application/json": { schema: BrandSubscriptionPauseResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/brands/{brandId}/subscription/resume",
+  summary: "Resume the brand subscription",
+  description:
+    "Resumes Stripe collection AND restores the brand daily-budget to the " +
+    "subscription's amount (read back from stripe-service).",
+  request: {
+    headers: protectedHeaders,
+    params: brandIdParam,
+  },
+  responses: {
+    200: {
+      description: "Resumed + budget restored",
+      content: {
+        "application/json": { schema: BrandSubscriptionResumeResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/brands/{brandId}/subscription/card-confirmed",
+  summary: "Grant the one-time $25 brand welcome gift (4-key deduped)",
+  description:
+    "Called by stripe-service when the subscription's card is added/confirmed " +
+    "(Stripe webhook → stripe-service → here). Grants $25 once, deduped across " +
+    "org_id / user_id / brand_id / card_fingerprint — a prior claim on ANY key " +
+    "yields granted:false, $0. Service-auth only (orgId/userId in the body, " +
+    "resolved from subscription metadata by stripe-service).",
+  request: {
+    headers: internalHeaders,
+    params: brandIdParam,
+    body: {
+      content: {
+        "application/json": { schema: CardConfirmedRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Grant evaluated (granted true/false)",
+      content: {
+        "application/json": { schema: CardConfirmedResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId or body",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Grant applied but balance compose failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

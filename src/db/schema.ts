@@ -217,6 +217,51 @@ export const brandDailyBudgets = pgTable("brand_daily_budgets", {
 export type BrandDailyBudget = typeof brandDailyBudgets.$inferSelect;
 export type NewBrandDailyBudget = typeof brandDailyBudgets.$inferInsert;
 
+// Per-brand subscription welcome gift — the one-time $25 free credit granted
+// when a brand's daily subscription gets a confirmed card. Distinct from the
+// org-level `welcome` $2 promo code (migration 0019 reverted that to 200) — this
+// is the per-brand subscription onboarding gift, seeded as code='brand_welcome'
+// @2500 by migration 0023. Independent path; do NOT conflate with `welcome`.
+export const BRAND_WELCOME_CODE = "brand_welcome";
+export const BRAND_WELCOME_AMOUNT_CENTS = 2500;
+
+// welcome_credit_claims: the 4-key suppression ledger for the per-brand $25 gift.
+// One row per SUCCESSFUL grant. The gift is un-farmable: a prior claim on ANY of
+// the four keys (org_id, user_id, brand_id, card_fingerprint) yields $0 on the
+// next attempt. Each key carries its OWN unique index, so the grant is a plain
+// INSERT that the DB rejects (23505) when any key was already claimed — race-safe
+// without a SELECT-then-insert window. card_fingerprint is the un-spoofable key
+// (the same physical card cannot re-claim under a fresh org/user/brand). The
+// money itself is a `local_promos` row (so it composes into balance) under the
+// `brand_welcome` code; `local_promo_id` back-references it. Migration 0023.
+export const welcomeCreditClaims = pgTable(
+  "welcome_credit_claims",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    cardFingerprint: text("card_fingerprint").notNull(),
+    amountCents: numeric("amount_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    localPromoId: uuid("local_promo_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_welcome_claims_org").on(table.orgId),
+    uniqueIndex("idx_welcome_claims_user").on(table.userId),
+    uniqueIndex("idx_welcome_claims_brand").on(table.brandId),
+    uniqueIndex("idx_welcome_claims_card").on(table.cardFingerprint),
+  ]
+);
+
+export type WelcomeCreditClaim = typeof welcomeCreditClaims.$inferSelect;
+export type NewWelcomeCreditClaim = typeof welcomeCreditClaims.$inferInsert;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 export const DUNNING_EVENT_T0 = "credit-depleted";

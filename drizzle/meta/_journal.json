@@ -162,6 +162,13 @@
       "when": 1790157600000,
       "tag": "0022_brand_daily_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790244000000,
+      "tag": "0023_brand_welcome_claims",
+      "breakpoints": true
     }
   ]
 }
