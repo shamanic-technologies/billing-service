@@ -44,6 +44,9 @@ describe("GET/PATCH /internal/promo-codes/:code", () => {
       spent_cents: "0.0000000000",
       as_of: "2026-06-12T00:00:00.000Z",
     });
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockResolvedValue({
+      spent_cents: "0.0000000000",
+    });
     await cleanTestData();
     // cleanTestData keeps promo-code rows as-is; these tests mutate the welcome
     // amount, so restore the seed value for deterministic, order-independent runs.

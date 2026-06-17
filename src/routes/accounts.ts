@@ -7,7 +7,7 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { UpdateAutoTopupRequestSchema, WalletSetupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, findOrCreateWalletAccount } from "../lib/account.js";
 import { addCents, isDepleted, subCents } from "../lib/cents.js";
-import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
+import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import {
@@ -42,28 +42,38 @@ async function composeAccountFunds(
   creditedCents: string;
   usageCents: string;
   balanceCents: string;
+  actualBalanceCents: string;
   hasPaymentMethod: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, hasCardPm] = await Promise.all([
+  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm] = await Promise.all([
     sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
+    fetchRunsOrgActualUsageTotal(orgId, identity),
     hasAttachedCardPm(identity, customer.id),
   ]);
   const creditedCents = addCents(paidTopups, localCredits);
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
+  const actualBalanceCents = subCents(creditedCents, actualRunsUsage.spent_cents);
   return {
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,
+    actualBalanceCents,
     hasPaymentMethod: hasCardPm,
   };
 }
 
 function buildAccountResponse(
   account: typeof billingAccounts.$inferSelect,
-  funds: { creditedCents: string; usageCents: string; balanceCents: string; hasPaymentMethod: boolean }
+  funds: {
+    creditedCents: string;
+    usageCents: string;
+    balanceCents: string;
+    actualBalanceCents: string;
+    hasPaymentMethod: boolean;
+  }
 ) {
   return {
     id: account.id,
@@ -71,6 +81,7 @@ function buildAccountResponse(
     credited_cents: funds.creditedCents,
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
+    actual_balance_cents: funds.actualBalanceCents,
     topup_amount_cents: account.topupAmountCents,
     topup_threshold_cents: account.topupThresholdCents,
     has_payment_method: funds.hasPaymentMethod,
@@ -155,6 +166,7 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
 
     res.json({
       balance_cents: funds.balanceCents,
+      actual_balance_cents: funds.actualBalanceCents,
       depleted: isDepleted(funds.balanceCents),
     });
   } catch (err) {
