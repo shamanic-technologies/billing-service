@@ -1,7 +1,18 @@
 import { Router } from "express";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { TransferBrandRequestSchema } from "../schemas.js";
+import {
+  InternalAccountTeardownResponseSchema,
+  TransferBrandRequestSchema,
+} from "../schemas.js";
+import {
+  billingAccounts,
+  brandDailyBudgets,
+  campaignAuthorizeCosts,
+  creditDepletionEpisodes,
+  localPromos,
+  welcomeCreditClaims,
+} from "../db/schema.js";
 import {
   listCustomersByMetadata,
   updateCustomer,
@@ -21,6 +32,53 @@ const INTERNAL_IDENTITY: Record<string, string> = {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type InternalAccountTeardownResponse = typeof InternalAccountTeardownResponseSchema._type;
+
+async function deleteBillingStateByOrg(
+  orgId: string
+): Promise<InternalAccountTeardownResponse["deletedRows"]> {
+  return db.transaction(async (tx) => {
+    const deletedWelcomeClaims = await tx
+      .delete(welcomeCreditClaims)
+      .where(eq(welcomeCreditClaims.orgId, orgId))
+      .returning({ id: welcomeCreditClaims.id });
+
+    const deletedLocalPromos = await tx
+      .delete(localPromos)
+      .where(eq(localPromos.orgId, orgId))
+      .returning({ id: localPromos.id });
+
+    const deletedDunningEpisodes = await tx
+      .delete(creditDepletionEpisodes)
+      .where(eq(creditDepletionEpisodes.orgId, orgId))
+      .returning({ id: creditDepletionEpisodes.id });
+
+    const deletedCampaignCosts = await tx
+      .delete(campaignAuthorizeCosts)
+      .where(eq(campaignAuthorizeCosts.orgId, orgId))
+      .returning({ campaignId: campaignAuthorizeCosts.campaignId });
+
+    const deletedBrandBudgets = await tx
+      .delete(brandDailyBudgets)
+      .where(eq(brandDailyBudgets.orgId, orgId))
+      .returning({ brandId: brandDailyBudgets.brandId });
+
+    const deletedBillingAccounts = await tx
+      .delete(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .returning({ id: billingAccounts.id });
+
+    return {
+      billingAccounts: deletedBillingAccounts.length,
+      localPromos: deletedLocalPromos.length,
+      creditDepletionEpisodes: deletedDunningEpisodes.length,
+      campaignAuthorizeCosts: deletedCampaignCosts.length,
+      brandDailyBudgets: deletedBrandBudgets.length,
+      welcomeCreditClaims: deletedWelcomeClaims.length,
+    };
+  });
+}
 
 /**
  * Parse a Stripe customer's `metadata.brand_id` value. We store it as a
@@ -67,6 +125,28 @@ async function listAllOrgCustomers(sourceOrgId: string): Promise<StripeCustomer[
   }
   return out;
 }
+
+// DELETE /internal/accounts/by-org/:orgId — billing-service leg of org teardown.
+//
+// Local-only cleanup: removes billing-owned org rows that can keep active money,
+// pacing, dunning, or affordability effects alive after client-service deletes
+// the org. Stripe customers/subscriptions and runs usage are owned by their
+// services; this endpoint deliberately does not fan out.
+router.delete("/internal/accounts/by-org/:orgId", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  try {
+    const deletedRows = await deleteBillingStateByOrg(orgId);
+    res.json({ ok: true, orgId, deletedRows });
+  } catch (err) {
+    console.error(`[billing-service] account teardown failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to delete billing account state" });
+  }
+});
 
 // POST /internal/transfer-brand — re-assigns solo-brand rows between orgs.
 //

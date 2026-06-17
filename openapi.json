@@ -353,6 +353,60 @@
           "code"
         ]
       },
+      "InternalAccountTeardownDeletedRows": {
+        "type": "object",
+        "properties": {
+          "billingAccounts": {
+            "type": "integer"
+          },
+          "localPromos": {
+            "type": "integer"
+          },
+          "creditDepletionEpisodes": {
+            "type": "integer"
+          },
+          "campaignAuthorizeCosts": {
+            "type": "integer"
+          },
+          "brandDailyBudgets": {
+            "type": "integer"
+          },
+          "welcomeCreditClaims": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "billingAccounts",
+          "localPromos",
+          "creditDepletionEpisodes",
+          "campaignAuthorizeCosts",
+          "brandDailyBudgets",
+          "welcomeCreditClaims"
+        ]
+      },
+      "InternalAccountTeardownResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deletedRows": {
+            "$ref": "#/components/schemas/InternalAccountTeardownDeletedRows"
+          }
+        },
+        "required": [
+          "ok",
+          "orgId",
+          "deletedRows"
+        ]
+      },
       "CreditGrantResponse": {
         "type": "object",
         "properties": {
@@ -1794,6 +1848,73 @@
           },
           "409": {
             "description": "Promo code already redeemed by this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}": {
+      "delete": {
+        "summary": "Remove billing-owned state for a deleted org",
+        "description": "Client-service cascade teardown leg for an internal org UUID. Removes only billing-service-owned org-scoped rows that can keep active billing effects alive: account topup config, local promo credits, dunning episodes, campaign affordability estimates, brand daily budgets, and welcome-credit claims. No cross-service fan-out. Idempotent: no rows for the org is still success.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Billing-owned org state removed; all counts may be zero on retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalAccountTeardownResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Database operation failed",
             "content": {
               "application/json": {
                 "schema": {

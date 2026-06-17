@@ -174,6 +174,27 @@ export const CreditGrantResponseSchema = z
   })
   .openapi("CreditGrantResponse");
 
+// --- Internal account teardown (client-service org cascade delete) ---
+
+export const InternalAccountTeardownDeletedRowsSchema = z
+  .object({
+    billingAccounts: z.number().int(),
+    localPromos: z.number().int(),
+    creditDepletionEpisodes: z.number().int(),
+    campaignAuthorizeCosts: z.number().int(),
+    brandDailyBudgets: z.number().int(),
+    welcomeCreditClaims: z.number().int(),
+  })
+  .openapi("InternalAccountTeardownDeletedRows");
+
+export const InternalAccountTeardownResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    orgId: z.string().uuid(),
+    deletedRows: InternalAccountTeardownDeletedRowsSchema,
+  })
+  .openapi("InternalAccountTeardownResponse");
+
 // --- Internal Promo-code config (re-price welcome / admin codes, no migration) ---
 
 export const PromoCodeSchema = z
@@ -643,6 +664,42 @@ registry.registerPath({
 
 const internalHeaders = z.object({
   "x-api-key": z.string(),
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/internal/accounts/by-org/{orgId}",
+  summary: "Remove billing-owned state for a deleted org",
+  description:
+    "Client-service cascade teardown leg for an internal org UUID. Removes only " +
+    "billing-service-owned org-scoped rows that can keep active billing effects " +
+    "alive: account topup config, local promo credits, dunning episodes, campaign " +
+    "affordability estimates, brand daily budgets, and welcome-credit claims. " +
+    "No cross-service fan-out. Idempotent: no rows for the org is still success.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Billing-owned org state removed; all counts may be zero on retry",
+      content: {
+        "application/json": { schema: InternalAccountTeardownResponseSchema },
+      },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Database operation failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
 });
 
 registry.registerPath({
