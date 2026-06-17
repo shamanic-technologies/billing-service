@@ -129,33 +129,6 @@ beforeAll(async () => {
     ON CONFLICT ("code") DO NOTHING
   `;
 
-  // welcome_credit_claims — 4-key suppression ledger for the per-brand $25 gift
-  // (migration 0023). Each key has its OWN unique index → the grant is a plain
-  // INSERT the DB rejects (23505) when any key was already claimed.
-  await sql`
-    CREATE TABLE IF NOT EXISTS "welcome_credit_claims" (
-      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-      "org_id" uuid NOT NULL,
-      "user_id" uuid NOT NULL,
-      "brand_id" uuid NOT NULL,
-      "card_fingerprint" text NOT NULL,
-      "amount_cents" numeric(16,10) NOT NULL,
-      "local_promo_id" uuid,
-      "created_at" timestamp with time zone DEFAULT now() NOT NULL
-    )
-  `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_welcome_claims_org" ON "welcome_credit_claims" ("org_id")`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_welcome_claims_user" ON "welcome_credit_claims" ("user_id")`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_welcome_claims_brand" ON "welcome_credit_claims" ("brand_id")`;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_welcome_claims_card" ON "welcome_credit_claims" ("card_fingerprint")`;
-
-  // Seed the per-brand welcome promo code @2500 (matches migration 0023).
-  await sql`
-    INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
-    VALUES ('brand_welcome', 2500, NULL, NULL)
-    ON CONFLICT ("code") DO NOTHING
-  `;
-
   // Drop legacy tables that may linger.
   await sql`DROP TABLE IF EXISTS "customer_balance_transactions"`;
   await sql`DROP TABLE IF EXISTS "cbt_archive_pre104_usage"`;
