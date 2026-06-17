@@ -25,6 +25,7 @@ describe("POST /internal/credits/grant", () => {
   const systemUserId = "00000000-0000-0000-0000-000000000000";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
+  let fetchRunsOrgActualUsageTotalSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
@@ -39,6 +40,12 @@ describe("POST /internal/credits/grant", () => {
     });
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockImplementation(
       fetchRunsOrgUsageTotalSpy
+    );
+    fetchRunsOrgActualUsageTotalSpy = vi.fn().mockResolvedValue({
+      spent_cents: "0.0000000000",
+    });
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      fetchRunsOrgActualUsageTotalSpy
     );
   });
 

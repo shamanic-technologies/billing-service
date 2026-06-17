@@ -18,6 +18,18 @@ export const ErrorResponseSchema = z
  * Drizzle returns numeric columns as strings — we pass them through unchanged.
  */
 const CentsStringSchema = z.string();
+const UsageCentsSchema = CentsStringSchema.openapi({
+  description:
+    "Platform usage from runs-service, including actualized costs and provisioned holds. Use with balance_cents for spend authorization.",
+});
+const SpendableBalanceCentsSchema = CentsStringSchema.openapi({
+  description:
+    "Spendable funds: credited_cents minus usage_cents. Includes provisioned holds, so this is the safety value for authorization, depletion, runway, and top-up checks.",
+});
+const ActualBalanceCentsSchema = CentsStringSchema.openapi({
+  description:
+    "User-facing credit balance: credited funds minus actualized platform usage only. Provisioned holds are not subtracted here because they may later actualize or cancel.",
+});
 
 // --- Account ---
 
@@ -28,9 +40,11 @@ export const BillingAccountSchema = z
     /** Lifetime credits added: stripe-service paid topups + sum(local_promos). */
     credited_cents: CentsStringSchema,
     /** Lifetime platform usage from runs-service /internal/org-usage-total. */
-    usage_cents: CentsStringSchema,
+    usage_cents: UsageCentsSchema,
     /** Spendable funds = credited_cents − usage_cents. Use this for depletion/budget gates. */
-    balance_cents: CentsStringSchema,
+    balance_cents: SpendableBalanceCentsSchema,
+    /** User-facing balance = credited_cents − actualized usage only. */
+    actual_balance_cents: ActualBalanceCentsSchema,
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
     has_payment_method: z.boolean(),
@@ -154,7 +168,8 @@ export const PortalSessionResponseSchema = z
 
 export const BalanceResponseSchema = z
   .object({
-    balance_cents: CentsStringSchema,
+    balance_cents: SpendableBalanceCentsSchema,
+    actual_balance_cents: ActualBalanceCentsSchema,
     depleted: z.boolean(),
   })
   .openapi("BalanceResponse");

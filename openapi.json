@@ -91,10 +91,16 @@
             "type": "string"
           },
           "usage_cents": {
-            "type": "string"
+            "type": "string",
+            "description": "Platform usage from runs-service, including actualized costs and provisioned holds. Use with balance_cents for spend authorization."
           },
           "balance_cents": {
-            "type": "string"
+            "type": "string",
+            "description": "Spendable funds: credited_cents minus usage_cents. Includes provisioned holds, so this is the safety value for authorization, depletion, runway, and top-up checks."
+          },
+          "actual_balance_cents": {
+            "type": "string",
+            "description": "User-facing credit balance: credited funds minus actualized platform usage only. Provisioned holds are not subtracted here because they may later actualize or cancel."
           },
           "topup_amount_cents": {
             "type": "integer",
@@ -123,6 +129,7 @@
           "credited_cents",
           "usage_cents",
           "balance_cents",
+          "actual_balance_cents",
           "topup_amount_cents",
           "topup_threshold_cents",
           "has_payment_method",
@@ -146,7 +153,12 @@
         "type": "object",
         "properties": {
           "balance_cents": {
-            "type": "string"
+            "type": "string",
+            "description": "Spendable funds: credited_cents minus usage_cents. Includes provisioned holds, so this is the safety value for authorization, depletion, runway, and top-up checks."
+          },
+          "actual_balance_cents": {
+            "type": "string",
+            "description": "User-facing credit balance: credited funds minus actualized platform usage only. Provisioned holds are not subtracted here because they may later actualize or cancel."
           },
           "depleted": {
             "type": "boolean"
@@ -154,6 +166,7 @@
         },
         "required": [
           "balance_cents",
+          "actual_balance_cents",
           "depleted"
         ]
       },
