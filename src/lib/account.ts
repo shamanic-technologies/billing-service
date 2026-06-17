@@ -56,3 +56,51 @@ export async function findOrCreateAccount(
 
   return inserted;
 }
+
+/**
+ * Find or create the org-level billing account for a paid wallet setup.
+ *
+ * This deliberately does NOT redeem the legacy welcome promo. The first-campaign
+ * wallet path has its own first-load match ledger row; stacking the old welcome
+ * row would make a $10 load impact $22 instead of the product contract's $20.
+ */
+export async function findOrCreateWalletAccount(
+  orgId: string,
+  userId: string,
+  wfHeaders: Record<string, string>
+) {
+  const [existing] = await db
+    .select()
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+
+  const account =
+    existing ??
+    (
+      await db
+        .insert(billingAccounts)
+        .values({ orgId })
+        .onConflictDoNothing()
+        .returning()
+    )[0] ??
+    (
+      await db
+        .select()
+        .from(billingAccounts)
+        .where(eq(billingAccounts.orgId, orgId))
+        .limit(1)
+    )[0];
+
+  if (!account) {
+    throw new Error(`failed to create billing account for org ${orgId}`);
+  }
+
+  await ensureCustomer({
+    "x-org-id": orgId,
+    "x-user-id": userId,
+    ...wfHeaders,
+  });
+
+  return account;
+}

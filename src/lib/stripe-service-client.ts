@@ -285,7 +285,7 @@ export interface CheckoutLineItem {
 }
 
 export interface CheckoutSessionBody {
-  mode: "payment" | "subscription" | "setup";
+  mode: "payment" | "setup";
   /** Required by Stripe for setup mode when payment_method_types is omitted. */
   currency?: string;
   /** Required for payment mode; omitted for setup mode (no charge). */

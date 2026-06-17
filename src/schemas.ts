@@ -84,9 +84,30 @@ export const UsageApplyResponseSchema = z
 export const UpdateAutoTopupRequestSchema = z
   .object({
     topup_amount_cents: z.number().int().positive(),
-    topup_threshold_cents: z.number().int().min(0).optional(),
+    topup_threshold_cents: z.number().int().min(0),
   })
   .openapi("UpdateAutoTopupRequest");
+
+// --- Wallet setup ---
+
+export const WalletSetupRequestSchema = z
+  .object({
+    /** Paid first load charged immediately via stripe-service PaymentIntent. */
+    initial_load_amount_cents: z.number().int().positive(),
+    /** Ongoing auto-topup reload amount. Required; no silent default. */
+    topup_amount_cents: z.number().int().positive(),
+    /** Ongoing auto-topup trigger threshold. Required; no silent default. */
+    topup_threshold_cents: z.number().int().min(0),
+  })
+  .openapi("WalletSetupRequest");
+
+export const WalletSetupResponseSchema = BillingAccountSchema.extend({
+  initial_load_amount_cents: z.number().int().positive(),
+  initial_load_payment_intent_id: z.string(),
+  first_load_match_applied: z.boolean(),
+  first_load_match_cents: CentsStringSchema,
+  first_load_match_local_promo_id: z.string().uuid().nullable(),
+}).openapi("WalletSetupResponse");
 
 // --- Checkout ---
 
@@ -95,9 +116,9 @@ export const CreateCheckoutRequestSchema = z
     success_url: z.string().url(),
     cancel_url: z.string().url(),
     /**
-     * Checkout flavor. Absent or "payment" → charge `topup_amount_cents` (unchanged
-     * behavior). "setup" → no-charge Stripe Checkout that saves a reusable off-session
-     * card so the org can enable auto-topup without buying credits.
+     * Checkout flavor. Absent or "payment" → one-shot top-up checkout.
+     * "setup" → no-charge Stripe Checkout that saves a reusable off-session card so
+     * the org can enable auto-topup without buying credits.
      */
     mode: z.enum(["payment", "setup"]).optional(),
     /**
@@ -498,7 +519,7 @@ registry.registerPath({
   summary: "Create Stripe Checkout session via stripe-service",
   description:
     "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. " +
-    "mode='payment' (default) charges topup_amount_cents and persists it as the auto-topup amount. " +
+    "mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. " +
     "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
   request: {
     headers: protectedHeaders,
@@ -515,6 +536,39 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/wallet_setup",
+  summary: "Configure mandatory org wallet funding and process the initial load",
+  description:
+    "First-campaign funding setup. Requires explicit initial_load_amount_cents, topup_amount_cents, and topup_threshold_cents. " +
+    "Charges the initial load via stripe-service, stores org-level auto-topup settings, and grants a first-load local promo match dollar-for-dollar up to $25 exactly once per org.",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: { "application/json": { schema: WalletSetupRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Wallet setup result",
+      content: { "application/json": { schema: WalletSetupResponseSchema } },
+    },
+    400: {
+      description: "Invalid request or missing payment method",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    402: {
+      description: "Initial load payment failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unavailable",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

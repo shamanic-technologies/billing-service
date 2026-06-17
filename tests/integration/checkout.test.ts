@@ -111,6 +111,27 @@ describe("POST /v1/checkout-sessions", () => {
     expect(ssMocks.ensureCustomer).toHaveBeenCalled();
   });
 
+  it("payment-mode: does NOT write auto-topup config without an explicit threshold", async () => {
+    await insertTestAccount({ orgId });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        topup_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(200);
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId));
+    expect(account.topupAmountCents).toBeNull();
+    expect(account.topupThresholdCents).toBe(200);
+  });
+
   it("returns 502 when stripe-service fails", async () => {
     await insertTestAccount({ orgId });
     ssMocks.createCheckoutSession.mockRejectedValue(new Error("SS down"));
