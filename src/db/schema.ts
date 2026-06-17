@@ -102,6 +102,8 @@ export const WELCOME_PROMO_AMOUNT_CENTS = 200;
 export const INVITE_REWARD_CODE = "invite_reward";
 export const INVITE_WELCOME_CODE = "invite_welcome";
 export const INVITE_GRANT_AMOUNT_CENTS = 2500;
+export const FIRST_LOAD_MATCH_CODE = "first_load_match";
+export const FIRST_LOAD_MATCH_CAP_CENTS = 2500;
 
 export const PLATFORM_GRANT_REASONS = [
   INVITE_REWARD_CODE,

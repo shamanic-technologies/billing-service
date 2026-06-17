@@ -1,7 +1,4 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
-import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import { createCheckoutSession, getCustomerByOrg } from "../lib/stripe-service-client.js";
@@ -95,18 +92,6 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       console.error("[billing-service] stripe-service createCheckoutSession failed:", err);
       res.status(502).json({ error: "Failed to create checkout session via stripe-service" });
       return;
-    }
-
-    // Payment-mode persists the chosen top-up amount as the org's auto-topup amount.
-    // Setup-mode is a pure card capture — it must NOT write any topup amount.
-    if (!isSetup) {
-      await db
-        .update(billingAccounts)
-        .set({
-          topupAmountCents: topup_amount_cents,
-          updatedAt: new Date(),
-        })
-        .where(eq(billingAccounts.orgId, orgId));
     }
 
     traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id } }, req.headers);
