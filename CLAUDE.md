@@ -113,6 +113,7 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
   "credited_cents": "55200.0000000000",      // SUM(succeeded PI.amount_received) + SUM(local_promos.amount_cents)
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned)
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
+  "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
   "topup_amount_cents": 2500,                // auto-topup amount
   "topup_threshold_cents": 500,              // auto-topup triggers when balance_cents < threshold
   "has_payment_method": true,                // ≥1 chargeable PM: card OR link (GET /v1/payment_methods?type=card, then type=link); NOT invoice_settings.default_payment_method
@@ -124,13 +125,16 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
 
 All three credited/usage/balance endpoints fail loud (502) when runs-service or stripe-service is unreachable.
 
+`balance_cents` and `actual_balance_cents` deliberately differ when the org has open provisioned holds. `balance_cents` is spendable availability and subtracts actualized costs plus provisioned holds so authorization cannot overspend. `actual_balance_cents` subtracts only actualized costs, so the dashboard does not show a hold as money already spent.
+
 Composition (`src/routes/accounts.ts:composeAccountFunds`):
 1. `getCustomerByOrg(identity)` → Stripe customer (for `id`)
 2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received` where `status='succeeded'`
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → runs-service `spent_cents`
-5. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
-6. `credited_cents = paid_topups + local_credits` ; `balance_cents = credited_cents − usage`
+5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → runs-service `total_expected_cents` from actualized platform costs only
+6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
+7. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`
 
 ### `GET /public/stats/billing`
 

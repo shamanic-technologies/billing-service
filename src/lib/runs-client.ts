@@ -8,6 +8,18 @@ export interface RunsOrgUsageTotalResult {
   as_of: string;
 }
 
+interface RunsExpectedTotalsResponse {
+  total_expected_cents: string;
+  runs: Array<{
+    run_id: string;
+    expected_cents: string;
+  }>;
+}
+
+export interface RunsOrgActualUsageTotalResult {
+  spent_cents: string;
+}
+
 function getRunsServiceConfig() {
   const url = process.env.RUNS_SERVICE_URL;
   const apiKey = process.env.RUNS_SERVICE_API_KEY;
@@ -49,4 +61,41 @@ export async function fetchRunsOrgUsageTotal(
   }
 
   return (await res.json()) as RunsOrgUsageTotalResult;
+}
+
+/**
+ * Fetch canonical actual-only org usage from runs-service.
+ *
+ * This excludes provisioned holds, so consumers can display money that has
+ * actually been spent without changing `fetchRunsOrgUsageTotal`, which remains
+ * the source for authorization/depletion availability.
+ */
+export async function fetchRunsOrgActualUsageTotal(
+  orgId: string,
+  wfHeaders: Record<string, string>
+): Promise<RunsOrgActualUsageTotalResult> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
+
+  const res = await fetchWithRetry(
+    `${config.url}/internal/runs-expected-totals?org_id=${encodeURIComponent(orgId)}`,
+    {
+      headers: {
+        "x-api-key": config.apiKey,
+        ...wfHeaders,
+      },
+    }
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `runs-service runs-expected-totals failed for org ${orgId}: ${res.status} ${body}`
+    );
+  }
+
+  const body = (await res.json()) as RunsExpectedTotalsResponse;
+  return { spent_cents: body.total_expected_cents };
 }

@@ -17,6 +17,7 @@ describe("Accounts endpoints", () => {
   const userId = "00000000-0000-0000-0000-000000000099";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
+  let fetchRunsOrgActualUsageTotalSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
@@ -31,6 +32,12 @@ describe("Accounts endpoints", () => {
     });
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockImplementation(
       fetchRunsOrgUsageTotalSpy
+    );
+    fetchRunsOrgActualUsageTotalSpy = vi.fn().mockResolvedValue({
+      spent_cents: "0.0000000000",
+    });
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      fetchRunsOrgActualUsageTotalSpy
     );
   });
 
@@ -53,6 +60,7 @@ describe("Accounts endpoints", () => {
       expect(res.body.credited_cents).toBe("200.0000000000");
       expect(res.body.usage_cents).toBe("0.0000000000");
       expect(res.body.balance_cents).toBe("200.0000000000");
+      expect(res.body.actual_balance_cents).toBe("200.0000000000");
       expect(res.body.has_payment_method).toBe(false);
       expect(res.body.has_auto_topup).toBe(false);
       expect(ssMocks.ensureCustomer).toHaveBeenCalled();
@@ -76,6 +84,30 @@ describe("Accounts endpoints", () => {
       expect(res.body.credited_cents).toBe("1000.0000000000");
       expect(res.body.usage_cents).toBe("75.0000000000");
       expect(res.body.balance_cents).toBe("925.0000000000");
+      expect(res.body.actual_balance_cents).toBe("1000.0000000000");
+    });
+
+    it("keeps spendable balance reduced by holds but actual balance actual-only", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("3000.0000000000");
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "105.0000000000",
+        as_of: "2026-05-13T00:00:00.000Z",
+      });
+      fetchRunsOrgActualUsageTotalSpy.mockResolvedValue({
+        spent_cents: "95.0000000000",
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.credited_cents).toBe("3000.0000000000");
+      expect(res.body.usage_cents).toBe("105.0000000000");
+      expect(res.body.balance_cents).toBe("2895.0000000000");
+      expect(res.body.actual_balance_cents).toBe("2905.0000000000");
     });
 
     it("returns negative balance_cents when usage > credited", async () => {
@@ -93,6 +125,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.balance_cents).toBe("-308.0000000000");
+      expect(res.body.actual_balance_cents).toBe("75.0000000000");
     });
 
     it("derives has_payment_method from attached card PMs (ignores default_payment_method)", async () => {
@@ -127,11 +160,23 @@ describe("Accounts endpoints", () => {
       // 55000 paid + 0 local − 38289.2958 usage = 16710.7042 spendable
       expect(res.body.credited_cents).toBe("55000.0000000000");
       expect(res.body.balance_cents).toBe("16710.7042000000");
+      expect(res.body.actual_balance_cents).toBe("55000.0000000000");
     });
 
     it("returns 502 when runs-service unavailable", async () => {
       await insertTestAccount({ orgId });
       fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(502);
+    });
+
+    it("returns 502 when actual-only runs usage is unavailable", async () => {
+      await insertTestAccount({ orgId });
+      fetchRunsOrgActualUsageTotalSpy.mockRejectedValue(new Error("runs-service actual down"));
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -207,6 +252,7 @@ describe("Accounts endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         balance_cents: "125.0000000000",
+        actual_balance_cents: "150.0000000000",
         depleted: false,
       });
     });
