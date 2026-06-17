@@ -16,7 +16,6 @@ import internalRoutes from "./routes/internal.js";
 import creditsRoutes from "./routes/credits.js";
 import promoCodesRoutes from "./routes/promo_codes.js";
 import brandBudgetsRoutes from "./routes/brand_budgets.js";
-import brandSubscriptionsRoutes from "./routes/brand_subscriptions.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 
@@ -49,7 +48,6 @@ app.use(internalRoutes);
 app.use(creditsRoutes);
 app.use(promoCodesRoutes);
 app.use(brandBudgetsRoutes);
-app.use(brandSubscriptionsRoutes);
 app.use(accountsRoutes);
 app.use(customerBalanceRoutes);
 app.use(checkoutRoutes);
