@@ -11,7 +11,6 @@ import {
   campaignAuthorizeCosts,
   creditDepletionEpisodes,
   localPromos,
-  welcomeCreditClaims,
 } from "../db/schema.js";
 import {
   listCustomersByMetadata,
@@ -35,14 +34,33 @@ const UUID_RE =
 
 type InternalAccountTeardownResponse = typeof InternalAccountTeardownResponseSchema._type;
 
+async function deleteWelcomeCreditClaimsIfPresent(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  orgId: string
+): Promise<number> {
+  const tableCheck = await tx.execute(sql`
+    SELECT to_regclass('public.welcome_credit_claims')::text AS table_name
+  `);
+  const tableName = (tableCheck as unknown as Array<{ table_name: string | null }>)[0]
+    ?.table_name;
+  if (!tableName) return 0;
+
+  const deleted = await tx.execute(sql`
+    DELETE FROM welcome_credit_claims
+    WHERE org_id = ${orgId}
+    RETURNING id
+  `);
+  return Number(
+    (deleted as { count?: number }).count ??
+      (Array.isArray(deleted) ? deleted.length : 0)
+  );
+}
+
 async function deleteBillingStateByOrg(
   orgId: string
 ): Promise<InternalAccountTeardownResponse["deletedRows"]> {
   return db.transaction(async (tx) => {
-    const deletedWelcomeClaims = await tx
-      .delete(welcomeCreditClaims)
-      .where(eq(welcomeCreditClaims.orgId, orgId))
-      .returning({ id: welcomeCreditClaims.id });
+    const deletedWelcomeClaims = await deleteWelcomeCreditClaimsIfPresent(tx, orgId);
 
     const deletedLocalPromos = await tx
       .delete(localPromos)
@@ -75,7 +93,7 @@ async function deleteBillingStateByOrg(
       creditDepletionEpisodes: deletedDunningEpisodes.length,
       campaignAuthorizeCosts: deletedCampaignCosts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
-      welcomeCreditClaims: deletedWelcomeClaims.length,
+      welcomeCreditClaims: deletedWelcomeClaims,
     };
   });
 }
