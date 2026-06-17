@@ -171,7 +171,8 @@
           }
         },
         "required": [
-          "topup_amount_cents"
+          "topup_amount_cents",
+          "topup_threshold_cents"
         ]
       },
       "PortalSessionResponse": {
@@ -239,6 +240,68 @@
         "required": [
           "success_url",
           "cancel_url"
+        ]
+      },
+      "WalletSetupResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BillingAccount"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "initial_load_amount_cents": {
+                "type": "integer",
+                "minimum": 0,
+                "exclusiveMinimum": true
+              },
+              "initial_load_payment_intent_id": {
+                "type": "string"
+              },
+              "first_load_match_applied": {
+                "type": "boolean"
+              },
+              "first_load_match_cents": {
+                "type": "string"
+              },
+              "first_load_match_local_promo_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "initial_load_amount_cents",
+              "initial_load_payment_intent_id",
+              "first_load_match_applied",
+              "first_load_match_cents",
+              "first_load_match_local_promo_id"
+            ]
+          }
+        ]
+      },
+      "WalletSetupRequest": {
+        "type": "object",
+        "properties": {
+          "initial_load_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "topup_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "topup_threshold_cents": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "initial_load_amount_cents",
+          "topup_amount_cents",
+          "topup_threshold_cents"
         ]
       },
       "AuthorizeResponse": {
@@ -1260,7 +1323,7 @@
     "/v1/checkout-sessions": {
       "post": {
         "summary": "Create Stripe Checkout session via stripe-service",
-        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. mode='payment' (default) charges topup_amount_cents and persists it as the auto-topup amount. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
         "parameters": [
           {
             "schema": {
@@ -1357,6 +1420,137 @@
           },
           "502": {
             "description": "stripe-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/wallet_setup": {
+      "post": {
+        "summary": "Configure mandatory org wallet funding and process the initial load",
+        "description": "First-campaign funding setup. Requires explicit initial_load_amount_cents, topup_amount_cents, and topup_threshold_cents. Charges the initial load via stripe-service, stores org-level auto-topup settings, and grants a first-load local promo match dollar-for-dollar up to $25 exactly once per org.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletSetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet setup result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletSetupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or missing payment method",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Initial load payment failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service unavailable",
             "content": {
               "application/json": {
                 "schema": {

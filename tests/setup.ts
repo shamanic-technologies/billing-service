@@ -125,8 +125,9 @@ beforeAll(async () => {
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
     VALUES ('invite_reward', 2500, NULL, NULL),
-           ('invite_welcome', 2500, NULL, NULL)
-    ON CONFLICT ("code") DO NOTHING
+           ('invite_welcome', 2500, NULL, NULL),
+           ('first_load_match', 0, NULL, NULL)
+    ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
   // Drop legacy tables that may linger.

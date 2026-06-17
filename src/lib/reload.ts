@@ -46,7 +46,8 @@ function flattenStatus(pi: StripePaymentIntent): ReloadOutcome {
 export async function reloadViaPaymentIntent(
   identity: IdentityHeaders,
   amountCents: number,
-  idempotencyKey: string
+  idempotencyKey: string,
+  metadata?: Record<string, string>
 ): Promise<ReloadOutcome> {
   const customer = await getCustomerByOrg(identity);
   const cards = await listPaymentMethods(identity, {
@@ -75,6 +76,7 @@ export async function reloadViaPaymentIntent(
       payment_method: pm.id,
       confirm: true,
       off_session: true,
+      metadata,
     },
     idempotencyKey
   );

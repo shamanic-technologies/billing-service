@@ -57,7 +57,7 @@ When reconciling or computing real cost: `WHERE rc.status='actual' AND rc.cost_s
 
 ## Local promos (`local_promos` table)
 
-The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($2 grant; seeded @$2 by migration 0016, bumped to $25 by 0018, reverted to $2 by 0019). Other codes are admin-managed.
+The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($2 grant; seeded @$2 by migration 0016, bumped to $25 by 0018, reverted to $2 by 0019). First paid wallet load match = `code='first_load_match'` (technical code seeded at 0; actual dynamic match amount is stored on the `local_promos` row, dollar-for-dollar capped at $25, once per org). Other codes are admin-managed.
 
 **Re-pricing a promo code at runtime (NO migration):** `PATCH /internal/promo-codes/:code` body `{ amountCents }` updates `local_promo_codes.amount_cents` in place (`GET /internal/promo-codes/:code` reads it). This is the live source read at redeem time, so it changes what NEW signups receive immediately — use this to re-price the welcome gift, not a migration. Service-auth only; the gateway must gate it to staff. Migrations are now only for the SEED DEFAULT (a fresh prod DB) — a `WELCOME_PROMO_AMOUNT_CENTS` change still wants a migration so the default is right on the next deploy, but day-to-day amount tweaks go through the endpoint.
 
@@ -159,9 +159,10 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 |---|---|---|
 | `GET` | `/v1/accounts` | account snapshot (credited, usage, balance, topup config) |
 | `GET` | `/v1/accounts/balance` | shortcut: `{ balance_cents, depleted }` |
-| `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup |
+| `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
+| `POST` | `/v1/accounts/wallet_setup` | first-campaign wallet setup: requires `initial_load_amount_cents`, `topup_amount_cents`, `topup_threshold_cents`; charges the initial load, stores org auto-topup config, grants `first_load_match` up to $25 once |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
-| `POST` | `/v1/checkout-sessions` | one-shot top-up via Stripe Checkout |
+| `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup |
 | `POST` | `/v1/portal-sessions` | Stripe Customer Portal session |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
