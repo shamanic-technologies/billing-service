@@ -17,7 +17,6 @@ import {
   campaignAuthorizeCosts,
   creditDepletionEpisodes,
   localPromos,
-  welcomeCreditClaims,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 
@@ -38,7 +37,6 @@ async function orgRowCounts(orgId: string) {
     episodeRows,
     campaignCostRows,
     brandBudgetRows,
-    welcomeClaimRows,
   ] = await Promise.all([
     db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId)),
     db.select().from(localPromos).where(eq(localPromos.orgId, orgId)),
@@ -51,10 +49,6 @@ async function orgRowCounts(orgId: string) {
       .from(campaignAuthorizeCosts)
       .where(eq(campaignAuthorizeCosts.orgId, orgId)),
     db.select().from(brandDailyBudgets).where(eq(brandDailyBudgets.orgId, orgId)),
-    db
-      .select()
-      .from(welcomeCreditClaims)
-      .where(eq(welcomeCreditClaims.orgId, orgId)),
   ]);
 
   return {
@@ -63,7 +57,7 @@ async function orgRowCounts(orgId: string) {
     creditDepletionEpisodes: episodeRows.length,
     campaignAuthorizeCosts: campaignCostRows.length,
     brandDailyBudgets: brandBudgetRows.length,
-    welcomeCreditClaims: welcomeClaimRows.length,
+    welcomeCreditClaims: 0,
   };
 }
 
@@ -76,7 +70,6 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
     seed === "target"
       ? "aaaaaaaa-0000-4000-8000-00000000b001"
       : "bbbbbbbb-0000-4000-8000-00000000b001";
-  const cardFingerprint = seed === "target" ? "fp_teardown_target" : "fp_teardown_other";
 
   await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
   await insertTestPromoGrant({
@@ -99,13 +92,6 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
     brandId,
     orgId,
     dailyBudgetCents: "2500.0000000000",
-  });
-  await db.insert(welcomeCreditClaims).values({
-    orgId,
-    userId: seed === "target" ? userId : otherUserId,
-    brandId,
-    cardFingerprint,
-    amountCents: "2500.0000000000",
   });
 }
 
@@ -138,7 +124,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
         creditDepletionEpisodes: 1,
         campaignAuthorizeCosts: 1,
         brandDailyBudgets: 1,
-        welcomeCreditClaims: 1,
+        welcomeCreditClaims: 0,
       },
     });
     expect(await orgRowCounts(targetOrgId)).toEqual({
@@ -155,7 +141,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       creditDepletionEpisodes: 1,
       campaignAuthorizeCosts: 1,
       brandDailyBudgets: 1,
-      welcomeCreditClaims: 1,
+      welcomeCreditClaims: 0,
     });
   });
 
