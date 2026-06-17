@@ -166,6 +166,7 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
+| `DELETE` | `/internal/accounts/by-org/:orgId` | client-service org teardown leg. Service-auth only; `:orgId` is the internal org UUID. Deletes billing-owned org rows (`billing_accounts`, `local_promos`, `credit_depletion_episodes`, `campaign_authorize_costs`, `brand_daily_budgets`, `welcome_credit_claims`) in one transaction. Idempotent: no rows → success. No cross-service fan-out. |
 | `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$25` welcome row. Used by api-service invite claim handler (DIS-64). |
 | `POST` | `/internal/dunning/tick` | run one out-of-credit dunning pass (ops/manual). Same pass runs on the in-process hourly scheduler. → `{processed, recovered, followup3dSent, followup10dSent}`. |
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
