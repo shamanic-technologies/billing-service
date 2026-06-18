@@ -4,12 +4,14 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 
 const orgId = "00000000-0000-0000-0000-00000000b201";
+const otherOrgId = "00000000-0000-0000-0000-00000000b202";
 const userId = "00000000-0000-0000-0000-00000000b299";
 const runId = "00000000-0000-0000-0000-00000000baaa";
 const brandId = "00000000-0000-0000-0000-0000000bd601";
 const otherBrandId = "00000000-0000-0000-0000-0000000bd999";
 
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
+const internalHeaders = (id: string) => ({ ...apiKeyHeaders, "x-org-id": id });
 
 function readPath(id: string) {
   return `/internal/brands/${id}/daily-budget`;
@@ -52,7 +54,9 @@ describe("brand daily budget (store + serve)", () => {
       .set(authHeaders)
       .send({ dailyBudgetCents: 2500 });
 
-    const res = await request(app).get(readPath(brandId)).set(apiKeyHeaders);
+    const res = await request(app)
+      .get(readPath(brandId))
+      .set(internalHeaders(orgId));
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -72,18 +76,63 @@ describe("brand daily budget (store + serve)", () => {
       .set(authHeaders)
       .send({ dailyBudgetCents: 9900 });
 
-    const res = await request(app).get(readPath(brandId)).set(apiKeyHeaders);
+    const res = await request(app)
+      .get(readPath(brandId))
+      .set(internalHeaders(orgId));
 
     expect(res.status).toBe(200);
     expect(res.body.dailyBudgetCents).toBe("9900.0000000000");
   });
 
   it("unset brand → 200 with null budget", async () => {
-    const res = await request(app).get(readPath(otherBrandId)).set(apiKeyHeaders);
+    const res = await request(app)
+      .get(readPath(otherBrandId))
+      .set(internalHeaders(orgId));
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       brandId: otherBrandId,
+      dailyBudgetCents: null,
+      updatedAt: null,
+    });
+  });
+
+  it("stores independent budgets for the same brand in different orgs", async () => {
+    await request(app)
+      .patch(setPath(brandId))
+      .set(authHeaders)
+      .send({ dailyBudgetCents: 2500 });
+    await request(app)
+      .patch(setPath(brandId))
+      .set(getAuthHeaders(otherOrgId, userId, runId))
+      .send({ dailyBudgetCents: 9900 });
+
+    const orgARes = await request(app)
+      .get(readPath(brandId))
+      .set(internalHeaders(orgId));
+    const orgBRes = await request(app)
+      .get(readPath(brandId))
+      .set(internalHeaders(otherOrgId));
+
+    expect(orgARes.status).toBe(200);
+    expect(orgBRes.status).toBe(200);
+    expect(orgARes.body.dailyBudgetCents).toBe("2500.0000000000");
+    expect(orgBRes.body.dailyBudgetCents).toBe("9900.0000000000");
+  });
+
+  it("returns null when this org has no budget even if another org has one", async () => {
+    await request(app)
+      .patch(setPath(brandId))
+      .set(getAuthHeaders(otherOrgId, userId, runId))
+      .send({ dailyBudgetCents: 9900 });
+
+    const res = await request(app)
+      .get(readPath(brandId))
+      .set(internalHeaders(orgId));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      brandId,
       dailyBudgetCents: null,
       updatedAt: null,
     });
@@ -127,14 +176,32 @@ describe("brand daily budget (store + serve)", () => {
   });
 
   it("rejects a non-UUID brandId on GET with 400", async () => {
-    const res = await request(app).get(readPath("not-a-uuid")).set(apiKeyHeaders);
+    const res = await request(app)
+      .get(readPath("not-a-uuid"))
+      .set(internalHeaders(orgId));
 
     expect(res.status).toBe(400);
   });
 
   it("internal read requires service auth (401 without x-api-key)", async () => {
-    const res = await request(app).get(readPath(brandId));
+    const res = await request(app)
+      .get(readPath(brandId))
+      .set({ "x-org-id": orgId });
     expect(res.status).toBe(401);
+  });
+
+  it("internal read requires x-org-id", async () => {
+    const res = await request(app).get(readPath(brandId)).set(apiKeyHeaders);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("x-org-id header is required");
+  });
+
+  it("internal read rejects invalid x-org-id", async () => {
+    const res = await request(app)
+      .get(readPath(brandId))
+      .set({ ...apiKeyHeaders, "x-org-id": "not-a-uuid" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("x-org-id must be a valid UUID");
   });
 
   it("PATCH requires org headers (400 without x-org-id)", async () => {

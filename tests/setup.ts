@@ -111,14 +111,24 @@ beforeAll(async () => {
     )
   `;
 
-  // brand_daily_budgets (per-brand daily spend ceiling, migration 0022).
+  // brand_daily_budgets (org-scoped per-brand daily spend ceiling, migrations 0022 + 0024).
   await sql`
     CREATE TABLE IF NOT EXISTS "brand_daily_budgets" (
-      "brand_id" uuid PRIMARY KEY NOT NULL,
+      "brand_id" uuid NOT NULL,
       "org_id" uuid NOT NULL,
       "daily_budget_cents" numeric(16,10) NOT NULL,
-      "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+      PRIMARY KEY ("org_id", "brand_id")
     )
+  `;
+  await sql`
+    ALTER TABLE "brand_daily_budgets"
+      DROP CONSTRAINT IF EXISTS "brand_daily_budgets_pkey"
+  `;
+  await sql`
+    ALTER TABLE "brand_daily_budgets"
+      ADD CONSTRAINT "brand_daily_budgets_pkey"
+      PRIMARY KEY ("org_id", "brand_id")
   `;
 
   // Seed platform-issued grant promo codes (matches migration 0017).

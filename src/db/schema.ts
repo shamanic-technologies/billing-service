@@ -7,6 +7,7 @@ import {
   timestamp,
   uniqueIndex,
   index,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -193,28 +194,35 @@ export const campaignAuthorizeCosts = pgTable("campaign_authorize_costs", {
 export type CampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferSelect;
 export type NewCampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferInsert;
 
-// brand_daily_budgets: per-brand daily spend ceiling (allocation / pacing).
-// ONE current scalar per brand, mutable, upserted in place (PK = brand_id).
-// This is a PACING ceiling ("how much should THIS brand spend per day"), a
-// SEPARATE concept from org credit balance/affordability ("can the org pay").
-// billing-service only STORES + SERVES this value — enforcement (summing
+// brand_daily_budgets: org-scoped per-brand daily spend ceiling
+// (allocation / pacing). A shared brand can belong to multiple orgs, so the
+// mutable scalar is one row per (org_id, brand_id), not one row per brand.
+// This is a PACING ceiling ("how much should THIS org spend for THIS brand per
+// day"), a SEPARATE concept from org credit balance/affordability ("can the org
+// pay"). billing-service only STORES + SERVES this value — enforcement (summing
 // today's spend vs the ceiling, stop-when-exceeded) is campaign-service's job.
-// Read by the user-less `GET /internal/brands/:brandId/daily-budget` (campaign-
-// service, api-key only — no user context). Set/updated by the user via
-// `PATCH /v1/brands/:brandId/daily-budget`. org_id is provenance (captured from
-// the setter's x-org-id); the read keys on brand_id alone. No row → unset
+// Reads and writes both require org identity. No row for that org+brand → unset
 // (the read returns dailyBudgetCents:null) — distinct from an explicit 0 (pause).
-export const brandDailyBudgets = pgTable("brand_daily_budgets", {
-  brandId: uuid("brand_id").primaryKey(),
-  orgId: uuid("org_id").notNull(),
-  dailyBudgetCents: numeric("daily_budget_cents", {
-    precision: FRACTIONAL_PRECISION,
-    scale: FRACTIONAL_SCALE,
-  }).notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const brandDailyBudgets = pgTable(
+  "brand_daily_budgets",
+  {
+    brandId: uuid("brand_id").notNull(),
+    orgId: uuid("org_id").notNull(),
+    dailyBudgetCents: numeric("daily_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "brand_daily_budgets_pkey",
+      columns: [table.orgId, table.brandId],
+    }),
+  ]
+);
 
 export type BrandDailyBudget = typeof brandDailyBudgets.$inferSelect;
 export type NewBrandDailyBudget = typeof brandDailyBudgets.$inferInsert;

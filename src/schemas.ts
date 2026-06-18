@@ -673,6 +673,11 @@ const internalHeaders = z.object({
   "x-api-key": z.string(),
 });
 
+const internalOrgHeaders = z.object({
+  "x-api-key": z.string(),
+  "x-org-id": z.string().uuid(),
+});
+
 registry.registerPath({
   method: "delete",
   path: "/internal/accounts/by-org/{orgId}",
@@ -854,15 +859,16 @@ registry.registerPath({
 registry.registerPath({
   method: "get",
   path: "/internal/brands/{brandId}/daily-budget",
-  summary: "Read a brand's current daily budget (per-day spend ceiling)",
+  summary: "Read this org's current daily budget for a brand",
   description:
-    "Returns the brand's current daily spend ceiling, keyed by brandId. User-less " +
-    "service-to-service read (x-api-key only) — campaign-service calls this once per " +
-    "loop on a scheduler. A brand with no configured budget returns dailyBudgetCents: " +
-    "null (a legitimate unset state; the consumer decides how to handle it). " +
+    "Returns the caller org's current daily spend ceiling for this brand, keyed by " +
+    "(x-org-id, brandId). Service-to-service read with x-api-key plus x-org-id; " +
+    "shared brands can have different budgets in different orgs. A brand with no " +
+    "configured budget for this org returns dailyBudgetCents: null (a legitimate " +
+    "unset state; the consumer decides how to handle it). " +
     "billing-service only stores + serves this value; enforcement is campaign-service's job.",
   request: {
-    headers: internalHeaders,
+    headers: internalOrgHeaders,
     params: z.object({ brandId: z.string().uuid() }),
   },
   responses: {
@@ -871,7 +877,7 @@ registry.registerPath({
       content: { "application/json": { schema: ReadBrandDailyBudgetSchema } },
     },
     400: {
-      description: "brandId is not a valid UUID",
+      description: "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -882,11 +888,12 @@ registry.registerPath({
   path: "/v1/brands/{brandId}/daily-budget",
   summary: "Set / update a brand's daily budget (per-day spend ceiling)",
   description:
-    "Sets the brand's daily spend ceiling. One mutable scalar per brand, upserted in " +
-    "place — a subsequent read reflects the latest write. dailyBudgetCents is " +
+    "Sets this org's daily spend ceiling for the brand. One mutable scalar per " +
+    "(orgId, brandId), upserted in place — a subsequent org-scoped read reflects " +
+    "the latest write. dailyBudgetCents is " +
     "non-negative (0 = explicit pause). This is an allocation / pacing ceiling, a " +
     "SEPARATE concept from org credit balance/affordability (which is unchanged). " +
-    "org_id is captured from x-org-id for provenance.",
+    "Shared brands can have independent budget rows per org.",
   request: {
     headers: protectedHeaders,
     params: z.object({ brandId: z.string().uuid() }),

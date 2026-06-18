@@ -2248,8 +2248,8 @@
     },
     "/internal/brands/{brandId}/daily-budget": {
       "get": {
-        "summary": "Read a brand's current daily budget (per-day spend ceiling)",
-        "description": "Returns the brand's current daily spend ceiling, keyed by brandId. User-less service-to-service read (x-api-key only) — campaign-service calls this once per loop on a scheduler. A brand with no configured budget returns dailyBudgetCents: null (a legitimate unset state; the consumer decides how to handle it). billing-service only stores + serves this value; enforcement is campaign-service's job.",
+        "summary": "Read this org's current daily budget for a brand",
+        "description": "Returns the caller org's current daily spend ceiling for this brand, keyed by (x-org-id, brandId). Service-to-service read with x-api-key plus x-org-id; shared brands can have different budgets in different orgs. A brand with no configured budget for this org returns dailyBudgetCents: null (a legitimate unset state; the consumer decides how to handle it). billing-service only stores + serves this value; enforcement is campaign-service's job.",
         "parameters": [
           {
             "schema": {
@@ -2267,6 +2267,15 @@
             "required": true,
             "name": "x-api-key",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -2281,7 +2290,7 @@
             }
           },
           "400": {
-            "description": "brandId is not a valid UUID",
+            "description": "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
             "content": {
               "application/json": {
                 "schema": {
@@ -2296,7 +2305,7 @@
     "/v1/brands/{brandId}/daily-budget": {
       "patch": {
         "summary": "Set / update a brand's daily budget (per-day spend ceiling)",
-        "description": "Sets the brand's daily spend ceiling. One mutable scalar per brand, upserted in place — a subsequent read reflects the latest write. dailyBudgetCents is non-negative (0 = explicit pause). This is an allocation / pacing ceiling, a SEPARATE concept from org credit balance/affordability (which is unchanged). org_id is captured from x-org-id for provenance.",
+        "description": "Sets this org's daily spend ceiling for the brand. One mutable scalar per (orgId, brandId), upserted in place — a subsequent org-scoped read reflects the latest write. dailyBudgetCents is non-negative (0 = explicit pause). This is an allocation / pacing ceiling, a SEPARATE concept from org credit balance/affordability (which is unchanged). Shared brands can have independent budget rows per org.",
         "parameters": [
           {
             "schema": {
