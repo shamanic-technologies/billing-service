@@ -27,6 +27,7 @@ export async function traceEvent(
         ...(headers["x-campaign-id"] ? { "x-campaign-id": headers["x-campaign-id"] as string } : {}),
         ...(headers["x-workflow-slug"] ? { "x-workflow-slug": headers["x-workflow-slug"] as string } : {}),
         ...(headers["x-feature-slug"] ? { "x-feature-slug": headers["x-feature-slug"] as string } : {}),
+        ...(headers["x-audience-id"] ? { "x-audience-id": headers["x-audience-id"] as string } : {}),
       },
       body: JSON.stringify(payload),
     });
