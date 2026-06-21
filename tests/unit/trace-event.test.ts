@@ -52,6 +52,7 @@ describe("traceEvent", () => {
         "x-campaign-id": "camp-1",
         "x-workflow-slug": "wf-slug",
         "x-feature-slug": "feat-slug",
+        "x-audience-id": "aud-1",
       }
     );
 
@@ -63,6 +64,7 @@ describe("traceEvent", () => {
     expect(headers["x-campaign-id"]).toBe("camp-1");
     expect(headers["x-workflow-slug"]).toBe("wf-slug");
     expect(headers["x-feature-slug"]).toBe("feat-slug");
+    expect(headers["x-audience-id"]).toBe("aud-1");
   });
 
   it("omits undefined identity headers", async () => {
@@ -78,6 +80,7 @@ describe("traceEvent", () => {
     expect(headers["x-org-id"]).toBe("org-1");
     expect(headers).not.toHaveProperty("x-user-id");
     expect(headers).not.toHaveProperty("x-brand-id");
+    expect(headers).not.toHaveProperty("x-audience-id");
   });
 
   it("skips silently when RUNS_SERVICE_URL is not set", async () => {

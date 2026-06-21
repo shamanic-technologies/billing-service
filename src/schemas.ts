@@ -372,6 +372,7 @@ const protectedHeaders = z.object({
   "x-brand-id": z.string().optional().openapi({ description: "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)", example: "uuid1,uuid2,uuid3" }),
   "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug injected by workflow-service" }),
   "x-feature-slug": z.string().optional().openapi({ description: "Feature slug for tracking" }),
+  "x-audience-id": z.string().optional().openapi({ description: "Audience ID injected by campaign-service for per-audience cost attribution" }),
 });
 
 registry.registerPath({
