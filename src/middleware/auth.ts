@@ -5,6 +5,7 @@ export interface WorkflowHeaders {
   brandIds?: string[];
   workflowSlug?: string;
   featureSlug?: string;
+  audienceId?: string;
 }
 
 /** Parse the x-brand-id header as a comma-separated list of UUIDs. */
@@ -21,6 +22,7 @@ export function getWorkflowHeaders(req: Request): WorkflowHeaders {
     brandIds: parseBrandIds(req.headers["x-brand-id"] as string | undefined),
     workflowSlug: req.headers["x-workflow-slug"] as string | undefined,
     featureSlug: req.headers["x-feature-slug"] as string | undefined,
+    audienceId: req.headers["x-audience-id"] as string | undefined,
   };
 }
 
@@ -31,6 +33,7 @@ export function forwardWorkflowHeaders(wf: WorkflowHeaders): Record<string, stri
   if (wf.brandIds && wf.brandIds.length > 0) headers["x-brand-id"] = wf.brandIds.join(",");
   if (wf.workflowSlug) headers["x-workflow-slug"] = wf.workflowSlug;
   if (wf.featureSlug) headers["x-feature-slug"] = wf.featureSlug;
+  if (wf.audienceId) headers["x-audience-id"] = wf.audienceId;
   return headers;
 }
 
