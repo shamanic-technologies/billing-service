@@ -210,6 +210,52 @@ export const CreditGrantResponseSchema = z
   })
   .openapi("CreditGrantResponse");
 
+// --- Admin credit grants (staff oversight ledger, stacking arbitrary amount) ---
+
+export const AdminCreditGrantRequestSchema = z
+  .object({
+    /** Arbitrary positive grant amount, integer cents. */
+    amountCents: z.number().int().positive(),
+    /** Optional staff note, stored on the grant row. */
+    note: z.string().optional(),
+    /**
+     * Caller-supplied stacking key. A fresh key per grant STACKS; the same key
+     * retried never double-grants. Required — no silent default.
+     */
+    idempotencyKey: z.string().min(1),
+  })
+  .openapi("AdminCreditGrantRequest");
+
+export const AdminCreditGrantResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Spendable funds after the grant (credited_cents − usage_cents). */
+    newBalanceCents: CentsStringSchema,
+  })
+  .openapi("AdminCreditGrantResponse");
+
+export const CreditGrantItemSchema = z
+  .object({
+    id: z.string(),
+    orgId: z.string(),
+    /** Grant amount, decimal string (numeric(16,10)). */
+    amountCents: CentsStringSchema,
+    /** Promo CODE behind the grant (admin_grant, invite_*, welcome, …). */
+    reason: z.string(),
+    /** Staff note / grant description; null when none. */
+    note: z.string().nullable(),
+    /** Staff email behind an admin_grant; null for non-admin grants. */
+    grantedBy: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .openapi("CreditGrantItem");
+
+export const CreditGrantsListResponseSchema = z
+  .object({
+    grants: z.array(CreditGrantItemSchema),
+  })
+  .openapi("CreditGrantsListResponse");
+
 // --- Internal account teardown (client-service org cascade delete) ---
 
 export const InternalAccountTeardownDeletedRowsSchema = z
@@ -743,6 +789,98 @@ registry.registerPath({
     502: {
       description: "stripe-service or runs-service unavailable (balance compose failed)",
       content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+const adminGrantHeaders = z.object({
+  "x-api-key": z.string(),
+  "x-org-id": z.string().uuid(),
+  "x-email": z.string().optional().openapi({
+    description: "Staff email behind the grant; recorded as grantedBy.",
+  }),
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/grant",
+  summary: "Staff grant of an arbitrary credit amount to an org (stacking)",
+  description:
+    "Inserts a stacking admin_grant local_promos row for x-org-id. Grants STACK — a " +
+    "fresh idempotencyKey per call adds another grant; the same key retried never " +
+    "double-grants. The note is stored on the row; x-email is recorded as grantedBy. " +
+    "Returns the org's spendable balance after the grant.",
+  request: {
+    headers: adminGrantHeaders,
+    body: {
+      content: { "application/json": { schema: AdminCreditGrantRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Grant applied (or already applied for this idempotencyKey)",
+      content: {
+        "application/json": { schema: AdminCreditGrantResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid body or missing/invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "admin_grant promo code seed missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/credits/grants",
+  summary: "List this org's credit grants (oversight ledger)",
+  description:
+    "Returns every credit grant for x-org-id (admin_grant, invite_*, welcome, promo " +
+    "redemptions, first_load_match), newest first. reason is the promo code.",
+  request: {
+    headers: z.object({
+      "x-api-key": z.string(),
+      "x-org-id": z.string().uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Org grants",
+      content: {
+        "application/json": { schema: CreditGrantsListResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/credits/grants",
+  summary: "List ALL orgs' credit grants (platform-wide oversight ledger)",
+  description:
+    "Returns every credit grant across all orgs, newest first. Service-auth only " +
+    "(x-api-key); no org scope. reason is the promo code behind each grant.",
+  request: {
+    headers: internalHeaders,
+  },
+  responses: {
+    200: {
+      description: "All grants",
+      content: {
+        "application/json": { schema: CreditGrantsListResponseSchema },
+      },
     },
   },
 });
