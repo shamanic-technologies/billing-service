@@ -217,18 +217,26 @@
           "url": {
             "type": "string"
           },
+          "client_secret": {
+            "type": "string"
+          },
           "session_id": {
             "type": "string"
           }
         },
         "required": [
-          "url",
           "session_id"
         ]
       },
       "CreateCheckoutRequest": {
         "type": "object",
         "properties": {
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "embedded"
+            ]
+          },
           "success_url": {
             "type": "string",
             "format": "uri"
@@ -249,11 +257,7 @@
             "minimum": 0,
             "exclusiveMinimum": true
           }
-        },
-        "required": [
-          "success_url",
-          "cancel_url"
-        ]
+        }
       },
       "WalletSetupResponse": {
         "allOf": [
@@ -1471,7 +1475,7 @@
     "/v1/checkout-sessions": {
       "post": {
         "summary": "Create Stripe Checkout session via stripe-service",
-        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). Credit + first-load match land via the existing checkout.session.completed webhook in all modes.",
         "parameters": [
           {
             "schema": {

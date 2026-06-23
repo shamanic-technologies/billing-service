@@ -127,25 +127,45 @@ export const WalletSetupResponseSchema = BillingAccountSchema.extend({
 
 export const CreateCheckoutRequestSchema = z
   .object({
-    success_url: z.string().url(),
-    cancel_url: z.string().url(),
     /**
-     * Checkout flavor. Absent or "payment" → one-shot top-up checkout.
+     * Checkout UI flavor.
+     * Absent → HOSTED redirect Checkout (default; requires success_url + cancel_url,
+     * returns a `url` the dashboard redirects to).
+     * "embedded" → Stripe Embedded Checkout mounted in an in-app modal (no redirect;
+     * success_url/cancel_url are not required, returns a `client_secret`). Embedded is
+     * payment-only: it always charges topup_amount_cents as a one-shot top-up.
+     */
+    ui_mode: z.literal("embedded").optional(),
+    /** Required for HOSTED checkout; not required (and ignored) in embedded mode. */
+    success_url: z.string().url().optional(),
+    cancel_url: z.string().url().optional(),
+    /**
+     * Checkout flavor (hosted only). Absent or "payment" → one-shot top-up checkout.
      * "setup" → no-charge Stripe Checkout that saves a reusable off-session card so
      * the org can enable auto-topup without buying credits.
      */
     mode: z.enum(["payment", "setup"]).optional(),
     /**
-     * Required for payment-mode (validated in the route — fail loud with 400 when
-     * absent). Omitted for setup-mode (no charge).
+     * Required for payment-mode and for embedded mode (validated in the route — fail
+     * loud with 400 when absent). Omitted for hosted setup-mode (no charge).
      */
     topup_amount_cents: z.number().int().positive().optional(),
   })
+  .refine(
+    (data) => data.ui_mode === "embedded" || (!!data.success_url && !!data.cancel_url),
+    {
+      message: "success_url and cancel_url are required for hosted checkout",
+      path: ["success_url"],
+    }
+  )
   .openapi("CreateCheckoutRequest");
 
 export const CheckoutResponseSchema = z
   .object({
-    url: z.string(),
+    /** Present for HOSTED checkout (the redirect URL); absent in embedded mode. */
+    url: z.string().optional(),
+    /** Present for EMBEDDED checkout (mounted in the in-app modal iframe); absent for hosted. */
+    client_secret: z.string().optional(),
     session_id: z.string(),
   })
   .openapi("CheckoutResponse");
@@ -581,8 +601,11 @@ registry.registerPath({
   summary: "Create Stripe Checkout session via stripe-service",
   description:
     "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. " +
+    "HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. " +
     "mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. " +
-    "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
+    "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. " +
+    "EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). " +
+    "Credit + first-load match land via the existing checkout.session.completed webhook in all modes.",
   request: {
     headers: protectedHeaders,
     body: {
