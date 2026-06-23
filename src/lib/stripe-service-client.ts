@@ -80,7 +80,10 @@ export interface CustomerEnsureResult {
 }
 
 export interface CheckoutSessionResult {
-  url: string;
+  /** Present for hosted (redirect) sessions; absent for embedded. */
+  url?: string;
+  /** Present for embedded (ui_mode:"embedded") sessions; absent for hosted. */
+  client_secret?: string;
   session_id: string;
 }
 
@@ -286,12 +289,24 @@ export interface CheckoutLineItem {
 
 export interface CheckoutSessionBody {
   mode: "payment" | "setup";
+  /**
+   * "embedded" → Stripe Embedded Checkout (in-app modal iframe). Omitted → hosted
+   * (redirect) checkout. stripe-service returns a `client_secret` for embedded sessions.
+   */
+  ui_mode?: "embedded";
+  /**
+   * Embedded-mode completion behavior. "never" → Stripe does NOT redirect after the
+   * payment completes (the modal stays in-app); required by Stripe when ui_mode is
+   * "embedded" and no success_url is supplied.
+   */
+  redirect_on_completion?: "never";
   /** Required by Stripe for setup mode when payment_method_types is omitted. */
   currency?: string;
   /** Required for payment mode; omitted for setup mode (no charge). */
   line_items?: CheckoutLineItem[];
-  success_url: string;
-  cancel_url: string;
+  /** Required for hosted checkout; omitted for embedded (redirect_on_completion:"never"). */
+  success_url?: string;
+  cancel_url?: string;
   customer: string;
   metadata: Record<string, string>;
   /** Payment-mode charge config; omitted for setup mode (no PaymentIntent created). */
