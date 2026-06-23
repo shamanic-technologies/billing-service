@@ -25,16 +25,20 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
     const { success_url, cancel_url, topup_amount_cents } = parsed.data;
-    const isSetup = parsed.data.mode === "setup";
+    const isEmbedded = parsed.data.ui_mode === "embedded";
+    // Embedded checkout is always payment (the iframe captures a card + charges the
+    // top-up); mode is ignored when ui_mode="embedded".
+    const isSetup = !isEmbedded && parsed.data.mode === "setup";
 
-    // Payment-mode (absent mode or "payment") requires an explicit amount. Fail loud
-    // rather than defaulting — a payment checkout with no amount is a malformed request.
+    // Payment checkout (hosted payment-mode or embedded) requires an explicit amount.
+    // Fail loud rather than defaulting — a payment checkout with no amount is malformed.
+    // (Embedded already enforces this in the schema; the guard keeps hosted-payment safe.)
     if (!isSetup && topup_amount_cents === undefined) {
       res.status(400).json({ error: "topup_amount_cents is required for payment-mode checkout" });
       return;
     }
 
-    traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { mode: isSetup ? "setup" : "payment", topup_amount_cents } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { ui_mode: isEmbedded ? "embedded" : "hosted", mode: isSetup ? "setup" : "payment", topup_amount_cents } }, req.headers);
 
     await findOrCreateAccount(orgId, userId, wfHeaders);
 
@@ -62,9 +66,9 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           metadata: { org_id: orgId },
         };
       } else {
-        // payment mode — topup_amount_cents is guaranteed present by the 400 guard
-        // above (non-setup + undefined already returned). The `!` reflects that proven
-        // invariant; it is not a fallback.
+        // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
+        // by the 400 guard above (non-setup + undefined already returned). The `!`
+        // reflects that proven invariant; it is not a fallback.
         body = {
           mode: "payment",
           line_items: [
@@ -77,8 +81,6 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
               quantity: 1,
             },
           ],
-          success_url,
-          cancel_url,
           customer: customer.id,
           metadata: { org_id: orgId },
           payment_intent_data: {
@@ -86,6 +88,19 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
             setup_future_usage: "off_session",
           },
         };
+        if (isEmbedded) {
+          // Embedded Checkout: mounted in an in-app iframe, returns a client_secret,
+          // never redirects (so no success_url). The card is still saved off-session
+          // via payment_intent_data.setup_future_usage above. The SAME
+          // checkout.session.completed webhook fires on completion, so all credit
+          // accounting (wallet credit, first-load match, saved card) is unchanged.
+          body.ui_mode = "embedded";
+          body.redirect_on_completion = "never";
+        } else {
+          // Hosted Checkout: redirect to the Stripe-hosted page.
+          body.success_url = success_url;
+          body.cancel_url = cancel_url;
+        }
       }
       session = await createCheckoutSession(identity, body);
     } catch (err) {
@@ -96,10 +111,12 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id } }, req.headers);
 
-    res.json({
-      url: session.url,
-      session_id: session.session_id,
-    });
+    // Embedded returns a client_secret (mounted in the iframe); hosted returns a url.
+    res.json(
+      isEmbedded
+        ? { client_secret: session.client_secret, session_id: session.session_id }
+        : { url: session.url, session_id: session.session_id }
+    );
   } catch (err) {
     console.error("[billing-service] Error creating checkout session:", err);
     res.status(500).json({ error: "Internal server error" });

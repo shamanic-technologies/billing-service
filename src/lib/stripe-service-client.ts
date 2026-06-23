@@ -80,7 +80,10 @@ export interface CustomerEnsureResult {
 }
 
 export interface CheckoutSessionResult {
-  url: string;
+  /** Hosted checkout — the Stripe-hosted page URL. Absent for embedded sessions. */
+  url?: string;
+  /** Embedded checkout — the client secret the front-end mounts in the iframe. Absent for hosted sessions. */
+  client_secret?: string;
   session_id: string;
 }
 
@@ -286,12 +289,22 @@ export interface CheckoutLineItem {
 
 export interface CheckoutSessionBody {
   mode: "payment" | "setup";
+  /**
+   * Checkout UI surface. Omitted (hosted) → Stripe returns a redirect `url`.
+   * "embedded" → Stripe returns a `client_secret` for the in-app iframe and
+   * requires `redirect_on_completion: "never"` (no success_url).
+   */
+  ui_mode?: "embedded";
+  /** Embedded sessions never redirect; set to "never" so no success_url is required. */
+  redirect_on_completion?: "never";
   /** Required by Stripe for setup mode when payment_method_types is omitted. */
   currency?: string;
   /** Required for payment mode; omitted for setup mode (no charge). */
   line_items?: CheckoutLineItem[];
-  success_url: string;
-  cancel_url: string;
+  /** Required for hosted checkout; omitted for embedded (no redirect). */
+  success_url?: string;
+  /** Required for hosted checkout; omitted for embedded (no redirect). */
+  cancel_url?: string;
   customer: string;
   metadata: Record<string, string>;
   /** Payment-mode charge config; omitted for setup mode (no PaymentIntent created). */

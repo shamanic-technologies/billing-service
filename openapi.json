@@ -217,18 +217,27 @@
           "url": {
             "type": "string"
           },
+          "client_secret": {
+            "type": "string"
+          },
           "session_id": {
             "type": "string"
           }
         },
         "required": [
-          "url",
           "session_id"
         ]
       },
       "CreateCheckoutRequest": {
         "type": "object",
         "properties": {
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ]
+          },
           "success_url": {
             "type": "string",
             "format": "uri"
@@ -249,11 +258,7 @@
             "minimum": 0,
             "exclusiveMinimum": true
           }
-        },
-        "required": [
-          "success_url",
-          "cancel_url"
-        ]
+        }
       },
       "WalletSetupResponse": {
         "allOf": [
@@ -1471,7 +1476,7 @@
     "/v1/checkout-sessions": {
       "post": {
         "summary": "Create Stripe Checkout session via stripe-service",
-        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. ui_mode='hosted' (default) returns a Stripe-hosted page `url` to redirect to and requires success_url + cancel_url. ui_mode='embedded' returns a `client_secret` for in-app Stripe Embedded Checkout (mounted in an iframe, no redirect); success_url/cancel_url are not required and it is always payment (charges topup_amount_cents). mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' (hosted only) creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. In all cases credit accounting (wallet credit, first-load match, saved card) lands via the existing checkout.session.completed webhook, not synchronously.",
         "parameters": [
           {
             "schema": {
@@ -1566,7 +1571,7 @@
         },
         "responses": {
           "200": {
-            "description": "Checkout session URL",
+            "description": "Checkout session: { url, session_id } for hosted, { client_secret, session_id } for embedded",
             "content": {
               "application/json": {
                 "schema": {

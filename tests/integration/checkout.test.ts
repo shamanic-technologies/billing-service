@@ -233,4 +233,119 @@ describe("POST /v1/checkout-sessions", () => {
     // Never falls back to a charge.
     expect(ssMocks.createPaymentIntent).not.toHaveBeenCalled();
   });
+
+  // --- Embedded mode (in-app iframe, no redirect) ---
+
+  it("embedded: returns client_secret + session_id (no url), no success/cancel URL required", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      client_secret: "cs_test_secret_abc",
+      session_id: "cs_emb",
+    });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        ui_mode: "embedded",
+        topup_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      client_secret: "cs_test_secret_abc",
+      session_id: "cs_emb",
+    });
+    expect(res.body).not.toHaveProperty("url");
+  });
+
+  it("embedded: proxies a payment session with ui_mode=embedded, redirect_on_completion=never, off-session card, no success/cancel", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      client_secret: "cs_test_secret_abc",
+      session_id: "cs_emb",
+    });
+
+    await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        ui_mode: "embedded",
+        topup_amount_cents: 2000,
+      });
+
+    expect(ssMocks.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({ "x-org-id": orgId }),
+      {
+        mode: "payment",
+        ui_mode: "embedded",
+        redirect_on_completion: "never",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Distribute credit top-up" },
+              unit_amount: 2000,
+            },
+            quantity: 1,
+          },
+        ],
+        customer: "cus_mock_123",
+        metadata: { org_id: orgId },
+        payment_intent_data: {
+          metadata: { org_id: orgId },
+          setup_future_usage: "off_session",
+        },
+      }
+    );
+    // Embedded never sends redirect URLs to stripe-service.
+    const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
+    expect(sentBody).not.toHaveProperty("success_url");
+    expect(sentBody).not.toHaveProperty("cancel_url");
+  });
+
+  it("embedded: auto-creates the billing account with welcome promo on first checkout", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      client_secret: "cs_test_secret_abc",
+      session_id: "cs_emb",
+    });
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        ui_mode: "embedded",
+        topup_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(200);
+    expect(ssMocks.ensureCustomer).toHaveBeenCalled();
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId));
+    expect(account).toBeDefined();
+  });
+
+  it("embedded: 400 when topup_amount_cents is missing", async () => {
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ ui_mode: "embedded" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("embedded: returns 502 when stripe-service fails", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.createCheckoutSession.mockRejectedValue(new Error("SS down"));
+
+    const res = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        ui_mode: "embedded",
+        topup_amount_cents: 2000,
+      });
+
+    expect(res.status).toBe(502);
+  });
 });

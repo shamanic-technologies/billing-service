@@ -127,25 +127,69 @@ export const WalletSetupResponseSchema = BillingAccountSchema.extend({
 
 export const CreateCheckoutRequestSchema = z
   .object({
-    success_url: z.string().url(),
-    cancel_url: z.string().url(),
+    /**
+     * Checkout UI surface. Absent or "hosted" → redirect to a Stripe-hosted
+     * Checkout page (returns `url`); requires success_url + cancel_url.
+     * "embedded" → in-app Stripe Embedded Checkout mounted in an iframe
+     * (returns `client_secret`, no redirect); success_url/cancel_url are not
+     * used. Embedded is payment-only (charges topup_amount_cents).
+     */
+    ui_mode: z.enum(["hosted", "embedded"]).optional(),
+    /**
+     * Required for hosted checkout; not used in embedded mode (the iframe does
+     * not redirect). Cross-field validation in superRefine below.
+     */
+    success_url: z.string().url().optional(),
+    cancel_url: z.string().url().optional(),
     /**
      * Checkout flavor. Absent or "payment" → one-shot top-up checkout.
      * "setup" → no-charge Stripe Checkout that saves a reusable off-session card so
-     * the org can enable auto-topup without buying credits.
+     * the org can enable auto-topup without buying credits. Embedded mode is
+     * always payment (mode is ignored when ui_mode="embedded").
      */
     mode: z.enum(["payment", "setup"]).optional(),
     /**
-     * Required for payment-mode (validated in the route — fail loud with 400 when
-     * absent). Omitted for setup-mode (no charge).
+     * Required for payment-mode and embedded mode (validated below — fail loud
+     * with 400 when absent). Omitted for hosted setup-mode (no charge).
      */
     topup_amount_cents: z.number().int().positive().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.ui_mode === "embedded") {
+      // Embedded checkout is payment-only and never redirects.
+      if (data.topup_amount_cents === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "topup_amount_cents is required for embedded checkout",
+          path: ["topup_amount_cents"],
+        });
+      }
+    } else {
+      // Hosted checkout redirects, so success_url + cancel_url are required.
+      if (data.success_url === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "success_url is required for hosted checkout",
+          path: ["success_url"],
+        });
+      }
+      if (data.cancel_url === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "cancel_url is required for hosted checkout",
+          path: ["cancel_url"],
+        });
+      }
+    }
   })
   .openapi("CreateCheckoutRequest");
 
 export const CheckoutResponseSchema = z
   .object({
-    url: z.string(),
+    /** Present for hosted checkout — the Stripe-hosted page the dashboard redirects to. */
+    url: z.string().optional(),
+    /** Present for embedded checkout — mounted in the in-app Stripe Embedded Checkout iframe. */
+    client_secret: z.string().optional(),
     session_id: z.string(),
   })
   .openapi("CheckoutResponse");
@@ -581,8 +625,11 @@ registry.registerPath({
   summary: "Create Stripe Checkout session via stripe-service",
   description:
     "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. " +
+    "ui_mode='hosted' (default) returns a Stripe-hosted page `url` to redirect to and requires success_url + cancel_url. " +
+    "ui_mode='embedded' returns a `client_secret` for in-app Stripe Embedded Checkout (mounted in an iframe, no redirect); success_url/cancel_url are not required and it is always payment (charges topup_amount_cents). " +
     "mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. " +
-    "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written.",
+    "mode='setup' (hosted only) creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. " +
+    "In all cases credit accounting (wallet credit, first-load match, saved card) lands via the existing checkout.session.completed webhook, not synchronously.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -593,7 +640,7 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Checkout session URL",
+      description: "Checkout session: { url, session_id } for hosted, { client_secret, session_id } for embedded",
       content: { "application/json": { schema: CheckoutResponseSchema } },
     },
     502: {
