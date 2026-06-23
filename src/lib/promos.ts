@@ -1,4 +1,4 @@
-import { and, eq, sql as rawSql } from "drizzle-orm";
+import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   billingAccounts,
@@ -8,6 +8,7 @@ import {
   INVITE_WELCOME_CODE,
   FIRST_LOAD_MATCH_CAP_CENTS,
   FIRST_LOAD_MATCH_CODE,
+  ADMIN_GRANT_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
@@ -276,8 +277,11 @@ export async function grantCredit(
         promoCodeId: grantCode.id,
         description,
       })
+      // (org, promo_code) uniqueness is now PARTIAL (WHERE idempotency_key IS
+      // NULL, migration 0025) — the conflict target must carry the predicate.
       .onConflictDoNothing({
         target: [localPromos.orgId, localPromos.promoCodeId],
+        where: rawSql`idempotency_key IS NULL`,
       })
       .returning();
 
@@ -352,8 +356,11 @@ export async function grantFirstLoadMatch(
       promoCodeId: promo.id,
       description: `First-load match: $${(matchAmountCents / 100).toFixed(2)}`,
     })
+    // (org, promo_code) uniqueness is PARTIAL (WHERE idempotency_key IS NULL,
+    // migration 0025) — the conflict target must carry the predicate.
     .onConflictDoNothing({
       target: [localPromos.orgId, localPromos.promoCodeId],
+      where: rawSql`idempotency_key IS NULL`,
     })
     .returning();
 
@@ -376,4 +383,140 @@ export async function grantFirstLoadMatch(
     amountCents: formatIntegerCents(0),
     localPromoId: existing?.id ?? null,
   };
+}
+
+// --- Admin-issued grants (staff oversight ledger) ---
+
+export interface AdminGrantResult {
+  localPromoId: string;
+  alreadyGranted: boolean;
+}
+
+/**
+ * Staff-issued arbitrary-amount credit grant. Backs `POST /v1/credits/grant`.
+ *
+ * Grants STACK: each call with a fresh `idempotencyKey` inserts a new
+ * `local_promos` row under the `admin_grant` code (exempt from the (org,
+ * promo_code) uniqueness because it carries an idempotency_key — migration
+ * 0025). A retry with the SAME key is deduped by the partial unique index
+ * `idx_local_promos_org_idempotency` → no double-grant.
+ *
+ * `note` is stored in `description`; `grantedBy` records the staff email.
+ *
+ * Fails loud (GrantPromoCodeMissingError) if the admin_grant seed is absent.
+ */
+export async function grantAdminCredit(
+  orgId: string,
+  amountCents: number,
+  note: string | null,
+  grantedBy: string | null,
+  idempotencyKey: string
+): Promise<AdminGrantResult> {
+  const [code] = await db
+    .select()
+    .from(localPromoCodes)
+    .where(eq(localPromoCodes.code, ADMIN_GRANT_CODE))
+    .limit(1);
+  if (!code) throw new GrantPromoCodeMissingError(ADMIN_GRANT_CODE);
+
+  return await db.transaction(async (tx) => {
+    // Pre-create the billing_accounts row so a concurrent findOrCreateAccount
+    // sees an existing row and skips its welcome-redeem side-effect path.
+    await tx.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
+
+    const inserted = await tx
+      .insert(localPromos)
+      .values({
+        orgId,
+        userId: SYSTEM_USER_ID,
+        amountCents: String(amountCents),
+        promoCodeId: code.id,
+        description: note,
+        grantedBy,
+        idempotencyKey,
+      })
+      .onConflictDoNothing({
+        target: [localPromos.orgId, localPromos.idempotencyKey],
+        where: rawSql`idempotency_key IS NOT NULL`,
+      })
+      .returning();
+
+    if (inserted.length > 0) {
+      return { localPromoId: inserted[0].id, alreadyGranted: false };
+    }
+
+    // Same idempotency key already granted — fetch the existing row.
+    const [existing] = await tx
+      .select({ id: localPromos.id })
+      .from(localPromos)
+      .where(
+        and(
+          eq(localPromos.orgId, orgId),
+          eq(localPromos.idempotencyKey, idempotencyKey)
+        )
+      )
+      .limit(1);
+
+    return { localPromoId: existing.id, alreadyGranted: true };
+  });
+}
+
+export interface GrantListItem {
+  id: string;
+  orgId: string;
+  amountCents: string;
+  reason: string;
+  note: string | null;
+  grantedBy: string | null;
+  createdAt: string;
+}
+
+const GRANT_LIST_COLUMNS = {
+  id: localPromos.id,
+  orgId: localPromos.orgId,
+  amountCents: localPromos.amountCents,
+  reason: localPromoCodes.code,
+  note: localPromos.description,
+  grantedBy: localPromos.grantedBy,
+  createdAt: localPromos.createdAt,
+} as const;
+
+function toGrantItem(row: {
+  id: string;
+  orgId: string;
+  amountCents: string;
+  reason: string;
+  note: string | null;
+  grantedBy: string | null;
+  createdAt: Date;
+}): GrantListItem {
+  return { ...row, createdAt: row.createdAt.toISOString() };
+}
+
+/**
+ * List every credit grant (all local_promos rows) for one org — the per-org
+ * oversight ledger. `reason` is the promo CODE (admin_grant, invite_*, welcome,
+ * first_load_match, or any redeemed promo). Newest first.
+ */
+export async function listGrantsForOrg(orgId: string): Promise<GrantListItem[]> {
+  const rows = await db
+    .select(GRANT_LIST_COLUMNS)
+    .from(localPromos)
+    .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .where(eq(localPromos.orgId, orgId))
+    .orderBy(desc(localPromos.createdAt));
+  return rows.map(toGrantItem);
+}
+
+/**
+ * List every credit grant across ALL orgs — the platform-wide oversight ledger.
+ * Newest first.
+ */
+export async function listAllGrants(): Promise<GrantListItem[]> {
+  const rows = await db
+    .select(GRANT_LIST_COLUMNS)
+    .from(localPromos)
+    .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .orderBy(desc(localPromos.createdAt));
+  return rows.map(toGrantItem);
 }

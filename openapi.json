@@ -527,6 +527,96 @@
           "reason"
         ]
       },
+      "AdminCreditGrantResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "newBalanceCents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "newBalanceCents"
+        ]
+      },
+      "AdminCreditGrantRequest": {
+        "type": "object",
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "note": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "amountCents",
+          "idempotencyKey"
+        ]
+      },
+      "CreditGrantItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "grantedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "amountCents",
+          "reason",
+          "note",
+          "grantedBy",
+          "createdAt"
+        ]
+      },
+      "CreditGrantsListResponse": {
+        "type": "object",
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditGrantItem"
+            }
+          }
+        },
+        "required": [
+          "grants"
+        ]
+      },
       "PromoCode": {
         "type": "object",
         "properties": {
@@ -847,6 +937,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -958,6 +1057,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -1058,6 +1166,15 @@
             },
             "required": false,
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
             "in": "header"
           }
         ],
@@ -1177,6 +1294,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -1277,6 +1403,15 @@
             },
             "required": false,
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
             "in": "header"
           }
         ],
@@ -1409,6 +1544,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -1519,6 +1663,15 @@
             },
             "required": false,
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
             "in": "header"
           }
         ],
@@ -1651,6 +1804,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -1762,6 +1924,15 @@
             "required": false,
             "name": "x-feature-slug",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -1872,6 +2043,15 @@
             },
             "required": false,
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
             "in": "header"
           }
         ],
@@ -2035,6 +2215,166 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/grant": {
+      "post": {
+        "summary": "Staff grant of an arbitrary credit amount to an org (stacking)",
+        "description": "Inserts a stacking admin_grant local_promos row for x-org-id. Grants STACK — a fresh idempotencyKey per call adds another grant; the same key retried never double-grants. The note is stored on the row; x-email is recorded as grantedBy. Returns the org's spendable balance after the grant.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Staff email behind the grant; recorded as grantedBy."
+            },
+            "required": false,
+            "name": "x-email",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreditGrantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grant applied (or already applied for this idempotencyKey)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCreditGrantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or missing/invalid x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "admin_grant promo code seed missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/grants": {
+      "get": {
+        "summary": "List this org's credit grants (oversight ledger)",
+        "description": "Returns every credit grant for x-org-id (admin_grant, invite_*, welcome, promo redemptions, first_load_match), newest first. reason is the promo code.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditGrantsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/credits/grants": {
+      "get": {
+        "summary": "List ALL orgs' credit grants (platform-wide oversight ledger)",
+        "description": "Returns every credit grant across all orgs, newest first. Service-auth only (x-api-key); no org scope. reason is the promo code behind each grant.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditGrantsListResponse"
                 }
               }
             }
@@ -2386,6 +2726,15 @@
             },
             "required": false,
             "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
             "in": "header"
           }
         ],

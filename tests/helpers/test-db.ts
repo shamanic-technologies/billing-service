@@ -11,6 +11,7 @@ import {
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
   FIRST_LOAD_MATCH_CODE,
+  ADMIN_GRANT_CODE,
   type CreditDepletionEpisode,
   type CampaignAuthorizeCost,
 } from "../../src/db/schema.js";
@@ -20,6 +21,7 @@ const SEEDED_PROMO_CODES = [
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
   FIRST_LOAD_MATCH_CODE,
+  ADMIN_GRANT_CODE,
 ];
 
 export async function cleanTestData() {

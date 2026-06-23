@@ -176,6 +176,13 @@
       "when": 1790330400000,
       "tag": "0024_org_scoped_brand_daily_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790416800000,
+      "tag": "0025_admin_grants",
+      "breakpoints": true
     }
   ]
 }

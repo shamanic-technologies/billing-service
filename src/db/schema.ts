@@ -60,8 +60,17 @@ export type LocalPromoCode = typeof localPromoCodes.$inferSelect;
 export type NewLocalPromoCode = typeof localPromoCodes.$inferInsert;
 
 // local_promos: per-org credit grants from promo codes (incl. welcome).
-// One row per (org, promo_code) UNIQUE. Welcome is just another promo code.
 // amount_cents is positive — these are credits, no sign convention needed.
+//
+// Idempotency is split by grant kind (migration 0025):
+//   - invite/welcome/promo-redemption rows leave `idempotency_key` NULL and are
+//     one-per-(org, promo_code) — enforced by the PARTIAL unique index
+//     `idx_local_promos_org_promo … WHERE idempotency_key IS NULL`.
+//   - admin_grant rows (staff oversight ledger) carry a caller-supplied
+//     `idempotency_key`, which EXEMPTS them from the (org, promo_code) uniqueness
+//     so multiple grants STACK; a retry with the same key is deduped by the
+//     PARTIAL unique index `idx_local_promos_org_idempotency … WHERE idempotency_key
+//     IS NOT NULL`. `granted_by` records the staff email behind the grant.
 export const localPromos = pgTable(
   "local_promos",
   {
@@ -77,13 +86,23 @@ export const localPromos = pgTable(
       .references(() => localPromoCodes.id),
     description: text("description"),
     brandIds: text("brand_ids").array(),
+    // Staff email behind an admin_grant (null for non-admin rows). See 0025.
+    grantedBy: text("granted_by"),
+    // Caller-supplied stacking idempotency key for admin_grant rows (null for
+    // invite/welcome/promo rows, which key idempotency on (org, promo_code)).
+    idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("idx_local_promos_org_promo").on(table.orgId, table.promoCodeId),
+    uniqueIndex("idx_local_promos_org_promo")
+      .on(table.orgId, table.promoCodeId)
+      .where(sql`idempotency_key IS NULL`),
     index("idx_local_promos_org").on(table.orgId),
+    uniqueIndex("idx_local_promos_org_idempotency")
+      .on(table.orgId, table.idempotencyKey)
+      .where(sql`idempotency_key IS NOT NULL`),
   ]
 );
 
@@ -105,6 +124,13 @@ export const INVITE_WELCOME_CODE = "invite_welcome";
 export const INVITE_GRANT_AMOUNT_CENTS = 2500;
 export const FIRST_LOAD_MATCH_CODE = "first_load_match";
 export const FIRST_LOAD_MATCH_CAP_CENTS = 2500;
+
+// Admin-issued arbitrary-amount grant (staff oversight ledger, migration 0025).
+// Per-row amount lives on local_promos (like first_load_match); the promo-code
+// row's amount_cents is a 0 placeholder. admin_grant rows STACK via a
+// caller-supplied idempotency_key — NOT part of PLATFORM_GRANT_REASONS (those
+// dedup on (org, promo_code)); admin grants have their own dedup path.
+export const ADMIN_GRANT_CODE = "admin_grant";
 
 export const PLATFORM_GRANT_REASONS = [
   INVITE_REWARD_CODE,

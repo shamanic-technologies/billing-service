@@ -52,7 +52,8 @@ beforeAll(async () => {
   `;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promo_codes_code" ON "local_promo_codes" ("code")`;
 
-  // local_promos (per-org credit grants — welcome gift + promo redemptions unified).
+  // local_promos (per-org credit grants — welcome gift + promo redemptions +
+  // admin grants unified).
   await sql`
     CREATE TABLE IF NOT EXISTS "local_promos" (
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -62,10 +63,19 @@ beforeAll(async () => {
       "promo_code_id" uuid NOT NULL REFERENCES "local_promo_codes"("id"),
       "description" text,
       "brand_ids" text[],
+      "granted_by" text,
+      "idempotency_key" text,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL
     )
   `;
-  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promos_org_promo" ON "local_promos" ("org_id", "promo_code_id")`;
+  // Stale-DB path: add migration-0025 columns if an older local DB predates them.
+  await sql`ALTER TABLE "local_promos" ADD COLUMN IF NOT EXISTS "granted_by" text`;
+  await sql`ALTER TABLE "local_promos" ADD COLUMN IF NOT EXISTS "idempotency_key" text`;
+  // (org, promo_code) uniqueness is PARTIAL post-0025 (admin_grant rows carry an
+  // idempotency_key and stack). DROP first so a stale full index is replaced.
+  await sql`DROP INDEX IF EXISTS "idx_local_promos_org_promo"`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promos_org_promo" ON "local_promos" ("org_id", "promo_code_id") WHERE "idempotency_key" IS NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_local_promos_org_idempotency" ON "local_promos" ("org_id", "idempotency_key") WHERE "idempotency_key" IS NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_local_promos_org" ON "local_promos" ("org_id")`;
 
   // credit_depletion_episodes (out-of-credit dunning engine, migration 0019).
@@ -131,12 +141,13 @@ beforeAll(async () => {
       PRIMARY KEY ("org_id", "brand_id")
   `;
 
-  // Seed platform-issued grant promo codes (matches migration 0017).
+  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025).
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
     VALUES ('invite_reward', 2500, NULL, NULL),
            ('invite_welcome', 2500, NULL, NULL),
-           ('first_load_match', 0, NULL, NULL)
+           ('first_load_match', 0, NULL, NULL),
+           ('admin_grant', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
