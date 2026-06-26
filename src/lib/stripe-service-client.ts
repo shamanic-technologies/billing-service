@@ -325,7 +325,7 @@ export async function createCheckoutSession(
 
 export async function createPortalSession(
   identity: IdentityHeaders,
-  body: { return_url: string }
+  body: { customer: string; return_url: string }
 ): Promise<PortalSessionResult> {
   return call("POST", "/v1/billing_portal/sessions", identity, body);
 }
