@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreatePortalSessionRequestSchema } from "../schemas.js";
-import { createPortalSession } from "../lib/stripe-service-client.js";
+import { createPortalSession, getCustomerByOrg } from "../lib/stripe-service-client.js";
 
 const router = Router();
 
@@ -34,17 +34,19 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
 
+    const identity = {
+      "x-org-id": orgId,
+      "x-user-id": userId,
+      "x-run-id": runId,
+      ...wfHeaders,
+    };
+
     let session;
     try {
-      session = await createPortalSession(
-        {
-          "x-org-id": orgId,
-          "x-user-id": userId,
-          "x-run-id": runId,
-          ...wfHeaders,
-        },
-        { return_url }
-      );
+      // Stripe portal sessions cannot be created without a customer id. Resolve the
+      // org's Stripe customer (org-implicit, server-side from x-org-id) and forward it.
+      const customer = await getCustomerByOrg(identity);
+      session = await createPortalSession(identity, { customer: customer.id, return_url });
     } catch (err) {
       console.error("[billing-service] stripe-service createPortalSession failed:", err);
       res.status(502).json({ error: "Failed to create portal session via stripe-service" });

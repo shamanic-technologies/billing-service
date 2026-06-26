@@ -35,7 +35,7 @@ describe("POST /v1/portal-sessions", () => {
     expect(res.body).toEqual({ url: "https://billing.stripe.com/p/session/abc" });
     expect(ssMocks.createPortalSession).toHaveBeenCalledWith(
       expect.objectContaining({ "x-org-id": orgId }),
-      { return_url: "https://example.com/return" }
+      { customer: "cus_mock_123", return_url: "https://example.com/return" }
     );
   });
 
