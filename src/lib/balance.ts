@@ -13,12 +13,21 @@ import {
   fetchOrgCustomer,
   sumSucceededTopupsForOrg,
   hasChargeablePmForOrg,
+  getOrgCardCountryByOrg,
+  isAutoReloadBlockedCountry,
   type StripeCustomer,
 } from "./stripe-service-client.js";
 
 export interface BalanceSnapshot {
   customer: StripeCustomer;
   hasCardPm: boolean;
+  /** Issuing country of the card the reload would charge (null when no card PM). */
+  cardCountry: string | null;
+  /**
+   * False when the saved card's issuing country can't be charged off_session (e.g.
+   * India / RBI). The reload trigger skips these cards — see customer_balance authorize.
+   */
+  autoReloadSupported: boolean;
   creditedCents: string;
   usageCents: string;
   balanceCents: string;
@@ -36,17 +45,20 @@ export interface BalanceSnapshot {
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const customer = await fetchOrgCustomer(orgId);
-  const [paidTopups, localCredits, runsUsage, hasCardPm] = await Promise.all([
+  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] = await Promise.all([
     sumSucceededTopupsForOrg(orgId),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, {}),
     hasChargeablePmForOrg(orgId),
+    getOrgCardCountryByOrg(orgId),
   ]);
   const creditedCents = addCents(paidTopups, localCredits);
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
   return {
     customer,
     hasCardPm,
+    cardCountry,
+    autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,

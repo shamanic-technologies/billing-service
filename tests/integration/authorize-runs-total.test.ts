@@ -140,6 +140,24 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
+  it("insufficient + topup + India card → sufficient:false, no reload attempted", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    // Card attached, but issued in India → off_session reload would be declined. The
+    // authorize path must NOT attempt it; it falls through to graceful sufficient:false.
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("IN");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
   it("PM lookup errors (stripe-service down) → 502, never silent no-PM", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.hasChargeablePmForOrg.mockRejectedValue(new Error("stripe-service down"));
