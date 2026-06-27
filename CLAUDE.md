@@ -102,6 +102,21 @@ Billing never duplicates Stripe state and never persists run-level usage rows.
 
 The same CSV convention applies to the `x-brand-id` header forwarded by workflow-service for multi-brand campaigns.
 
+## Off_session auto-reload — country eligibility (India / RBI e-mandates)
+
+**Off_session auto-reload is IMPOSSIBLE for cards issued in some countries, and Stripe cannot fix it through the path billing uses. India is the confirmed, prod-observed case (GH #220).** Hard Stripe facts (verified against docs 2026-06-27 — re-verify before changing this):
+
+- An off_session reload on an India-issued card is declined: *"You must provide a mandate for off-session card payments made with cards issued in India."*
+- India RBI e-mandates are registrable **ONLY via Stripe Subscriptions**, NOT via PaymentIntents or SetupIntents (https://docs.stripe.com/india-recurring-payments — explicit note). billing's wallet model = SetupIntent card capture (Checkout setup/payment mode) + raw off_session **PaymentIntent** reload (`src/lib/reload.ts`) → **no Stripe-supported way to register the mandate**. So adding `payment_method_options.card.mandate_options` to the capture call does NOT work: Checkout doesn't carry it, and even a SetupIntent (which has the field) does not create an India e-mandate. Do NOT reach for that "fix" again — it's a dead end for this architecture.
+- Even via Subscriptions, India off_session carries a **26-hour pre-debit notification delay** + per-charge AFA above **~15,000 INR (~$180)**. "Top up NOW to keep a campaign running" is structurally impossible for India cards by ANY path. The product answer for India is **manual on-session top-up** (the existing one-shot Checkout payment + the dashboard Add Credit flow), NOT auto-reload.
+- **Forward-only**: a card already saved without a mandate cannot be retrofitted (Stripe declines; needs customer re-auth). The fix only affects cards added after it shipped.
+
+**What billing does (v0.40.0, GH #221):** detect the card's issuing country and make auto-reload coherently unavailable instead of attempting a doomed charge.
+
+- `card.country` is **already on the wire** — stripe-service passes the Stripe PaymentMethod object through verbatim. NO stripe-service change is needed to read it.
+- `AUTO_RELOAD_BLOCKED_CARD_COUNTRIES` + `isAutoReloadBlockedCountry()` + `getOrgCardCountry` (real-user) / `getOrgCardCountryByOrg` (balance path) live in `src/lib/stripe-service-client.ts`. **Blocklist = `{ IN }` only.** EEA is deliberately NOT blocked (its mandate is satisfied by `setup_future_usage` + SCA on the initial Checkout save, which already works — EU orgs auto-reload fine). Mexico / Brazil are listed by Stripe as agreement-requiring but the mechanism is unconfirmed and there is zero prod evidence — left out to avoid blocking orgs that may work. Extend the set ONLY when a decline is confirmed in prod.
+- Enforced in BOTH reload paths so the UI "deactivated" state never contradicts backend behavior: `customer_balance/authorize` gates on `snapshot.autoReloadSupported` (from `computeBalance`), `usage_apply` checks `getOrgCardCountry` — both **skip the reload** for a blocked country and fall through to depletion dunning (which prompts manual recharge). `PATCH /v1/accounts/auto_topup` rejects a blocked-country card (400, fail-loud) rather than storing config that never fires. `GET /v1/accounts` exposes `auto_reload_supported` / `auto_reload_unsupported_reason` / `card_country`, and forces `has_auto_topup=false` when unsupported.
+
 ## Public surface field names
 
 ### `GET /v1/accounts` and `PATCH/DELETE /v1/accounts/auto_topup`
@@ -117,7 +132,10 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
   "topup_amount_cents": 2500,                // auto-topup amount
   "topup_threshold_cents": 500,              // auto-topup triggers when balance_cents < threshold
   "has_payment_method": true,                // ≥1 chargeable PM: card OR link (GET /v1/payment_methods?type=card, then type=link); NOT invoice_settings.default_payment_method
-  "has_auto_topup": true,
+  "has_auto_topup": true,                     // false when auto_reload_supported is false, even if topup config exists (it would never fire)
+  "auto_reload_supported": true,             // false when the saved card's issuing country can't be charged off_session (e.g. India). See "Off_session auto-reload" below
+  "auto_reload_unsupported_reason": null,    // "card_issuing_country_unsupported" when auto_reload_supported is false; null otherwise
+  "card_country": "US",                      // ISO-3166-1 alpha-2 issuing country of the card the reload would charge; null when no card PM (link-only / none)
   "created_at": "...",
   "updated_at": "..."
 }
@@ -134,7 +152,8 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → runs-service `spent_cents`
 5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → runs-service `total_expected_cents` from actualized platform costs only
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
-7. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`
+7. `getOrgCardCountry(identity, customer.id)` → `card_country` → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
+8. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`
 
 ### `GET /public/stats/billing`
 
