@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   sumSucceededTopupsForCustomer,
   hasAttachedCardPm,
+  getOrgCardCountry,
+  getOrgCardCountryByOrg,
+  isAutoReloadBlockedCountry,
   type StripePaymentIntent,
   type StripePaymentIntentList,
   type StripePaymentMethod,
@@ -220,5 +223,81 @@ describe("hasAttachedCardPm", () => {
     await expect(hasAttachedCardPm({}, "cus_test")).rejects.toThrow(
       /stripe-service GET \/v1\/payment_methods.*failed: 404/
     );
+  });
+});
+
+describe("isAutoReloadBlockedCountry", () => {
+  it("blocks India (case-insensitive)", () => {
+    expect(isAutoReloadBlockedCountry("IN")).toBe(true);
+    expect(isAutoReloadBlockedCountry("in")).toBe(true);
+  });
+
+  it("does not block US / EEA / null / undefined", () => {
+    expect(isAutoReloadBlockedCountry("US")).toBe(false);
+    expect(isAutoReloadBlockedCountry("FR")).toBe(false);
+    expect(isAutoReloadBlockedCountry(null)).toBe(false);
+    expect(isAutoReloadBlockedCountry(undefined)).toBe(false);
+  });
+});
+
+describe("getOrgCardCountry / getOrgCardCountryByOrg", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function pmListBody(data: StripePaymentMethod[]) {
+    return { object: "list", url: "/v1/payment_methods", data, has_more: false };
+  }
+
+  it("returns the first card PM's issuing country (real-user path)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pmListBody([{ id: "pm_1", object: "payment_method", type: "card", card: { country: "IN" } }])
+      )
+    );
+
+    expect(await getOrgCardCountry({}, "cus_test")).toBe("IN");
+    const url = fetchMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain("type=card");
+    expect(url).toContain("customer=cus_test");
+  });
+
+  it("returns null when no card PM is attached", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+    expect(await getOrgCardCountry({}, "cus_test")).toBeNull();
+  });
+
+  it("returns null when the card object carries no country", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(pmListBody([{ id: "pm_1", object: "payment_method", type: "card" }]))
+    );
+    expect(await getOrgCardCountry({}, "cus_test")).toBeNull();
+  });
+
+  it("by-org variant hits the user-less /internal route with type=card", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pmListBody([{ id: "pm_1", object: "payment_method", type: "card", card: { country: "US" } }])
+      )
+    );
+
+    expect(await getOrgCardCountryByOrg("org-123")).toBe("US");
+    const url = fetchMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain("/internal/payment_methods/by-org/org-123");
+    expect(url).toContain("type=card");
+  });
+
+  it("propagates stripe-service errors (fail-loud)", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
+    );
+    await expect(getOrgCardCountry({}, "cus_test")).rejects.toThrow(/failed: 500/);
   });
 });

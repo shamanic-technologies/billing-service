@@ -103,6 +103,26 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
+  it("does not topup for an India-issued card (off_session mandate unsupported)", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.hasAttachedCardPm.mockResolvedValue(true);
+    ssMocks.getOrgCardCountry.mockResolvedValue("IN");
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/usage_apply")
+      .set(getAuthHeaders(orgId, userId))
+      .send({ spent_total_cents: "50.0000000000" });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
   it("does not topup when no topup config", async () => {
     await insertTestAccount({ orgId });
 

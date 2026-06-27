@@ -13,6 +13,8 @@ import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
   hasAttachedCardPm,
+  getOrgCardCountry,
+  isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
@@ -158,6 +160,27 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
+    if (!snapshot.autoReloadSupported) {
+      // Card issued in a country that can't be charged off_session (e.g. India / RBI
+      // e-mandate, issue #220). A reload here would be declined every cycle, so we skip
+      // it and fall through to depletion dunning, which prompts a manual recharge.
+      await openDepletionEpisodeIfDepleted({
+        orgId, userId, runId,
+        balanceCents: snapshot.balanceCents,
+        creditedCents: snapshot.creditedCents,
+        workflow: wf,
+        workflowHeaders: wfHeaders,
+        recipientEmail: snapshot.customer.email,
+      });
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "auto_reload_unsupported_country", card_country: snapshot.cardCountry } }, req.headers);
+      res.json({
+        sufficient: false,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
+      return;
+    }
+
     const chargeAmount = computeTopupCharge(snapshot.balanceCents, requiredCents, account.topupAmountCents);
     if (chargeAmount <= 0) {
       await openDepletionEpisodeIfDepleted({
@@ -280,6 +303,15 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     const customer = await getCustomerByOrg(identity);
 
     if (!(await hasAttachedCardPm(identity, customer.id))) {
+      res.status(202).json({ acknowledged: true, topup_triggered: false });
+      return;
+    }
+
+    // India (and other off_session-mandate) cards can't be auto-reloaded — Stripe declines
+    // the off_session charge with no registered mandate (issue #220). Skip rather than spam
+    // a doomed reload; the depletion dunning path prompts the org to recharge manually.
+    if (isAutoReloadBlockedCountry(await getOrgCardCountry(identity, customer.id))) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.topup-skipped", data: { reason: "auto_reload_unsupported_country" } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
