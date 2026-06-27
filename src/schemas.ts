@@ -49,6 +49,17 @@ export const BillingAccountSchema = z
     topup_threshold_cents: z.number().int().nullable(),
     has_payment_method: z.boolean(),
     has_auto_topup: z.boolean(),
+    /**
+     * False when the saved card's issuing country can't be charged off_session (e.g.
+     * India / RBI e-mandate). The dashboard hides/disables the auto-reload section and
+     * shows a notice when false. has_auto_topup is also false in that case (a stored
+     * config would never fire). See issue #220.
+     */
+    auto_reload_supported: z.boolean(),
+    /** Machine reason when auto_reload_supported is false; null otherwise. */
+    auto_reload_unsupported_reason: z.string().nullable(),
+    /** ISO-3166-1 alpha-2 issuing country of the card the reload would charge; null when no card PM. */
+    card_country: z.string().nullable(),
     created_at: z.string(),
     updated_at: z.string(),
   })

@@ -14,6 +14,8 @@ import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
   hasAttachedCardPm,
+  getOrgCardCountry,
+  isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 
 const router = Router();
@@ -44,14 +46,17 @@ async function composeAccountFunds(
   balanceCents: string;
   actualBalanceCents: string;
   hasPaymentMethod: boolean;
+  cardCountry: string | null;
+  autoReloadSupported: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm] = await Promise.all([
+  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry] = await Promise.all([
     sumSucceededTopupsForCustomer(identity, customer.id),
     sumLocalPromoCreditsForOrg(orgId),
     fetchRunsOrgUsageTotal(orgId, identity),
     fetchRunsOrgActualUsageTotal(orgId, identity),
     hasAttachedCardPm(identity, customer.id),
+    getOrgCardCountry(identity, customer.id),
   ]);
   const creditedCents = addCents(paidTopups, localCredits);
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
@@ -62,6 +67,8 @@ async function composeAccountFunds(
     balanceCents,
     actualBalanceCents,
     hasPaymentMethod: hasCardPm,
+    cardCountry,
+    autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
   };
 }
 
@@ -73,6 +80,8 @@ function buildAccountResponse(
     balanceCents: string;
     actualBalanceCents: string;
     hasPaymentMethod: boolean;
+    cardCountry: string | null;
+    autoReloadSupported: boolean;
   }
 ) {
   return {
@@ -85,7 +94,17 @@ function buildAccountResponse(
     topup_amount_cents: account.topupAmountCents,
     topup_threshold_cents: account.topupThresholdCents,
     has_payment_method: funds.hasPaymentMethod,
-    has_auto_topup: account.topupAmountCents != null && account.topupThresholdCents != null && funds.hasPaymentMethod,
+    // Off_session auto-reload is impossible for cards issued in mandate-required countries
+    // (e.g. India / RBI, issue #220). When unsupported, the dashboard shows a notice and
+    // has_auto_topup is false even if topup config exists — the reload would never fire.
+    auto_reload_supported: funds.autoReloadSupported,
+    auto_reload_unsupported_reason: funds.autoReloadSupported ? null : "card_issuing_country_unsupported",
+    card_country: funds.cardCountry,
+    has_auto_topup:
+      account.topupAmountCents != null &&
+      account.topupThresholdCents != null &&
+      funds.hasPaymentMethod &&
+      funds.autoReloadSupported,
     created_at: account.createdAt.toISOString(),
     updated_at: account.updatedAt.toISOString(),
   };
@@ -202,9 +221,13 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
     }
 
     let hasCardPm: boolean;
+    let cardCountry: string | null;
     try {
       const customer = await getCustomerByOrg(identity);
-      hasCardPm = await hasAttachedCardPm(identity, customer.id);
+      [hasCardPm, cardCountry] = await Promise.all([
+        hasAttachedCardPm(identity, customer.id),
+        getOrgCardCountry(identity, customer.id),
+      ]);
     } catch (err) {
       console.error("[billing-service] Failed to fetch customer for PM check:", err);
       res.status(502).json({ error: "Failed to query payment method status" });
@@ -214,6 +237,16 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
     if (!hasCardPm) {
       res.status(400).json({
         error: "Payment method required. Create a checkout session first.",
+      });
+      return;
+    }
+
+    // Off_session auto-reload can't be charged for cards issued in mandate-required
+    // countries (e.g. India / RBI, issue #220). Reject the config rather than store one
+    // that silently never fires — fail loud so the dashboard surfaces the real reason.
+    if (isAutoReloadBlockedCountry(cardCountry)) {
+      res.status(400).json({
+        error: `Auto-reload is unavailable for cards issued in ${cardCountry} — off-session charges require a mandate Stripe can't register on this card. Add a card from another country to enable auto-reload.`,
       });
       return;
     }

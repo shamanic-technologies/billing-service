@@ -142,6 +142,38 @@ describe("Accounts endpoints", () => {
       expect(res.body.has_payment_method).toBe(true);
     });
 
+    it("reports auto_reload_supported=true for a non-blocked card country", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.getOrgCardCountry.mockResolvedValue("US");
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.auto_reload_supported).toBe(true);
+      expect(res.body.auto_reload_unsupported_reason).toBeNull();
+      expect(res.body.card_country).toBe("US");
+    });
+
+    it("reports auto_reload_supported=false + reason for an India-issued card", async () => {
+      // Account has full topup config, but the India card can't be charged off_session
+      // → auto_reload_supported false, reason set, has_auto_topup forced false.
+      await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
+      ssMocks.getOrgCardCountry.mockResolvedValue("IN");
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.auto_reload_supported).toBe(false);
+      expect(res.body.auto_reload_unsupported_reason).toBe("card_issuing_country_unsupported");
+      expect(res.body.card_country).toBe("IN");
+      expect(res.body.has_payment_method).toBe(true);
+      expect(res.body.has_auto_topup).toBe(false);
+    });
+
     it("credited reflects only succeeded payment intents (failed PIs excluded)", async () => {
       await insertTestAccount({ orgId });
       // Helper already filters succeeded — assert by configuring its return.
@@ -304,6 +336,21 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("Payment method required");
+    });
+
+    it("rejects enabling auto-topup for an India-issued card (off_session mandate unsupported)", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.hasAttachedCardPm.mockResolvedValue(true);
+      ssMocks.getOrgCardCountry.mockResolvedValue("IN");
+
+      const res = await request(app)
+        .patch("/v1/accounts/auto_topup")
+        .set(getAuthHeaders(orgId))
+        .send({ topup_amount_cents: 5000, topup_threshold_cents: 1000 });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain("IN");
+      expect(res.body.error).toContain("Auto-reload is unavailable");
     });
 
     it("requires an explicit auto-topup threshold", async () => {

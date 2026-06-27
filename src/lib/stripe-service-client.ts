@@ -66,6 +66,17 @@ export interface StripePaymentMethod {
   id: string;
   object: "payment_method";
   type: string;
+  /**
+   * Card detail (present when type === "card"). stripe-service passes the Stripe
+   * PaymentMethod object through verbatim, so `card.country` (the ISO-3166-1 alpha-2
+   * issuing country, e.g. "IN") is already on the wire — used to gate off_session
+   * auto-reload (see AUTO_RELOAD_BLOCKED_CARD_COUNTRIES). Null/absent for non-card PMs.
+   */
+  card?: {
+    country?: string | null;
+    brand?: string | null;
+    last4?: string | null;
+  } | null;
 }
 
 export interface StripePaymentMethodList {
@@ -400,6 +411,54 @@ export async function hasAttachedCardPm(
   return links.data.length > 0;
 }
 
+// --- Off_session auto-reload country eligibility ---
+//
+// Some countries' card networks REQUIRE a pre-registered mandate / agreement for
+// off-session (merchant-initiated) charges. Stripe CANNOT register that mandate through
+// the PaymentIntent / SetupIntent path billing-service uses for card capture + reload —
+// it is only creatable via Stripe Subscriptions (see issue #220). India (RBI e-mandate)
+// is the confirmed, prod-observed case: an off_session reload on an India-issued card is
+// declined with "You must provide a mandate for off-session card payments made with cards
+// issued in India."
+//
+// Forward-only: a card already saved without a mandate cannot be retrofitted. So instead
+// of attempting a charge Stripe will decline every cycle, we detect the issuing country
+// and (a) report auto_reload_supported=false on the account so the dashboard shows a
+// notice, and (b) skip the reload trigger for these cards.
+//
+// NOT included:
+//   - EEA/SCA — that mandate is satisfied by setup_future_usage + SCA on the initial
+//     save, which billing's Checkout flow already performs; off_session MITs work.
+//   - Mexico / Brazil — listed by Stripe as agreement-requiring, but the mechanism is
+//     unconfirmed and we have no prod evidence. Left out to avoid blocking orgs that may
+//     work today. Add the ISO-2 code here if a decline is confirmed.
+export const AUTO_RELOAD_BLOCKED_CARD_COUNTRIES: ReadonlySet<string> = new Set(["IN"]);
+
+/**
+ * True when a card's issuing country cannot be charged off_session (e.g. "IN").
+ * Null/absent country (no card, or a link PM) is NOT blocked.
+ */
+export function isAutoReloadBlockedCountry(country: string | null | undefined): boolean {
+  return country != null && AUTO_RELOAD_BLOCKED_CARD_COUNTRIES.has(country.toUpperCase());
+}
+
+/**
+ * Issuing country (ISO-3166-1 alpha-2, e.g. "IN") of the CARD the off_session reload
+ * would charge — the first attached `card` PM, mirroring reload.ts's pick order. Returns
+ * null when the org has no card PM (link-only or none): a link PM has no blocked issuing
+ * country, so it is always reload-eligible.
+ *
+ * Real-user path (org-implicit GET /v1/payment_methods, requires x-user-id). Fail-loud:
+ * a stripe-service error propagates.
+ */
+export async function getOrgCardCountry(
+  identity: IdentityHeaders,
+  customerId: string
+): Promise<string | null> {
+  const cards = await listPaymentMethods(identity, { customer: customerId, type: "card" });
+  return cards.data[0]?.card?.country ?? null;
+}
+
 // --- User-less org-scoped reads (balance path only) ---
 //
 // stripe-service exposes a service-authenticated, org-scoped read surface under
@@ -466,4 +525,19 @@ export async function hasChargeablePmForOrg(orgId: string): Promise<boolean> {
   if (cards.data.length > 0) return true;
   const links = await call<StripePaymentMethodList>("GET", `${path}?type=link`, {});
   return links.data.length > 0;
+}
+
+/**
+ * User-less (balance-path) twin of getOrgCardCountry — issuing country of the org's first
+ * card PM via the service-authenticated GET /internal/payment_methods/by-org/{orgId}?type=card
+ * route (X-API-Key + org only, NO x-user-id). Returns null when the org has no card PM.
+ * Fail-loud: a stripe-service error propagates.
+ */
+export async function getOrgCardCountryByOrg(orgId: string): Promise<string | null> {
+  const cards = await call<StripePaymentMethodList>(
+    "GET",
+    `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}?type=card`,
+    {}
+  );
+  return cards.data[0]?.card?.country ?? null;
 }
