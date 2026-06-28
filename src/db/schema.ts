@@ -258,3 +258,13 @@ export type NewBrandDailyBudget = typeof brandDailyBudgets.$inferInsert;
 export const DUNNING_EVENT_T0 = "credit-depleted";
 export const DUNNING_EVENT_3D = "credit-depleted-followup-3d";
 export const DUNNING_EVENT_10D = "credit-depleted-followup-10d";
+
+// Blocked-card variants — sent when the org's saved card can't be charged
+// off_session (auto-reload-blocked country, e.g. India / RBI). The auto-topup
+// nudge in the base templates is a dead-end for these orgs, so these sibling
+// templates swap it for manual-recharge copy. Byte-equal to the rows seeded in
+// the transactional-email-service prod DB (distribute.you#2240, 4th surface).
+// LOCKED contract; do not rename. Copy lives in the DB templates, never in code.
+export const DUNNING_EVENT_T0_BLOCKED = "credit-depleted-blocked";
+export const DUNNING_EVENT_3D_BLOCKED = "credit-depleted-followup-3d-blocked";
+export const DUNNING_EVENT_10D_BLOCKED = "credit-depleted-followup-10d-blocked";
