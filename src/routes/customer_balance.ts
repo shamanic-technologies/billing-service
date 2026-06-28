@@ -133,6 +133,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
+        autoReloadSupported: snapshot.autoReloadSupported,
       });
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "no_topup_config" } }, req.headers);
       res.json({
@@ -151,6 +152,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
+        autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
         sufficient: false,
@@ -171,6 +173,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
+        autoReloadSupported: snapshot.autoReloadSupported,
       });
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "auto_reload_unsupported_country", card_country: snapshot.cardCountry } }, req.headers);
       res.json({
@@ -190,6 +193,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
+        autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
         sufficient: false,
@@ -225,6 +229,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: snapshot.customer.email,
+        autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
         sufficient: false,
@@ -252,6 +257,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         workflow: wf,
         workflowHeaders: wfHeaders,
         recipientEmail: after.customer.email,
+        autoReloadSupported: after.autoReloadSupported,
       });
     }
 

@@ -319,6 +319,61 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(recovered.recoveredAt).not.toBeNull();
   });
 
+  it("14: blocked-card org (IN) depleted → T0 routes to credit-depleted-blocked", async () => {
+    await insertTestAccount({ orgId }); // no topup config
+    setBalance("0.0000000000");
+    // Card issued in an auto-reload-blocked country (India) → autoReloadSupported=false.
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("IN");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(campaignHeaders())
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+    expect(sendEmailSpy).toHaveBeenCalledTimes(1);
+    expect(sendEmailSpy.mock.calls[0][0]).toMatchObject({
+      eventType: "credit-depleted-blocked",
+      recipientEmail: billingEmail,
+    });
+  });
+
+  it("15: blocked-card org (IN) tick aged ≥10d → +3d/+10d route to -blocked variants", async () => {
+    setBalance("0.0000000000");
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("IN");
+    await insertTestEpisode({
+      orgId,
+      userId,
+      campaignId,
+      startedAt: new Date(Date.now() - 11 * DAY_MS),
+    });
+
+    const res = await tick();
+    expect(res.body).toMatchObject({ processed: 1, followup3dSent: 1, followup10dSent: 1 });
+
+    const eventTypes = sendEmailSpy.mock.calls.map((c) => c[0].eventType).sort();
+    expect(eventTypes).toEqual([
+      "credit-depleted-followup-10d-blocked",
+      "credit-depleted-followup-3d-blocked",
+    ]);
+  });
+
+  it("16: supported-card org (no blocked country) → base events, NOT -blocked", async () => {
+    setBalance("0.0000000000");
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("US"); // not blocked
+    await insertTestEpisode({
+      orgId,
+      userId,
+      campaignId,
+      startedAt: new Date(Date.now() - 11 * DAY_MS),
+    });
+
+    await tick();
+    const eventTypes = sendEmailSpy.mock.calls.map((c) => c[0].eventType).sort();
+    expect(eventTypes).toEqual(["credit-depleted-followup-10d", "credit-depleted-followup-3d"]);
+  });
+
   it("10: tick endpoint returns a summary over multiple open episodes", async () => {
     setBalance("0.0000000000");
     // window sanity: constants exported for any caller
