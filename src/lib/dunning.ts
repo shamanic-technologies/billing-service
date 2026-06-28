@@ -21,6 +21,9 @@ import {
   DUNNING_EVENT_T0,
   DUNNING_EVENT_3D,
   DUNNING_EVENT_10D,
+  DUNNING_EVENT_T0_BLOCKED,
+  DUNNING_EVENT_3D_BLOCKED,
+  DUNNING_EVENT_10D_BLOCKED,
 } from "../db/schema.js";
 import { isDepleted, cmpCents } from "./cents.js";
 import { computeBalance } from "./balance.js";
@@ -43,6 +46,28 @@ function hasCampaignActivity(wf: WorkflowHeaders): boolean {
   return Boolean(wf.campaignId || wf.workflowSlug || wf.featureSlug);
 }
 
+/**
+ * Pick the dunning eventType for a stage. When the org's card can't be charged
+ * off_session (auto-reload-blocked country, e.g. India), the base templates'
+ * "turn on auto-topup" nudge is a dead-end, so we route to the `-blocked` sibling
+ * template whose copy points to a manual recharge instead. `autoReloadSupported`
+ * comes straight from the balance snapshot — no extra Stripe call.
+ */
+function dunningEventType(
+  base: typeof DUNNING_EVENT_T0 | typeof DUNNING_EVENT_3D | typeof DUNNING_EVENT_10D,
+  autoReloadSupported: boolean
+): string {
+  if (autoReloadSupported) return base;
+  switch (base) {
+    case DUNNING_EVENT_T0:
+      return DUNNING_EVENT_T0_BLOCKED;
+    case DUNNING_EVENT_3D:
+      return DUNNING_EVENT_3D_BLOCKED;
+    case DUNNING_EVENT_10D:
+      return DUNNING_EVENT_10D_BLOCKED;
+  }
+}
+
 export interface OpenEpisodeParams {
   orgId: string;
   userId: string;
@@ -53,6 +78,12 @@ export interface OpenEpisodeParams {
   creditedCents: string;
   /** Parsed workflow headers — gates the open on campaign activity. */
   workflow: WorkflowHeaders;
+  /**
+   * False when the org's saved card can't be charged off_session (auto-reload-
+   * blocked country, e.g. India). Routes the T0 email to the `-blocked` template
+   * variant whose copy nudges a manual recharge instead of auto-topup.
+   */
+  autoReloadSupported: boolean;
   /** Forwarded tracking headers for the email-service call. */
   workflowHeaders: Record<string, string>;
   /** Stripe billing email; when null the email-service resolves via x-user-id. */
@@ -94,7 +125,7 @@ export async function openDepletionEpisodeIfDepleted(
   );
 
   sendEmail({
-    eventType: DUNNING_EVENT_T0,
+    eventType: dunningEventType(DUNNING_EVENT_T0, params.autoReloadSupported),
     orgId: params.orgId,
     userId: params.userId,
     runId: params.runId,
@@ -210,7 +241,7 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       if (claimed) {
         result.followup3dSent += 1;
         sendEmail({
-          eventType: DUNNING_EVENT_3D,
+          eventType: dunningEventType(DUNNING_EVENT_3D, snapshot.autoReloadSupported),
           orgId: ep.orgId,
           userId: ep.userId,
           runId,
@@ -234,7 +265,7 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       if (claimed) {
         result.followup10dSent += 1;
         sendEmail({
-          eventType: DUNNING_EVENT_10D,
+          eventType: dunningEventType(DUNNING_EVENT_10D, snapshot.autoReloadSupported),
           orgId: ep.orgId,
           userId: ep.userId,
           runId,
