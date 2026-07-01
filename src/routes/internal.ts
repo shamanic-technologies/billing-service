@@ -20,7 +20,8 @@ import {
 import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
-import { gte as gteCents } from "../lib/cents.js";
+import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
+import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 
 const router = Router();
 
@@ -314,6 +315,60 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
     hasHistory: true,
+  });
+});
+
+// GET /internal/accounts/by-org/:orgId/balance
+//
+// User-less spendable-balance read for platform/staff fleet aggregators
+// (features-service accounts audit + fleet send-forecast) that need an org's
+// balance without a real end-user in context. Mirrors GET /v1/accounts/balance
+// (same response shape + field names + semantics) but keyed by the orgId PATH
+// param and guarded by requireApiKey only — no x-org-id / x-user-id / x-run-id
+// headers, no sentinel identity.
+//
+// Pure read: computeBalance (user-less /internal/*/by-org/{orgId} stripe reads +
+// runs-service org-usage) — NO auto-reload, NO depletion-episode mutation, no
+// side effects. 404 when the org has no billing account (same as /v1). Fail-loud
+// 502 when stripe-service / runs-service is unreachable.
+router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  const [account] = await db
+    .select({ id: billingAccounts.id })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+
+  if (!account) {
+    res.status(404).json({ error: "Billing account not found" });
+    return;
+  }
+
+  let snapshot;
+  let actualUsage;
+  try {
+    [snapshot, actualUsage] = await Promise.all([
+      computeBalance(orgId),
+      fetchRunsOrgActualUsageTotal(orgId, {}),
+    ]);
+  } catch (err) {
+    console.error(
+      `[billing-service] internal balance-by-org: compose failed for org ${orgId}:`,
+      err
+    );
+    res.status(502).json({ error: "Failed to compute balance" });
+    return;
+  }
+
+  res.json({
+    balance_cents: snapshot.balanceCents,
+    actual_balance_cents: subCents(snapshot.creditedCents, actualUsage.spent_cents),
+    depleted: isDepleted(snapshot.balanceCents),
   });
 });
 

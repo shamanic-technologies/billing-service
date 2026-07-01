@@ -1031,6 +1031,42 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/internal/accounts/by-org/{orgId}/balance",
+  summary: "User-less spendable balance for an org (platform/fleet reads)",
+  description:
+    "Same spendable-balance snapshot as GET /v1/accounts/balance (balance_cents = " +
+    "credited − committed usage; actual_balance_cents = credited − actualized usage; " +
+    "depleted = balance_cents <= 0), but keyed by the orgId PATH param and callable " +
+    "with the service x-api-key ONLY — no x-org-id / x-user-id / x-run-id, no sentinel " +
+    "identity. For platform/staff fleet aggregators (accounts audit, send-forecast) that " +
+    "have no end-user in context. Pure read: no auto-reload, no depletion mutation. " +
+    "404 when the org has no billing account; 502 when stripe-service/runs-service is unreachable.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Balance info",
+      content: { "application/json": { schema: BalanceResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/brands/{brandId}/daily-budget",
   summary: "Read this org's current daily budget for a brand",
   description:
