@@ -47,3 +47,26 @@ export function tierFor(cumulativePaidCents: string): TopupTier {
   }
   return { thresholdCents: -5000, amountCents: 5000 };
 }
+
+/**
+ * Cents to charge to lift `currentBalanceCents` up to `targetCents`, in whole
+ * multiples of `unitCents` (the tier reload amount). Returns 0 when the balance
+ * is already at/above target. Rounds the multiple UP so one settle fully clears
+ * the deficit past the target.
+ *
+ * Shared by every reload path: authorize (target = threshold + required),
+ * usage_apply (target = threshold), and the month-end sweep (target = "0").
+ */
+export function computeTopupCharge(
+  currentBalanceCents: string,
+  targetCents: string,
+  unitCents: number
+): number {
+  const deficit = new Decimal(targetCents).minus(currentBalanceCents);
+  if (deficit.lessThanOrEqualTo(0)) return 0;
+  const multiples = deficit
+    .dividedBy(unitCents)
+    .toDecimalPlaces(0, Decimal.ROUND_CEIL)
+    .toNumber();
+  return multiples * unitCents;
+}

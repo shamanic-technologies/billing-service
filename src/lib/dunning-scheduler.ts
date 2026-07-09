@@ -10,6 +10,7 @@
  */
 
 import { runDunningTick } from "./dunning.js";
+import { runMonthEndSweep } from "./month-end-sweep.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
 // is plenty frequent for both follow-ups and recharge detection.
@@ -22,15 +23,32 @@ let timer: NodeJS.Timeout | null = null;
 export function startDunningScheduler(): void {
   const tick = async () => {
     try {
-      const r = await runDunningTick();
-      if (r.processed > 0) {
-        console.log(
-          `[billing-service] dunning tick: processed=${r.processed} recovered=${r.recovered} ` +
-            `3d=${r.followup3dSent} 10d=${r.followup10dSent}`
-        );
+      try {
+        const r = await runDunningTick();
+        if (r.processed > 0) {
+          console.log(
+            `[billing-service] dunning tick: processed=${r.processed} recovered=${r.recovered} ` +
+              `3d=${r.followup3dSent} 10d=${r.followup10dSent}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] dunning tick failed:", err);
       }
-    } catch (err) {
-      console.error("[billing-service] dunning tick failed:", err);
+
+      // Month-end forced top-up sweep. Self-gates on the last UTC day of the
+      // month — a cheap date check on every other tick. Isolated from dunning so
+      // a failure in either never blocks the other.
+      try {
+        const s = await runMonthEndSweep();
+        if (s.ranSweep && (s.charged > 0 || s.failed > 0)) {
+          console.log(
+            `[billing-service] month-end sweep: eligible=${s.eligible} ` +
+              `charged=${s.charged} skipped=${s.skipped} failed=${s.failed}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] month-end sweep failed:", err);
+      }
     } finally {
       timer = setTimeout(tick, TICK_INTERVAL_MS);
     }

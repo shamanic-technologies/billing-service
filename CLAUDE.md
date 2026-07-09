@@ -127,7 +127,19 @@ Auto-topup is **postpaid on a derived tier ladder**, not a fixed daily charge. T
 - **`usage_apply`:** reload when `balance < threshold` (negative floor), charging tier `amount` multiples toward the floor.
 - **Dunning gate is threshold-aware** (`src/lib/cents.ts` `isDepleted(a, threshold="0")`, 2-arg): a depletion episode / T0 email opens ONLY when `balance <= threshold` (past the floor), NEVER on a normal negative balance within the line. `openDepletionEpisodeIfDepleted` takes `thresholdCents` (the derived floor for reload-capable orgs, `"0"` otherwise). This is also the structural root-fix for #170 (the balance-flutter duplicate-email bug): an enabled org running at ~0 never reaches the depletion path until it genuinely blows past the negative floor. The `credited`-rising recovery logic is unchanged; the dunning-tick follow-up gate stays at floor `"0"` (still-in-the-red check).
 - Credit exposure is bounded by `|threshold|` of the current tier plus one run's overshoot.
-- Onboarding / initial wallet-setup checkout is unchanged (seeds a positive buffer, lowers risk). The month-end forced-charge is a separate follow-up, not built here.
+- Onboarding / initial wallet-setup checkout is unchanged (seeds a positive buffer, lowers risk).
+- `computeTopupCharge(currentBalance, target, unit)` (the shared reload-math: cents to charge in whole tier-`unit` multiples to lift the balance to `target`, rounding the multiple up) lives in `src/lib/topup-tier.ts` and is reused by `authorize` (target = `threshold + required`), `usage_apply` (target = `threshold`), and the month-end sweep (target = `"0"`). It was moved out of `customer_balance.ts` so all three paths share one source.
+
+### Month-end forced top-up sweep (guarantee ≥1 charge/month)
+
+A slow spender whose balance never crosses the floor within a calendar month would go the whole month un-charged (Google/Meta Ads sweep any outstanding spend on the monthly bill date regardless of amount). `src/lib/month-end-sweep.ts` fixes this: `runMonthEndSweep(now = new Date())` settles every reload-capable org back to `>= 0` once a month.
+
+- **Trigger:** runs from the SAME hourly dunning scheduler (`dunning-scheduler.ts` tick, post-`listen()` — never the boot path), isolated in its own try/catch so a sweep failure never blocks dunning and vice-versa. Self-gates on `isLastDayOfMonth(now)` (UTC) — a single date check on every non-last-day tick.
+- **Selection:** auto-topup-ENABLED accounts (`topup_amount_cents` AND `topup_threshold_cents` non-null), then per-org reload-capability re-checked against the live snapshot (chargeable card + non-blocked issuing country — mirrors the `usage_apply` guards). Only a `balance < 0` org is charged; a non-negative org owes nothing, and anything already past the floor is owned by the normal floor-crossing path.
+- **Charge:** ONE `reloadViaPaymentIntent` (via `coalesceReload` + a 30s timeout) of `computeTopupCharge(balance, "0", tierFor(paidTopups).amountCents)` — settles the negative balance to `>= 0`. No end user on this path → the reload identity uses the `INTERNAL_IDENTITY` sentinel `x-user-id` (like transfer-brand), since the `/v1` reload primitives still require `x-user-id`.
+- **Idempotency (NO new storage):** the PRIMARY guard is the balance re-check — once the settle lands, `credited` rises past `usage` and the org reads non-negative, so later same-month ticks skip it. A month-bucketed (`YYYY-MM`), amount-independent Stripe idempotency key (`sweepIdempotencyKey`) collapses any same-month double-charge across the mirror-sync-lag window / multiple replicas (all last-day ticks fall inside Stripe's ~24h key retention).
+- **Fail-loud per org, isolated:** a per-org error is logged (`console.error("[billing-service] month-end sweep failed for org …")`) and skipped; one unreachable org never blocks the rest (same shape as `runDunningTick`).
+- **No cost declaration:** a reload collects the org's OWN money via Stripe — not a metered platform cost, exactly like the `authorize` / `usage_apply` reloads. No runs-service cost row.
 
 ## Public surface field names
 
