@@ -74,6 +74,13 @@ export interface OpenEpisodeParams {
   runId: string;
   /** Balance snapshot at the failing authorize. */
   balanceCents: string;
+  /**
+   * Depletion floor (the derived postpaid tier's NEGATIVE credit line, or "0"
+   * for prepaid orgs with no auto-reload). An episode opens ONLY when the
+   * balance is at/below this floor — a normal negative balance WITHIN the line
+   * never triggers a T0 email. Defaults to "0" (legacy strictly-prepaid gate).
+   */
+  thresholdCents?: string;
   /** Credited snapshot at the failing authorize — the recovery baseline. */
   creditedCents: string;
   /** Parsed workflow headers — gates the open on campaign activity. */
@@ -98,7 +105,7 @@ export interface OpenEpisodeParams {
 export async function openDepletionEpisodeIfDepleted(
   params: OpenEpisodeParams
 ): Promise<{ opened: boolean }> {
-  if (!isDepleted(params.balanceCents)) return { opened: false };
+  if (!isDepleted(params.balanceCents, params.thresholdCents ?? "0")) return { opened: false };
   if (!hasCampaignActivity(params.workflow)) return { opened: false };
 
   // The partial unique index `(org_id) WHERE recovered_at IS NULL` is the

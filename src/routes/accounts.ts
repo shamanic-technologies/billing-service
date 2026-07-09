@@ -7,6 +7,7 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { UpdateAutoTopupRequestSchema, WalletSetupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, findOrCreateWalletAccount } from "../lib/account.js";
 import { addCents, isDepleted, subCents } from "../lib/cents.js";
+import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
@@ -45,6 +46,7 @@ async function composeAccountFunds(
   usageCents: string;
   balanceCents: string;
   actualBalanceCents: string;
+  paidTopupsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   autoReloadSupported: boolean;
@@ -66,6 +68,7 @@ async function composeAccountFunds(
     usageCents: runsUsage.spent_cents,
     balanceCents,
     actualBalanceCents,
+    paidTopupsCents: paidTopups,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
@@ -79,11 +82,20 @@ function buildAccountResponse(
     usageCents: string;
     balanceCents: string;
     actualBalanceCents: string;
+    paidTopupsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     autoReloadSupported: boolean;
   }
 ) {
+  // Auto-topup is enabled iff the stored columns are non-null (they are the
+  // enabled flag). When enabled, the effective (amount, threshold) are the
+  // DERIVED postpaid tier (a function of cumulative paid topups) — the negative
+  // threshold is the credit-line floor the dashboard renders. When disabled,
+  // both fields are null (no top-up). See lib/topup-tier.
+  const enabled =
+    account.topupAmountCents != null && account.topupThresholdCents != null;
+  const tier = enabled ? tierFor(funds.paidTopupsCents) : null;
   return {
     id: account.id,
     org_id: account.orgId,
@@ -91,8 +103,8 @@ function buildAccountResponse(
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
-    topup_amount_cents: account.topupAmountCents,
-    topup_threshold_cents: account.topupThresholdCents,
+    topup_amount_cents: tier ? tier.amountCents : null,
+    topup_threshold_cents: tier ? tier.thresholdCents : null,
     has_payment_method: funds.hasPaymentMethod,
     // Off_session auto-reload is impossible for cards issued in mandate-required countries
     // (e.g. India / RBI, issue #220). When unsupported, the dashboard shows a notice and
