@@ -323,9 +323,10 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
 // User-less spendable-balance read for platform/staff fleet aggregators
 // (features-service accounts audit + fleet send-forecast) that need an org's
 // balance without a real end-user in context. Mirrors GET /v1/accounts/balance
-// (same response shape + field names + semantics) but keyed by the orgId PATH
-// param and guarded by requireApiKey only — no x-org-id / x-user-id / x-run-id
-// headers, no sentinel identity.
+// (same balance/actual_balance/depleted shape + field names + semantics) plus an
+// additive auto_topup_enabled flag (see below) — keyed by the orgId PATH param and
+// guarded by requireApiKey only — no x-org-id / x-user-id / x-run-id headers, no
+// sentinel identity.
 //
 // Pure read: computeBalance (user-less /internal/*/by-org/{orgId} stripe reads +
 // runs-service org-usage) — NO auto-reload, NO depletion-episode mutation, no
@@ -339,7 +340,11 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
   }
 
   const [account] = await db
-    .select({ id: billingAccounts.id })
+    .select({
+      id: billingAccounts.id,
+      topupAmountCents: billingAccounts.topupAmountCents,
+      topupThresholdCents: billingAccounts.topupThresholdCents,
+    })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
@@ -365,10 +370,24 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     return;
   }
 
+  // auto_topup_enabled mirrors the has_auto_topup semantics of GET /v1/accounts:
+  // the stored topup columns are the enabled flag (non-null ⇒ configured), AND the
+  // reload can actually fire (a chargeable card exists AND its issuing country is
+  // not off_session-blocked, e.g. India / RBI). This is the "will never run dry"
+  // signal fleet aggregators (features-service accounts audit) use to classify an
+  // org as active even when its momentary spendable balance is low. Additive field
+  // — the balance/actual_balance/depleted shape above is unchanged.
+  const autoTopupEnabled =
+    account.topupAmountCents != null &&
+    account.topupThresholdCents != null &&
+    snapshot.hasCardPm &&
+    snapshot.autoReloadSupported;
+
   res.json({
     balance_cents: snapshot.balanceCents,
     actual_balance_cents: subCents(snapshot.creditedCents, actualUsage.spent_cents),
     depleted: isDepleted(snapshot.balanceCents),
+    auto_topup_enabled: autoTopupEnabled,
   });
 });
 
