@@ -76,7 +76,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
       actual_balance_cents: "70.0000000000",
       depleted: false,
       // No topup config on the default account → auto-topup not enabled.
-      auto_topup_enabled: false,
+      has_auto_topup: false,
     });
     // User-less balance path: keyed off orgId ONLY (no x-user-id / sentinel).
     expect(ssMocks.fetchOrgCustomer).toHaveBeenCalledWith(orgId);
@@ -84,7 +84,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("auto_topup_enabled=true when topup configured + chargeable card + supported country", async () => {
+  it("has_auto_topup=true when topup configured + chargeable card + supported country", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 5000,
@@ -96,12 +96,12 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
 
     expect(res.status).toBe(200);
-    expect(res.body.auto_topup_enabled).toBe(true);
+    expect(res.body.has_auto_topup).toBe(true);
     // Pure read: still never reloads, even for an auto-topup-enabled org.
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("auto_topup_enabled=false when topup configured but no chargeable card", async () => {
+  it("has_auto_topup=false when topup configured but no chargeable card", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 5000,
@@ -112,10 +112,10 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
 
     expect(res.status).toBe(200);
-    expect(res.body.auto_topup_enabled).toBe(false);
+    expect(res.body.has_auto_topup).toBe(false);
   });
 
-  it("auto_topup_enabled=false when the card's issuing country is off_session-blocked (e.g. India)", async () => {
+  it("has_auto_topup=false when the card's issuing country is off_session-blocked (e.g. India)", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 5000,
@@ -127,7 +127,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
 
     expect(res.status).toBe(200);
-    expect(res.body.auto_topup_enabled).toBe(false);
+    expect(res.body.has_auto_topup).toBe(false);
   });
 
   it("depleted=true when spendable balance <= 0", async () => {

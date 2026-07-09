@@ -324,7 +324,7 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
 // (features-service accounts audit + fleet send-forecast) that need an org's
 // balance without a real end-user in context. Mirrors GET /v1/accounts/balance
 // (same balance/actual_balance/depleted shape + field names + semantics) plus an
-// additive auto_topup_enabled flag (see below) — keyed by the orgId PATH param and
+// additive has_auto_topup flag (see below) — keyed by the orgId PATH param and
 // guarded by requireApiKey only — no x-org-id / x-user-id / x-run-id headers, no
 // sentinel identity.
 //
@@ -370,14 +370,15 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     return;
   }
 
-  // auto_topup_enabled mirrors the has_auto_topup semantics of GET /v1/accounts:
-  // the stored topup columns are the enabled flag (non-null ⇒ configured), AND the
-  // reload can actually fire (a chargeable card exists AND its issuing country is
-  // not off_session-blocked, e.g. India / RBI). This is the "will never run dry"
-  // signal fleet aggregators (features-service accounts audit) use to classify an
-  // org as active even when its momentary spendable balance is low. Additive field
-  // — the balance/actual_balance/depleted shape above is unchanged.
-  const autoTopupEnabled =
+  // has_auto_topup uses the SAME name + semantics as GET /v1/accounts (one field
+  // for one concept across both billing balance surfaces): the stored topup columns
+  // are the enabled flag (non-null ⇒ configured), AND the reload can actually fire
+  // (a chargeable card exists AND its issuing country is not off_session-blocked,
+  // e.g. India / RBI). This is the "will never run dry" signal fleet aggregators
+  // (features-service accounts audit) use to classify an org as active even when its
+  // momentary spendable balance is low. Additive field — the
+  // balance/actual_balance/depleted shape above is unchanged.
+  const hasAutoTopup =
     account.topupAmountCents != null &&
     account.topupThresholdCents != null &&
     snapshot.hasCardPm &&
@@ -387,7 +388,7 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     balance_cents: snapshot.balanceCents,
     actual_balance_cents: subCents(snapshot.creditedCents, actualUsage.spent_cents),
     depleted: isDepleted(snapshot.balanceCents),
-    auto_topup_enabled: autoTopupEnabled,
+    has_auto_topup: hasAutoTopup,
   });
 });
 
