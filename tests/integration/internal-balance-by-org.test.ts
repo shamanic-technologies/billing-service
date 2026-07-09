@@ -75,11 +75,59 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
       balance_cents: "60.0000000000",
       actual_balance_cents: "70.0000000000",
       depleted: false,
+      // No topup config on the default account → auto-topup not enabled.
+      auto_topup_enabled: false,
     });
     // User-less balance path: keyed off orgId ONLY (no x-user-id / sentinel).
     expect(ssMocks.fetchOrgCustomer).toHaveBeenCalledWith(orgId);
     // Pure read: never reloads.
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("auto_topup_enabled=true when topup configured + chargeable card + supported country", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 5000,
+      topupThresholdCents: -5000,
+    });
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("US");
+
+    const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.auto_topup_enabled).toBe(true);
+    // Pure read: still never reloads, even for an auto-topup-enabled org.
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("auto_topup_enabled=false when topup configured but no chargeable card", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 5000,
+      topupThresholdCents: -5000,
+    });
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+
+    const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.auto_topup_enabled).toBe(false);
+  });
+
+  it("auto_topup_enabled=false when the card's issuing country is off_session-blocked (e.g. India)", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 5000,
+      topupThresholdCents: -5000,
+    });
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("IN");
+
+    const res = await request(app).get(balancePath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.auto_topup_enabled).toBe(false);
   });
 
   it("depleted=true when spendable balance <= 0", async () => {
