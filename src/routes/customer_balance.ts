@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { Decimal } from "decimal.js";
 import crypto from "crypto";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { AuthorizeRequestSchema, UsageApplyRequestSchema } from "../schemas.js";
@@ -17,7 +16,7 @@ import {
   isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
-import { tierFor } from "../lib/topup-tier.js";
+import { tierFor, computeTopupCharge } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
@@ -27,13 +26,6 @@ const router = Router();
 
 const RELOAD_TIMEOUT_MS = 30_000;
 const RELOAD_IDEMPOTENCY_BUCKET_MS = 60_000;
-
-function computeTopupCharge(currentBalance: string, requiredCents: string, topupUnit: number): number {
-  const deficit = new Decimal(requiredCents).minus(currentBalance);
-  if (deficit.lessThanOrEqualTo(0)) return 0;
-  const multiples = deficit.dividedBy(topupUnit).toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
-  return multiples * topupUnit;
-}
 
 function buildIdentity(orgId: string, userId: string, runId: string | undefined, wfHeaders: Record<string, string>) {
   const out: Record<string, string> = {
