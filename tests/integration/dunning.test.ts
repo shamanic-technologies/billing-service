@@ -374,6 +374,47 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(eventTypes).toEqual(["credit-depleted-followup-10d", "credit-depleted-followup-3d"]);
   });
 
+  it("17: auto-topup org negative WITHIN the credit line → sufficient:true, NO episode, NO T0", async () => {
+    // Enabled org (card + config). paid 0 → floor -5000. usage 4000 → balance -4000,
+    // still above the floor → the run proceeds on credit, no depletion, no email.
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
+    setBalance("0.0000000000");
+    setUsage("4000.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(campaignHeaders())
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(await listEpisodes(orgId)).toHaveLength(0);
+    expect(sendEmailSpy).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("18: auto-topup org crosses the floor + reload fails → opens episode, sends T0", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
+    setBalance("0.0000000000");
+    setUsage("5001.0000000000"); // balance -5001, past the -5000 floor
+    ssMocks.reloadViaPaymentIntent.mockResolvedValue({
+      status: "failed",
+      failure_reason: "card_declined",
+    });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(campaignHeaders())
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(false);
+    expect(await listEpisodes(orgId)).toHaveLength(1);
+    const t0 = sendEmailSpy.mock.calls.filter((c) => c[0].eventType === "credit-depleted");
+    expect(t0).toHaveLength(1);
+    expect(t0[0][0]).toMatchObject({ recipientEmail: billingEmail });
+  });
+
   it("10: tick endpoint returns a summary over multiple open episodes", async () => {
     setBalance("0.0000000000");
     // window sanity: constants exported for any caller

@@ -97,10 +97,21 @@ describe("addCents / subCents / cmpCents", () => {
     expect(cmpCents("1.5", "1.6")).toBe(-1);
   });
 
-  it("isDepleted true for ≤ 0", () => {
+  it("isDepleted true for ≤ 0 (default threshold 0)", () => {
     expect(isDepleted("0")).toBe(true);
     expect(isDepleted("-0.0001")).toBe(true);
     expect(isDepleted("0.0000000001")).toBe(false);
+  });
+
+  it("isDepleted threshold-aware: depleted only at/below the negative floor", () => {
+    // Within the credit line (above the floor) → NOT depleted.
+    expect(isDepleted("-30", "-5000")).toBe(false);
+    expect(isDepleted("-4999.9999999999", "-5000")).toBe(false);
+    // At or past the floor → depleted.
+    expect(isDepleted("-5000", "-5000")).toBe(true);
+    expect(isDepleted("-5000.0000000001", "-5000")).toBe(true);
+    // A normal positive balance is never depleted against a negative floor.
+    expect(isDepleted("100", "-5000")).toBe(false);
   });
 
   it("gte handles fractions", () => {

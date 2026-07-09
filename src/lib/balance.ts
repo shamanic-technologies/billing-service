@@ -28,6 +28,12 @@ export interface BalanceSnapshot {
    * India / RBI). The reload trigger skips these cards — see customer_balance authorize.
    */
   autoReloadSupported: boolean;
+  /**
+   * Paid succeeded topups only (excludes promos) — the cumulative-paid signal
+   * that drives the derived postpaid tier (see lib/topup-tier). Distinct from
+   * creditedCents, which also includes local promo grants.
+   */
+  paidTopupsCents: string;
   creditedCents: string;
   usageCents: string;
   balanceCents: string;
@@ -59,6 +65,7 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
     hasCardPm,
     cardCountry,
     autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
+    paidTopupsCents: paidTopups,
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,

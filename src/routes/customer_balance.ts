@@ -17,6 +17,7 @@ import {
   isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
+import { tierFor } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
@@ -115,8 +116,22 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    if (gteCents(snapshot.balanceCents, requiredCents)) {
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+    // Threshold-based postpaid: the account is allowed to run NEGATIVE down to a
+    // credit-line floor. The effective (amount, threshold) come from the derived
+    // tier (a function of cumulative paid topups) — the stored columns are only
+    // the "auto-topup enabled" flag. Orgs that can't be reloaded (no config, no
+    // card, or a blocked issuing country) have no credit line → floor "0"
+    // (strictly prepaid), so the sufficiency + dunning gates behave as before.
+    const canReload =
+      account.topupAmountCents != null && snapshot.hasCardPm && snapshot.autoReloadSupported;
+    const tier = canReload ? tierFor(snapshot.paidTopupsCents) : null;
+    const thresholdCents = tier ? String(tier.thresholdCents) : "0";
+
+    // Sufficient (no reload) when running this cost keeps the balance at/above
+    // the floor: balance − required >= threshold. A negative balance still
+    // within the credit line reads sufficient and runs on credit.
+    if (gteCents(subCents(snapshot.balanceCents, requiredCents), thresholdCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, balance_cents: snapshot.balanceCents, required_cents: requiredCents, threshold_cents: thresholdCents } }, req.headers);
       res.json({
         sufficient: true,
         balance_cents: snapshot.balanceCents,
@@ -129,6 +144,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        thresholdCents,
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -148,6 +164,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        thresholdCents,
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -169,6 +186,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        thresholdCents,
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -184,11 +202,17 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    const chargeAmount = computeTopupCharge(snapshot.balanceCents, requiredCents, account.topupAmountCents);
+    // canReload is true here → tier is non-null. Reload enough tier-amount
+    // multiples to bring the balance up to (threshold + required) so the run
+    // clears WITH the floor headroom preserved. Charge uses the tier amount, not
+    // the stored daily amount.
+    const targetCents = addCents(thresholdCents, requiredCents);
+    const chargeAmount = computeTopupCharge(snapshot.balanceCents, targetCents, tier!.amountCents);
     if (chargeAmount <= 0) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        thresholdCents,
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -225,6 +249,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
+        thresholdCents,
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -248,11 +273,12 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    const sufficient = gteCents(after.balanceCents, requiredCents);
+    const sufficient = gteCents(subCents(after.balanceCents, requiredCents), thresholdCents);
     if (!sufficient) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: after.balanceCents,
+        thresholdCents,
         creditedCents: after.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
@@ -329,7 +355,13 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
 
     const creditedCents = addCents(paidTopups, localCredits);
     const balanceCents = subCents(creditedCents, spentTotalCents);
-    const thresholdCents = String(account.topupThresholdCents);
+
+    // Threshold-based postpaid: the effective (amount, threshold) come from the
+    // derived tier (a function of cumulative paid topups), NOT the stored daily
+    // columns. The floor is NEGATIVE, so a reload only fires once spend crosses
+    // the credit line — not every day.
+    const tier = tierFor(paidTopups);
+    const thresholdCents = String(tier.thresholdCents);
 
     if (gteCents(balanceCents, thresholdCents)) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: balanceCents, threshold_cents: thresholdCents } }, req.headers);
@@ -337,7 +369,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       return;
     }
 
-    const chargeAmount = computeTopupCharge(balanceCents, thresholdCents, account.topupAmountCents);
+    const chargeAmount = computeTopupCharge(balanceCents, thresholdCents, tier.amountCents);
     if (chargeAmount <= 0) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;

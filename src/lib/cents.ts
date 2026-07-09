@@ -90,9 +90,16 @@ export function cmpCents(a: string, b: string): -1 | 0 | 1 {
   return new Decimal(a).comparedTo(b) as -1 | 0 | 1;
 }
 
-/** True if value <= 0 (depleted check). */
-export function isDepleted(a: string): boolean {
-  return new Decimal(a).lessThanOrEqualTo(0);
+/**
+ * True if `a` is at or below the depletion floor `threshold`.
+ *
+ * In the threshold-based postpaid model the floor is the tier's NEGATIVE credit
+ * line (balance may legitimately go negative down to it). Default threshold "0"
+ * preserves the legacy strictly-prepaid check (balance <= 0) for callers that
+ * have no credit line (the `/balance` shortcut, prepaid orgs).
+ */
+export function isDepleted(a: string, threshold: string = "0"): boolean {
+  return new Decimal(a).lessThanOrEqualTo(threshold);
 }
 
 /** True if a >= b. */
