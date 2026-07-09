@@ -44,23 +44,46 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("triggers reload when available < threshold and PM present", async () => {
+  it("no reload while the negative balance is within the credit line (postpaid)", async () => {
     await insertTestAccount({
       orgId,
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
     ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
+    // paid 0 → start tier floor -5000. spent 4000 → balance -4000, still above floor.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
       .set(getAuthHeaders(orgId, userId))
-      .send({ spent_total_cents: "200.0000000000" });
+      .send({ spent_total_cents: "4000.0000000000" });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("triggers reload when balance crosses the floor; charges the TIER amount not the stored daily", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+    // paid 0 → floor -5000, tier amount 5000. spent 5001 → balance -5001 < -5000 → reload.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/usage_apply")
+      .set(getAuthHeaders(orgId, userId))
+      .send({ spent_total_cents: "5001.0000000000" });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
     expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    // Charge is the tier amount (5000), NOT the stored daily topup_amount (1000).
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(5000);
   });
 
   it("triggers reload when card attached but no default PM (regression)", async () => {
@@ -72,12 +95,12 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     // Customer has no default_payment_method, but a card is attached.
     ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
     ssMocks.hasAttachedCardPm.mockResolvedValue(true);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
       .set(getAuthHeaders(orgId, userId))
-      .send({ spent_total_cents: "200.0000000000" });
+      .send({ spent_total_cents: "5001.0000000000" });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
@@ -143,7 +166,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       topupThresholdCents: 500,
     });
     ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("600.0000000000");
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
     ssMocks.reloadViaPaymentIntent.mockResolvedValue({
       status: "failed",
       failure_reason: "decline",
@@ -152,7 +175,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
       .set(getAuthHeaders(orgId, userId))
-      .send({ spent_total_cents: "200.0000000000" });
+      .send({ spent_total_cents: "5001.0000000000" });
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });

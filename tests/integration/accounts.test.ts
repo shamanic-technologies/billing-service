@@ -174,6 +174,33 @@ describe("Accounts endpoints", () => {
       expect(res.body.has_auto_topup).toBe(false);
     });
 
+    it("enabled account surfaces the DERIVED tier scaled to cumulative paid ($1000 → $500 line)", async () => {
+      await insertTestAccount({ orgId, topupAmountCents: 1000, topupThresholdCents: 200 });
+      // Cumulative paid $1000 → high tier {amount 50000, threshold -50000}.
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.topup_amount_cents).toBe(50000);
+      expect(res.body.topup_threshold_cents).toBe(-50000);
+    });
+
+    it("disabled account (no topup config) → topup amount/threshold null", async () => {
+      await insertTestAccount({ orgId }); // topupAmountCents null
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.topup_amount_cents).toBeNull();
+      expect(res.body.topup_threshold_cents).toBeNull();
+    });
+
     it("credited reflects only succeeded payment intents (failed PIs excluded)", async () => {
       await insertTestAccount({ orgId });
       // Helper already filters succeeded — assert by configuring its return.
@@ -310,18 +337,21 @@ describe("Accounts endpoints", () => {
   });
 
   describe("PATCH /v1/accounts/auto_topup", () => {
-    it("enables auto-topup when SS reports payment method present", async () => {
+    it("enables auto-topup; response returns the DERIVED tier, not the posted daily amount", async () => {
       await insertTestAccount({ orgId });
       ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
+      // Posted daily amount/threshold are now only the enabled flag. Cumulative
+      // paid = 0 → start tier {amount 5000, threshold -5000} (negative floor).
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
-        .send({ topup_amount_cents: 5000, topup_threshold_cents: 1000 });
+        .send({ topup_amount_cents: 1234, topup_threshold_cents: 999 });
 
       expect(res.status).toBe(200);
       expect(res.body.topup_amount_cents).toBe(5000);
-      expect(res.body.topup_threshold_cents).toBe(1000);
+      expect(res.body.topup_threshold_cents).toBe(-5000);
       expect(res.body.has_auto_topup).toBe(true);
     });
 
@@ -395,8 +425,11 @@ describe("Accounts endpoints", () => {
           });
 
         expect(res.status).toBe(200);
-        expect(res.body.topup_amount_cents).toBe(3000);
-        expect(res.body.topup_threshold_cents).toBe(700);
+        // Posted daily amount/threshold (3000/700) are only the enabled flag;
+        // the response returns the derived tier. These loads (≤ $50) all resolve
+        // to the start tier → amount 5000, threshold -5000.
+        expect(res.body.topup_amount_cents).toBe(5000);
+        expect(res.body.topup_threshold_cents).toBe(-5000);
         expect(res.body.has_auto_topup).toBe(true);
         expect(res.body.first_load_match_applied).toBe(true);
         expect(res.body.first_load_match_cents).toBe(expectedBonus);

@@ -86,12 +86,43 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("insufficient + topup configured + SS has PM → calls reload and re-evaluates", async () => {
+  it("negative balance still within the credit line → sufficient:true, NO reload (postpaid)", async () => {
+    // Cumulative paid 0 → start tier {amount 5000, threshold -5000}. usage 4000,
+    // paid 0 → balance -4000. required 10 → -4010 still >= -5000 floor → runs on credit.
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "4000.0000000000",
+      as_of: "x",
+    });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(res.body.balance_cents).toBe("-4000.0000000000");
+    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it("crossing the floor → reloads the TIER amount (not the stored daily amount) and re-evaluates", async () => {
+    // Stored daily amount is 1000, but the reload charge must be the derived tier
+    // amount (5000 at start tier). usage 5000, paid 0 → balance -5000; required 10
+    // → -5010 < -5000 floor → reload one tier unit (5000).
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
     ssMocks.sumSucceededTopupsForOrg
       .mockResolvedValueOnce("0.0000000000")
-      .mockResolvedValueOnce("1000.0000000000");
+      .mockResolvedValueOnce("5000.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5000.0000000000",
+      as_of: "x",
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -101,18 +132,48 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
     expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(1000);
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(5000);
   });
 
-  it("insufficient + topup + card attached but no default PM → fires reload (regression)", async () => {
+  it("tier scales with cumulative paid: $200-tier org crossing floor reloads $200", async () => {
+    // Cumulative paid 20000 ($200) → mid tier {amount 20000, threshold -20000}.
+    // usage 40000, paid 20000 → balance -20000; required 10 → -20010 < -20000 → reload 20000.
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg
+      .mockResolvedValueOnce("20000.0000000000")
+      .mockResolvedValueOnce("40000.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "40000.0000000000",
+      as_of: "x",
+    });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(20000);
+  });
+
+  it("crossing the floor + card attached but no default PM → fires reload (regression)", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     // Customer has NO default_payment_method, but a card is attached. The gate now
-    // keys on the attached card (hasAttachedCardPm), not invoice_settings.default.
+    // keys on the attached card (hasChargeablePmForOrg), not invoice_settings.default.
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM({ invoice_settings: { default_payment_method: null } }));
     ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
     ssMocks.sumSucceededTopupsForOrg
       .mockResolvedValueOnce("0.0000000000")
-      .mockResolvedValueOnce("1000.0000000000");
+      .mockResolvedValueOnce("5000.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5000.0000000000",
+      as_of: "x",
+    });
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -122,7 +183,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
     expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(1000);
+    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(5000);
   });
 
   it("insufficient + topup + no card attached → graceful sufficient:false, no reload", async () => {
@@ -172,10 +233,15 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
   });
 
-  it("reload status=failed → sufficient:false", async () => {
+  it("reload status=failed (past the floor) → sufficient:false", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5000.0000000000",
+      as_of: "x",
+    });
     ssMocks.reloadViaPaymentIntent.mockResolvedValue({
       status: "failed",
       failure_reason: "card_declined",
@@ -190,10 +256,15 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(res.body.sufficient).toBe(false);
   });
 
-  it("reload throws (SS down) → 502", async () => {
+  it("reload throws (SS down, past the floor) → 502", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5000.0000000000",
+      as_of: "x",
+    });
     ssMocks.reloadViaPaymentIntent.mockRejectedValue(new Error("SS down"));
 
     const res = await request(app)
@@ -208,6 +279,11 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     await insertTestAccount({ orgId, topupAmountCents: 1000 });
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5000.0000000000",
+      as_of: "x",
+    });
 
     ssMocks.reloadViaPaymentIntent.mockImplementation(
       () =>

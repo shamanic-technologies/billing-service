@@ -117,6 +117,18 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
 - `AUTO_RELOAD_BLOCKED_CARD_COUNTRIES` + `isAutoReloadBlockedCountry()` + `getOrgCardCountry` (real-user) / `getOrgCardCountryByOrg` (balance path) live in `src/lib/stripe-service-client.ts`. **Blocklist = `{ IN }` only.** EEA is deliberately NOT blocked (its mandate is satisfied by `setup_future_usage` + SCA on the initial Checkout save, which already works — EU orgs auto-reload fine). Mexico / Brazil are listed by Stripe as agreement-requiring but the mechanism is unconfirmed and there is zero prod evidence — left out to avoid blocking orgs that may work. Extend the set ONLY when a decline is confirmed in prod.
 - Enforced in BOTH reload paths so the UI "deactivated" state never contradicts backend behavior: `customer_balance/authorize` gates on `snapshot.autoReloadSupported` (from `computeBalance`), `usage_apply` checks `getOrgCardCountry` — both **skip the reload** for a blocked country and fall through to depletion dunning (which prompts manual recharge). `PATCH /v1/accounts/auto_topup` rejects a blocked-country card (400, fail-loud) rather than storing config that never fires. `GET /v1/accounts` exposes `auto_reload_supported` / `auto_reload_unsupported_reason` / `card_country`, and forces `has_auto_topup=false` when unsupported.
 
+## Threshold-based postpaid top-up (Google/Meta-Ads cadence)
+
+Auto-topup is **postpaid on a derived tier ladder**, not a fixed daily charge. The balance is allowed to run NEGATIVE down to a credit-line floor; a fixed reload fires only when spend crosses that floor — so a $32/day org is charged ~every 1.5 days, not daily.
+
+- **Derived tier** (`src/lib/topup-tier.ts`, `tierFor(cumulativePaidCents)`): pure function of the org's cumulative **succeeded topups** (the same `sumSucceededTopupsForOrg` / `sumSucceededTopupsForCustomer` sum already computed — NOT credited, promos excluded). Returns `{ thresholdCents (NEGATIVE floor), amountCents }`, magnitudes equal so one charge clears one crossed line. Ladder: `≥ $1000 paid → {-50000, 50000}` ($500 line); `≥ $200 → {-20000, 20000}`; else `{-5000, 5000}` ($50 start line). The line grows with trust. **No storage** — derived every read.
+- **Stored `billing_accounts.topup_amount_cents` / `topup_threshold_cents` are ONLY the "auto-topup enabled" flag** (non-null ⇒ enabled). The effective `(amount, threshold)` come from `tierFor()` EVERYWHERE — reload math in `authorize` + `usage_apply`, and the account-read response. The `PATCH/wallet_setup` request schema is unchanged (still `min(0)`); the negative threshold is derived + returned, never written through the route.
+- **`authorize` (true postpaid):** sufficient (no reload) when `balance − required >= threshold` (floor). Below it, reload multiples of the tier `amount` toward `threshold + required`, then recheck against the floor. Orgs that can't be reloaded (no config / no card / blocked country) have **no credit line → floor `"0"`** (strictly prepaid) — the sufficiency + dunning gates behave as pre-postpaid for them.
+- **`usage_apply`:** reload when `balance < threshold` (negative floor), charging tier `amount` multiples toward the floor.
+- **Dunning gate is threshold-aware** (`src/lib/cents.ts` `isDepleted(a, threshold="0")`, 2-arg): a depletion episode / T0 email opens ONLY when `balance <= threshold` (past the floor), NEVER on a normal negative balance within the line. `openDepletionEpisodeIfDepleted` takes `thresholdCents` (the derived floor for reload-capable orgs, `"0"` otherwise). This is also the structural root-fix for #170 (the balance-flutter duplicate-email bug): an enabled org running at ~0 never reaches the depletion path until it genuinely blows past the negative floor. The `credited`-rising recovery logic is unchanged; the dunning-tick follow-up gate stays at floor `"0"` (still-in-the-red check).
+- Credit exposure is bounded by `|threshold|` of the current tier plus one run's overshoot.
+- Onboarding / initial wallet-setup checkout is unchanged (seeds a positive buffer, lowers risk). The month-end forced-charge is a separate follow-up, not built here.
+
 ## Public surface field names
 
 ### `GET /v1/accounts` and `PATCH/DELETE /v1/accounts/auto_topup`
@@ -129,8 +141,8 @@ The same CSV convention applies to the `x-brand-id` header forwarded by workflow
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned)
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
-  "topup_amount_cents": 2500,                // auto-topup amount
-  "topup_threshold_cents": 500,              // auto-topup triggers when balance_cents < threshold
+  "topup_amount_cents": 5000,                // DERIVED tier reload amount (tierFor(cumulative paid)); null when auto-topup disabled. NOT the stored daily amount.
+  "topup_threshold_cents": -5000,            // DERIVED tier NEGATIVE credit-line floor; auto-topup reloads when balance crosses it. null when disabled. See "Threshold-based postpaid top-up"
   "has_payment_method": true,                // ≥1 chargeable PM: card OR link (GET /v1/payment_methods?type=card, then type=link); NOT invoice_settings.default_payment_method
   "has_auto_topup": true,                     // false when auto_reload_supported is false, even if topup config exists (it would never fire)
   "auto_reload_supported": true,             // false when the saved card's issuing country can't be charged off_session (e.g. India). See "Off_session auto-reload" below
