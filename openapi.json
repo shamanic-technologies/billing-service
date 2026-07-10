@@ -92,7 +92,7 @@
           },
           "usage_cents": {
             "type": "string",
-            "description": "Platform usage from runs-service, including actualized costs and provisioned holds. Use with balance_cents for spend authorization."
+            "description": "Platform usage from runs-service, including actualized costs and provisioned holds. Already NET of any per-org usage discount (applied once at cost-write in runs-service). Use with balance_cents for spend authorization."
           },
           "balance_cents": {
             "type": "string",
@@ -105,12 +105,6 @@
           "usage_discount_pct": {
             "type": "integer",
             "nullable": true
-          },
-          "net_usage_cents": {
-            "type": "string"
-          },
-          "net_actual_usage_cents": {
-            "type": "string"
           },
           "topup_amount_cents": {
             "type": "integer",
@@ -152,8 +146,6 @@
           "balance_cents",
           "actual_balance_cents",
           "usage_discount_pct",
-          "net_usage_cents",
-          "net_actual_usage_cents",
           "topup_amount_cents",
           "topup_threshold_cents",
           "has_payment_method",
@@ -760,6 +752,23 @@
           "balanceCents",
           "lastRequiredCents",
           "hasHistory"
+        ]
+      },
+      "InternalUsageDiscount": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "discountPct": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "orgId",
+          "discountPct"
         ]
       },
       "ReadBrandDailyBudget": {
@@ -2482,7 +2491,7 @@
       },
       "put": {
         "summary": "Set / replace this org's platform-usage discount (staff)",
-        "description": "Upserts the single usage-discount value for x-org-id (0–100, integer). The org then effectively pays (1 − discountPct/100) of its gross platform usage: the usage billing subtracts at balance composition is reduced, so the balance depletes proportionally slower and auto-topups fire proportionally less often. Gross usage in runs-service is untouched. x-email is recorded as setBy. Out-of-range percentages are rejected (400) — no silent clamp.",
+        "description": "Upserts the single usage-discount value for x-org-id (0–100, integer). The org then effectively pays (1 − discountPct/100) of its gross platform usage. The discount is applied ONCE, at cost-write time, inside runs-service (which reads this value via GET /internal/accounts/by-org/{orgId}/usage-discount): each cost row is stored net, so the org's balance depletes proportionally slower and auto-topups fire proportionally less often. Billing only stores + serves the percentage and never re-applies it at balance composition. x-email is recorded as setBy. Out-of-range percentages are rejected (400) — no silent clamp.",
         "parameters": [
           {
             "schema": {
@@ -2886,6 +2895,63 @@
           },
           "502": {
             "description": "stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/usage-discount": {
+      "get": {
+        "summary": "User-less read of an org's platform-usage discount (service-to-service)",
+        "description": "Returns the org's usage-discount percentage keyed by the orgId PATH param, callable with the service x-api-key ONLY — no x-org-id / x-user-id, no sentinel. runs-service calls this at cost-write time to FREEZE the discount onto each cost row (the discount is applied exactly once, there — billing never re-applies it at balance composition). discountPct is null when the org has no discount (full pricing).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current discount (discountPct null when none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InternalUsageDiscount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {

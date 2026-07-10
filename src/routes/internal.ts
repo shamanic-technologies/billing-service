@@ -21,7 +21,7 @@ import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
-import { applyUsageDiscount } from "../lib/usage-discount.js";
+import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 
 const router = Router();
@@ -386,17 +386,38 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     snapshot.autoReloadSupported;
 
   res.json({
-    // balance_cents is already discount-adjusted (computeBalance subtracts net
-    // usage). actual_balance_cents must apply the same discount to the actualized
-    // usage — snapshot.discountPct is the org's live pct (null → gross unchanged).
+    // Both usage figures from runs-service are already NET of the org's usage
+    // discount (frozen at cost-write). Billing subtracts them verbatim and applies
+    // no discount here. balance_cents = credited − committed usage;
+    // actual_balance_cents = credited − actualized usage.
     balance_cents: snapshot.balanceCents,
-    actual_balance_cents: subCents(
-      snapshot.creditedCents,
-      applyUsageDiscount(actualUsage.spent_cents, snapshot.discountPct)
-    ),
+    actual_balance_cents: subCents(snapshot.creditedCents, actualUsage.spent_cents),
     depleted: isDepleted(snapshot.balanceCents),
     has_auto_topup: hasAutoTopup,
   });
+});
+
+// GET /internal/accounts/by-org/:orgId/usage-discount
+//
+// User-less read of an org's platform-usage discount percentage, keyed by the
+// orgId PATH param and guarded by requireApiKey ONLY — no x-org-id / x-user-id,
+// no sentinel. runs-service calls this at cost-write time to FREEZE the discount
+// onto each cost row (the discount is applied exactly once, there — billing never
+// re-applies it at balance composition). Mirrors the staff GET /v1/usage-discount
+// value (same discountPct semantics) but is a pure service-to-service read with no
+// gateway staff-gating and no audit fields.
+//
+// → { orgId, discountPct } where discountPct is null when the org has no discount
+// (full pricing). 400 on a non-UUID orgId.
+router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  const discountPct = await getUsageDiscountPct(orgId);
+  res.json({ orgId, discountPct });
 });
 
 // POST /internal/dunning/tick — manually run one dunning scheduler pass.
