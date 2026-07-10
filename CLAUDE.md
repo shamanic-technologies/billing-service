@@ -226,7 +226,7 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `GET` | `/v1/usage-discount` | staff READ of this org's platform-usage discount. Auth mirrors credit-grant (`x-api-key` + `x-org-id`). → `{orgId, discountPct, setBy, setAt}`; unset → `discountPct:null`. See "Per-org usage discount". |
 | `PUT` | `/v1/usage-discount` | staff SET/REPLACE the discount. body `{discountPct}` (integer 0–100; out-of-range → 400, no clamp). `setBy = x-email`. → `{orgId, discountPct, setBy, setAt}`. |
 | `DELETE` | `/v1/usage-discount` | staff REMOVE the discount (→ null → full pricing on new cost writes; not retroactive). Idempotent. → `{orgId, discountPct:null, setBy:null, setAt:null}`. |
-| `GET` | `/internal/accounts/by-org/:orgId/usage-discount` | user-less read of an org's discount pct for runs-service to freeze at cost-write. Service-auth + `:orgId` PATH only — NO `x-org-id`/`x-user-id`/sentinel. → `{orgId, discountPct}`; unset → `discountPct:null`. See "Per-org usage discount". |
+| `GET` | `/internal/accounts/by-org/:orgId/usage-discount` | user-less read of an org's discount pct (runs-service freezes it at cost-write; features-service #510 reads it for net-priced metrics). Service-auth + `:orgId` PATH only — NO `x-org-id`/`x-user-id`/sentinel. → `{orgId, discount_percent}` (number 0–100); no discount → `discount_percent:0` (NOT null, NOT 404). Shape matches the deployed features-service reader. See "Per-org usage discount". |
 
 ## Per-org usage discount (frozen at cost-write in runs-service — billing does NOT apply it)
 
@@ -237,7 +237,7 @@ Platform staff can give an org a percentage discount on ALL its platform usage. 
 **State:** one table, `org_usage_discounts` (migration `0026`, hand-journaled) — `org_id` PK, `discount_pct integer` (DB CHECK 0..100), `set_by text` (staff email), `set_at`, `created_at`. ONE row per org; **absence of a row = null = no discount**. Replaceable (upsert on `org_id`), removable (DELETE → null). `src/lib/usage-discount.ts` owns the read/set/remove. (`applyUsageDiscount(grossCents, pct)` still lives there for tests/reference but is NOT called on any balance path.)
 
 **Where the pct is READ (never to reduce a billing-side balance):**
-- `GET /internal/accounts/by-org/:orgId/usage-discount` (`src/routes/internal.ts`) — the user-less read runs-service calls at cost-write to freeze the discount onto each cost row. `{orgId, discountPct}`, service-auth, orgId PATH param.
+- `GET /internal/accounts/by-org/:orgId/usage-discount` (`src/routes/internal.ts`) — the user-less read runs-service calls at cost-write to freeze the discount onto each cost row (and features-service #510 reads for net-priced metrics). `{orgId, discount_percent}` (number 0–100; no discount → `0`, NOT null/404 — matches the deployed features-service reader), service-auth, orgId PATH param.
 - `composeAccountFunds` (`src/routes/accounts.ts`) for `GET /v1/accounts` (+ `balance`, `auto_topup`, `wallet_setup`): reads the pct only to expose `usage_discount_pct` for the dashboard banner. `balance_cents`/`actual_balance_cents` subtract runs' net usage directly; the pct does not enter that math.
 - Staff CRUD `GET/PUT/DELETE /v1/usage-discount` (`src/routes/usage_discount.ts`).
 

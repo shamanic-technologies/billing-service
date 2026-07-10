@@ -313,8 +313,13 @@ export const SetUsageDiscountRequestSchema = z
 export const InternalUsageDiscountSchema = z
   .object({
     orgId: z.string().uuid(),
-    /** Current discount percentage (0–100); null when no discount is set (full pricing). */
-    discountPct: z.number().int().nullable(),
+    /**
+     * Current discount percentage (0–100). A known org with NO discount returns 0
+     * (NOT null, NOT 404) so a non-discounted org resolves to "0% off" = no change.
+     * Field name + zero-not-null semantics match the deployed features-service
+     * reader (PR #510 billing-discount-client.ts).
+     */
+    discount_percent: z.number().int().min(0).max(100),
   })
   .openapi("InternalUsageDiscount");
 
@@ -1188,9 +1193,11 @@ registry.registerPath({
   description:
     "Returns the org's usage-discount percentage keyed by the orgId PATH param, " +
     "callable with the service x-api-key ONLY — no x-org-id / x-user-id, no sentinel. " +
-    "runs-service calls this at cost-write time to FREEZE the discount onto each cost " +
-    "row (the discount is applied exactly once, there — billing never re-applies it at " +
-    "balance composition). discountPct is null when the org has no discount (full pricing).",
+    "Consumed by runs-service (to FREEZE the discount onto each cost row at cost-write, " +
+    "the single application point — billing never re-applies it at balance composition) " +
+    "and features-service PR #510 (net-priced cost metrics). A known org with NO discount " +
+    "returns discount_percent = 0 (NOT null, NOT 404). Shape matches the deployed " +
+    "features-service reader.",
   request: {
     headers: internalHeaders,
     params: z.object({ orgId: z.string().uuid() }),
