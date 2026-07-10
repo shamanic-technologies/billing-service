@@ -9,6 +9,7 @@
 import { addCents, subCents } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
 import { fetchRunsOrgUsageTotal } from "./runs-client.js";
+import { getUsageDiscountPct, applyUsageDiscount } from "./usage-discount.js";
 import {
   fetchOrgCustomer,
   sumSucceededTopupsForOrg,
@@ -35,7 +36,16 @@ export interface BalanceSnapshot {
    */
   paidTopupsCents: string;
   creditedCents: string;
+  /** GROSS platform usage from runs-service (reporting truth — never discounted). */
   usageCents: string;
+  /**
+   * Per-org usage-discount percentage applied at composition (null = none).
+   * A discounted org subtracts NET usage below, so its balance depletes slower.
+   */
+  discountPct: number | null;
+  /** NET usage after discount = gross × (1 − pct/100). Equals usageCents when no discount. */
+  netUsageCents: string;
+  /** Spendable balance = creditedCents − netUsageCents (discount-adjusted). */
   balanceCents: string;
 }
 
@@ -51,15 +61,20 @@ export interface BalanceSnapshot {
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const customer = await fetchOrgCustomer(orgId);
-  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] = await Promise.all([
-    sumSucceededTopupsForOrg(orgId),
-    sumLocalPromoCreditsForOrg(orgId),
-    fetchRunsOrgUsageTotal(orgId, {}),
-    hasChargeablePmForOrg(orgId),
-    getOrgCardCountryByOrg(orgId),
-  ]);
+  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry, discountPct] =
+    await Promise.all([
+      sumSucceededTopupsForOrg(orgId),
+      sumLocalPromoCreditsForOrg(orgId),
+      fetchRunsOrgUsageTotal(orgId, {}),
+      hasChargeablePmForOrg(orgId),
+      getOrgCardCountryByOrg(orgId),
+      getUsageDiscountPct(orgId),
+    ]);
   const creditedCents = addCents(paidTopups, localCredits);
-  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
+  // Discount reduces the usage billing subtracts (gross usage stays reporting
+  // truth). netUsage === gross when discountPct is null → byte-identical balance.
+  const netUsageCents = applyUsageDiscount(runsUsage.spent_cents, discountPct);
+  const balanceCents = subCents(creditedCents, netUsageCents);
   return {
     customer,
     hasCardPm,
@@ -68,6 +83,8 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
     paidTopupsCents: paidTopups,
     creditedCents,
     usageCents: runsUsage.spent_cents,
+    discountPct,
+    netUsageCents,
     balanceCents,
   };
 }

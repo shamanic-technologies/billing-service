@@ -153,6 +153,9 @@ A slow spender whose balance never crosses the floor within a calendar month wou
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned)
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
+  "usage_discount_pct": 50,                  // per-org platform-usage discount (0–100); null when none. See "Per-org usage discount"
+  "net_usage_cents": "19144.6479000000",     // usage_cents × (1 − usage_discount_pct/100) = the NET committed usage balance_cents subtracts. Equals usage_cents when no discount.
+  "net_actual_usage_cents": "...",           // NET actualized usage; the amount actual_balance_cents subtracts. Equals gross actualized usage when no discount.
   "topup_amount_cents": 5000,                // DERIVED tier reload amount (tierFor(cumulative paid)); null when auto-topup disabled. NOT the stored daily amount.
   "topup_threshold_cents": -5000,            // DERIVED tier NEGATIVE credit-line floor; auto-topup reloads when balance crosses it. null when disabled. See "Threshold-based postpaid top-up"
   "has_payment_method": true,                // ≥1 chargeable PM: card OR link (GET /v1/payment_methods?type=card, then type=link); NOT invoice_settings.default_payment_method
@@ -177,7 +180,8 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → runs-service `total_expected_cents` from actualized platform costs only
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
 7. `getOrgCardCountry(identity, customer.id)` → `card_country` → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
-8. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`
+8. `getUsageDiscountPct(orgId)` → `usage_discount_pct` (see "Per-org usage discount"); the balance figures subtract NET usage
+9. `credited_cents = paid_topups + local_credits`; `net_usage = usage × (1 − pct/100)`; `balance_cents = credited_cents − net_usage`; `actual_balance_cents = credited_cents − net_actualized_usage`. `usage_cents` stays GROSS (reporting). No discount (`pct` null) → net == gross → every existing field is byte-identical.
 
 ### `GET /public/stats/billing`
 
@@ -221,6 +225,24 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget` | READ this org's current daily budget for a brand (service auth + `x-org-id`). → `{brandId, dailyBudgetCents, updatedAt}`; unset for that org → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
 | `PATCH` | `/v1/brands/:brandId/daily-budget` | SET/UPDATE a brand's daily budget (user via gateway, org headers). body `{dailyBudgetCents}` (non-negative; 0 = pause). → `{brandId, orgId, dailyBudgetCents, updatedAt}`. |
+| `GET` | `/v1/usage-discount` | staff READ of this org's platform-usage discount. Auth mirrors credit-grant (`x-api-key` + `x-org-id`). → `{orgId, discountPct, setBy, setAt}`; unset → `discountPct:null`. See "Per-org usage discount". |
+| `PUT` | `/v1/usage-discount` | staff SET/REPLACE the discount. body `{discountPct}` (integer 0–100; out-of-range → 400, no clamp). `setBy = x-email`. → `{orgId, discountPct, setBy, setAt}`. |
+| `DELETE` | `/v1/usage-discount` | staff REMOVE the discount (→ null → full pricing on the next composition; not retroactive). Idempotent. → `{orgId, discountPct:null, setBy:null, setAt:null}`. |
+
+## Per-org usage discount (reduces the usage component at balance composition)
+
+Platform staff can give an org a percentage discount on ALL its platform usage. A discounted org effectively pays `(1 − discount_pct/100)` of its GROSS usage over time: the discount REDUCES the usage billing subtracts wherever it composes the spendable balance, so the balance depletes proportionally slower and Stripe topups fire proportionally less often. It is NOT a Stripe coupon and NOT bonus/matching credits — it is a read-side reduction of the usage term. The GROSS usage in runs-service is NEVER touched (reporting still sees the full number).
+
+**State:** one table, `org_usage_discounts` (migration `0026`, hand-journaled) — `org_id` PK, `discount_pct integer` (DB CHECK 0..100), `set_by text` (staff email), `set_at`, `created_at`. ONE row per org; **absence of a row = null = no discount = today's EXACT behavior** (byte-identical numbers). Replaceable (upsert on `org_id`), removable (DELETE → null). `src/lib/usage-discount.ts` owns the read/set/remove + the pure `applyUsageDiscount(grossCents, pct)` helper (`pct` null or 0 → returns gross verbatim; else `gross × (1 − pct/100)` at scale 10).
+
+**Applied at EVERY balance-composition site** — the discount reduces usage, never credited:
+- `computeBalance(orgId)` (`src/lib/balance.ts`) reads `getUsageDiscountPct(orgId)` and returns `balanceCents = credited − netUsage`, plus `discountPct` + `netUsageCents` on the snapshot (`usageCents` stays gross). This one chokepoint feeds authorize, the dunning scheduler, month-end sweep, `GET /internal/campaigns/:id/affordability`, and `GET /internal/accounts/by-org/:orgId/balance` (whose `actual_balance_cents` re-applies the discount to actualized usage via `snapshot.discountPct`).
+- `composeAccountFunds` (`src/routes/accounts.ts`) for `GET /v1/accounts` (+ `balance`, `auto_topup`, `wallet_setup`): `balance_cents`/`actual_balance_cents` subtract net usage; exposes `usage_discount_pct` + `net_usage_cents` + `net_actual_usage_cents` (`usage_cents` stays gross) so the dashboard renders a banner + strikethrough.
+- `POST /v1/customer_balance/usage_apply` discounts the caller-reported `spent_total_cents` before the postpaid threshold check → topups fire proportionally less often.
+
+The postpaid TIER (`tierFor`) is derived from cumulative PAID topups, not usage, so it is unaffected; the "fires less often" effect comes entirely from the higher (discount-adjusted) balance crossing the floor later. Removing the discount restores full pricing on the NEXT composition (not retroactive). Fail-loud: an out-of-range percentage is rejected at both the Zod route schema and `setUsageDiscount` (`InvalidUsageDiscountError`) — no clamp, no default.
+
+**Follow-up (other repos, not built here):** api-service gateway proxy gating `/v1/usage-discount` to staff; admin-console UI to read/set/remove; dashboard banner + strikethrough rendering from `usage_discount_pct` + `usage_cents` + `net_usage_cents`.
 
 ## Per-brand daily budget (pacing ceiling — NOT affordability)
 
