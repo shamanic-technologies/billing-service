@@ -10,7 +10,7 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
-import { getUsageDiscountPct, applyUsageDiscount } from "../lib/usage-discount.js";
+import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import {
   getCustomerByOrg,
@@ -48,8 +48,6 @@ async function composeAccountFunds(
   balanceCents: string;
   actualBalanceCents: string;
   discountPct: number | null;
-  netUsageCents: string;
-  netActualUsageCents: string;
   paidTopupsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
@@ -67,21 +65,18 @@ async function composeAccountFunds(
       getUsageDiscountPct(orgId),
     ]);
   const creditedCents = addCents(paidTopups, localCredits);
-  // Discount reduces the usage subtracted from credited (gross usage_cents stays
-  // reporting truth). Both net values equal their gross when discountPct is null,
-  // so balance_cents / actual_balance_cents are byte-identical without a discount.
-  const netUsageCents = applyUsageDiscount(runsUsage.spent_cents, discountPct);
-  const netActualUsageCents = applyUsageDiscount(actualRunsUsage.spent_cents, discountPct);
-  const balanceCents = subCents(creditedCents, netUsageCents);
-  const actualBalanceCents = subCents(creditedCents, netActualUsageCents);
+  // runs-service usage is already NET of the org's usage discount (frozen at
+  // cost-write). Billing subtracts it verbatim — no discount is applied here. The
+  // discount pct is still read + exposed (usage_discount_pct) for the dashboard
+  // banner, but it does NOT change these balance figures.
+  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
+  const actualBalanceCents = subCents(creditedCents, actualRunsUsage.spent_cents);
   return {
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,
     actualBalanceCents,
     discountPct,
-    netUsageCents,
-    netActualUsageCents,
     paidTopupsCents: paidTopups,
     hasPaymentMethod: hasCardPm,
     cardCountry,
@@ -97,8 +92,6 @@ function buildAccountResponse(
     balanceCents: string;
     actualBalanceCents: string;
     discountPct: number | null;
-    netUsageCents: string;
-    netActualUsageCents: string;
     paidTopupsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
@@ -120,14 +113,12 @@ function buildAccountResponse(
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
-    // Per-org platform-usage discount. null = no discount (usage_cents is the net
-    // usage, balance_cents/actual_balance_cents unchanged). When set, usage_cents
-    // stays GROSS (reporting) and net_usage_cents / net_actual_usage_cents are the
-    // discounted usage the balance figures already subtract — the dashboard renders
-    // the banner (usage_discount_pct) + strikethrough (gross usage_cents vs net).
+    // Per-org platform-usage discount percentage (0–100), or null when none. This
+    // is EXPOSED for the customer dashboard banner only — it does NOT affect the
+    // balance figures above. The discount is applied ONCE, at cost-write time, in
+    // runs-service, so usage_cents (and thus balance_cents/actual_balance_cents) is
+    // already net. Billing never re-applies it. See CLAUDE.md "Usage discount".
     usage_discount_pct: funds.discountPct,
-    net_usage_cents: funds.netUsageCents,
-    net_actual_usage_cents: funds.netActualUsageCents,
     topup_amount_cents: tier ? tier.amountCents : null,
     topup_threshold_cents: tier ? tier.thresholdCents : null,
     has_payment_method: funds.hasPaymentMethod,

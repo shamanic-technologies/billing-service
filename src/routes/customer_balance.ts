@@ -8,7 +8,6 @@ import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
-import { getUsageDiscountPct, applyUsageDiscount } from "../lib/usage-discount.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
@@ -341,18 +340,17 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       return;
     }
 
-    const [paidTopups, localCredits, discountPct] = await Promise.all([
+    const [paidTopups, localCredits] = await Promise.all([
       sumSucceededTopupsForCustomer(identity, customer.id),
       sumLocalPromoCreditsForOrg(orgId),
-      getUsageDiscountPct(orgId),
     ]);
 
     const creditedCents = addCents(paidTopups, localCredits);
-    // Discount the reported spend before the threshold check so a discounted org's
-    // balance depletes slower → auto-topup fires proportionally less often. Gross
-    // spend is unchanged when discountPct is null (byte-identical topup cadence).
-    const netSpentCents = applyUsageDiscount(spentTotalCents, discountPct);
-    const balanceCents = subCents(creditedCents, netSpentCents);
+    // spent_total_cents is reported by runs-service after its cost write, so it is
+    // already NET of any per-org usage discount (the discount is applied once, at
+    // cost-write). Billing subtracts it verbatim — re-applying the discount here
+    // would double-count it.
+    const balanceCents = subCents(creditedCents, spentTotalCents);
 
     // Threshold-based postpaid: the effective (amount, threshold) come from the
     // derived tier (a function of cumulative paid topups), NOT the stored daily

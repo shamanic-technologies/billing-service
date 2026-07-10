@@ -9,7 +9,6 @@
 import { addCents, subCents } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
 import { fetchRunsOrgUsageTotal } from "./runs-client.js";
-import { getUsageDiscountPct, applyUsageDiscount } from "./usage-discount.js";
 import {
   fetchOrgCustomer,
   sumSucceededTopupsForOrg,
@@ -36,16 +35,13 @@ export interface BalanceSnapshot {
    */
   paidTopupsCents: string;
   creditedCents: string;
-  /** GROSS platform usage from runs-service (reporting truth — never discounted). */
-  usageCents: string;
   /**
-   * Per-org usage-discount percentage applied at composition (null = none).
-   * A discounted org subtracts NET usage below, so its balance depletes slower.
+   * Platform usage from runs-service. This is the NET figure: any per-org usage
+   * discount is applied ONCE, at cost-write time, inside runs-service — billing
+   * reads it as-is and never re-applies a discount. See CLAUDE.md "Usage discount".
    */
-  discountPct: number | null;
-  /** NET usage after discount = gross × (1 − pct/100). Equals usageCents when no discount. */
-  netUsageCents: string;
-  /** Spendable balance = creditedCents − netUsageCents (discount-adjusted). */
+  usageCents: string;
+  /** Spendable balance = creditedCents − usageCents (net usage from runs). */
   balanceCents: string;
 }
 
@@ -61,20 +57,19 @@ export interface BalanceSnapshot {
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const customer = await fetchOrgCustomer(orgId);
-  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry, discountPct] =
+  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] =
     await Promise.all([
       sumSucceededTopupsForOrg(orgId),
       sumLocalPromoCreditsForOrg(orgId),
       fetchRunsOrgUsageTotal(orgId, {}),
       hasChargeablePmForOrg(orgId),
       getOrgCardCountryByOrg(orgId),
-      getUsageDiscountPct(orgId),
     ]);
   const creditedCents = addCents(paidTopups, localCredits);
-  // Discount reduces the usage billing subtracts (gross usage stays reporting
-  // truth). netUsage === gross when discountPct is null → byte-identical balance.
-  const netUsageCents = applyUsageDiscount(runsUsage.spent_cents, discountPct);
-  const balanceCents = subCents(creditedCents, netUsageCents);
+  // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at
+  // cost-write in runs-service). Billing subtracts it verbatim — applying a
+  // discount here again would double-count it.
+  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
   return {
     customer,
     hasCardPm,
@@ -83,8 +78,6 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
     paidTopupsCents: paidTopups,
     creditedCents,
     usageCents: runsUsage.spent_cents,
-    discountPct,
-    netUsageCents,
     balanceCents,
   };
 }
