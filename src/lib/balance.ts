@@ -35,7 +35,13 @@ export interface BalanceSnapshot {
    */
   paidTopupsCents: string;
   creditedCents: string;
+  /**
+   * Platform usage from runs-service. This is the NET figure: any per-org usage
+   * discount is applied ONCE, at cost-write time, inside runs-service — billing
+   * reads it as-is and never re-applies a discount. See CLAUDE.md "Usage discount".
+   */
   usageCents: string;
+  /** Spendable balance = creditedCents − usageCents (net usage from runs). */
   balanceCents: string;
 }
 
@@ -51,14 +57,18 @@ export interface BalanceSnapshot {
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const customer = await fetchOrgCustomer(orgId);
-  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] = await Promise.all([
-    sumSucceededTopupsForOrg(orgId),
-    sumLocalPromoCreditsForOrg(orgId),
-    fetchRunsOrgUsageTotal(orgId, {}),
-    hasChargeablePmForOrg(orgId),
-    getOrgCardCountryByOrg(orgId),
-  ]);
+  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] =
+    await Promise.all([
+      sumSucceededTopupsForOrg(orgId),
+      sumLocalPromoCreditsForOrg(orgId),
+      fetchRunsOrgUsageTotal(orgId, {}),
+      hasChargeablePmForOrg(orgId),
+      getOrgCardCountryByOrg(orgId),
+    ]);
   const creditedCents = addCents(paidTopups, localCredits);
+  // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at
+  // cost-write in runs-service). Billing subtracts it verbatim — applying a
+  // discount here again would double-count it.
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
   return {
     customer,

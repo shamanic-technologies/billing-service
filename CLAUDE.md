@@ -150,9 +150,10 @@ A slow spender whose balance never crosses the floor within a calendar month wou
   "id": "<uuid>",
   "org_id": "<uuid>",
   "credited_cents": "55200.0000000000",      // SUM(succeeded PI.amount_received) + SUM(local_promos.amount_cents)
-  "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned)
+  "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned). Already NET of any usage discount (frozen at cost-write in runs-service).
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
+  "usage_discount_pct": 50,                  // per-org platform-usage discount (0–100); null when none. EXPOSED for the dashboard banner only — does NOT affect the balance figures (discount is frozen in runs-service). See "Per-org usage discount"
   "topup_amount_cents": 5000,                // DERIVED tier reload amount (tierFor(cumulative paid)); null when auto-topup disabled. NOT the stored daily amount.
   "topup_threshold_cents": -5000,            // DERIVED tier NEGATIVE credit-line floor; auto-topup reloads when balance crosses it. null when disabled. See "Threshold-based postpaid top-up"
   "has_payment_method": true,                // ≥1 chargeable PM: card OR link (GET /v1/payment_methods?type=card, then type=link); NOT invoice_settings.default_payment_method
@@ -177,7 +178,8 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → runs-service `total_expected_cents` from actualized platform costs only
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
 7. `getOrgCardCountry(identity, customer.id)` → `card_country` → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
-8. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`
+8. `getUsageDiscountPct(orgId)` → `usage_discount_pct` (dashboard banner only; see "Per-org usage discount"). Does NOT enter the balance math — runs-service already served net usage.
+9. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`. runs-service usage is already NET of the discount, so billing subtracts it verbatim (no discount applied here).
 
 ### `GET /public/stats/billing`
 
@@ -221,6 +223,29 @@ Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed liv
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget` | READ this org's current daily budget for a brand (service auth + `x-org-id`). → `{brandId, dailyBudgetCents, updatedAt}`; unset for that org → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
 | `PATCH` | `/v1/brands/:brandId/daily-budget` | SET/UPDATE a brand's daily budget (user via gateway, org headers). body `{dailyBudgetCents}` (non-negative; 0 = pause). → `{brandId, orgId, dailyBudgetCents, updatedAt}`. |
+| `GET` | `/v1/usage-discount` | staff READ of this org's platform-usage discount. Auth mirrors credit-grant (`x-api-key` + `x-org-id`). → `{orgId, discountPct, setBy, setAt}`; unset → `discountPct:null`. See "Per-org usage discount". |
+| `PUT` | `/v1/usage-discount` | staff SET/REPLACE the discount. body `{discountPct}` (integer 0–100; out-of-range → 400, no clamp). `setBy = x-email`. → `{orgId, discountPct, setBy, setAt}`. |
+| `DELETE` | `/v1/usage-discount` | staff REMOVE the discount (→ null → full pricing on new cost writes; not retroactive). Idempotent. → `{orgId, discountPct:null, setBy:null, setAt:null}`. |
+| `GET` | `/internal/accounts/by-org/:orgId/usage-discount` | user-less read of an org's discount pct (runs-service freezes it at cost-write; features-service #510 reads it for net-priced metrics). Service-auth + `:orgId` PATH only — NO `x-org-id`/`x-user-id`/sentinel. → `{orgId, discount_percent}` (number 0–100); no discount → `discount_percent:0` (NOT null, NOT 404). Shape matches the deployed features-service reader. See "Per-org usage discount". |
+
+## Per-org usage discount (frozen at cost-write in runs-service — billing does NOT apply it)
+
+Platform staff can give an org a percentage discount on ALL its platform usage. A discounted org effectively pays `(1 − discount_pct/100)` of its GROSS usage. **The discount is applied EXACTLY ONCE, at cost-declaration time, inside runs-service** (which stores a gross and a net amount per cost row, netting once at write). billing-service therefore **STORES the percentage, SERVES it (to runs-service + the dashboard), and NEVER applies it at balance composition** — runs already serves a net usage figure, so billing subtracts that verbatim. Applying it here again would DOUBLE-discount. It is NOT a Stripe coupon and NOT bonus/matching credits.
+
+> History: PR #246 first applied the discount ON READ at every balance-composition site. The architecture then moved the netting into runs-service (single application at write). This rework (superseding #246 on staging) REMOVED billing's read-side application; the storage + CRUD + exposure are kept. Never reintroduce an `applyUsageDiscount(usage, pct)` multiply on a balance path — that is the double-discount bug.
+
+**State:** one table, `org_usage_discounts` (migration `0026`, hand-journaled) — `org_id` PK, `discount_pct integer` (DB CHECK 0..100), `set_by text` (staff email), `set_at`, `created_at`. ONE row per org; **absence of a row = null = no discount**. Replaceable (upsert on `org_id`), removable (DELETE → null). `src/lib/usage-discount.ts` owns the read/set/remove. (`applyUsageDiscount(grossCents, pct)` still lives there for tests/reference but is NOT called on any balance path.)
+
+**Where the pct is READ (never to reduce a billing-side balance):**
+- `GET /internal/accounts/by-org/:orgId/usage-discount` (`src/routes/internal.ts`) — the user-less read runs-service calls at cost-write to freeze the discount onto each cost row (and features-service #510 reads for net-priced metrics). `{orgId, discount_percent}` (number 0–100; no discount → `0`, NOT null/404 — matches the deployed features-service reader), service-auth, orgId PATH param.
+- `composeAccountFunds` (`src/routes/accounts.ts`) for `GET /v1/accounts` (+ `balance`, `auto_topup`, `wallet_setup`): reads the pct only to expose `usage_discount_pct` for the dashboard banner. `balance_cents`/`actual_balance_cents` subtract runs' net usage directly; the pct does not enter that math.
+- Staff CRUD `GET/PUT/DELETE /v1/usage-discount` (`src/routes/usage_discount.ts`).
+
+`computeBalance` (`src/lib/balance.ts`), `usage_apply`, authorize, the dunning scheduler, month-end sweep, affordability, and `GET /internal/accounts/by-org/:orgId/balance` all subtract runs-service usage (already net) verbatim — none read or apply the discount. Removing the discount restores full pricing on NEW cost writes (not retroactive). Fail-loud: an out-of-range percentage is rejected at both the Zod route schema and `setUsageDiscount` (`InvalidUsageDiscountError`) — no clamp, no default.
+
+**Cross-service contract:** runs-service is the discount OWNER at write time. It reads billing's `GET /internal/accounts/by-org/:orgId/usage-discount` and applies the pct once per cost row (gross + net stored). billing only READS runs' net usage — it does NOT modify runs' gross ledger.
+
+**Follow-up (other repos, not built here):** runs-service consuming the internal discount read + storing gross/net per cost row; api-service gateway proxy gating `/v1/usage-discount` to staff; admin-console UI to read/set/remove; dashboard banner rendering from `usage_discount_pct`.
 
 ## Per-brand daily budget (pacing ceiling — NOT affordability)
 

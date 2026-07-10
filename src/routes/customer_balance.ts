@@ -346,6 +346,10 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     ]);
 
     const creditedCents = addCents(paidTopups, localCredits);
+    // spent_total_cents is reported by runs-service after its cost write, so it is
+    // already NET of any per-org usage discount (the discount is applied once, at
+    // cost-write). Billing subtracts it verbatim — re-applying the discount here
+    // would double-count it.
     const balanceCents = subCents(creditedCents, spentTotalCents);
 
     // Threshold-based postpaid: the effective (amount, threshold) come from the

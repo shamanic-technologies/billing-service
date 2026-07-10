@@ -10,6 +10,7 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import {
   getCustomerByOrg,
@@ -46,21 +47,28 @@ async function composeAccountFunds(
   usageCents: string;
   balanceCents: string;
   actualBalanceCents: string;
+  discountPct: number | null;
   paidTopupsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   autoReloadSupported: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry] = await Promise.all([
-    sumSucceededTopupsForCustomer(identity, customer.id),
-    sumLocalPromoCreditsForOrg(orgId),
-    fetchRunsOrgUsageTotal(orgId, identity),
-    fetchRunsOrgActualUsageTotal(orgId, identity),
-    hasAttachedCardPm(identity, customer.id),
-    getOrgCardCountry(identity, customer.id),
-  ]);
+  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry, discountPct] =
+    await Promise.all([
+      sumSucceededTopupsForCustomer(identity, customer.id),
+      sumLocalPromoCreditsForOrg(orgId),
+      fetchRunsOrgUsageTotal(orgId, identity),
+      fetchRunsOrgActualUsageTotal(orgId, identity),
+      hasAttachedCardPm(identity, customer.id),
+      getOrgCardCountry(identity, customer.id),
+      getUsageDiscountPct(orgId),
+    ]);
   const creditedCents = addCents(paidTopups, localCredits);
+  // runs-service usage is already NET of the org's usage discount (frozen at
+  // cost-write). Billing subtracts it verbatim — no discount is applied here. The
+  // discount pct is still read + exposed (usage_discount_pct) for the dashboard
+  // banner, but it does NOT change these balance figures.
   const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
   const actualBalanceCents = subCents(creditedCents, actualRunsUsage.spent_cents);
   return {
@@ -68,6 +76,7 @@ async function composeAccountFunds(
     usageCents: runsUsage.spent_cents,
     balanceCents,
     actualBalanceCents,
+    discountPct,
     paidTopupsCents: paidTopups,
     hasPaymentMethod: hasCardPm,
     cardCountry,
@@ -82,6 +91,7 @@ function buildAccountResponse(
     usageCents: string;
     balanceCents: string;
     actualBalanceCents: string;
+    discountPct: number | null;
     paidTopupsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
@@ -103,6 +113,12 @@ function buildAccountResponse(
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
+    // Per-org platform-usage discount percentage (0–100), or null when none. This
+    // is EXPOSED for the customer dashboard banner only — it does NOT affect the
+    // balance figures above. The discount is applied ONCE, at cost-write time, in
+    // runs-service, so usage_cents (and thus balance_cents/actual_balance_cents) is
+    // already net. Billing never re-applies it. See CLAUDE.md "Usage discount".
+    usage_discount_pct: funds.discountPct,
     topup_amount_cents: tier ? tier.amountCents : null,
     topup_threshold_cents: tier ? tier.thresholdCents : null,
     has_payment_method: funds.hasPaymentMethod,
