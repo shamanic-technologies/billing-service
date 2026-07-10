@@ -183,6 +183,13 @@
       "when": 1790416800000,
       "tag": "0025_admin_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790503200000,
+      "tag": "0026_org_usage_discounts",
+      "breakpoints": true
     }
   ]
 }

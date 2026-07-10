@@ -10,6 +10,7 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import { getUsageDiscountPct, applyUsageDiscount } from "../lib/usage-discount.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
 import {
   getCustomerByOrg,
@@ -46,28 +47,41 @@ async function composeAccountFunds(
   usageCents: string;
   balanceCents: string;
   actualBalanceCents: string;
+  discountPct: number | null;
+  netUsageCents: string;
+  netActualUsageCents: string;
   paidTopupsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   autoReloadSupported: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry] = await Promise.all([
-    sumSucceededTopupsForCustomer(identity, customer.id),
-    sumLocalPromoCreditsForOrg(orgId),
-    fetchRunsOrgUsageTotal(orgId, identity),
-    fetchRunsOrgActualUsageTotal(orgId, identity),
-    hasAttachedCardPm(identity, customer.id),
-    getOrgCardCountry(identity, customer.id),
-  ]);
+  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry, discountPct] =
+    await Promise.all([
+      sumSucceededTopupsForCustomer(identity, customer.id),
+      sumLocalPromoCreditsForOrg(orgId),
+      fetchRunsOrgUsageTotal(orgId, identity),
+      fetchRunsOrgActualUsageTotal(orgId, identity),
+      hasAttachedCardPm(identity, customer.id),
+      getOrgCardCountry(identity, customer.id),
+      getUsageDiscountPct(orgId),
+    ]);
   const creditedCents = addCents(paidTopups, localCredits);
-  const balanceCents = subCents(creditedCents, runsUsage.spent_cents);
-  const actualBalanceCents = subCents(creditedCents, actualRunsUsage.spent_cents);
+  // Discount reduces the usage subtracted from credited (gross usage_cents stays
+  // reporting truth). Both net values equal their gross when discountPct is null,
+  // so balance_cents / actual_balance_cents are byte-identical without a discount.
+  const netUsageCents = applyUsageDiscount(runsUsage.spent_cents, discountPct);
+  const netActualUsageCents = applyUsageDiscount(actualRunsUsage.spent_cents, discountPct);
+  const balanceCents = subCents(creditedCents, netUsageCents);
+  const actualBalanceCents = subCents(creditedCents, netActualUsageCents);
   return {
     creditedCents,
     usageCents: runsUsage.spent_cents,
     balanceCents,
     actualBalanceCents,
+    discountPct,
+    netUsageCents,
+    netActualUsageCents,
     paidTopupsCents: paidTopups,
     hasPaymentMethod: hasCardPm,
     cardCountry,
@@ -82,6 +96,9 @@ function buildAccountResponse(
     usageCents: string;
     balanceCents: string;
     actualBalanceCents: string;
+    discountPct: number | null;
+    netUsageCents: string;
+    netActualUsageCents: string;
     paidTopupsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
@@ -103,6 +120,14 @@ function buildAccountResponse(
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
+    // Per-org platform-usage discount. null = no discount (usage_cents is the net
+    // usage, balance_cents/actual_balance_cents unchanged). When set, usage_cents
+    // stays GROSS (reporting) and net_usage_cents / net_actual_usage_cents are the
+    // discounted usage the balance figures already subtract — the dashboard renders
+    // the banner (usage_discount_pct) + strikethrough (gross usage_cents vs net).
+    usage_discount_pct: funds.discountPct,
+    net_usage_cents: funds.netUsageCents,
+    net_actual_usage_cents: funds.netActualUsageCents,
     topup_amount_cents: tier ? tier.amountCents : null,
     topup_threshold_cents: tier ? tier.thresholdCents : null,
     has_payment_method: funds.hasPaymentMethod,

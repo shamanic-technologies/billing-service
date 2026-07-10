@@ -141,6 +141,18 @@ beforeAll(async () => {
       PRIMARY KEY ("org_id", "brand_id")
   `;
 
+  // org_usage_discounts (per-org platform-usage discount, migration 0026).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "org_usage_discounts" (
+      "org_id" uuid PRIMARY KEY,
+      "discount_pct" integer NOT NULL,
+      "set_by" text,
+      "set_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "org_usage_discount_pct_range" CHECK ("discount_pct" >= 0 AND "discount_pct" <= 100)
+    )
+  `;
+
   // Seed platform-issued grant promo codes (matches migrations 0017 + 0025).
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")

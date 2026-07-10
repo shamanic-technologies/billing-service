@@ -21,6 +21,7 @@ import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
+import { applyUsageDiscount } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 
 const router = Router();
@@ -385,8 +386,14 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     snapshot.autoReloadSupported;
 
   res.json({
+    // balance_cents is already discount-adjusted (computeBalance subtracts net
+    // usage). actual_balance_cents must apply the same discount to the actualized
+    // usage — snapshot.discountPct is the org's live pct (null → gross unchanged).
     balance_cents: snapshot.balanceCents,
-    actual_balance_cents: subCents(snapshot.creditedCents, actualUsage.spent_cents),
+    actual_balance_cents: subCents(
+      snapshot.creditedCents,
+      applyUsageDiscount(actualUsage.spent_cents, snapshot.discountPct)
+    ),
     depleted: isDepleted(snapshot.balanceCents),
     has_auto_topup: hasAutoTopup,
   });

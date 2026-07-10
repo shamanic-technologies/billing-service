@@ -253,6 +253,29 @@ export const brandDailyBudgets = pgTable(
 export type BrandDailyBudget = typeof brandDailyBudgets.$inferSelect;
 export type NewBrandDailyBudget = typeof brandDailyBudgets.$inferInsert;
 
+// org_usage_discounts: per-org platform-usage discount (staff-managed).
+// ONE row per org (org_id PK); absence of a row = no discount = today's exact
+// behavior. discount_pct is an integer 0..100 (DB CHECK + route validation, no
+// silent clamp). At balance composition, billing subtracts NET usage =
+// gross_usage × (1 − discount_pct/100), so a discounted org's spendable balance
+// depletes proportionally slower and its Stripe topups fire proportionally less
+// often. The GROSS usage in runs-service is NEVER overwritten (reporting sees
+// the full number). Replaceable (upsert) + removable (DELETE → null). set_by /
+// set_at record which staff member set it and when. Migration 0026.
+export const orgUsageDiscounts = pgTable("org_usage_discounts", {
+  orgId: uuid("org_id").primaryKey(),
+  discountPct: integer("discount_pct").notNull(),
+  // Staff email behind the discount (null when set by a service with no email).
+  setBy: text("set_by"),
+  setAt: timestamp("set_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type OrgUsageDiscount = typeof orgUsageDiscounts.$inferSelect;
+export type NewOrgUsageDiscount = typeof orgUsageDiscounts.$inferInsert;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 export const DUNNING_EVENT_T0 = "credit-depleted";

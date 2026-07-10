@@ -7,6 +7,7 @@ import {
   creditDepletionEpisodes,
   campaignAuthorizeCosts,
   brandDailyBudgets,
+  orgUsageDiscounts,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -28,6 +29,7 @@ export async function cleanTestData() {
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignAuthorizeCosts);
   await db.delete(brandDailyBudgets);
+  await db.delete(orgUsageDiscounts);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep seeded codes (welcome + invite_reward + invite_welcome +
@@ -174,6 +176,22 @@ export async function insertTestCampaignCost(data: {
       campaignId: data.campaignId,
       orgId: data.orgId,
       lastAuthorizeRequiredCents: data.lastAuthorizeRequiredCents,
+    })
+    .returning();
+  return row;
+}
+
+export async function insertTestUsageDiscount(data: {
+  orgId: string;
+  discountPct: number;
+  setBy?: string | null;
+}) {
+  const [row] = await db
+    .insert(orgUsageDiscounts)
+    .values({
+      orgId: data.orgId,
+      discountPct: data.discountPct,
+      setBy: data.setBy ?? null,
     })
     .returning();
   return row;

@@ -45,6 +45,17 @@ export const BillingAccountSchema = z
     balance_cents: SpendableBalanceCentsSchema,
     /** User-facing balance = credited_cents − actualized usage only. */
     actual_balance_cents: ActualBalanceCentsSchema,
+    /**
+     * Per-org platform-usage discount percentage (0–100), or null when none.
+     * null → no discount: usage_cents is the net usage and balance figures are
+     * unchanged. When set, usage_cents stays GROSS (reporting) and the balance
+     * figures already subtract the discounted (net) usage below.
+     */
+    usage_discount_pct: z.number().int().nullable(),
+    /** NET committed usage after discount = usage_cents × (1 − pct/100); equals usage_cents when no discount. */
+    net_usage_cents: CentsStringSchema,
+    /** NET actualized usage after discount; the amount actual_balance_cents subtracts from credited. */
+    net_actual_usage_cents: CentsStringSchema,
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
     has_payment_method: z.boolean(),
@@ -286,6 +297,31 @@ export const CreditGrantsListResponseSchema = z
     grants: z.array(CreditGrantItemSchema),
   })
   .openapi("CreditGrantsListResponse");
+
+// --- Per-org usage discount (staff-managed, single replaceable value) ---
+
+export const SetUsageDiscountRequestSchema = z
+  .object({
+    /**
+     * Platform-usage discount percentage, integer 0–100. Out-of-range is
+     * rejected (400) — no silent clamp, no default. The org then pays
+     * (1 − discountPct/100) of its gross usage at balance composition.
+     */
+    discountPct: z.number().int().min(0).max(100),
+  })
+  .openapi("SetUsageDiscountRequest");
+
+export const UsageDiscountResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    /** Current discount percentage (0–100); null when no discount is set. */
+    discountPct: z.number().int().nullable(),
+    /** Staff email that set the discount; null when unset or none recorded. */
+    setBy: z.string().nullable(),
+    /** ISO-8601 timestamp the discount was last set; null when unset. */
+    setAt: z.string().nullable(),
+  })
+  .openapi("UsageDiscountResponse");
 
 // --- Internal account teardown (client-service org cascade delete) ---
 
@@ -891,6 +927,77 @@ registry.registerPath({
       content: {
         "application/json": { schema: CreditGrantsListResponseSchema },
       },
+    },
+    400: {
+      description: "Missing or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/usage-discount",
+  summary: "Read this org's platform-usage discount (staff)",
+  description:
+    "Returns the current usage-discount percentage for x-org-id, or discountPct=null " +
+    "when no discount is set (full pricing). Includes the audit (setBy / setAt). " +
+    "Staff-gated on the gateway, mirroring the credit-grant path (x-api-key + x-org-id).",
+  request: { headers: adminGrantHeaders },
+  responses: {
+    200: {
+      description: "Current discount (discountPct null when none)",
+      content: { "application/json": { schema: UsageDiscountResponseSchema } },
+    },
+    400: {
+      description: "Missing or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/usage-discount",
+  summary: "Set / replace this org's platform-usage discount (staff)",
+  description:
+    "Upserts the single usage-discount value for x-org-id (0–100, integer). The org " +
+    "then effectively pays (1 − discountPct/100) of its gross platform usage: the " +
+    "usage billing subtracts at balance composition is reduced, so the balance " +
+    "depletes proportionally slower and auto-topups fire proportionally less often. " +
+    "Gross usage in runs-service is untouched. x-email is recorded as setBy. " +
+    "Out-of-range percentages are rejected (400) — no silent clamp.",
+  request: {
+    headers: adminGrantHeaders,
+    body: {
+      content: { "application/json": { schema: SetUsageDiscountRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Discount set",
+      content: { "application/json": { schema: UsageDiscountResponseSchema } },
+    },
+    400: {
+      description: "Invalid discountPct (must be an integer 0–100) or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/v1/usage-discount",
+  summary: "Remove this org's platform-usage discount (staff)",
+  description:
+    "Deletes the usage discount for x-org-id (→ null → full pricing). Restores full " +
+    "pricing on the NEXT balance composition (not retroactive). Idempotent: removing " +
+    "a non-existent discount still returns 200 with discountPct=null.",
+  request: { headers: adminGrantHeaders },
+  responses: {
+    200: {
+      description: "Discount removed (discountPct null)",
+      content: { "application/json": { schema: UsageDiscountResponseSchema } },
     },
     400: {
       description: "Missing or invalid x-org-id",
