@@ -761,14 +761,15 @@
             "type": "string",
             "format": "uuid"
           },
-          "discountPct": {
+          "discount_percent": {
             "type": "integer",
-            "nullable": true
+            "minimum": 0,
+            "maximum": 100
           }
         },
         "required": [
           "orgId",
-          "discountPct"
+          "discount_percent"
         ]
       },
       "ReadBrandDailyBudget": {
@@ -2909,7 +2910,7 @@
     "/internal/accounts/by-org/{orgId}/usage-discount": {
       "get": {
         "summary": "User-less read of an org's platform-usage discount (service-to-service)",
-        "description": "Returns the org's usage-discount percentage keyed by the orgId PATH param, callable with the service x-api-key ONLY — no x-org-id / x-user-id, no sentinel. runs-service calls this at cost-write time to FREEZE the discount onto each cost row (the discount is applied exactly once, there — billing never re-applies it at balance composition). discountPct is null when the org has no discount (full pricing).",
+        "description": "Returns the org's usage-discount percentage keyed by the orgId PATH param, callable with the service x-api-key ONLY — no x-org-id / x-user-id, no sentinel. Consumed by runs-service (to FREEZE the discount onto each cost row at cost-write, the single application point — billing never re-applies it at balance composition) and features-service PR #510 (net-priced cost metrics). A known org with NO discount returns discount_percent = 0 (NOT null, NOT 404). Shape matches the deployed features-service reader.",
         "parameters": [
           {
             "schema": {

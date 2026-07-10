@@ -401,14 +401,18 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
 //
 // User-less read of an org's platform-usage discount percentage, keyed by the
 // orgId PATH param and guarded by requireApiKey ONLY — no x-org-id / x-user-id,
-// no sentinel. runs-service calls this at cost-write time to FREEZE the discount
-// onto each cost row (the discount is applied exactly once, there — billing never
-// re-applies it at balance composition). Mirrors the staff GET /v1/usage-discount
-// value (same discountPct semantics) but is a pure service-to-service read with no
-// gateway staff-gating and no audit fields.
+// no sentinel. Two service-to-service consumers:
+//   - runs-service calls it at cost-write time to FREEZE the discount onto each
+//     cost row (the discount is applied exactly once, there — billing never
+//     re-applies it at balance composition).
+//   - features-service (PR #510, already deployed) reads it to render net-priced
+//     cost metrics.
 //
-// → { orgId, discountPct } where discountPct is null when the org has no discount
-// (full pricing). 400 on a non-UUID orgId.
+// Contract is dictated by the deployed features-service reader (billing-discount-
+// client.ts): → { discount_percent: number } in [0, 100]. A known org with NO
+// discount returns discount_percent = 0 (NOT null, NOT 404) so a non-discounted
+// org resolves to "0% off" = no change. The `orgId` echo is additive. 400 on a
+// non-UUID orgId.
 router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) => {
   const { orgId } = req.params;
   if (!UUID_RE.test(orgId)) {
@@ -417,7 +421,7 @@ router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) =
   }
 
   const discountPct = await getUsageDiscountPct(orgId);
-  res.json({ orgId, discountPct });
+  res.json({ orgId, discount_percent: discountPct ?? 0 });
 });
 
 // POST /internal/dunning/tick — manually run one dunning scheduler pass.
