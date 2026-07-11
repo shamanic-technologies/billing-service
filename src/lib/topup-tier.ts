@@ -49,6 +49,31 @@ export function tierFor(cumulativePaidCents: string): TopupTier {
 }
 
 /**
+ * Resolve an org's effective postpaid credit-line for a spend decision.
+ *
+ * An org has a NEGATIVE credit-line floor only when auto-topup can actually
+ * fire: config enabled AND a chargeable card AND a non-blocked issuing country
+ * (e.g. India / RBI off_session cards can't be reloaded). Otherwise the org is
+ * strictly prepaid — floor "0" — and behaves exactly as pre-postpaid.
+ *
+ * Returns the derived `tier` (null when strictly prepaid) and the floor as a
+ * decimal-cents string. Single source of the floor formula: shared by authorize
+ * (sufficiency + reload target) and the read-only affordability pre-flight, so
+ * the two can never drift on when an org is "still within its line".
+ */
+export function resolvePostpaidTier(params: {
+  topupEnabled: boolean;
+  hasCardPm: boolean;
+  autoReloadSupported: boolean;
+  paidTopupsCents: string;
+}): { tier: TopupTier | null; thresholdCents: string } {
+  const canReload =
+    params.topupEnabled && params.hasCardPm && params.autoReloadSupported;
+  const tier = canReload ? tierFor(params.paidTopupsCents) : null;
+  return { tier, thresholdCents: tier ? String(tier.thresholdCents) : "0" };
+}
+
+/**
  * Cents to charge to lift `currentBalanceCents` up to `targetCents`, in whole
  * multiples of `unitCents` (the tier reload amount). Returns 0 when the balance
  * is already at/above target. Rounds the multiple UP so one settle fully clears

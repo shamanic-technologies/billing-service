@@ -16,7 +16,7 @@ import {
   isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
-import { tierFor, computeTopupCharge } from "../lib/topup-tier.js";
+import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaPaymentIntent } from "../lib/reload.js";
@@ -114,10 +114,12 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     // the "auto-topup enabled" flag. Orgs that can't be reloaded (no config, no
     // card, or a blocked issuing country) have no credit line → floor "0"
     // (strictly prepaid), so the sufficiency + dunning gates behave as before.
-    const canReload =
-      account.topupAmountCents != null && snapshot.hasCardPm && snapshot.autoReloadSupported;
-    const tier = canReload ? tierFor(snapshot.paidTopupsCents) : null;
-    const thresholdCents = tier ? String(tier.thresholdCents) : "0";
+    const { tier, thresholdCents } = resolvePostpaidTier({
+      topupEnabled: account.topupAmountCents != null,
+      hasCardPm: snapshot.hasCardPm,
+      autoReloadSupported: snapshot.autoReloadSupported,
+      paidTopupsCents: snapshot.paidTopupsCents,
+    });
 
     // Sufficient (no reload) when running this cost keeps the balance at/above
     // the floor: balance − required >= threshold. A negative balance still
