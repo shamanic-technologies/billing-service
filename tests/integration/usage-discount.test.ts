@@ -295,21 +295,21 @@ describe("Internal usage-discount read for runs-service (GET /internal/accounts/
     await cleanTestData();
   });
 
-  it("returns discount_percent=0 when the org has no discount (NOT null, NOT 404)", async () => {
+  it("returns discount_percent=0 / discount_pct=0 when the org has no discount (NOT null, NOT 404)", async () => {
     const res = await request(app)
       .get(`/internal/accounts/by-org/${orgId}/usage-discount`)
       .set(apiKey);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ orgId, discount_percent: 0 });
+    expect(res.body).toEqual({ orgId, discount_percent: 0, discount_pct: 0 });
   });
 
-  it("returns the stored discount_percent (user-less, orgId in PATH)", async () => {
+  it("returns the stored discount as both discount_percent (int) and discount_pct (fraction, user-less, orgId in PATH)", async () => {
     await insertTestUsageDiscount({ orgId, discountPct: 40, setBy: "staff@distribute.you" });
     const res = await request(app)
       .get(`/internal/accounts/by-org/${orgId}/usage-discount`)
       .set(apiKey);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ orgId, discount_percent: 40 });
+    expect(res.body).toEqual({ orgId, discount_percent: 40, discount_pct: 0.4 });
   });
 
   it("401 without service auth", async () => {
