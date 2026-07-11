@@ -3,6 +3,7 @@ import request from "supertest";
 import { createTestApp } from "../helpers/test-app.js";
 import {
   cleanTestData,
+  insertTestAccount,
   insertTestCampaignCost,
   listEpisodes,
   closeDb,
@@ -106,6 +107,94 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
     expect(res.body.balanceCents).toBe("10.0000000000");
     expect(res.body.lastRequiredCents).toBe("50.0000000000");
     expect(res.body.hasHistory).toBe(true);
+  });
+
+  it("postpaid org: balance negative but within the credit line → affordable=true", async () => {
+    // Auto-topup enabled + chargeable card + non-blocked country ⇒ postpaid line.
+    // Start tier (paid < $200) → floor −$50 (−5000 cents).
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 200 });
+    await insertTestCampaignCost({
+      campaignId,
+      orgId,
+      lastAuthorizeRequiredCents: "10.0000000000",
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000"); // paid → start tier
+    setUsage("150.0000000000"); // balance = 100 − 150 = −50 cents, well within the −5000 floor
+
+    const res = await request(app)
+      .get(affordabilityPath(campaignId))
+      .set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    // balance − required = −60 >= floor −5000 → affordable, even though balance < 0
+    // (and < required, which would have blocked under the old zero-floor gate).
+    expect(res.body.affordable).toBe(true);
+    expect(res.body.balanceCents).toBe("-50.0000000000");
+    expect(res.body.lastRequiredCents).toBe("10.0000000000");
+    expect(res.body.hasHistory).toBe(true);
+  });
+
+  it("postpaid org: next run would cross past the floor → affordable=false", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 200 });
+    await insertTestCampaignCost({
+      campaignId,
+      orgId,
+      lastAuthorizeRequiredCents: "10.0000000000",
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("5.0000000000"); // start tier, floor −5000
+    setUsage("5000.0000000000"); // balance = 5 − 5000 = −4995 cents (just inside the floor)
+
+    const res = await request(app)
+      .get(affordabilityPath(campaignId))
+      .set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    // balance − required = −5005 < floor −5000 → running it crosses the line.
+    expect(res.body.affordable).toBe(false);
+    expect(res.body.balanceCents).toBe("-4995.0000000000");
+  });
+
+  it("zero-floor org (no auto-topup config): unchanged — negative balance is not affordable", async () => {
+    // Same negative balance as the within-line case, but WITHOUT a postpaid line
+    // (no topup config ⇒ floor "0") → blocks once it can't cover the run.
+    await insertTestCampaignCost({
+      campaignId,
+      orgId,
+      lastAuthorizeRequiredCents: "10.0000000000",
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
+    setUsage("150.0000000000"); // balance = −50 cents; no credit line
+
+    const res = await request(app)
+      .get(affordabilityPath(campaignId))
+      .set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    // balance − required = −60 < floor 0 → not affordable.
+    expect(res.body.affordable).toBe(false);
+    expect(res.body.balanceCents).toBe("-50.0000000000");
+  });
+
+  it("postpaid org with a reload-blocked card country (India): no line → floor 0", async () => {
+    // Auto-topup config present but the card can't be charged off_session (e.g.
+    // India / RBI) ⇒ no effective credit line (floor "0"), same as authorize.
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 200 });
+    await insertTestCampaignCost({
+      campaignId,
+      orgId,
+      lastAuthorizeRequiredCents: "10.0000000000",
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue("IN");
+    setUsage("150.0000000000"); // balance = −50 cents
+
+    const res = await request(app)
+      .get(affordabilityPath(campaignId))
+      .set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.affordable).toBe(false);
+    expect(res.body.balanceCents).toBe("-50.0000000000");
   });
 
   it("is read-only: never reloads or opens a depletion episode even when depleted", async () => {
