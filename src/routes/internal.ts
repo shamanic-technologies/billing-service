@@ -440,11 +440,15 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
 //   - features-service (PR #510, already deployed) reads it to render net-priced
 //     cost metrics.
 //
-// Contract is dictated by the deployed features-service reader (billing-discount-
-// client.ts): → { discount_percent: number } in [0, 100]. A known org with NO
-// discount returns discount_percent = 0 (NOT null, NOT 404) so a non-discounted
-// org resolves to "0% off" = no change. The `orgId` echo is additive. 400 on a
-// non-UUID orgId.
+// Two service-to-service consumers with DIFFERENT field names + scales — the
+// response carries BOTH keys:
+//   - features-service (#510, billing-discount-client.ts): `discount_percent`,
+//     integer in [0, 100].
+//   - runs-service (services/usage-discount.ts): `discount_pct`, fraction in
+//     [0, 1] (0.5 == 50%), fail-loud 422 if the key is absent.
+// A known org with NO discount returns discount_percent = 0 / discount_pct = 0
+// (NOT null, NOT 404) so a non-discounted org resolves to "0% off" = no change.
+// The `orgId` echo is additive. 400 on a non-UUID orgId.
 router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) => {
   const { orgId } = req.params;
   if (!UUID_RE.test(orgId)) {
@@ -452,8 +456,13 @@ router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) =
     return;
   }
 
-  const discountPct = await getUsageDiscountPct(orgId);
-  res.json({ orgId, discount_percent: discountPct ?? 0 });
+  const pct = (await getUsageDiscountPct(orgId)) ?? 0;
+  // Serve BOTH field names — two consumers, two contracts:
+  //   - features-service (#510): `discount_percent`, integer [0,100].
+  //   - runs-service (services/usage-discount.ts): `discount_pct`, fraction
+  //     [0,1] (0.5 == 50%), fail-loud 422 if absent. #250 dropped this key and
+  //     broke every platform cost write; restored here.
+  res.json({ orgId, discount_percent: pct, discount_pct: pct / 100 });
 });
 
 // POST /internal/dunning/tick — manually run one dunning scheduler pass.
