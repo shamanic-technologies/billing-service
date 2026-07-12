@@ -86,6 +86,11 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
             metadata: { org_id: orgId },
             setup_future_usage: "off_session",
           },
+          // Auto-create a finalized Stripe Invoice + PDF for the top-up charge so it
+          // shows up in the customer portal's "Invoice history" tab. Payment mode only;
+          // the off-session auto-topup charges (customer_balance usage_apply) are raw
+          // PaymentIntents and are NOT invoiced by this — separate future work.
+          invoice_creation: { enabled: true },
         };
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —

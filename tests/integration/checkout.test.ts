@@ -65,6 +65,7 @@ describe("POST /v1/checkout-sessions", () => {
           metadata: { org_id: orgId },
           setup_future_usage: "off_session",
         },
+        invoice_creation: { enabled: true },
       }
     );
   });
@@ -194,6 +195,7 @@ describe("POST /v1/checkout-sessions", () => {
     const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(sentBody).not.toHaveProperty("line_items");
     expect(sentBody).not.toHaveProperty("payment_intent_data");
+    expect(sentBody).not.toHaveProperty("invoice_creation");
   });
 
   it("setup-mode: does NOT write a topup amount to the account", async () => {
@@ -294,6 +296,7 @@ describe("POST /v1/checkout-sessions", () => {
           metadata: { org_id: orgId },
           setup_future_usage: "off_session",
         },
+        invoice_creation: { enabled: true },
       }
     );
     // No redirect URLs on an embedded session.

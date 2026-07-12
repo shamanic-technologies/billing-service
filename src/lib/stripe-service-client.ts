@@ -325,6 +325,12 @@ export interface CheckoutSessionBody {
     metadata: Record<string, string>;
     setup_future_usage?: "off_session" | "on_session";
   };
+  /**
+   * Payment-mode only: when enabled, Stripe auto-creates a finalized Invoice + hosted
+   * PDF for the charge, so it appears in the customer portal's "Invoice history" tab.
+   * Omitted for setup mode (no charge).
+   */
+  invoice_creation?: { enabled: boolean };
 }
 
 export async function createCheckoutSession(
