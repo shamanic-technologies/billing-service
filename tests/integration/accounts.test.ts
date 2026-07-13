@@ -222,6 +222,43 @@ describe("Accounts endpoints", () => {
       expect(res.body.actual_balance_cents).toBe("55000.0000000000");
     });
 
+    it("composes balance on NET usage (mid-history discount) with additive bonus credits", async () => {
+      // Repro: org with a 50% usage discount set mid-history. runs-service freezes
+      // the per-row net at cost-write (pre-discount rows: net == gross; post-discount
+      // rows: net == gross*(1−pct)) and serves the NET totals, which the runs-client
+      // returns as spent_cents. Billing subtracts them verbatim — the discount is
+      // applied exactly once (in runs), never here. Free/welcome credits stay ADDITIVE
+      // on top: the discount and the bonus BOTH apply.
+      //
+      // Numbers mirror the prod repro org 5fefaf5a…: gross usage $65.40, NET usage
+      // $53.16 (Overview "Total spent"); gross actualized $33.24, NET actualized $27.84.
+      // Auto-create grants the $2 welcome bonus; paid topups seed the rest of credited.
+      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
+      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("6700.0000000000");
+      fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+        org_id: orgId,
+        spent_cents: "5315.7879745674", // NET (post-discount), NOT gross 6540.03
+        as_of: "2026-07-13T00:00:00.000Z",
+      });
+      fetchRunsOrgActualUsageTotalSpy.mockResolvedValue({
+        spent_cents: "2783.9414137504", // NET actualized, NOT gross 3324.08
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      // credited = 6700 paid + 200 welcome bonus (additive on top of the net discount).
+      expect(res.body.credited_cents).toBe("6900.0000000000");
+      // usage reflects NET, not gross.
+      expect(res.body.usage_cents).toBe("5315.7879745674");
+      // Available = credited − NET usage (bonus counted on top).
+      expect(res.body.balance_cents).toBe("1584.2120254326");
+      // Confirmed line = credited − NET actualized.
+      expect(res.body.actual_balance_cents).toBe("4116.0585862496");
+    });
+
     it("returns 502 when runs-service unavailable", async () => {
       await insertTestAccount({ orgId });
       fetchRunsOrgUsageTotalSpy.mockRejectedValue(new Error("runs-service down"));

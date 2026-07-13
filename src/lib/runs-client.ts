@@ -4,12 +4,29 @@ import { fetchWithRetry } from "./fetch-retry.js";
 
 export interface RunsOrgUsageTotalResult {
   org_id: string;
+  /**
+   * The NET platform usage (per-org usage discount frozen at cost-write in
+   * runs-service). Sourced from the runs `net_spent_cents` field, NOT the gross
+   * `spent_cents`. Billing subtracts this verbatim for the spendable balance — the
+   * discount is applied exactly once, in runs, so re-applying here would double it.
+   * Historical (pre-discount) rows read net == gross in runs, so this is
+   * non-retroactive by construction.
+   */
   spent_cents: string;
+  as_of: string;
+}
+
+/** Raw runs-service /internal/org-usage-total body (gross + frozen net). */
+interface RunsOrgUsageTotalResponse {
+  org_id: string;
+  spent_cents: string;
+  net_spent_cents: string;
   as_of: string;
 }
 
 interface RunsExpectedTotalsResponse {
   total_expected_cents: string;
+  net_total_expected_cents: string;
   runs: Array<{
     run_id: string;
     expected_cents: string;
@@ -17,6 +34,12 @@ interface RunsExpectedTotalsResponse {
 }
 
 export interface RunsOrgActualUsageTotalResult {
+  /**
+   * NET actualized usage (frozen per-row net, COALESCE(net, gross)). Sourced from
+   * the runs `net_total_expected_cents` field, NOT the gross `total_expected_cents`.
+   * Used for actual_balance_cents / the dashboard "Confirmed charges" line so it
+   * agrees with the net spendable balance and the brand Overview.
+   */
   spent_cents: string;
 }
 
@@ -30,9 +53,13 @@ function getRunsServiceConfig() {
 /**
  * Fetch canonical org usage total from runs-service.
  *
- * The runs-service contract owns usage detail. `spent_cents` includes
- * platform costs in `actual` and `provisioned` states, excludes cancelled
- * and org/BYOK costs, and preserves fractional cents as a decimal string.
+ * The runs-service contract owns usage detail. The runs body carries both a GROSS
+ * `spent_cents` and a frozen NET `net_spent_cents` (per-org usage discount applied
+ * once, at cost-write, inside runs). Billing reads the NET figure — the org owes
+ * (and is depleted / reloaded against) the discounted amount. Both cover platform
+ * costs in `actual` and `provisioned` states, exclude cancelled and org/BYOK costs,
+ * and preserve fractional cents as a decimal string. Fail-loud if the net field is
+ * absent (a runs-service too old to serve it).
  */
 export async function fetchRunsOrgUsageTotal(
   orgId: string,
@@ -60,7 +87,14 @@ export async function fetchRunsOrgUsageTotal(
     );
   }
 
-  return (await res.json()) as RunsOrgUsageTotalResult;
+  const body = (await res.json()) as RunsOrgUsageTotalResponse;
+  if (body.net_spent_cents == null) {
+    throw new Error(
+      `runs-service org-usage-total missing net_spent_cents for org ${orgId}`
+    );
+  }
+  // Return the NET figure as spent_cents — billing's usage is the discounted amount.
+  return { org_id: body.org_id, spent_cents: body.net_spent_cents, as_of: body.as_of };
 }
 
 /**
@@ -68,7 +102,10 @@ export async function fetchRunsOrgUsageTotal(
  *
  * This excludes provisioned holds, so consumers can display money that has
  * actually been spent without changing `fetchRunsOrgUsageTotal`, which remains
- * the source for authorization/depletion availability.
+ * the source for authorization/depletion availability. Reads the NET actualized
+ * total (`net_total_expected_cents`, frozen per-row net) so actual_balance_cents /
+ * the dashboard "Confirmed charges" line is discounted consistently with the net
+ * spendable balance. Fail-loud if the net field is absent.
  */
 export async function fetchRunsOrgActualUsageTotal(
   orgId: string,
@@ -97,5 +134,10 @@ export async function fetchRunsOrgActualUsageTotal(
   }
 
   const body = (await res.json()) as RunsExpectedTotalsResponse;
-  return { spent_cents: body.total_expected_cents };
+  if (body.net_total_expected_cents == null) {
+    throw new Error(
+      `runs-service runs-expected-totals missing net_total_expected_cents for org ${orgId}`
+    );
+  }
+  return { spent_cents: body.net_total_expected_cents };
 }
