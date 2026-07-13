@@ -174,8 +174,10 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 1. `getCustomerByOrg(identity)` → Stripe customer (for `id`)
 2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received` where `status='succeeded'`
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
-4. `fetchRunsOrgUsageTotal(orgId, identity)` → runs-service `spent_cents`
-5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → runs-service `total_expected_cents` from actualized platform costs only
+4. `fetchRunsOrgUsageTotal(orgId, identity)` → reads runs-service **`net_spent_cents`** (the frozen-NET usage total, `SUM(COALESCE(net, gross))`), NOT the gross `spent_cents`. Returned to callers as `spent_cents` (billing's "usage" = the discounted amount the org owes).
+5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → reads runs-service **`net_total_expected_cents`** (the frozen-NET actualized total), NOT the gross `total_expected_cents`, from actualized platform costs only.
+
+> **Why net, not gross (bug #262):** the per-org usage discount is frozen per cost row at write time IN runs-service (gross + net stored). billing reads the NET org totals and subtracts them verbatim — the discount is applied exactly once (in runs), never re-applied here, and pre-discount rows read net == gross so it is non-retroactive. Reading the gross `spent_cents`/`total_expected_cents` fields (the pre-#249 wiring) left the dashboard Available + Confirmed/Provisioned lines at GROSS while the brand Overview showed net. ALWAYS read the `net_*` runs fields for balance composition.
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
 7. `getOrgCardCountry(identity, customer.id)` → `card_country` → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
 8. `getUsageDiscountPct(orgId)` → `usage_discount_pct` (dashboard banner only; see "Per-org usage discount"). Does NOT enter the balance math — runs-service already served net usage.
