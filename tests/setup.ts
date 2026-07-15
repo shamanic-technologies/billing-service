@@ -141,6 +141,21 @@ beforeAll(async () => {
       PRIMARY KEY ("org_id", "brand_id")
   `;
 
+  // brand_daily_budget_changes (append-only daily-budget history, migration 0027).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "brand_daily_budget_changes" (
+      "id" bigserial PRIMARY KEY,
+      "org_id" uuid NOT NULL,
+      "brand_id" uuid NOT NULL,
+      "daily_budget_cents" numeric(16,10) NOT NULL,
+      "changed_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS "brand_daily_budget_changes_org_brand_changed_at_idx"
+      ON "brand_daily_budget_changes" ("org_id", "brand_id", "changed_at", "id")
+  `;
+
   // org_usage_discounts (per-org platform-usage discount, migration 0026).
   await sql`
     CREATE TABLE IF NOT EXISTS "org_usage_discounts" (
