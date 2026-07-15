@@ -190,6 +190,13 @@
       "when": 1790503200000,
       "tag": "0026_org_usage_discounts",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790589600000,
+      "tag": "0027_brand_daily_budget_changes",
+      "breakpoints": true
     }
   ]
 }

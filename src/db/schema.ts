@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  bigserial,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -252,6 +253,42 @@ export const brandDailyBudgets = pgTable(
 
 export type BrandDailyBudget = typeof brandDailyBudgets.$inferSelect;
 export type NewBrandDailyBudget = typeof brandDailyBudgets.$inferInsert;
+
+// brand_daily_budget_changes: append-only history of daily-budget writes.
+// brand_daily_budgets holds only the CURRENT scalar (upserted in place), so the
+// timeline of raises/lowers/zeroings is lost. This table records ONE row per
+// write — the value the budget BECAME and WHEN — for the customer-health board
+// (features-service) to render a per-(org, brand) budget-change timeline.
+// Forward-only: no backfill of pre-existing history (never captured). Written in
+// the SAME transaction as the brand_daily_budgets upsert. `id` (bigserial) is a
+// stable secondary sort so same-millisecond writes keep insertion order.
+export const brandDailyBudgetChanges = pgTable(
+  "brand_daily_budget_changes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    dailyBudgetCents: numeric("daily_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    changedAt: timestamp("changed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("brand_daily_budget_changes_org_brand_changed_at_idx").on(
+      table.orgId,
+      table.brandId,
+      table.changedAt,
+      table.id
+    ),
+  ]
+);
+
+export type BrandDailyBudgetChange = typeof brandDailyBudgetChanges.$inferSelect;
+export type NewBrandDailyBudgetChange =
+  typeof brandDailyBudgetChanges.$inferInsert;
 
 // org_usage_discounts: per-org platform-usage discount (staff-managed).
 // ONE row per org (org_id PK); absence of a row = no discount = today's exact

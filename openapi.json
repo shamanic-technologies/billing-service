@@ -794,6 +794,40 @@
           "updatedAt"
         ]
       },
+      "BrandDailyBudgetChange": {
+        "type": "object",
+        "properties": {
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "changedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dailyBudgetCents",
+          "changedAt"
+        ]
+      },
+      "ReadBrandDailyBudgetHistory": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandDailyBudgetChange"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "history"
+        ]
+      },
       "BrandDailyBudget": {
         "type": "object",
         "properties": {
@@ -3003,6 +3037,62 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReadBrandDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/daily-budget/history": {
+      "get": {
+        "summary": "Read this org's daily-budget change history for a brand",
+        "description": "Returns the caller org's ordered daily-budget CHANGE history for this brand (the timeline of raises / lowers / zeroings), keyed by (x-org-id, brandId). Service-to-service read with x-api-key plus x-org-id, same auth as the current-value read. Entries are oldest-first (chronological). Forward-only: history begins when the feature shipped, so a brand with no writes since then returns an empty history array (never a fabricated backfill). billing-service only stores + serves this; the current-value read is unchanged.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ordered daily-budget change history (empty array when none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandDailyBudgetHistory"
                 }
               }
             }
