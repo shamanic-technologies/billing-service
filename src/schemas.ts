@@ -455,6 +455,27 @@ export const ReadBrandDailyBudgetSchema = z
   })
   .openapi("ReadBrandDailyBudget");
 
+export const BrandDailyBudgetChangeSchema = z
+  .object({
+    /** The value the daily budget BECAME at this point in time. */
+    dailyBudgetCents: CentsStringSchema,
+    /** When the budget was changed to this value (ISO 8601). */
+    changedAt: z.string(),
+  })
+  .openapi("BrandDailyBudgetChange");
+
+export const ReadBrandDailyBudgetHistorySchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /**
+     * Ordered daily-budget change history, oldest first (chronological
+     * timeline). Empty when no budget has been set for this org+brand since the
+     * feature shipped (forward-only — no fabricated backfill).
+     */
+    history: z.array(BrandDailyBudgetChangeSchema),
+  })
+  .openapi("ReadBrandDailyBudgetHistory");
+
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -1237,6 +1258,36 @@ registry.registerPath({
     200: {
       description: "Brand daily budget (dailyBudgetCents null when unset)",
       content: { "application/json": { schema: ReadBrandDailyBudgetSchema } },
+    },
+    400: {
+      description: "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/daily-budget/history",
+  summary: "Read this org's daily-budget change history for a brand",
+  description:
+    "Returns the caller org's ordered daily-budget CHANGE history for this brand " +
+    "(the timeline of raises / lowers / zeroings), keyed by (x-org-id, brandId). " +
+    "Service-to-service read with x-api-key plus x-org-id, same auth as the " +
+    "current-value read. Entries are oldest-first (chronological). Forward-only: " +
+    "history begins when the feature shipped, so a brand with no writes since then " +
+    "returns an empty history array (never a fabricated backfill). " +
+    "billing-service only stores + serves this; the current-value read is unchanged.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Ordered daily-budget change history (empty array when none)",
+      content: {
+        "application/json": { schema: ReadBrandDailyBudgetHistorySchema },
+      },
     },
     400: {
       description: "brandId or x-org-id is not a valid UUID, or x-org-id is missing",

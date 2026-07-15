@@ -4,6 +4,7 @@ import { SetBrandDailyBudgetRequestSchema } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
   getBrandDailyBudget,
+  getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
 } from "../lib/brand-budgets.js";
 
@@ -50,6 +51,52 @@ router.get("/internal/brands/:brandId/daily-budget", async (req, res) => {
     updatedAt: stored ? stored.updatedAt.toISOString() : null,
   });
 });
+
+// GET /internal/brands/:brandId/daily-budget/history — read this org's ordered
+// daily-budget CHANGE history for a brand (the timeline of raises / lowers /
+// zeroings), for the customer-health board.
+//
+// Auth: same as the current-value read — x-api-key (service-to-service) +
+// x-org-id (the internal org UUID). Shared brands keep independent per-org
+// history. Resp: { brandId, history: [{ dailyBudgetCents, changedAt }] },
+// oldest-first (chronological). Forward-only: entries begin when this feature
+// shipped, so a brand with no writes since then returns an empty history array
+// (a legitimate state — never fabricated). 400 on a non-UUID brandId.
+router.get(
+  "/internal/brands/:brandId/daily-budget/history",
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+
+    const orgId = req.headers["x-org-id"] as string | undefined;
+    if (!orgId) {
+      console.error(
+        `[billing-service] [billing-400] ${req.method} ${req.path}: missing x-org-id`
+      );
+      res.status(400).json({ error: "x-org-id header is required" });
+      return;
+    }
+    if (!UUID_RE.test(orgId)) {
+      console.error(
+        `[billing-service] [billing-400] ${req.method} ${req.path}: invalid x-org-id="${orgId}" (not a UUID)`
+      );
+      res.status(400).json({ error: "x-org-id must be a valid UUID" });
+      return;
+    }
+
+    const changes = await getBrandDailyBudgetHistory(orgId, brandId);
+    res.json({
+      brandId,
+      history: changes.map((c) => ({
+        dailyBudgetCents: c.dailyBudgetCents,
+        changedAt: c.changedAt.toISOString(),
+      })),
+    });
+  }
+);
 
 // PATCH /v1/brands/:brandId/daily-budget — set / update a brand's daily budget.
 //
