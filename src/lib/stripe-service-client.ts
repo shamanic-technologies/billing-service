@@ -62,6 +62,30 @@ export interface StripePaymentIntentList {
   has_more: boolean;
 }
 
+/**
+ * Subset of the Stripe Invoice object billing-service reads back from the
+ * off-session invoiced-charge endpoint. stripe-service returns the paid Invoice
+ * verbatim; only these fields are consumed to flatten the reload outcome.
+ *
+ * `payment_intent` is the invoice's underlying PaymentIntent (string id, or the
+ * expanded object). stripe-service snapshots that PI into its mirror synchronously
+ * on pay, so the billing-side `sumSucceededTopups*` sum reflects this top-up
+ * immediately — the invoiced reload counts as a paid topup identically to the
+ * former bare-PI reload (no double-count, no under-count).
+ */
+export interface StripeInvoice {
+  id: string;
+  object: "invoice";
+  /** "paid" on a successful off-session charge. */
+  status: string | null;
+  paid?: boolean;
+  amount_paid?: number;
+  currency?: string;
+  payment_intent?: string | { id: string } | null;
+  hosted_invoice_url?: string | null;
+  metadata?: Record<string, string>;
+}
+
 export interface StripePaymentMethod {
   id: string;
   object: "payment_method";
@@ -546,4 +570,45 @@ export async function getOrgCardCountryByOrg(orgId: string): Promise<string | nu
     {}
   );
   return cards.data[0]?.card?.country ?? null;
+}
+
+/**
+ * Create + pay a finalized OFF-SESSION Stripe invoice for the org's customer via
+ * the user-less `POST /internal/invoices/by-org/{orgId}` route (stripe-service#89).
+ * X-API-Key only — orgId is in the path, NO x-user-id / x-org-id / sentinel.
+ *
+ * stripe-service drives Stripe end-to-end (draft invoice → line item → finalize →
+ * pay off_session) and returns the paid Invoice verbatim (hosted invoice + PDF,
+ * visible in the customer's billing portal invoice list). This replaces the bare
+ * off_session PaymentIntent reload so EVERY auto-topup produces an invoice document.
+ *
+ * `Idempotency-Key` is REQUIRED: stripe-service derives a per-Stripe-step key from
+ * it, so a retry for the same logical top-up never double-charges or duplicates the
+ * invoice. Pass the SAME key billing already computes per reload (reloadIdempotencyKey
+ * / sweepIdempotencyKey / initialLoadIdempotencyKey).
+ *
+ * Prefer passing an explicit card `payment_method` — the customer's Stripe default
+ * may be a Link/wallet PM Stripe refuses to charge off_session.
+ *
+ * Fail-loud: a declined off_session charge (or any Stripe error) propagates as a
+ * non-2xx → `call` throws. 404 when the org has no Stripe customer.
+ */
+export async function createOffSessionInvoiceForOrg(
+  orgId: string,
+  body: {
+    amount: number;
+    currency: string;
+    description: string;
+    payment_method?: string;
+    metadata?: Record<string, string>;
+  },
+  idempotencyKey: string
+): Promise<StripeInvoice> {
+  return call<StripeInvoice>(
+    "POST",
+    `/internal/invoices/by-org/${encodeURIComponent(orgId)}`,
+    {},
+    body,
+    { "Idempotency-Key": idempotencyKey }
+  );
 }

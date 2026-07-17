@@ -212,7 +212,7 @@ describe("GET /internal/campaigns/:campaignId/affordability (read-only gate)", (
 
     expect(res.status).toBe(200);
     expect(res.body.affordable).toBe(false);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
     expect(await listEpisodes(orgId)).toHaveLength(0);
   });
 
