@@ -56,11 +56,11 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.org_id).toBe(orgId);
-      // SS paid = 0, local welcome = 200, usage = 0 → credited 200, balance 200.
-      expect(res.body.credited_cents).toBe("200.0000000000");
+      // SS paid = 0, local welcome = 500, usage = 0 → credited 500, balance 500.
+      expect(res.body.credited_cents).toBe("500.0000000000");
       expect(res.body.usage_cents).toBe("0.0000000000");
-      expect(res.body.balance_cents).toBe("200.0000000000");
-      expect(res.body.actual_balance_cents).toBe("200.0000000000");
+      expect(res.body.balance_cents).toBe("500.0000000000");
+      expect(res.body.actual_balance_cents).toBe("500.0000000000");
       expect(res.body.has_payment_method).toBe(false);
       expect(res.body.has_auto_topup).toBe(false);
       expect(ssMocks.ensureCustomer).toHaveBeenCalled();
@@ -232,7 +232,7 @@ describe("Accounts endpoints", () => {
       //
       // Numbers mirror the prod repro org 5fefaf5a…: gross usage $65.40, NET usage
       // $53.16 (Overview "Total spent"); gross actualized $33.24, NET actualized $27.84.
-      // Auto-create grants the $2 welcome bonus; paid topups seed the rest of credited.
+      // Auto-create grants the $5 welcome bonus; paid topups seed the rest of credited.
       ssMocks.hasAttachedCardPm.mockResolvedValue(false);
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("6700.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
@@ -249,14 +249,14 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      // credited = 6700 paid + 200 welcome bonus (additive on top of the net discount).
-      expect(res.body.credited_cents).toBe("6900.0000000000");
+      // credited = 6700 paid + 500 welcome bonus (additive on top of the net discount).
+      expect(res.body.credited_cents).toBe("7200.0000000000");
       // usage reflects NET, not gross.
       expect(res.body.usage_cents).toBe("5315.7879745674");
       // Available = credited − NET usage (bonus counted on top).
-      expect(res.body.balance_cents).toBe("1584.2120254326");
+      expect(res.body.balance_cents).toBe("1884.2120254326");
       // Confirmed line = credited − NET actualized.
-      expect(res.body.actual_balance_cents).toBe("4116.0585862496");
+      expect(res.body.actual_balance_cents).toBe("4416.0585862496");
     });
 
     it("returns 502 when runs-service unavailable", async () => {

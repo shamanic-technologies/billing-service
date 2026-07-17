@@ -129,7 +129,7 @@ describe("Admin credit grants (POST /v1/credits/grant, GET grants)", () => {
     await insertTestPromoGrant({
       orgId,
       userId: SYSTEM_USER_ID,
-      amountCents: 200,
+      amountCents: 500,
       promoCode: WELCOME_PROMO_CODE,
     });
 
@@ -139,8 +139,8 @@ describe("Admin credit grants (POST /v1/credits/grant, GET grants)", () => {
       .send({ amountCents: 5000, idempotencyKey: "k" });
 
     expect(res.status).toBe(200);
-    // 200 welcome + 5000 admin grant
-    expect(res.body.newBalanceCents).toBe("5200.0000000000");
+    // 500 welcome + 5000 admin grant
+    expect(res.body.newBalanceCents).toBe("5500.0000000000");
     const grants = await getPromosForOrg(orgId);
     expect(grants).toHaveLength(2);
   });
