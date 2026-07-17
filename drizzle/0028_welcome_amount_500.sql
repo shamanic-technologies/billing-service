@@ -1,0 +1,17 @@
+-- Set the welcome trial gift to $5 (500¢) as the canonical seed default.
+--
+-- PROD was already set to 500 live via the editable-promo endpoint
+-- (PATCH /internal/promo-codes/welcome, feature #157), but the seed default
+-- and the code constant still read 200 (reverted by migration 0019, PR #152).
+-- This migration makes 500 the source of truth so a FRESH environment seeds
+-- $5, matching prod and the code constant WELCOME_PROMO_AMOUNT_CENTS.
+--
+-- redeemPromoCode('welcome') (lib/account.ts findOrCreateAccount) reads
+-- local_promo_codes.amount_cents at redeem time, so updating this row makes all
+-- NEW redemptions grant $5. Does NOT touch the referral/invite grant path
+-- (INVITE_GRANT_AMOUNT_CENTS stays 2500) nor first_load_match.
+--
+-- No backfill: orgs that already redeemed keep their existing local_promos row
+-- (new signups only). Idempotent: single-row UPDATE keyed on a unique code,
+-- re-running is a no-op.
+UPDATE "local_promo_codes" SET "amount_cents" = 500 WHERE "code" = 'welcome';

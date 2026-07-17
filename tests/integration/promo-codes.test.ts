@@ -52,26 +52,26 @@ describe("GET/PATCH /internal/promo-codes/:code", () => {
     // amount, so restore the seed value for deterministic, order-independent runs.
     await db
       .update(localPromoCodes)
-      .set({ amountCents: 200 })
+      .set({ amountCents: 500 })
       .where(eq(localPromoCodes.code, WELCOME_PROMO_CODE));
   });
 
   afterAll(async () => {
     await db
       .update(localPromoCodes)
-      .set({ amountCents: 200 })
+      .set({ amountCents: 500 })
       .where(eq(localPromoCodes.code, WELCOME_PROMO_CODE));
     await cleanTestData();
     await closeDb();
   });
 
-  it("GET returns the current welcome amount (200 from seed)", async () => {
+  it("GET returns the current welcome amount (500 from seed)", async () => {
     const res = await request(app)
       .get(`/internal/promo-codes/${WELCOME_PROMO_CODE}`)
       .set(authHeaders());
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ code: "welcome", amount_cents: 200 });
+    expect(res.body).toEqual({ code: "welcome", amount_cents: 500 });
   });
 
   it("PATCH sets a new amount, persists it, and GET reflects it", async () => {
@@ -126,7 +126,7 @@ describe("GET/PATCH /internal/promo-codes/:code", () => {
       .set(authHeaders())
       .send({ amountCents: -100 });
     expect(res.status).toBe(400);
-    expect(await welcomeAmountInDb()).toBe(200);
+    expect(await welcomeAmountInDb()).toBe(500);
   });
 
   it("PATCH rejects a non-integer amount with 400", async () => {

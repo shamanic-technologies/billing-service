@@ -75,7 +75,7 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
   await insertTestPromoGrant({
     orgId,
     userId: seed === "target" ? userId : otherUserId,
-    amountCents: 200,
+    amountCents: 500,
     promoCode: WELCOME_PROMO_CODE,
   });
   await insertTestEpisode({

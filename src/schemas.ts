@@ -871,7 +871,7 @@ registry.registerPath({
   description:
     "Inserts a local_promos row for an org under a reserved platform reason. " +
     "Idempotent on (orgId, reason). " +
-    "When reason='invite_welcome', the existing $2 welcome row (if any) is deleted " +
+    "When reason='invite_welcome', the existing $5 welcome row (if any) is deleted " +
     "in the same tx so the invitee ends at the grant amount (not stacked). " +
     "Returns the org's spendable balance after the grant.",
   request: {
