@@ -119,12 +119,12 @@ describe("POST /internal/credits/grant", () => {
     expect(grants[0].promoCodeId).toBe(inviteRewardId);
   });
 
-  it("T3: invite_welcome override — replaces existing $2 welcome (final $25, not $27)", async () => {
+  it("T3: invite_welcome override — replaces existing $5 welcome (final $25, not $30)", async () => {
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({
       orgId,
       userId: systemUserId,
-      amountCents: 200,
+      amountCents: 500,
       promoCode: WELCOME_PROMO_CODE,
     });
 
@@ -180,12 +180,12 @@ describe("POST /internal/credits/grant", () => {
     expect(grants).toHaveLength(1);
   });
 
-  it("T6: invite_reward is additive — does NOT override welcome ($2 + $25 = $27)", async () => {
+  it("T6: invite_reward is additive — does NOT override welcome ($5 + $25 = $30)", async () => {
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({
       orgId,
       userId: systemUserId,
-      amountCents: 200,
+      amountCents: 500,
       promoCode: WELCOME_PROMO_CODE,
     });
 
@@ -195,7 +195,7 @@ describe("POST /internal/credits/grant", () => {
       .send({ orgId, amountCents: 2500, reason: "invite_reward" });
 
     expect(res.status).toBe(200);
-    expect(res.body.newBalanceCents).toBe("2700.0000000000");
+    expect(res.body.newBalanceCents).toBe("3000.0000000000");
 
     const grants = await getPromosForOrg(orgId);
     expect(grants).toHaveLength(2);

@@ -49,8 +49,8 @@ describe("GET /public/stats/billing", () => {
   it("composes total_credited from SS paid + local promo credits", async () => {
     await insertTestAccount({ orgId: orgA });
     await insertTestAccount({ orgId: orgB });
-    await insertTestPromoGrant({ orgId: orgA, userId, amountCents: 200, promoCode: "welcome" });
-    await insertTestPromoGrant({ orgId: orgB, userId, amountCents: 200, promoCode: "welcome" });
+    await insertTestPromoGrant({ orgId: orgA, userId, amountCents: 500, promoCode: "welcome" });
+    await insertTestPromoGrant({ orgId: orgB, userId, amountCents: 500, promoCode: "welcome" });
 
     ssMocks.getStats.mockResolvedValue({
       total_paid_cents: "15000.0000000000",
@@ -66,13 +66,13 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.accounts_with_payment_method).toBe(1);
     expect(res.body.total_paid_cents).toBe("15000.0000000000");
     expect(res.body.total_revenue_cents).toBe("15000.0000000000");
-    expect(res.body.total_local_credits_cents).toBe("400.0000000000");
-    expect(res.body.total_credited_cents).toBe("15400.0000000000");
+    expect(res.body.total_local_credits_cents).toBe("1000.0000000000");
+    expect(res.body.total_credited_cents).toBe("16000.0000000000");
   });
 
   it("merges monthly_growth from SS + local promos by period", async () => {
     await insertTestAccount({ orgId: orgA });
-    await insertTestPromoGrant({ orgId: orgA, userId, amountCents: 200, promoCode: "welcome" });
+    await insertTestPromoGrant({ orgId: orgA, userId, amountCents: 500, promoCode: "welcome" });
 
     ssMocks.getStats.mockResolvedValue({
       total_paid_cents: "5000.0000000000",
@@ -99,7 +99,7 @@ describe("GET /public/stats/billing", () => {
       (s: number, r: { revenue_cents: string }) => s + parseFloat(r.revenue_cents),
       0
     );
-    expect(totalCredited).toBe(5200);
+    expect(totalCredited).toBe(5500);
     expect(totalRevenue).toBe(5000);
   });
 

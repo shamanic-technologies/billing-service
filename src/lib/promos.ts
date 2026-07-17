@@ -209,7 +209,7 @@ export interface GrantResult {
  * Idempotency: the UNIQUE (org_id, promo_code_id) index on local_promos makes
  * repeated calls with the same (orgId, reason) a no-op (no double-grant).
  *
- * `invite_welcome` semantics: replaces (not stacks with) the $2 welcome row.
+ * `invite_welcome` semantics: replaces (not stacks with) the $5 welcome row.
  * The tx (a) inserts billing_accounts ON CONFLICT DO NOTHING so a concurrent
  * findOrCreateAccount won't fire its own welcome-redeem branch, then (b)
  * deletes any existing welcome row, then (c) inserts the invite_welcome row.
