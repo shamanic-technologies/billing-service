@@ -11,7 +11,7 @@ import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
-import { reloadViaPaymentIntent } from "../lib/reload.js";
+import { reloadViaInvoice } from "../lib/reload.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
@@ -348,7 +348,7 @@ router.post("/v1/accounts/wallet_setup", requireOrgHeaders, async (req, res) => 
     try {
       initialLoad = await withTimeout(
         INITIAL_LOAD_TIMEOUT_MS,
-        reloadViaPaymentIntent(
+        reloadViaInvoice(
           identity,
           initial_load_amount_cents,
           initialLoadIdempotencyKey(orgId, initial_load_amount_cents),

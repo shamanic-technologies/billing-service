@@ -67,11 +67,11 @@ describe("Month-end forced top-up sweep", () => {
     expect(res.charged).toBe(1);
     expect(res.skipped).toBe(0);
     expect(res.failed).toBe(0);
-    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
     // One tier-amount multiple (5000) clears the -100 deficit to +4900.
-    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
     // Month-scoped idempotency key.
-    expect(ssMocks.reloadViaPaymentIntent.mock.calls[0]?.[2]).toBe(
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[2]).toBe(
       sweepIdempotencyKey(orgA, monthBucket(LAST_DAY))
     );
   });
@@ -89,7 +89,7 @@ describe("Month-end forced top-up sweep", () => {
 
     expect(res.charged).toBe(0);
     expect(res.skipped).toBe(1);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("AC2: does NOT charge an org with no chargeable card", async () => {
@@ -106,7 +106,7 @@ describe("Month-end forced top-up sweep", () => {
 
     expect(res.charged).toBe(0);
     expect(res.skipped).toBe(1);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("AC2: does NOT charge a blocked-country (India) card", async () => {
@@ -123,7 +123,7 @@ describe("Month-end forced top-up sweep", () => {
 
     expect(res.charged).toBe(0);
     expect(res.skipped).toBe(1);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("AC2: does NOT select an org with no auto-topup config", async () => {
@@ -135,7 +135,7 @@ describe("Month-end forced top-up sweep", () => {
 
     expect(res.eligible).toBe(0);
     expect(res.charged).toBe(0);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("AC3: idempotent — after the settle, a second tick reads non-negative and skips", async () => {
@@ -157,7 +157,7 @@ describe("Month-end forced top-up sweep", () => {
     expect(second.charged).toBe(0);
     expect(second.skipped).toBe(1);
     // Exactly ONE charge across both ticks.
-    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
   });
 
   it("AC4: a per-org failure is isolated — the sweep continues for other orgs", async () => {
@@ -184,7 +184,7 @@ describe("Month-end forced top-up sweep", () => {
     expect(res.eligible).toBe(2);
     expect(res.failed).toBe(1); // orgA
     expect(res.charged).toBe(1); // orgB still settled
-    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
   });
 
   it("AC5/AC6: no-op on any day that is not the last of the month", async () => {
@@ -201,6 +201,6 @@ describe("Month-end forced top-up sweep", () => {
     expect(res.ranSweep).toBe(false);
     expect(res.eligible).toBe(0);
     expect(res.charged).toBe(0);
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 });

@@ -269,7 +269,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
     // paid 0 → start tier floor -5000. runs reports net spend 6000 → balance −6000
     // (past the floor) → reload fires. Billing does NOT re-discount the 6000.
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
-    ssMocks.reloadViaPaymentIntent.mockResolvedValue({ status: "succeeded", payment_intent_id: "pi_x" });
+    ssMocks.reloadViaInvoice.mockResolvedValue({ status: "succeeded", payment_intent_id: "pi_x" });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -278,7 +278,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
-    expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalled();
   });
 });
 

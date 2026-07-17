@@ -19,7 +19,7 @@ import { computeBalance } from "../lib/balance.js";
 import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
-import { reloadViaPaymentIntent } from "../lib/reload.js";
+import { reloadViaInvoice } from "../lib/reload.js";
 import { coalesceReload } from "../lib/reload-coalescer.js";
 
 const router = Router();
@@ -226,7 +226,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       reloadResult = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaPaymentIntent(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
+          reloadViaInvoice(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
     } catch (err) {
@@ -378,7 +378,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       const result = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaPaymentIntent(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
+          reloadViaInvoice(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
       topupTriggered = result.status === "succeeded";
