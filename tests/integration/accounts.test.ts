@@ -471,7 +471,7 @@ describe("Accounts endpoints", () => {
         expect(res.body.first_load_match_applied).toBe(true);
         expect(res.body.first_load_match_cents).toBe(expectedBonus);
         expect(res.body.balance_cents).toBe(expectedBalance);
-        expect(ssMocks.reloadViaPaymentIntent).toHaveBeenCalledWith(
+        expect(ssMocks.reloadViaInvoice).toHaveBeenCalledWith(
           expect.objectContaining({ "x-org-id": orgId }),
           load,
           expect.any(String),
@@ -530,7 +530,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("topup_threshold_cents");
-      expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+      expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
     });
 
     it("rejects wallet setup when no payment method is attached", async () => {
@@ -547,7 +547,7 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain("Payment method required");
-      expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+      expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
     });
   });
 

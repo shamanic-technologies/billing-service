@@ -390,14 +390,14 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(res.body.sufficient).toBe(true);
     expect(await listEpisodes(orgId)).toHaveLength(0);
     expect(sendEmailSpy).not.toHaveBeenCalled();
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("18: auto-topup org crosses the floor + reload fails → opens episode, sends T0", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
     setBalance("0.0000000000");
     setUsage("5001.0000000000"); // balance -5001, past the -5000 floor
-    ssMocks.reloadViaPaymentIntent.mockResolvedValue({
+    ssMocks.reloadViaInvoice.mockResolvedValue({
       status: "failed",
       failure_reason: "card_declined",
     });

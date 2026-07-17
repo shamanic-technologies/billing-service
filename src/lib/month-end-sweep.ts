@@ -35,7 +35,7 @@ import { computeBalance } from "./balance.js";
 import { tierFor, computeTopupCharge } from "./topup-tier.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
-import { reloadViaPaymentIntent } from "./reload.js";
+import { reloadViaInvoice } from "./reload.js";
 
 // INTERNAL_IDENTITY sentinel — there is no end user on the sweep path. The /v1
 // reload primitives (getCustomerByOrg / listPaymentMethods / createPaymentIntent)
@@ -187,7 +187,7 @@ export async function runMonthEndSweep(
       const outcome = await coalesceReload(account.orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaPaymentIntent(
+          reloadViaInvoice(
             identity,
             chargeAmount,
             sweepIdempotencyKey(account.orgId, bucket),

@@ -59,7 +59,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     expect(res.status).toBe(404);
     // Pure read: no balance compose for a non-existent account.
     expect(ssMocks.fetchOrgCustomer).not.toHaveBeenCalled();
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("200 with same shape as /v1/accounts/balance (credited − usage)", async () => {
@@ -81,7 +81,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     // User-less balance path: keyed off orgId ONLY (no x-user-id / sentinel).
     expect(ssMocks.fetchOrgCustomer).toHaveBeenCalledWith(orgId);
     // Pure read: never reloads.
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("has_auto_topup=true when topup configured + chargeable card + supported country", async () => {
@@ -98,7 +98,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
     expect(res.status).toBe(200);
     expect(res.body.has_auto_topup).toBe(true);
     // Pure read: still never reloads, even for an auto-topup-enabled org.
-    expect(ssMocks.reloadViaPaymentIntent).not.toHaveBeenCalled();
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("has_auto_topup=false when topup configured but no chargeable card", async () => {
