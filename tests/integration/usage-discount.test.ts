@@ -241,13 +241,15 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
     expect(res.body.depleted).toBe(false);
   });
 
-  it("authorize: a discount does NOT change the sufficiency verdict (billing applies nothing)", async () => {
+  it("authorize: the discount nets the required ESTIMATE (not usage), so it CAN flip the verdict", async () => {
     await insertTestAccount({ orgId }); // no topup config → credit-line floor "0"
     await insertTestUsageDiscount({ orgId, discountPct: 50 });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
     setUsage("80.0000000000");
 
     const costsClient = await import("../../src/lib/costs-client.js");
+    // GROSS costs-service list price. The org will actually be charged the NET amount
+    // (runs freezes the discount per cost row), so authorize nets the estimate too.
     vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("30.0000000000");
 
     const res = await request(app)
@@ -256,10 +258,14 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
       .send({ items: [{ costName: "x", quantity: 1 }] });
 
     expect(res.status).toBe(200);
-    // balance 100 − 80 = 20; 20 − 30 = −10 < 0 → insufficient. The discount is NOT
-    // applied (under #246 net usage 40 → balance 60 would have been sufficient).
-    expect(res.body.sufficient).toBe(false);
+    // USAGE is still verbatim from runs (NOT re-netted, #246 stays reverted): balance
+    // = 100 − 80 = 20. But the required ESTIMATE is netted 30 → 15 (the ONLY billing-side
+    // discount application — a forward catalog estimate, not runs-netted usage): 20 − 15
+    // = 5 ≥ 0 floor → sufficient. With the pre-fix gross required (30) this org was
+    // wrongly judged insufficient / reloaded early (the −$25-instead-of-−$50 bug).
+    expect(res.body.sufficient).toBe(true);
     expect(res.body.balance_cents).toBe("20.0000000000");
+    expect(res.body.required_cents).toBe("15.0000000000");
   });
 
   it("usage_apply: spent_total_cents (already net from runs) is used verbatim; discount does not suppress the topup", async () => {

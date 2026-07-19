@@ -5,6 +5,7 @@ import {
   cleanTestData,
   insertTestAccount,
   insertTestPromoGrant,
+  insertTestUsageDiscount,
   closeDb,
 } from "../helpers/test-db.js";
 import {
@@ -306,6 +307,65 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       expect(r.status).toBe(200);
     }
     expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
+  });
+
+  it("usage discount nets the required estimate → no early reload (gross required would over-reserve)", async () => {
+    // 50%-off org. GROSS required $50 (5000) → NET $25 (2500). Base tier floor -5000.
+    // usage 2500, paid 0, promos 0 → balance -2500. NET check: -2500 - 2500 = -5000
+    // >= -5000 floor → sufficient, NO reload. The BUG (gross required in the trigger)
+    // did -2500 - 5000 = -7500 < -5000 → fired a reload at balance -$25. required_cents
+    // must be the netted value.
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    await insertTestUsageDiscount({ orgId, discountPct: 50 });
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("5000.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "2500.0000000000",
+      as_of: "x",
+    });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sufficient).toBe(true);
+    expect(res.body.balance_cents).toBe("-2500.0000000000");
+    expect(res.body.required_cents).toBe("2500.0000000000");
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+  });
+
+  it("usage discount: still reloads when the NET balance is genuinely past the floor", async () => {
+    // 50%-off org, GROSS required $50 → NET $25. usage 5100 → balance -5100 < -5000
+    // floor even before reserving the run → reload one tier unit (5000). Confirms
+    // netting the estimate does not suppress a legitimate reload.
+    await insertTestAccount({ orgId, topupAmountCents: 1000 });
+    await insertTestUsageDiscount({ orgId, discountPct: 50 });
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    ssMocks.sumSucceededTopupsForOrg
+      .mockResolvedValueOnce("0.0000000000")
+      .mockResolvedValueOnce("5000.0000000000");
+    const costsClient = await import("../../src/lib/costs-client.js");
+    vi.spyOn(costsClient, "resolveRequiredCents").mockResolvedValue("5000.0000000000");
+    fetchRunsOrgUsageTotalSpy.mockResolvedValue({
+      org_id: orgId,
+      spent_cents: "5100.0000000000",
+      as_of: "x",
+    });
+
+    const res = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set(getAuthHeaders(orgId, userId))
+      .send(authorizeBody);
+
+    expect(res.status).toBe(200);
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    expect(res.body.required_cents).toBe("2500.0000000000");
   });
 
   it("fails loud when runs-service unavailable", async () => {
