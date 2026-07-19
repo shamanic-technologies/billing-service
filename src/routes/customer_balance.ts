@@ -8,6 +8,7 @@ import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import { applyUsageDiscount, getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
@@ -83,6 +84,17 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       res.status(502).json({ error: "Failed to resolve prices from costs-service" });
       return;
     }
+
+    // Net the run's cost ESTIMATE by the org's usage discount. resolveRequiredCents
+    // returns the GROSS costs-service list price, but a discounted org is charged the
+    // NET amount (runs-service freezes the discount per cost row at write time), and
+    // every sufficiency / reload-trigger comparison below is against a NET balance
+    // (runs already serves net usage). Comparing a gross estimate to a net balance
+    // over-reserves headroom for a discounted org and fires its auto-reload EARLY
+    // (a 50%-off org would trigger at −$25 instead of −$50). This is the ONLY place
+    // billing applies the discount: it nets a forward CATALOG estimate, never the
+    // runs-netted usage — so it is not the double-discount trap the balance paths avoid.
+    requiredCents = applyUsageDiscount(requiredCents, await getUsageDiscountPct(orgId));
 
     traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.resolved", data: { required_cents: requiredCents } }, req.headers);
 
