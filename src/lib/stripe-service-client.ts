@@ -94,12 +94,17 @@ export interface StripePaymentMethod {
    * Card detail (present when type === "card"). stripe-service passes the Stripe
    * PaymentMethod object through verbatim, so `card.country` (the ISO-3166-1 alpha-2
    * issuing country, e.g. "IN") is already on the wire — used to gate off_session
-   * auto-reload (see AUTO_RELOAD_BLOCKED_CARD_COUNTRIES). Null/absent for non-card PMs.
+   * auto-reload (see AUTO_RELOAD_BLOCKED_CARD_COUNTRIES). `brand`/`last4`/`exp_month`/
+   * `exp_year` are the non-sensitive human-facing display attributes (e.g. "Visa
+   * ending 4242, expires 08/27") surfaced on the account read. Null/absent for
+   * non-card PMs.
    */
   card?: {
     country?: string | null;
     brand?: string | null;
     last4?: string | null;
+    exp_month?: number | null;
+    exp_year?: number | null;
   } | null;
 }
 
@@ -487,6 +492,41 @@ export async function getOrgCardCountry(
 ): Promise<string | null> {
   const cards = await listPaymentMethods(identity, { customer: customerId, type: "card" });
   return cards.data[0]?.card?.country ?? null;
+}
+
+/**
+ * Human-facing display attributes of the org's saved card — the SAME first `card`
+ * PM `getOrgCardCountry` reads, but returning the non-sensitive display fields the
+ * dashboard renders ("Visa ending 4242, expires 08/27") ALONGSIDE the issuing
+ * country, in one Stripe read. All fields are display-only (brand, last4, expiry,
+ * country) — never the full PAN. Returns null when the org has no card PM
+ * (link-only or none), so callers surface clean nulls, no fabrication.
+ *
+ * Real-user path (org-implicit GET /v1/payment_methods, requires x-user-id).
+ * Fail-loud: a stripe-service error propagates.
+ */
+export interface CardDisplay {
+  country: string | null;
+  brand: string | null;
+  last4: string | null;
+  expMonth: number | null;
+  expYear: number | null;
+}
+
+export async function getOrgCardDisplay(
+  identity: IdentityHeaders,
+  customerId: string
+): Promise<CardDisplay | null> {
+  const cards = await listPaymentMethods(identity, { customer: customerId, type: "card" });
+  const card = cards.data[0]?.card;
+  if (!card) return null;
+  return {
+    country: card.country ?? null,
+    brand: card.brand ?? null,
+    last4: card.last4 ?? null,
+    expMonth: card.exp_month ?? null,
+    expYear: card.exp_year ?? null,
+  };
 }
 
 // --- User-less org-scoped reads (balance path only) ---

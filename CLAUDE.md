@@ -162,6 +162,10 @@ A slow spender whose balance never crosses the floor within a calendar month wou
   "auto_reload_supported": true,             // false when the saved card's issuing country can't be charged off_session (e.g. India). See "Off_session auto-reload" below
   "auto_reload_unsupported_reason": null,    // "card_issuing_country_unsupported" when auto_reload_supported is false; null otherwise
   "card_country": "US",                      // ISO-3166-1 alpha-2 issuing country of the card the reload would charge; null when no card PM (link-only / none)
+  "card_brand": "visa",                      // saved card network/brand (display-only); null when no card PM
+  "card_last4": "4242",                      // saved card last 4 digits (display-only, NOT the full PAN); null when no card PM
+  "card_exp_month": 8,                       // saved card expiry month 1–12 (display-only); null when no card PM
+  "card_exp_year": 2027,                     // saved card expiry year (display-only); null when no card PM
   "created_at": "...",
   "updated_at": "..."
 }
@@ -180,7 +184,7 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 
 > **Why net, not gross (bug #262):** the per-org usage discount is frozen per cost row at write time IN runs-service (gross + net stored). billing reads the NET org totals and subtracts them verbatim — the discount is applied exactly once (in runs), never re-applied here, and pre-discount rows read net == gross so it is non-retroactive. Reading the gross `spent_cents`/`total_expected_cents` fields (the pre-#249 wiring) left the dashboard Available + Confirmed/Provisioned lines at GROSS while the brand Overview showed net. ALWAYS read the `net_*` runs fields for balance composition.
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
-7. `getOrgCardCountry(identity, customer.id)` → `card_country` → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
+7. `getOrgCardDisplay(identity, customer.id)` → `{country, brand, last4, expMonth, expYear}` (one Stripe read of the first card PM) → `card_country`/`card_brand`/`card_last4`/`card_exp_month`/`card_exp_year` (display-only, null when no card PM) → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
 8. `getUsageDiscountPct(orgId)` → `usage_discount_pct` (dashboard banner only; see "Per-org usage discount"). Does NOT enter the balance math — runs-service already served net usage.
 9. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`. runs-service usage is already NET of the discount, so billing subtracts it verbatim (no discount applied here).
 
