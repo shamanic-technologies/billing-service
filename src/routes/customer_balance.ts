@@ -7,15 +7,7 @@ import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
-import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { applyUsageDiscount, getUsageDiscountPct } from "../lib/usage-discount.js";
-import {
-  getCustomerByOrg,
-  sumSucceededTopupsForCustomer,
-  hasAttachedCardPm,
-  getOrgCardCountry,
-  isAutoReloadBlockedCountry,
-} from "../lib/stripe-service-client.js";
 import { computeBalance } from "../lib/balance.js";
 import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
@@ -338,48 +330,49 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       return;
     }
 
-    const customer = await getCustomerByOrg(identity);
-
-    if (!(await hasAttachedCardPm(identity, customer.id))) {
-      res.status(202).json({ acknowledged: true, topup_triggered: false });
+    // Balance for the reload decision comes from computeBalance — the SAME NET
+    // source authorize uses (runs-service net_spent_cents, with the per-org usage
+    // discount frozen at cost-write). The request's `spent_total_cents` is the
+    // CALLER's GROSS usage total and MUST NOT gate the charge: subtracting gross
+    // from credited understates a discounted org's balance by the discount amount
+    // and fires the auto-topup early — a 50%-off org crossed the −$50 floor ~$56
+    // too soon and was charged while its true net balance was positive. The body
+    // value stays a no-op hint (logged in the start trace above), never the gate.
+    let snapshot;
+    try {
+      snapshot = await computeBalance(orgId);
+    } catch (err) {
+      console.error("[billing-service] usage_apply: failed to compute balance:", err);
+      res.status(502).json({ error: "Failed to compute balance" });
       return;
     }
 
-    // India (and other off_session-mandate) cards can't be auto-reloaded — Stripe declines
-    // the off_session charge with no registered mandate (issue #220). Skip rather than spam
-    // a doomed reload; the depletion dunning path prompts the org to recharge manually.
-    if (isAutoReloadBlockedCountry(await getOrgCardCountry(identity, customer.id))) {
+    // Reload-capable guards mirror authorize: a chargeable card AND an issuing
+    // country that supports off_session charges (India/RBI excluded, issue #220).
+    if (!snapshot.hasCardPm) {
+      res.status(202).json({ acknowledged: true, topup_triggered: false });
+      return;
+    }
+    if (!snapshot.autoReloadSupported) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.topup-skipped", data: { reason: "auto_reload_unsupported_country" } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const [paidTopups, localCredits] = await Promise.all([
-      sumSucceededTopupsForCustomer(identity, customer.id),
-      sumLocalPromoCreditsForOrg(orgId),
-    ]);
-
-    const creditedCents = addCents(paidTopups, localCredits);
-    // spent_total_cents is reported by runs-service after its cost write, so it is
-    // already NET of any per-org usage discount (the discount is applied once, at
-    // cost-write). Billing subtracts it verbatim — re-applying the discount here
-    // would double-count it.
-    const balanceCents = subCents(creditedCents, spentTotalCents);
-
     // Threshold-based postpaid: the effective (amount, threshold) come from the
     // derived tier (a function of cumulative paid topups), NOT the stored daily
-    // columns. The floor is NEGATIVE, so a reload only fires once spend crosses
-    // the credit line — not every day.
-    const tier = tierFor(paidTopups);
+    // columns. The floor is NEGATIVE, so a reload only fires once the NET balance
+    // crosses the credit line — not every day.
+    const tier = tierFor(snapshot.paidTopupsCents);
     const thresholdCents = String(tier.thresholdCents);
 
-    if (gteCents(balanceCents, thresholdCents)) {
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: balanceCents, threshold_cents: thresholdCents } }, req.headers);
+    if (gteCents(snapshot.balanceCents, thresholdCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: snapshot.balanceCents, threshold_cents: thresholdCents } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const chargeAmount = computeTopupCharge(balanceCents, thresholdCents, tier.amountCents);
+    const chargeAmount = computeTopupCharge(snapshot.balanceCents, thresholdCents, tier.amountCents);
     if (chargeAmount <= 0) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;

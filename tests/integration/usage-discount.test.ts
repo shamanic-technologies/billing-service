@@ -268,23 +268,46 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
     expect(res.body.required_cents).toBe("15.0000000000");
   });
 
-  it("usage_apply: spent_total_cents (already net from runs) is used verbatim; discount does not suppress the topup", async () => {
+  it("usage_apply: reloads on the NET balance from runs (discount not re-applied), fires when past the floor", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
     await insertTestUsageDiscount({ orgId, discountPct: 50 });
-    ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
-    // paid 0 → start tier floor -5000. runs reports net spend 6000 → balance −6000
-    // (past the floor) → reload fires. Billing does NOT re-discount the 6000.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    // paid 0 → start tier floor -5000. runs reports NET spend 6000 → balance −6000
+    // (past the floor) → reload fires. Billing does NOT re-discount the 6000, and the
+    // GROSS body value below is ignored by the gate.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage("6000.0000000000");
     ssMocks.reloadViaInvoice.mockResolvedValue({ status: "succeeded", payment_intent_id: "pi_x" });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
       .set(getAuthHeaders(orgId, userId))
-      .send({ spent_total_cents: "6000.0000000000" });
+      .send({ spent_total_cents: "99999.0000000000" }); // gross body — ignored by the gate
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
     expect(ssMocks.reloadViaInvoice).toHaveBeenCalled();
+  });
+
+  it("usage_apply: a discounted org with a POSITIVE net balance is NOT charged despite a large GROSS body (bug #285)", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
+    await insertTestUsageDiscount({ orgId, discountPct: 50 });
+    ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithDefaultPM());
+    // credited 15350 (paid) , NET usage 14685 → balance +665 (positive). The caller
+    // sends the GROSS usage total (~20340) — the pre-fix code computed balance
+    // 15350 − 20340 = −4990, crossed the −$50 floor, and charged $50 while the org
+    // sat at +$6.65 net. The fix reads the NET balance → no reload.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("15350.0000000000");
+    setUsage("14685.0000000000");
+
+    const res = await request(app)
+      .post("/v1/customer_balance/usage_apply")
+      .set(getAuthHeaders(orgId, userId))
+      .send({ spent_total_cents: "20340.0000000000" }); // GROSS — would have wrongly fired
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 });
 
