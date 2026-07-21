@@ -144,7 +144,13 @@ describe("Accounts endpoints", () => {
 
     it("reports auto_reload_supported=true for a non-blocked card country", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getOrgCardCountry.mockResolvedValue("US");
+      ssMocks.getOrgCardDisplay.mockResolvedValue({
+        country: "US",
+        brand: "visa",
+        last4: "4242",
+        expMonth: 8,
+        expYear: 2027,
+      });
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -156,11 +162,54 @@ describe("Accounts endpoints", () => {
       expect(res.body.card_country).toBe("US");
     });
 
+    it("surfaces the saved card's brand, last4, and expiry alongside the country", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.getOrgCardDisplay.mockResolvedValue({
+        country: "US",
+        brand: "visa",
+        last4: "4242",
+        expMonth: 8,
+        expYear: 2027,
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.card_brand).toBe("visa");
+      expect(res.body.card_last4).toBe("4242");
+      expect(res.body.card_exp_month).toBe(8);
+      expect(res.body.card_exp_year).toBe(2027);
+      expect(res.body.card_country).toBe("US");
+    });
+
+    it("returns null card display fields when the org has no card PM", async () => {
+      await insertTestAccount({ orgId });
+      // Default getOrgCardDisplay mock resolves null (link-only / no card).
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.card_brand).toBeNull();
+      expect(res.body.card_last4).toBeNull();
+      expect(res.body.card_exp_month).toBeNull();
+      expect(res.body.card_exp_year).toBeNull();
+      expect(res.body.card_country).toBeNull();
+    });
+
     it("reports auto_reload_supported=false + reason for an India-issued card", async () => {
       // Account has full topup config, but the India card can't be charged off_session
       // → auto_reload_supported false, reason set, has_auto_topup forced false.
       await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
-      ssMocks.getOrgCardCountry.mockResolvedValue("IN");
+      ssMocks.getOrgCardDisplay.mockResolvedValue({
+        country: "IN",
+        brand: "visa",
+        last4: "0002",
+        expMonth: 3,
+        expYear: 2028,
+      });
 
       const res = await request(app)
         .get("/v1/accounts")
