@@ -12,6 +12,7 @@ export interface StripeServiceMocks {
   listPaymentMethods: ReturnType<typeof vi.fn>;
   hasAttachedCardPm: ReturnType<typeof vi.fn>;
   getOrgCardCountry: ReturnType<typeof vi.fn>;
+  getOrgCardDisplay: ReturnType<typeof vi.fn>;
   sumSucceededTopupsForCustomer: ReturnType<typeof vi.fn>;
   // User-less org-keyed reads (balance path — computeBalance).
   fetchOrgCustomer: ReturnType<typeof vi.fn>;
@@ -99,6 +100,11 @@ export function setupStripeMocks(): StripeServiceMocks {
     // Default null = no blocked issuing country → auto-reload supported. Override to "IN"
     // to exercise the India / off_session-mandate path.
     getOrgCardCountry: vi.fn().mockResolvedValue(null),
+    // Default null = org has no card PM (link-only / none) → card_country and all
+    // card_* display fields resolve null. Override with a CardDisplay object to
+    // exercise a saved card (e.g. { country: "US", brand: "visa", last4: "4242",
+    // expMonth: 8, expYear: 2027 }).
+    getOrgCardDisplay: vi.fn().mockResolvedValue(null),
     sumSucceededTopupsForCustomer: vi.fn().mockResolvedValue("0.0000000000"),
     fetchOrgCustomer: vi.fn().mockResolvedValue(buildMockCustomer()),
     sumSucceededTopupsForOrg: vi.fn().mockResolvedValue("0.0000000000"),
@@ -140,6 +146,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "listPaymentMethods").mockImplementation(mocks.listPaymentMethods);
   vi.spyOn(ssClient, "hasAttachedCardPm").mockImplementation(mocks.hasAttachedCardPm);
   vi.spyOn(ssClient, "getOrgCardCountry").mockImplementation(mocks.getOrgCardCountry);
+  vi.spyOn(ssClient, "getOrgCardDisplay").mockImplementation(mocks.getOrgCardDisplay);
   vi.spyOn(ssClient, "sumSucceededTopupsForCustomer").mockImplementation(
     mocks.sumSucceededTopupsForCustomer
   );

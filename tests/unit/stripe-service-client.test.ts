@@ -4,6 +4,7 @@ import {
   hasAttachedCardPm,
   getOrgCardCountry,
   getOrgCardCountryByOrg,
+  getOrgCardDisplay,
   isAutoReloadBlockedCountry,
   type StripePaymentIntent,
   type StripePaymentIntentList,
@@ -299,5 +300,73 @@ describe("getOrgCardCountry / getOrgCardCountryByOrg", () => {
       new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
     );
     await expect(getOrgCardCountry({}, "cus_test")).rejects.toThrow(/failed: 500/);
+  });
+});
+
+describe("getOrgCardDisplay", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function pmListBody(data: StripePaymentMethod[]) {
+    return { object: "list", url: "/v1/payment_methods", data, has_more: false };
+  }
+
+  it("returns the first card PM's display attributes (brand, last4, expiry, country)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pmListBody([
+          {
+            id: "pm_1",
+            object: "payment_method",
+            type: "card",
+            card: { country: "US", brand: "visa", last4: "4242", exp_month: 8, exp_year: 2027 },
+          },
+        ])
+      )
+    );
+
+    expect(await getOrgCardDisplay({}, "cus_test")).toEqual({
+      country: "US",
+      brand: "visa",
+      last4: "4242",
+      expMonth: 8,
+      expYear: 2027,
+    });
+    const url = fetchMock.mock.calls[0]?.[0] as string;
+    expect(url).toContain("type=card");
+    expect(url).toContain("customer=cus_test");
+  });
+
+  it("returns null when no card PM is attached (no fabrication)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pmListBody([])));
+    expect(await getOrgCardDisplay({}, "cus_test")).toBeNull();
+  });
+
+  it("nulls individual attributes the Stripe card object omits", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(pmListBody([{ id: "pm_1", object: "payment_method", type: "card", card: { last4: "1111" } }]))
+    );
+    expect(await getOrgCardDisplay({}, "cus_test")).toEqual({
+      country: null,
+      brand: null,
+      last4: "1111",
+      expMonth: null,
+      expYear: null,
+    });
+  });
+
+  it("propagates stripe-service errors (fail-loud)", async () => {
+    fetchMock.mockResolvedValue(
+      new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
+    );
+    await expect(getOrgCardDisplay({}, "cus_test")).rejects.toThrow(/failed: 500/);
   });
 });

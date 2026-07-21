@@ -17,6 +17,7 @@ import {
   sumSucceededTopupsForCustomer,
   hasAttachedCardPm,
   getOrgCardCountry,
+  getOrgCardDisplay,
   isAutoReloadBlockedCountry,
 } from "../lib/stripe-service-client.js";
 
@@ -51,19 +52,24 @@ async function composeAccountFunds(
   paidTopupsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  cardExpMonth: number | null;
+  cardExpYear: number | null;
   autoReloadSupported: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardCountry, discountPct] =
+  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
     await Promise.all([
       sumSucceededTopupsForCustomer(identity, customer.id),
       sumLocalPromoCreditsForOrg(orgId),
       fetchRunsOrgUsageTotal(orgId, identity),
       fetchRunsOrgActualUsageTotal(orgId, identity),
       hasAttachedCardPm(identity, customer.id),
-      getOrgCardCountry(identity, customer.id),
+      getOrgCardDisplay(identity, customer.id),
       getUsageDiscountPct(orgId),
     ]);
+  const cardCountry = cardDisplay?.country ?? null;
   const creditedCents = addCents(paidTopups, localCredits);
   // runs-service usage is already NET of the org's usage discount (frozen at
   // cost-write). Billing subtracts it verbatim — no discount is applied here. The
@@ -80,6 +86,10 @@ async function composeAccountFunds(
     paidTopupsCents: paidTopups,
     hasPaymentMethod: hasCardPm,
     cardCountry,
+    cardBrand: cardDisplay?.brand ?? null,
+    cardLast4: cardDisplay?.last4 ?? null,
+    cardExpMonth: cardDisplay?.expMonth ?? null,
+    cardExpYear: cardDisplay?.expYear ?? null,
     autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
   };
 }
@@ -95,6 +105,10 @@ function buildAccountResponse(
     paidTopupsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
+    cardBrand: string | null;
+    cardLast4: string | null;
+    cardExpMonth: number | null;
+    cardExpYear: number | null;
     autoReloadSupported: boolean;
   }
 ) {
@@ -128,6 +142,14 @@ function buildAccountResponse(
     auto_reload_supported: funds.autoReloadSupported,
     auto_reload_unsupported_reason: funds.autoReloadSupported ? null : "card_issuing_country_unsupported",
     card_country: funds.cardCountry,
+    // Non-sensitive human-facing display attributes of the saved card, so the
+    // dashboard can render it like a real billing UI ("Visa ending 4242, expires
+    // 08/27"). Null when the org has no card PM (link-only / none) — never
+    // fabricated. Display-only: brand, last4, expiry — NEVER the full PAN.
+    card_brand: funds.cardBrand,
+    card_last4: funds.cardLast4,
+    card_exp_month: funds.cardExpMonth,
+    card_exp_year: funds.cardExpYear,
     has_auto_topup:
       account.topupAmountCents != null &&
       account.topupThresholdCents != null &&
