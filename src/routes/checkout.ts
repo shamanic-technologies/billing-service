@@ -102,6 +102,12 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         } else {
           body.success_url = success_url;
           body.cancel_url = cancel_url;
+          // Hosted payment-mode top-up only: show Stripe's native "Add promotion code"
+          // field so a user can enter a valid Stripe promotion code (e.g. a 100%-off comp)
+          // and have the discount applied at pay time. Only valid codes do anything; credit
+          // still derives from the amount Stripe receives (a $0 checkout lands $0 credit).
+          // Deliberately NOT set for setup mode or embedded checkout (out of scope).
+          body.allow_promotion_codes = true;
         }
       }
       session = await createCheckoutSession(identity, body);
