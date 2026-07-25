@@ -360,6 +360,14 @@ export interface CheckoutSessionBody {
    * Omitted for setup mode (no charge).
    */
   invoice_creation?: { enabled: boolean };
+  /**
+   * Hosted payment-mode only: when true, Stripe's hosted Checkout page shows the native
+   * "Add promotion code" field so the user can enter a valid Stripe promotion code and
+   * have the discount applied at pay time. Credit accounting is unchanged — credit still
+   * derives from the amount Stripe actually receives (a fully-discounted $0 checkout
+   * lands $0 credit). Deliberately NOT set for setup mode (no charge) or embedded checkout.
+   */
+  allow_promotion_codes?: boolean;
 }
 
 export async function createCheckoutSession(
