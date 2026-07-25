@@ -66,8 +66,28 @@ describe("POST /v1/checkout-sessions", () => {
           setup_future_usage: "off_session",
         },
         invoice_creation: { enabled: true },
+        allow_promotion_codes: true,
       }
     );
+  });
+
+  it("hosted payment-mode: offers Stripe promotion-code entry (allow_promotion_codes:true)", async () => {
+    ssMocks.createCheckoutSession.mockResolvedValue({
+      url: "https://checkout.stripe.com/pay/cs_abc",
+      session_id: "cs_abc",
+    });
+
+    await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        success_url: "https://example.com/success",
+        cancel_url: "https://example.com/cancel",
+        topup_amount_cents: 2000,
+      });
+
+    const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
+    expect(sentBody.allow_promotion_codes).toBe(true);
   });
 
   it("resolves Stripe customer before creating checkout session", async () => {
@@ -196,6 +216,8 @@ describe("POST /v1/checkout-sessions", () => {
     expect(sentBody).not.toHaveProperty("line_items");
     expect(sentBody).not.toHaveProperty("payment_intent_data");
     expect(sentBody).not.toHaveProperty("invoice_creation");
+    // Promotion-code entry is hosted-payment-only; never on a no-charge setup session.
+    expect(sentBody).not.toHaveProperty("allow_promotion_codes");
   });
 
   it("setup-mode: does NOT write a topup amount to the account", async () => {
@@ -303,6 +325,8 @@ describe("POST /v1/checkout-sessions", () => {
     const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(sentBody).not.toHaveProperty("success_url");
     expect(sentBody).not.toHaveProperty("cancel_url");
+    // Promotion-code entry is hosted-only; embedded checkout is out of scope.
+    expect(sentBody).not.toHaveProperty("allow_promotion_codes");
   });
 
   it("embedded-mode: auto-creates the billing account on first checkout (same as hosted)", async () => {
