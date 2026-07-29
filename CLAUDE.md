@@ -50,7 +50,7 @@ Billing nets it in ONE place: `netReceivedCents(pi)` in `src/lib/stripe-service-
 
 Fail-loud: a PaymentIntent arriving without `amount_returned` (stripe-service older than #92) **throws**. Defaulting it to 0 would silently resurrect the bug. Consequence: billing must not run against a stripe-service below v0.27.0.
 
-**Known remaining gross surface:** `GET /public/stats/billing` composes `total_paid_cents` / `total_credited_cents` from stripe-service `getStats()`, which still sums gross `amount_received` platform-wide. That makes the platform-wide credited total disagree with the sum of the per-org ones. Tracked as a follow-up on stripe-service (expose a platform-wide returned total); `total_revenue_cents` legitimately stays gross.
+**The platform-wide surface is netted too** (stripe-service #95, v0.28.0): `GET /public/stats/billing` reads `total_net_cents` (and per-bucket `net_cents`) for `total_credited_cents` AND `total_revenue_cents`, so the platform total equals the sum of the per-org ones. `total_paid_cents` keeps its original GROSS meaning and `total_returned_cents` is exposed alongside. Revenue is net on purpose: it feeds the landing investor-metrics page, and money we refunded is not revenue we earned.
 
 ### Stripe `customer.balance` is NOT used
 
@@ -208,9 +208,10 @@ Composed from stripe-service `getStats()` + local `localPromos`:
 {
   "total_accounts": 2,
   "accounts_with_payment_method": 1,                // from stripe-service
-  "total_credited_cents": "15400.0000000000",       // total_paid_cents + total_local_credits_cents
-  "total_paid_cents": "15000.0000000000",           // stripe-service Stripe payments (gross)
-  "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue
+  "total_credited_cents": "15400.0000000000",       // stripe-service total_net_cents + total_local_credits_cents
+  "total_paid_cents": "15000.0000000000",           // stripe-service Stripe payments, GROSS (unchanged meaning)
+  "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue, NET of returns (= paid − returned)
+  "total_returned_cents": "0.0000000000",           // settled refunds + LOST disputes, platform-wide
   "total_local_credits_cents": "400.0000000000",    // SUM(local_promos.amount_cents)
   "monthly_growth": [
     { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000" }
@@ -219,7 +220,7 @@ Composed from stripe-service `getStats()` + local `localPromos`:
 }
 ```
 
-Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
+Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they read stripe-service's per-bucket `net_cents`). A return is bucketed in the period it HAPPENED, not the period of the payment it reverses — stripe-service does not back-date, so a past bucket is never rewritten. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
 
 ## Endpoints reference
 

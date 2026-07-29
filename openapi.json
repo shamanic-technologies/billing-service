@@ -49,6 +49,9 @@
           "total_revenue_cents": {
             "type": "string"
           },
+          "total_returned_cents": {
+            "type": "string"
+          },
           "total_local_credits_cents": {
             "type": "string"
           },
@@ -71,6 +74,7 @@
           "total_credited_cents",
           "total_paid_cents",
           "total_revenue_cents",
+          "total_returned_cents",
           "total_local_credits_cents",
           "monthly_growth",
           "weekly_growth"
