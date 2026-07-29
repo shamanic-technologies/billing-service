@@ -481,7 +481,9 @@ export const ReadBrandDailyBudgetHistorySchema = z
 export const BillingGrowthRowSchema = z
   .object({
     period: z.string(),
+    /** NET Stripe payments in this period + local promo credits granted in it. */
     credited_cents: CentsStringSchema,
+    /** NET Stripe payments in this period. Returns are attributed to the period they happened in. */
     revenue_cents: CentsStringSchema,
   })
   .openapi("BillingGrowthRow");
@@ -490,16 +492,23 @@ export const PublicBillingStatsSchema = z
   .object({
     total_accounts: z.number().int(),
     accounts_with_payment_method: z.number().int(),
-    /** Lifetime sum of paid + local credits (combined). */
+    /** Lifetime NET Stripe payments + local credits (combined). */
     total_credited_cents: CentsStringSchema,
-    /** Lifetime stripe-service paid only. */
+    /** Lifetime GROSS stripe-service payments, before anything was given back. */
     total_paid_cents: CentsStringSchema,
     /**
      * Cumulative all-time Stripe revenue, top-level alias for investor/landing-page consumers.
-     * Currently equals `total_paid_cents` (gross — refunds not subtracted). Will become net
-     * (paid − refunded) once stripe-service exposes refund totals.
+     * NET of money returned: `total_paid_cents − total_returned_cents`. Money we refunded is
+     * not revenue we earned, and this figure feeds the investor metrics page. Read
+     * `total_paid_cents` for the gross charges.
      */
     total_revenue_cents: CentsStringSchema,
+    /**
+     * Lifetime money given back across the platform: settled refunds plus LOST disputes.
+     * A pending refund, a refund that later failed or was cancelled, and an open or won
+     * dispute are all excluded — only money that actually left counts.
+     */
+    total_returned_cents: CentsStringSchema,
     /** Lifetime local promo credits only. */
     total_local_credits_cents: CentsStringSchema,
     monthly_growth: z.array(BillingGrowthRowSchema),

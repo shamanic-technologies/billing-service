@@ -37,6 +37,16 @@ async function queryLocalGrowth(truncTo: "month" | "week"): Promise<LocalGrowthR
   return rows as unknown as LocalGrowthRow[];
 }
 
+// Both credited and revenue take the NET Stripe figure (gross minus settled
+// refunds and lost disputes). Money we gave back is neither revenue we earned
+// nor credit the customer can spend, and `total_revenue_cents` feeds the
+// investor metrics page, where overstating by the refunded amount is the wrong
+// direction to be wrong in. The raw gross charges stay available, unchanged, as
+// `total_paid_cents`. Credited still differs from revenue by the local promo
+// grants, exactly as before.
+//
+// A return is attributed to the period it happened in, not the period of the
+// payment it reverses, so a past bucket is never rewritten.
 function mergeGrowthRows(
   localRows: LocalGrowthRow[],
   ssRows: StripeBillingStatsGrowthRow[]
@@ -48,10 +58,10 @@ function mergeGrowthRows(
   for (const r of ssRows) {
     const existing = merged.get(r.period);
     if (existing) {
-      existing.credited = addCents(existing.credited, r.paid_cents);
-      existing.revenue = addCents(existing.revenue, r.paid_cents);
+      existing.credited = addCents(existing.credited, r.net_cents);
+      existing.revenue = addCents(existing.revenue, r.net_cents);
     } else {
-      merged.set(r.period, { credited: r.paid_cents, revenue: r.paid_cents });
+      merged.set(r.period, { credited: r.net_cents, revenue: r.net_cents });
     }
   }
   return [...merged.entries()]
@@ -98,9 +108,11 @@ router.get("/public/stats/billing", async (_req, res) => {
     res.json({
       total_accounts: accountStats.totalAccounts,
       accounts_with_payment_method: ssStats.accounts_with_payment_method,
-      total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_paid_cents),
+      // NET for credited and revenue, GROSS kept as total_paid_cents. See mergeGrowthRows.
+      total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_net_cents),
       total_paid_cents: ssStats.total_paid_cents,
-      total_revenue_cents: ssStats.total_paid_cents,
+      total_revenue_cents: ssStats.total_net_cents,
+      total_returned_cents: ssStats.total_returned_cents,
       total_local_credits_cents: localCreditStats.totalLocalCredits,
       monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth),
       weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth),

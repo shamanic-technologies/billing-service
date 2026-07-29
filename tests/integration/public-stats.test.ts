@@ -54,6 +54,8 @@ describe("GET /public/stats/billing", () => {
 
     ssMocks.getStats.mockResolvedValue({
       total_paid_cents: "15000.0000000000",
+      total_returned_cents: "0.0000000000",
+      total_net_cents: "15000.0000000000",
       accounts_with_payment_method: 1,
       monthly_growth: [],
       weekly_growth: [],
@@ -76,9 +78,15 @@ describe("GET /public/stats/billing", () => {
 
     ssMocks.getStats.mockResolvedValue({
       total_paid_cents: "5000.0000000000",
+      total_returned_cents: "0.0000000000",
+      total_net_cents: "5000.0000000000",
       accounts_with_payment_method: 1,
-      monthly_growth: [{ period: "2026-05-01", paid_cents: "5000.0000000000" }],
-      weekly_growth: [{ period: "2026-05-11", paid_cents: "5000.0000000000" }],
+      monthly_growth: [
+        { period: "2026-05-01", paid_cents: "5000.0000000000", net_cents: "5000.0000000000" },
+      ],
+      weekly_growth: [
+        { period: "2026-05-11", paid_cents: "5000.0000000000", net_cents: "5000.0000000000" },
+      ],
     });
 
     const res = await request(app).get("/public/stats/billing");
@@ -101,6 +109,58 @@ describe("GET /public/stats/billing", () => {
     );
     expect(totalCredited).toBe(5500);
     expect(totalRevenue).toBe(5000);
+  });
+
+  // Money given back is neither revenue we earned nor credit the customer can
+  // spend. Reporting the gross figure would also make this platform-wide total
+  // disagree with the sum of the per-org credited figures, which net returns out
+  // per PaymentIntent.
+  it("reports credited and revenue NET of returns, keeping paid gross", async () => {
+    await insertTestAccount({ orgId: orgA });
+    await insertTestPromoGrant({ orgId: orgA, userId, amountCents: 500, promoCode: "welcome" });
+
+    ssMocks.getStats.mockResolvedValue({
+      total_paid_cents: "15000.0000000000",
+      total_returned_cents: "7500.0000000000",
+      total_net_cents: "7500.0000000000",
+      accounts_with_payment_method: 1,
+      monthly_growth: [],
+      weekly_growth: [],
+    });
+
+    const res = await request(app).get("/public/stats/billing");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total_paid_cents).toBe("15000.0000000000");
+    expect(res.body.total_returned_cents).toBe("7500.0000000000");
+    expect(res.body.total_revenue_cents).toBe("7500.0000000000");
+    expect(res.body.total_credited_cents).toBe("8000.0000000000");
+  });
+
+  it("nets returns out of the growth buckets too", async () => {
+    await insertTestAccount({ orgId: orgA });
+
+    ssMocks.getStats.mockResolvedValue({
+      total_paid_cents: "5000.0000000000",
+      total_returned_cents: "2000.0000000000",
+      total_net_cents: "3000.0000000000",
+      accounts_with_payment_method: 1,
+      monthly_growth: [
+        { period: "2026-05-01", paid_cents: "5000.0000000000", net_cents: "3000.0000000000" },
+      ],
+      weekly_growth: [
+        { period: "2026-05-11", paid_cents: "5000.0000000000", net_cents: "3000.0000000000" },
+      ],
+    });
+
+    const res = await request(app).get("/public/stats/billing");
+
+    expect(res.status).toBe(200);
+    const may = res.body.monthly_growth.find(
+      (r: { period: string }) => r.period === "2026-05-01"
+    );
+    expect(may.revenue_cents).toBe("3000.0000000000");
+    expect(may.credited_cents).toBe("3000.0000000000");
   });
 
   it("returns 502 when stripe-service stats unavailable", async () => {
