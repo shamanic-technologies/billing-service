@@ -53,6 +53,20 @@ export interface StripePaymentIntent {
   customer: string | null;
   status: StripePaymentIntentStatus;
   last_payment_error: { code?: string; message?: string } | null;
+  /**
+   * Money given back on this payment, in the payment's own minor unit. Added by
+   * stripe-service (#92) on every PaymentIntent read surface — Stripe itself has
+   * no refund field on a PaymentIntent (a refund is a separate object and leaves
+   * `amount_received` untouched forever), so without these a fully refunded
+   * top-up reads as a plain successful charge.
+   *
+   * `amount_returned` = succeeded Refunds + LOST Disputes. A pending refund, a
+   * refund that later failed/was canceled, and an open or won dispute are all
+   * excluded — the money is only "returned" once it has actually left.
+   */
+  amount_refunded: number;
+  amount_disputed_lost: number;
+  amount_returned: number;
 }
 
 export interface StripePaymentIntentList {
@@ -272,9 +286,35 @@ const TOPUP_PAGE_LIMIT = 100;
 const TOPUP_PAGE_CAP = 200;
 
 /**
- * Paginate every payment_intent for `customerId` and sum `amount_received`
- * across rows with `status === 'succeeded'`. The result is the total money
- * the org has actually paid into Stripe — the paid-topups component of
+ * Money a single succeeded top-up actually left with us: `amount_received`
+ * minus `amount_returned` (succeeded refunds + lost disputes). Non-succeeded
+ * PaymentIntents contribute nothing.
+ *
+ * Stripe never mutates a payment when money goes back out — a refunded charge
+ * keeps `status: "succeeded"` at its full `amount_received` forever, and the
+ * return lives on a separate object. Summing `amount_received` alone therefore
+ * credits an org for money it was already given back.
+ *
+ * Fail-loud: a PaymentIntent with no `amount_returned` means stripe-service is
+ * older than #92. Defaulting it to zero would silently resurrect exactly the
+ * bug this nets out, so it throws instead.
+ */
+function netReceivedCents(pi: StripePaymentIntent): Decimal {
+  if (pi.status !== "succeeded" || typeof pi.amount_received !== "number") {
+    return new Decimal(0);
+  }
+  if (typeof pi.amount_returned !== "number") {
+    throw new Error(
+      `stripe-service payment_intent ${pi.id} is missing amount_returned — refunds cannot be netted out of credited`
+    );
+  }
+  return new Decimal(pi.amount_received).minus(pi.amount_returned);
+}
+
+/**
+ * Paginate every payment_intent for `customerId` and sum each succeeded row's
+ * `amount_received` NET of what was given back. The result is the money the
+ * org has paid in and not been refunded — the paid-topups component of
  * billing-side `credited_cents`.
  *
  * Returns a numeric(16,10)-formatted string for arithmetic-compatibility
@@ -296,9 +336,7 @@ export async function sumSucceededTopupsForCustomer(
       starting_after: startingAfter,
     });
     for (const pi of page.data) {
-      if (pi.status === "succeeded" && typeof pi.amount_received === "number") {
-        total = total.plus(pi.amount_received);
-      }
+      total = total.plus(netReceivedCents(pi));
     }
     if (!page.has_more) {
       return total.toFixed(10);
@@ -565,10 +603,14 @@ export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
 }
 
 /**
- * Sum `amount_received` across all the org's `status === 'succeeded'`
- * PaymentIntents — the paid-topups component of `credited_cents`. The
- * `/internal/payment_intents/by-org/{orgId}` route returns ALL PIs in one list
- * (no limit, no pagination), so there is no page loop.
+ * Sum each succeeded PaymentIntent's `amount_received` NET of what was given
+ * back, across all the org's PaymentIntents — the paid-topups component of
+ * `credited_cents`. The `/internal/payment_intents/by-org/{orgId}` route returns
+ * ALL PIs in one list (no limit, no pagination), so there is no page loop.
+ *
+ * Uses the SAME per-PaymentIntent netting as the real-user
+ * `sumSucceededTopupsForCustomer` above, so the two surfaces can never disagree
+ * about how much an org has paid in.
  *
  * Returns a numeric(16,10)-formatted string for arithmetic-compatibility with
  * the cents helpers.
@@ -581,9 +623,7 @@ export async function sumSucceededTopupsForOrg(orgId: string): Promise<string> {
   );
   let total = new Decimal(0);
   for (const pi of list.data) {
-    if (pi.status === "succeeded" && typeof pi.amount_received === "number") {
-      total = total.plus(pi.amount_received);
-    }
+    total = total.plus(netReceivedCents(pi));
   }
   return total.toFixed(10);
 }
