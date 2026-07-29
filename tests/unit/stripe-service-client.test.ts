@@ -14,8 +14,11 @@ import {
 function pi(
   id: string,
   status: StripePaymentIntent["status"],
-  amount_received: number | null
+  amount_received: number | null,
+  returned: { refunded?: number; disputedLost?: number } = {}
 ): StripePaymentIntent {
+  const amount_refunded = returned.refunded ?? 0;
+  const amount_disputed_lost = returned.disputedLost ?? 0;
   return {
     id,
     object: "payment_intent",
@@ -25,6 +28,9 @@ function pi(
     customer: "cus_test",
     status,
     last_payment_error: null,
+    amount_refunded,
+    amount_disputed_lost,
+    amount_returned: amount_refunded + amount_disputed_lost,
   };
 }
 
@@ -153,6 +159,83 @@ describe("sumSucceededTopupsForCustomer", () => {
     const total = await sumSucceededTopupsForCustomer({}, "cus_test");
 
     expect(total).toBe("55200.0000000000");
+  });
+
+  // Stripe leaves a refunded payment `succeeded` at its full amount_received
+  // forever — the money returned lives on separate Refund/Dispute objects that
+  // stripe-service#92 surfaces as amount_returned. Summing amount_received alone
+  // credits the org for money it was already given back (GH billing #290).
+  it("nets a fully refunded top-up out of the total", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pageBody(
+          [
+            pi("pi_kept", "succeeded", 5000),
+            pi("pi_refunded", "succeeded", 1000, { refunded: 1000 }),
+          ],
+          false
+        )
+      )
+    );
+
+    const total = await sumSucceededTopupsForCustomer({}, "cus_test");
+
+    expect(total).toBe("5000.0000000000");
+  });
+
+  it("nets a partial refund proportionally", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pageBody([pi("pi_1", "succeeded", 5000, { refunded: 1500 })], false)
+      )
+    );
+
+    const total = await sumSucceededTopupsForCustomer({}, "cus_test");
+
+    expect(total).toBe("3500.0000000000");
+  });
+
+  // A lost dispute takes the money exactly like a refund does.
+  it("nets a lost dispute out of the total", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pageBody([pi("pi_1", "succeeded", 5000, { disputedLost: 5000 })], false)
+      )
+    );
+
+    const total = await sumSucceededTopupsForCustomer({}, "cus_test");
+
+    expect(total).toBe("0.0000000000");
+  });
+
+  it("nets a refund and a lost dispute on the same payment", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pageBody(
+          [pi("pi_1", "succeeded", 10000, { refunded: 2500, disputedLost: 1000 })],
+          false
+        )
+      )
+    );
+
+    const total = await sumSucceededTopupsForCustomer({}, "cus_test");
+
+    expect(total).toBe("6500.0000000000");
+  });
+
+  // Defaulting a missing amount_returned to zero would silently resurrect the
+  // very bug this nets out, so an older stripe-service must fail loud.
+  it("throws when stripe-service omits amount_returned (fail-loud)", async () => {
+    const legacy = pi("pi_legacy", "succeeded", 1000) as Partial<StripePaymentIntent>;
+    delete legacy.amount_returned;
+
+    fetchMock.mockResolvedValue(
+      jsonResponse(pageBody([legacy as StripePaymentIntent], false))
+    );
+
+    await expect(sumSucceededTopupsForCustomer({}, "cus_test")).rejects.toThrow(
+      /pi_legacy is missing amount_returned/
+    );
   });
 });
 

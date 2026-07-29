@@ -33,12 +33,24 @@ Naming follows Stripe Topups + Refunds APIs. When in doubt, search Stripe docs f
 
 | Term | Definition | Source of truth |
 |---|---|---|
-| **credited** | Lifetime credits added to org (paid topups + promos). | `SUM(succeeded payment_intents.amount_received)` via stripe-service + `SUM(local_promos.amount_cents)` |
+| **credited** | Lifetime credits added to org (paid topups NET of money returned, + promos). | `SUM(succeeded payment_intents.(amount_received − amount_returned))` via stripe-service + `SUM(local_promos.amount_cents)` |
 | **usage** | Platform AI cost consumed by org. Lifetime, all-time. | runs-service `GET /internal/org-usage-total` |
 | **balance** | Funds usable right now for new work. `credited − usage`. **Use this for depletion/budget gates.** | computed at request time |
 | **topup** | Auto/manual Stripe payment that increases credited. | stripe-service `payment_intents` (status='succeeded') |
 | **gift / promo** | Non-payment credit (welcome bonus, promo redemption, manual adjustment). | `local_promos.amount_cents` |
-| **refund** | Funds returned to org. | stripe-service `refunds` (visibility only — does not auto-deduct from billing) |
+| **returned** | Money given back on a topup — a succeeded **refund** or a **LOST dispute**. Deducted from credited. | stripe-service `amount_returned` on each PaymentIntent read |
+
+### Refunds and lost disputes are netted out of `credited` (GH #290)
+
+**Stripe never mutates a payment when money goes back out.** A fully refunded charge keeps `status: "succeeded"` at its full `amount_received` forever; the return lives on a separate Refund (or Dispute) object. So summing `amount_received` alone credits an org for money it was already given back — a manual dashboard refund used to leave the customer holding the full credit, on every refund and every lost dispute in the account.
+
+stripe-service (#92, v0.27.0) mirrors Refunds + Disputes and exposes, on **every** PaymentIntent read surface, `amount_refunded` / `amount_disputed_lost` / `amount_returned`. `amount_returned` counts ONLY a `succeeded` refund and a `lost` dispute — a pending refund, a refund that later failed/was canceled, and an open or won dispute are all excluded, so partial refunds and reverted refunds are correct by construction.
+
+Billing nets it in ONE place: `netReceivedCents(pi)` in `src/lib/stripe-service-client.ts`, used by BOTH `sumSucceededTopupsForCustomer` (real-user `/v1/accounts` path) and `sumSucceededTopupsForOrg` (user-less `computeBalance` path). Same arithmetic on the same rows, so the two surfaces can never disagree about how much an org paid in. **Never re-add a bare `amount_received` sum** — and note the netting also (correctly) shrinks `paidTopupsCents`, which drives the postpaid tier ladder: a refunded payment must not keep growing the org's credit line.
+
+Fail-loud: a PaymentIntent arriving without `amount_returned` (stripe-service older than #92) **throws**. Defaulting it to 0 would silently resurrect the bug. Consequence: billing must not run against a stripe-service below v0.27.0.
+
+**Known remaining gross surface:** `GET /public/stats/billing` composes `total_paid_cents` / `total_credited_cents` from stripe-service `getStats()`, which still sums gross `amount_received` platform-wide. That makes the platform-wide credited total disagree with the sum of the per-org ones. Tracked as a follow-up on stripe-service (expose a platform-wide returned total); `total_revenue_cents` legitimately stays gross.
 
 ### Stripe `customer.balance` is NOT used
 
@@ -150,7 +162,7 @@ A slow spender whose balance never crosses the floor within a calendar month wou
 {
   "id": "<uuid>",
   "org_id": "<uuid>",
-  "credited_cents": "55200.0000000000",      // SUM(succeeded PI.amount_received) + SUM(local_promos.amount_cents)
+  "credited_cents": "55200.0000000000",      // SUM(succeeded PI.(amount_received − amount_returned)) + SUM(local_promos.amount_cents). Refunds + lost disputes are netted out — see "Refunds and lost disputes"
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned). Already NET of any usage discount (frozen at cost-write in runs-service).
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
@@ -177,7 +189,7 @@ All three credited/usage/balance endpoints fail loud (502) when runs-service or 
 
 Composition (`src/routes/accounts.ts:composeAccountFunds`):
 1. `getCustomerByOrg(identity)` → Stripe customer (for `id`)
-2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received` where `status='succeeded'`
+2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received − amount_returned` where `status='succeeded'` (refunds + lost disputes netted out — see "Refunds and lost disputes")
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → reads runs-service **`net_spent_cents`** (the frozen-NET usage total, `SUM(COALESCE(net, gross))`), NOT the gross `spent_cents`. Returned to callers as `spent_cents` (billing's "usage" = the discounted amount the org owes).
 5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → reads runs-service **`net_total_expected_cents`** (the frozen-NET actualized total), NOT the gross `total_expected_cents`, from actualized platform costs only.
