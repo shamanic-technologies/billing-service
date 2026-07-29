@@ -71,6 +71,9 @@ export function setupStripeMocks(): StripeServiceMocks {
       customer: MOCK_CUSTOMER_ID,
       status: "succeeded",
       last_payment_error: null,
+      amount_refunded: 0,
+      amount_disputed_lost: 0,
+      amount_returned: 0,
     }),
     getPaymentIntent: vi.fn().mockResolvedValue({
       id: "pi_mock",
@@ -81,6 +84,9 @@ export function setupStripeMocks(): StripeServiceMocks {
       customer: MOCK_CUSTOMER_ID,
       status: "succeeded",
       last_payment_error: null,
+      amount_refunded: 0,
+      amount_disputed_lost: 0,
+      amount_returned: 0,
     }),
     listPaymentIntents: vi.fn().mockResolvedValue({
       object: "list",
