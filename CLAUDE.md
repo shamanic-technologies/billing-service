@@ -50,7 +50,11 @@ Billing nets it in ONE place: `netReceivedCents(pi)` in `src/lib/stripe-service-
 
 Fail-loud: a PaymentIntent arriving without `amount_returned` (stripe-service older than #92) **throws**. Defaulting it to 0 would silently resurrect the bug. Consequence: billing must not run against a stripe-service below v0.27.0.
 
-**Known remaining gross surface:** `GET /public/stats/billing` composes `total_paid_cents` / `total_credited_cents` from stripe-service `getStats()`, which still sums gross `amount_received` platform-wide. That makes the platform-wide credited total disagree with the sum of the per-org ones. Tracked as a follow-up on stripe-service (expose a platform-wide returned total); `total_revenue_cents` legitimately stays gross.
+**⚠️ Automating a correction that was previously done BY HAND double-counts unless you delete the manual rows first.** Before this shipped, the only way to take back a refunded top-up was a NEGATIVE `local_promos` row inserted by staff. Those rows survive the automation, so the org gets debited twice — once by the manual row, once by the netting. Cost 2026-07-29: org `17d240d8-…` carried a `-5000` `admin_grant` row ("Refund offset: $50 erroneous auto-topup") from 21 July; after the netting shipped its credits read $103.50 instead of $153.50 and its balance went to −$41.98 instead of +$8.02, which would then have triggered a month-end sweep charge. Kevin caught it from the dashboard, not from any test. The row was deleted; it was the only one.
+
+So whenever you automate something staff used to patch manually, sweep for the manual patches in the SAME ship: `SELECT * FROM local_promos WHERE amount_cents::numeric < 0` (a negative grant is almost always a hand-rolled correction, since promos are credits) and grep the descriptions for the concept you just automated. A rendered `Bonus credit +$-50.00` in the dashboard Gifts list is the visible tell that one is still there.
+
+**The platform-wide surface is netted too** (stripe-service #95, v0.28.0): `GET /public/stats/billing` reads `total_net_cents` (and per-bucket `net_cents`) for `total_credited_cents` AND `total_revenue_cents`, so the platform total equals the sum of the per-org ones. `total_paid_cents` keeps its original GROSS meaning and `total_returned_cents` is exposed alongside. Revenue is net on purpose: it feeds the landing investor-metrics page, and money we refunded is not revenue we earned.
 
 ### Stripe `customer.balance` is NOT used
 
@@ -208,9 +212,10 @@ Composed from stripe-service `getStats()` + local `localPromos`:
 {
   "total_accounts": 2,
   "accounts_with_payment_method": 1,                // from stripe-service
-  "total_credited_cents": "15400.0000000000",       // total_paid_cents + total_local_credits_cents
-  "total_paid_cents": "15000.0000000000",           // stripe-service Stripe payments (gross)
-  "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue
+  "total_credited_cents": "15400.0000000000",       // stripe-service total_net_cents + total_local_credits_cents
+  "total_paid_cents": "15000.0000000000",           // stripe-service Stripe payments, GROSS (unchanged meaning)
+  "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue, NET of returns (= paid − returned)
+  "total_returned_cents": "0.0000000000",           // settled refunds + LOST disputes, platform-wide
   "total_local_credits_cents": "400.0000000000",    // SUM(local_promos.amount_cents)
   "monthly_growth": [
     { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000" }
@@ -219,7 +224,7 @@ Composed from stripe-service `getStats()` + local `localPromos`:
 }
 ```
 
-Growth rows expose `credited_cents` and `revenue_cents` only. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
+Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they read stripe-service's per-bucket `net_cents`). A return is bucketed in the period it HAPPENED, not the period of the payment it reverses — stripe-service does not back-date, so a past bucket is never rewritten. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
 
 ## Endpoints reference
 
