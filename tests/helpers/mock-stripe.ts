@@ -134,6 +134,8 @@ export function setupStripeMocks(): StripeServiceMocks {
     ),
     getStats: vi.fn().mockResolvedValue({
       total_paid_cents: "0.0000000000",
+      total_returned_cents: "0.0000000000",
+      total_net_cents: "0.0000000000",
       accounts_with_payment_method: 0,
       monthly_growth: [],
       weekly_growth: [],

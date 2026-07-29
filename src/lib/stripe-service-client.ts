@@ -145,13 +145,31 @@ export interface PortalSessionResult {
   url: string;
 }
 
+/**
+ * One period of the platform-wide growth series. Carries the same gross/net
+ * split as the all-time totals: `paid_cents` is gross charges (revenue),
+ * `net_cents` is gross minus money returned (the credit customers kept).
+ *
+ * A return is attributed to the period it HAPPENED in, not to the period of the
+ * payment it reverses — stripe-service does not back-date, so a past bucket is
+ * never rewritten.
+ */
 export interface StripeBillingStatsGrowthRow {
   period: string;
   paid_cents: string;
+  net_cents: string;
 }
 
 export interface StripeBillingStatsResult {
+  /** Gross charges. Revenue is reported gross; this keeps its original meaning. */
   total_paid_cents: string;
+  /**
+   * Gross minus settled refunds and lost disputes — the spendable credit
+   * customers actually ended up with. This is what billing reports as credited;
+   * summing payments alone counts money we gave back as money we still hold.
+   */
+  total_net_cents: string;
+  total_returned_cents: string;
   accounts_with_payment_method: number;
   monthly_growth: StripeBillingStatsGrowthRow[];
   weekly_growth: StripeBillingStatsGrowthRow[];
