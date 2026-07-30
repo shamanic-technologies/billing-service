@@ -1,9 +1,18 @@
 import { Router } from "express";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
-import { createCheckoutSession, getCustomerByOrg } from "../lib/stripe-service-client.js";
+import {
+  createCheckoutSession,
+  getCustomerByOrg,
+  sumSucceededTopupsForCustomer,
+} from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
+import {
+  decideCheckoutWelcomeOffer,
+  settleWelcomeCompletion,
+  WELCOME_COMPLETION_CHECKOUT_NOTICE,
+} from "../lib/welcome-completion.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const CHECKOUT_PRODUCT_NAME = "Distribute credit top-up";
@@ -65,6 +74,21 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           metadata: { org_id: orgId },
         };
       } else {
+        // Free-credit offer for THIS checkout. Needs the org's cumulative paid
+        // topups: the $25 discount may only ever land on an org that has NEVER
+        // paid, otherwise every later top-up would silently get $25 off forever.
+        // Settling first also covers an org whose earlier payment already crossed
+        // the $25 trigger but was not yet settled, so the notice/discount decision
+        // reads a fresh ledger. Both fail loud (the catch below → 502): a buyer must
+        // never get a discount without the matching credit grant.
+        const paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
+        await settleWelcomeCompletion(orgId, paidTopupsCents);
+        const offer = await decideCheckoutWelcomeOffer(
+          orgId,
+          paidTopupsCents,
+          topup_amount_cents!
+        );
+
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
         // by the 400 guard above (non-setup + undefined already returned). The `!`
         // reflects that proven invariant; it is not a fallback.
@@ -92,6 +116,17 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           // PaymentIntents and are NOT invoiced by this — separate future work.
           invoice_creation: { enabled: true },
         };
+        if (offer.applyDiscount) {
+          // Advance the whole $25 free-credit entitlement as a visible discount.
+          // Gated on a >= $50 checkout, so the buyer still pays >= $25 (which EARNS
+          // the completion) and the charge can never reach $0. The credit that lands
+          // is (payment) + (welcome) + (completion) = exactly the amount configured.
+          body.discounts = [{ coupon: offer.couponId! }];
+        } else if (offer.showNotice) {
+          // No discount on this checkout: tell the buyer the gift is still coming,
+          // so the promise is visible at the moment of payment.
+          body.custom_text = { submit: { message: WELCOME_COMPLETION_CHECKOUT_NOTICE } };
+        }
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —
           // Stripe keeps the flow in-app (redirect_on_completion:"never") and returns a
@@ -102,12 +137,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         } else {
           body.success_url = success_url;
           body.cancel_url = cancel_url;
-          // Hosted payment-mode top-up only: show Stripe's native "Add promotion code"
-          // field so a user can enter a valid Stripe promotion code (e.g. a 100%-off comp)
-          // and have the discount applied at pay time. Only valid codes do anything; credit
-          // still derives from the amount Stripe receives (a $0 checkout lands $0 credit).
-          // Deliberately NOT set for setup mode or embedded checkout (out of scope).
-          body.allow_promotion_codes = true;
+          // NOTE: `allow_promotion_codes` is deliberately NOT set. Stripe's native
+          // "Add promotion code" entry was enabled for a single journalist comp; that
+          // is done, and it is mutually exclusive with the pre-applied welcome
+          // discount above. Do not re-add it.
         }
       }
       session = await createCheckoutSession(identity, body);

@@ -10,6 +10,7 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { grantFirstLoadMatch, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import { settleWelcomeCompletion } from "../lib/welcome-completion.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { reloadViaInvoice } from "../lib/reload.js";
 import {
@@ -50,6 +51,7 @@ async function composeAccountFunds(
   actualBalanceCents: string;
   discountPct: number | null;
   paidTopupsCents: string;
+  giftedCreditsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   cardBrand: string | null;
@@ -59,7 +61,7 @@ async function composeAccountFunds(
   autoReloadSupported: boolean;
 }> {
   const customer = await getCustomerByOrg(identity);
-  const [paidTopups, localCredits, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
+  const [paidTopups, localCreditsBeforeSettle, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
     await Promise.all([
       sumSucceededTopupsForCustomer(identity, customer.id),
       sumLocalPromoCreditsForOrg(orgId),
@@ -69,6 +71,16 @@ async function composeAccountFunds(
       getOrgCardDisplay(identity, customer.id),
       getUsageDiscountPct(orgId),
     ]);
+  // Welcome-completion gift: paid topups are the trigger and we already hold them,
+  // so settle here — the dashboard reads this endpoint right after a payment, which
+  // is what makes the gift land in seconds rather than waiting for the hourly sweep.
+  // The grant condition is derived entirely from Stripe's record of money received,
+  // never from anything the caller asserts. Fails loud (→ 502 at the call site).
+  // Fold the freshly-granted amount in rather than re-querying the ledger.
+  const completion = await settleWelcomeCompletion(orgId, paidTopups);
+  const localCredits = completion.granted
+    ? addCents(localCreditsBeforeSettle, completion.amountCents)
+    : localCreditsBeforeSettle;
   const cardCountry = cardDisplay?.country ?? null;
   const creditedCents = addCents(paidTopups, localCredits);
   // runs-service usage is already NET of the org's usage discount (frozen at
@@ -84,6 +96,7 @@ async function composeAccountFunds(
     actualBalanceCents,
     discountPct,
     paidTopupsCents: paidTopups,
+    giftedCreditsCents: localCredits,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     cardBrand: cardDisplay?.brand ?? null,
@@ -103,6 +116,7 @@ function buildAccountResponse(
     actualBalanceCents: string;
     discountPct: number | null;
     paidTopupsCents: string;
+    giftedCreditsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     cardBrand: string | null;
@@ -124,6 +138,15 @@ function buildAccountResponse(
     id: account.id,
     org_id: account.orgId,
     credited_cents: funds.creditedCents,
+    // Decomposition of credited_cents into the two things it is made of, so the
+    // dashboard can render "money you paid" vs "credits we gave you" without doing
+    // any money arithmetic in the browser. Invariant:
+    //   credited_cents === credited_paid_cents + credited_gifted_cents
+    // paid = succeeded Stripe payments NET of refunds + lost disputes.
+    // gifted = SUM(local_promos): welcome, welcome-completion, first-load match,
+    // invite grants, staff grants, redeemed promo codes.
+    credited_paid_cents: funds.paidTopupsCents,
+    credited_gifted_cents: funds.giftedCreditsCents,
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,

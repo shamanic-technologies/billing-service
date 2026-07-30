@@ -417,13 +417,22 @@ export interface CheckoutSessionBody {
    */
   invoice_creation?: { enabled: boolean };
   /**
-   * Hosted payment-mode only: when true, Stripe's hosted Checkout page shows the native
-   * "Add promotion code" field so the user can enter a valid Stripe promotion code and
-   * have the discount applied at pay time. Credit accounting is unchanged — credit still
-   * derives from the amount Stripe actually receives (a fully-discounted $0 checkout
-   * lands $0 credit). Deliberately NOT set for setup mode (no charge) or embedded checkout.
+   * Payment-mode only: pre-applied discounts, shown on the Checkout page as a
+   * discount line so the buyer sees what they are getting before paying. Stripe
+   * accepts at most one entry. Used to advance the welcome-completion gift as a
+   * visible $25 off the org's FIRST checkout (see lib/welcome-completion).
+   *
+   * Mutually exclusive with user-entered promotion codes — billing deliberately
+   * does NOT set `allow_promotion_codes` anywhere (removed with the journalist comp
+   * it was added for), so there is no conflict to resolve.
    */
-  allow_promotion_codes?: boolean;
+  discounts?: Array<{ coupon: string }>;
+  /**
+   * Payment-mode only: copy rendered on the Checkout page alongside the pay button
+   * (Stripe caps `message` at 1200 chars). Used to tell a buyer the free credits are
+   * coming when no up-front discount applies.
+   */
+  custom_text?: { submit: { message: string } };
 }
 
 export async function createCheckoutSession(
