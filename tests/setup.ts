@@ -181,7 +181,7 @@ beforeAll(async () => {
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
-  // Migration 0030 dropped the abandoned first-load-match ledger key (prod had it
+  // Migration 0031 dropped the abandoned first-load-match ledger key (prod had it
   // hand-renamed to `brand_welcome`). Clear it from a stale local DB so the
   // removal guard in accounts.test.ts is meaningful.
   await sql`

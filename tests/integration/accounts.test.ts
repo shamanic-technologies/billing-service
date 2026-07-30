@@ -507,7 +507,7 @@ describe("Accounts endpoints", () => {
   });
 
   // The wallet_setup endpoint and its first-load match were REMOVED (migration
-  // 0030). Onboarding never used it (the dashboard's own onboarding-flow test
+  // 0031). Onboarding never used it (the dashboard's own onboarding-flow test
   // asserts the flow does not contain `wallet_setup`) and prod never completed
   // one. Its "$25 free on first money in" promise is served by the
   // welcome-completion gift, which respects the single $25 entitlement — the

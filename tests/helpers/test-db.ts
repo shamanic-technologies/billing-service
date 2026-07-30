@@ -35,7 +35,7 @@ export async function cleanTestData() {
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep the seeded codes; remove any test-created code (and any stale
-  // `first_load_match` / `brand_welcome` row a pre-0030 local DB still carries —
+  // `first_load_match` / `brand_welcome` row a pre-0031 local DB still carries —
   // the removal guard in accounts.test.ts asserts it is gone).
   await db
     .delete(localPromoCodes)

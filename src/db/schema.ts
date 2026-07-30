@@ -135,7 +135,7 @@ export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 export const INVITE_REWARD_CODE = "invite_reward";
 export const INVITE_WELCOME_CODE = "invite_welcome";
 
-// NOTE: `first_load_match` is GONE (migration 0030). It backed the retired
+// NOTE: `first_load_match` is GONE (migration 0031). It backed the retired
 // `POST /v1/accounts/wallet_setup` first-load-match, which onboarding abandoned
 // and prod never once completed. Do NOT reintroduce it: it capped at $25 on its
 // OWN with no reference to FREE_CREDIT_ENTITLEMENT_CENTS below, so welcome +
