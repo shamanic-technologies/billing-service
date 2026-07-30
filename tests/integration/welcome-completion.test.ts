@@ -12,7 +12,15 @@ import {
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 import { db } from "../../src/db/index.js";
-import { localPromoCodes, localPromos, WELCOME_COMPLETION_CODE } from "../../src/db/schema.js";
+import {
+  billingAccounts,
+  localPromoCodes,
+  localPromos,
+  WELCOME_COMPLETION_CODE,
+  WELCOME_COMPLETION_LAUNCH_AT_MS,
+  WELCOME_COMPLETION_LAUNCH_AT_UNIX,
+} from "../../src/db/schema.js";
+import { sumSucceededTopupsForOrgBefore } from "../../src/lib/stripe-service-client.js";
 import {
   settleWelcomeCompletion,
   WelcomeCompletionPromoCodeMissingError,
@@ -40,6 +48,44 @@ async function newPayingOrg(paidTopupsCents: string, ssMocks: ReturnType<typeof 
   ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
   ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
 }
+
+/** A day before the automation launched — a "pre-existing org" fixture. */
+const BEFORE_LAUNCH = new Date(WELCOME_COMPLETION_LAUNCH_AT_MS - 86_400_000);
+
+/**
+ * One of the orgs that already existed when the automation launched: carries the $5
+ * welcome row, eligible (migration 0030 gave every pre-existing account its
+ * eligibility back), and its paid topups are mocked BOTH as of today and as of the
+ * launch instant — the two figures are what decide whether the gift is owed.
+ */
+async function preLaunchOrg(
+  paidTopupsCents: string,
+  paidBeforeLaunchCents: string,
+  ssMocks: ReturnType<typeof setupStripeMocks>
+) {
+  await insertTestAccount({
+    orgId,
+    welcomeCompletionEligible: true,
+    createdAt: BEFORE_LAUNCH,
+  });
+  await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
+  ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
+  ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
+  ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue(paidBeforeLaunchCents);
+  ssMocks.sumSucceededTopupsForOrgBefore.mockResolvedValue(paidBeforeLaunchCents);
+}
+
+async function isEligible(org: string): Promise<boolean> {
+  const [row] = await db
+    .select({ eligible: billingAccounts.welcomeCompletionEligible })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, org));
+  return row.eligible;
+}
+
+/** The grandfather-check fetcher, exactly as the sweep wires it. */
+const paidBeforeLaunch = (org: string) => () =>
+  sumSucceededTopupsForOrgBefore(org, WELCOME_COMPLETION_LAUNCH_AT_UNIX);
 
 describe("welcome-completion gift ($25 total free credits)", () => {
   const app = createTestApp();
@@ -330,19 +376,21 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     await newPayingOrg("2500.0000000000", ssMocks);
 
     const outcomes = await Promise.all([
-      settleWelcomeCompletion(orgId, "2500.0000000000"),
-      settleWelcomeCompletion(orgId, "2500.0000000000"),
-      settleWelcomeCompletion(orgId, "2500.0000000000"),
+      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
+      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
+      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
     ]);
 
     expect(outcomes.filter((o) => o.granted)).toHaveLength(1);
     expect(await completionRows(orgId)).toHaveLength(1);
   });
 
-  // --- AC8: no backfill ---
+  // --- AC8: "no backfill" excludes ONE population — the orgs that had already
+  // crossed the $25 trigger before the automation launched. Every other
+  // pre-existing org still earns it on its future payments. ---
 
-  it("AC8: an ineligible (pre-existing) org never receives a completion grant", async () => {
-    await insertTestAccount({ orgId }); // ineligible, like every prod org at ship time
+  it("AC8: an org already excluded receives nothing, whatever it has paid", async () => {
+    await insertTestAccount({ orgId }); // welcomeCompletionEligible defaults false
     await insertTestPromoGrant({ orgId, userId, amountCents: 200, promoCode: "welcome" });
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
@@ -351,9 +399,122 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     const sweep = await runWelcomeCompletionSweep();
 
     expect(await completionRows(orgId)).toHaveLength(0);
+    expect(sweep.candidates).toBe(0); // not even a candidate
     expect(sweep.granted).toBe(0);
     // Untouched: still the old $2-era welcome row only.
     expect(res.body.credited_gifted_cents).toBe("200.0000000000");
+  });
+
+  it("a pre-existing org that had NOT reached $25 before launch earns it on its future payments", async () => {
+    // The population the automation exists for: signed up long ago, holds the $5
+    // welcome row, had paid nothing when the feature shipped.
+    await preLaunchOrg("0.0000000000", "0.0000000000", ssMocks);
+
+    // Nothing yet — payments are below the trigger.
+    let res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(await completionRows(orgId)).toHaveLength(0);
+    expect(res.body.credited_gifted_cents).toBe("500.0000000000");
+
+    // It pays $25 AFTER launch → the gift lands on its own, no hand-granting.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+
+    expect((await completionRows(orgId))[0].amountCents).toBe("2000.0000000000");
+    expect(res.body.credited_gifted_cents).toBe("2500.0000000000");
+    // Still eligible on the row — it was granted, not excluded.
+    expect(await isEligible(orgId)).toBe(true);
+  });
+
+  it("the hourly sweep grants it to a pre-existing under-trigger org with no request traffic", async () => {
+    await preLaunchOrg("2500.0000000000", "0.0000000000", ssMocks);
+
+    const sweep = await runWelcomeCompletionSweep();
+
+    expect(sweep.candidates).toBe(1);
+    expect(sweep.granted).toBe(1);
+    expect((await completionRows(orgId))[0].amountCents).toBe("2000.0000000000");
+  });
+
+  it("a pre-existing org that had ALREADY crossed $25 before launch receives nothing, now or later", async () => {
+    // Its $1000 of payments all pre-date the launch: the trigger was satisfied
+    // before the offer existed, so granting would be the retroactive credit the
+    // product owner ruled out.
+    await preLaunchOrg("100000.0000000000", "100000.0000000000", ssMocks);
+
+    const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+
+    expect(await completionRows(orgId)).toHaveLength(0);
+    expect(res.body.credited_gifted_cents).toBe("500.0000000000");
+    // The answer is frozen on the account, so it is never re-derived...
+    expect(await isEligible(orgId)).toBe(false);
+    // ...and it drops out of the sweep permanently.
+    const sweep = await runWelcomeCompletionSweep();
+    expect(sweep.candidates).toBe(0);
+    expect(sweep.granted).toBe(0);
+
+    // Later payments do not resurrect it either.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("200000.0000000000");
+    await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(await completionRows(orgId)).toHaveLength(0);
+  });
+
+  it("re-resolving an excluded pre-existing org changes nothing (idempotent on immutable history)", async () => {
+    await preLaunchOrg("100000.0000000000", "100000.0000000000", ssMocks);
+
+    // Two settles = the resolution applied twice, as a re-applied migration would.
+    const first = await settleWelcomeCompletion(
+      orgId,
+      "100000.0000000000",
+      paidBeforeLaunch(orgId)
+    );
+    // Simulate migration 0030 being re-applied: eligibility handed back.
+    await db
+      .update(billingAccounts)
+      .set({ welcomeCompletionEligible: true })
+      .where(eq(billingAccounts.orgId, orgId));
+    const second = await settleWelcomeCompletion(
+      orgId,
+      "100000.0000000000",
+      paidBeforeLaunch(orgId)
+    );
+
+    expect(first.reason).toBe("trigger_crossed_before_launch");
+    expect(second.reason).toBe("trigger_crossed_before_launch");
+    expect(await isEligible(orgId)).toBe(false);
+    expect(await completionRows(orgId)).toHaveLength(0);
+  });
+
+  it("a pre-existing org already gifted its full $25 receives nothing, whatever its payment history", async () => {
+    await insertTestAccount({
+      orgId,
+      welcomeCompletionEligible: true,
+      createdAt: BEFORE_LAUNCH,
+    });
+    await insertTestPromoGrant({ orgId, userId, amountCents: 2500, promoCode: "invite_welcome" });
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("9000.0000000000");
+    ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue("0.0000000000");
+
+    const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+
+    expect(await completionRows(orgId)).toHaveLength(0);
+    expect(res.body.credited_gifted_cents).toBe("2500.0000000000");
+    // The entitlement ceiling stops it before the grandfather check is even asked.
+    expect(ssMocks.sumSucceededTopupsForCustomerBefore).not.toHaveBeenCalled();
+  });
+
+  it("an account created AFTER launch is never demoted and never pays for the extra read", async () => {
+    // A brand-new signup: no pre-launch payments exist by construction, so the
+    // grandfather check must be skipped entirely — even if the pre-launch read
+    // would have answered "over the trigger".
+    await newPayingOrg("2500.0000000000", ssMocks);
+    ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue("100000.0000000000");
+    ssMocks.sumSucceededTopupsForOrgBefore.mockResolvedValue("100000.0000000000");
+
+    await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+
+    expect((await completionRows(orgId))[0].amountCents).toBe("2000.0000000000");
+    expect(await isEligible(orgId)).toBe(true);
+    expect(ssMocks.sumSucceededTopupsForCustomerBefore).not.toHaveBeenCalled();
   });
 
   // --- The server-side driver ---
@@ -393,9 +554,9 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await removeWelcomeCompletionCode();
 
-    await expect(settleWelcomeCompletion(orgId, "2500.0000000000")).rejects.toThrow(
-      WelcomeCompletionPromoCodeMissingError
-    );
+    await expect(
+      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId))
+    ).rejects.toThrow(WelcomeCompletionPromoCodeMissingError);
   });
 
   it("propagates the missing-ledger-key failure to the account read as a 502", async () => {
