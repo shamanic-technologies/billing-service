@@ -19,6 +19,7 @@ import brandBudgetsRoutes from "./routes/brand_budgets.js";
 import usageDiscountRoutes from "./routes/usage_discount.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
+import { deployEmailTemplates } from "./instrument.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +71,12 @@ if (process.env.NODE_ENV !== "test") {
       startDunningScheduler();
       app.listen(Number(PORT), "::", () => {
         console.log(`Billing service running on port ${PORT}`);
+        // Register the email templates this service sends. Fired only once the
+        // port is bound, never awaited, and it never throws — an unreachable or
+        // cold email service must not delay or break the boot. The receiving
+        // PUT upserts by template name, so every restart re-registering is
+        // harmless (no marker state anywhere).
+        void deployEmailTemplates();
       });
     })
     .catch((err) => {
