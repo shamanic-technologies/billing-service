@@ -5,8 +5,10 @@ import {
   createCheckoutSession,
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
+  sumSucceededTopupsForCustomerBefore,
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
+import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import {
   decideCheckoutWelcomeOffer,
@@ -79,10 +81,19 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // paid, otherwise every later top-up would silently get $25 off forever.
         // Settling first also covers an org whose earlier payment already crossed
         // the $25 trigger but was not yet settled, so the notice/discount decision
-        // reads a fresh ledger. Both fail loud (the catch below → 502): a buyer must
-        // never get a discount without the matching credit grant.
+        // reads a fresh ledger — including the grandfather resolution, which is what
+        // stops the "the rest is coming" notice being shown to an org that had
+        // already crossed the trigger before launch and is owed nothing. Both fail
+        // loud (the catch below → 502): a buyer must never get a discount without
+        // the matching credit grant.
         const paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
-        await settleWelcomeCompletion(orgId, paidTopupsCents);
+        await settleWelcomeCompletion(orgId, paidTopupsCents, () =>
+          sumSucceededTopupsForCustomerBefore(
+            identity,
+            customer.id,
+            WELCOME_COMPLETION_LAUNCH_AT_UNIX
+          )
+        );
         const offer = await decideCheckoutWelcomeOffer(
           orgId,
           paidTopupsCents,

@@ -14,14 +14,19 @@
  * in its own try/catch so neither can block the other.
  *
  * Candidate set = eligible accounts with no completion row yet (an org drops out
- * permanently once granted), so this costs one stripe-service paid-topups read per
- * not-yet-earned new signup per hour — bounded by signups, not by fleet size.
+ * permanently once granted, or once the grandfather check excludes it), so this costs
+ * one stripe-service paid-topups read per hour per org that still has the gift
+ * coming — new signups plus the pre-launch orgs that have not yet paid $25.
  *
  * Fail-loud per org, isolated: a per-org error is logged and skipped so one
  * unreachable org never blocks the rest (same shape as runDunningTick).
  */
 
-import { sumSucceededTopupsForOrg } from "./stripe-service-client.js";
+import {
+  sumSucceededTopupsForOrg,
+  sumSucceededTopupsForOrgBefore,
+} from "./stripe-service-client.js";
+import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import {
   listWelcomeCompletionCandidates,
   settleWelcomeCompletion,
@@ -43,7 +48,9 @@ export async function runWelcomeCompletionSweep(): Promise<WelcomeCompletionSwee
       // User-less org-keyed read (X-API-Key + org only) — there is no end user on
       // this path, so no identity is invented. Net of refunds + lost disputes.
       const paidTopups = await sumSucceededTopupsForOrg(orgId);
-      const outcome = await settleWelcomeCompletion(orgId, paidTopups);
+      const outcome = await settleWelcomeCompletion(orgId, paidTopups, () =>
+        sumSucceededTopupsForOrgBefore(orgId, WELCOME_COMPLETION_LAUNCH_AT_UNIX)
+      );
       if (outcome.granted) {
         granted += 1;
         console.log(
