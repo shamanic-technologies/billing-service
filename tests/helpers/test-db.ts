@@ -107,17 +107,20 @@ export async function listEpisodes(orgId: string): Promise<CreditDepletionEpisod
 /**
  * Insert a billing account fixture.
  *
- * `welcomeCompletionEligible` defaults to FALSE: a hand-inserted fixture stands in
- * for an org that already existed (exactly like the prod accounts migration 0029
- * marked ineligible), so paid-topup mocks in unrelated suites never trip the
- * welcome-completion grant and shift their credited totals. Pass `true` to
- * exercise the gift.
+ * `welcomeCompletionEligible` defaults to FALSE — i.e. an org already excluded from
+ * the welcome-completion gift — so paid-topup mocks in unrelated suites never trip
+ * the grant and shift their credited totals. Pass `true` to exercise the gift.
+ *
+ * `createdAt` defaults to now (a post-launch signup, which skips the grandfather
+ * check). Pass a pre-WELCOME_COMPLETION_LAUNCH_AT_ISO date to stand in for one of
+ * the orgs that existed before the automation launched.
  */
 export async function insertTestAccount(data: {
   orgId: string;
   topupAmountCents?: number;
   topupThresholdCents?: number;
   welcomeCompletionEligible?: boolean;
+  createdAt?: Date;
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -126,6 +129,7 @@ export async function insertTestAccount(data: {
       topupAmountCents: data.topupAmountCents ?? null,
       topupThresholdCents: data.topupThresholdCents ?? 200,
       welcomeCompletionEligible: data.welcomeCompletionEligible ?? false,
+      ...(data.createdAt ? { createdAt: data.createdAt } : {}),
     })
     .returning();
   return account;

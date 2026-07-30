@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
+import {
+  billingAccounts,
+  WELCOME_COMPLETION_LAUNCH_AT_UNIX,
+} from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
@@ -14,6 +17,7 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
+  sumSucceededTopupsForCustomerBefore,
   hasAttachedCardPm,
   getOrgCardCountry,
   getOrgCardDisplay,
@@ -73,7 +77,13 @@ async function composeAccountFunds(
   // The grant condition is derived entirely from Stripe's record of money received,
   // never from anything the caller asserts. Fails loud (→ 502 at the call site).
   // Fold the freshly-granted amount in rather than re-querying the ledger.
-  const completion = await settleWelcomeCompletion(orgId, paidTopups);
+  const completion = await settleWelcomeCompletion(orgId, paidTopups, () =>
+    sumSucceededTopupsForCustomerBefore(
+      identity,
+      customer.id,
+      WELCOME_COMPLETION_LAUNCH_AT_UNIX
+    )
+  );
   const localCredits = completion.granted
     ? addCents(localCreditsBeforeSettle, completion.amountCents)
     : localCreditsBeforeSettle;
