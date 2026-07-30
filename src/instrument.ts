@@ -22,6 +22,23 @@ async function deployEmailTemplates() {
 <p><a href="{{settingsUrl}}">Update payment method</a></p>`,
       textBody: "We attempted to automatically reload your account, but the payment failed. Please update your payment method. Visit: {{settingsUrl}}",
     },
+    {
+      // Staff notification, not a customer email: transactional-email-service
+      // routes this event type to its own staff recipient list and fills {{email}}
+      // with the acting user when billing sends none. The name MUST stay
+      // byte-equal to BRAND_DAILY_BUDGET_CHANGED_EVENT — the email service
+      // resolves a template by looking up the row whose name equals the event.
+      name: "brand_daily_budget_changed",
+      subject: "Daily budget {{previousBudget}} → {{newBudget}}",
+      htmlBody: `<p>{{email}} changed a brand's daily budget.</p>
+<ul>
+<li>Was: {{previousBudget}}</li>
+<li>Now: {{newBudget}}</li>
+<li>Brand: {{brandId}}</li>
+<li>Org: {{orgId}}</li>
+</ul>`,
+      textBody: "{{email}} changed a brand's daily budget. Was: {{previousBudget}}. Now: {{newBudget}}. Brand: {{brandId}}. Org: {{orgId}}.",
+    },
   ];
 
   try {
