@@ -12,7 +12,6 @@ import {
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
-  FIRST_LOAD_MATCH_CODE,
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
   type CreditDepletionEpisode,
@@ -23,7 +22,6 @@ const SEEDED_PROMO_CODES = [
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
-  FIRST_LOAD_MATCH_CODE,
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
 ];
@@ -36,27 +34,20 @@ export async function cleanTestData() {
   await db.delete(orgUsageDiscounts);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
-  // Keep seeded codes (welcome + invite_reward + invite_welcome +
-  // first_load_match); remove any test-created codes.
+  // Keep the seeded codes; remove any test-created code (and any stale
+  // `first_load_match` / `brand_welcome` row a pre-0031 local DB still carries —
+  // the removal guard in accounts.test.ts asserts it is gone).
   await db
     .delete(localPromoCodes)
     .where(notInArray(localPromoCodes.code, SEEDED_PROMO_CODES));
   await db
     .insert(localPromoCodes)
-    .values([
-      {
-        code: FIRST_LOAD_MATCH_CODE,
-        amountCents: 0,
-        maxRedemptions: null,
-        expiresAt: null,
-      },
-      {
-        code: WELCOME_COMPLETION_CODE,
-        amountCents: 0,
-        maxRedemptions: null,
-        expiresAt: null,
-      },
-    ])
+    .values({
+      code: WELCOME_COMPLETION_CODE,
+      amountCents: 0,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: 0 },

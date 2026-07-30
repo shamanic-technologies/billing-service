@@ -176,10 +176,18 @@ beforeAll(async () => {
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
     VALUES ('invite_reward', 2500, NULL, NULL),
            ('invite_welcome', 2500, NULL, NULL),
-           ('first_load_match', 0, NULL, NULL),
            ('admin_grant', 0, NULL, NULL),
            ('welcome_completion', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
+  `;
+
+  // Migration 0031 dropped the abandoned first-load-match ledger key (prod had it
+  // hand-renamed to `brand_welcome`). Clear it from a stale local DB so the
+  // removal guard in accounts.test.ts is meaningful.
+  await sql`
+    DELETE FROM "local_promo_codes" c
+     WHERE c."code" IN ('first_load_match', 'brand_welcome')
+       AND NOT EXISTS (SELECT 1 FROM "local_promos" p WHERE p."promo_code_id" = c."id")
   `;
 
   // Drop legacy tables that may linger.

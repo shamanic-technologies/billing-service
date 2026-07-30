@@ -134,8 +134,13 @@ export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 // the welcome row at grant time — see lib/promos.ts grantCredit.
 export const INVITE_REWARD_CODE = "invite_reward";
 export const INVITE_WELCOME_CODE = "invite_welcome";
-export const FIRST_LOAD_MATCH_CODE = "first_load_match";
-export const FIRST_LOAD_MATCH_CAP_CENTS = 2500;
+
+// NOTE: `first_load_match` is GONE (migration 0031). It backed the retired
+// `POST /v1/accounts/wallet_setup` first-load-match, which onboarding abandoned
+// and prod never once completed. Do NOT reintroduce it: it capped at $25 on its
+// OWN with no reference to FREE_CREDIT_ENTITLEMENT_CENTS below, so welcome +
+// first_load_match granted $30 of free credit against a $25 entitlement. The
+// promise it encoded is served by `welcome_completion`.
 
 // --- Welcome-completion gift (migration 0029) ---
 //
@@ -144,7 +149,7 @@ export const FIRST_LOAD_MATCH_CAP_CENTS = 2500;
 // the org's cumulative succeeded payments reach FREE_CREDIT_PAID_TRIGGER_CENTS.
 // The per-row amount is dynamic (entitlement MINUS what the org was already
 // gifted) and lives on local_promos — the promo-code row's amount_cents is a 0
-// placeholder, like first_load_match. See lib/welcome-completion.ts.
+// placeholder, like admin_grant. See lib/welcome-completion.ts.
 export const WELCOME_COMPLETION_CODE = "welcome_completion";
 
 // Total free credits an org may ever receive, welcome gift INCLUDED. The
@@ -188,7 +193,7 @@ export const WELCOME_COMPLETION_LAUNCH_AT_UNIX = Math.floor(
 export const WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS = 5000;
 
 // Admin-issued arbitrary-amount grant (staff oversight ledger, migration 0025).
-// Per-row amount lives on local_promos (like first_load_match); the promo-code
+// Per-row amount lives on local_promos; the promo-code
 // row's amount_cents is a 0 placeholder. admin_grant rows STACK via a
 // caller-supplied idempotency_key — NOT part of PLATFORM_GRANT_REASONS (those
 // dedup on (org, promo_code)); admin grants have their own dedup path.
