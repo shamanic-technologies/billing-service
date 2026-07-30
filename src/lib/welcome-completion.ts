@@ -15,6 +15,27 @@
  * on credit before paying anything), and we must not gift credits to someone whose
  * card may still fail.
  *
+ * ## Who is excluded ("no backfill", precisely)
+ *
+ * Exactly one population: an org whose cumulative payments had ALREADY crossed the
+ * trigger BEFORE WELCOME_COMPLETION_LAUNCH_AT_ISO. Granting those would be a
+ * retroactive credit for a trigger satisfied before the offer existed, which the
+ * product owner ruled out.
+ *
+ * Every OTHER pre-existing org earns it on its FUTURE payments, exactly like a
+ * brand-new signup — which is the whole point of the automation: the orgs it was
+ * built for signed up long ago, hold the $5 welcome row, and have not paid $25 yet.
+ * (Migration 0029 first read "no backfill" as "every account that existed at ship
+ * time is ineligible forever", which excluded 78 of 88 orgs wrongly and left the
+ * founder hand-granting the remainder one at a time. Migration 0030 corrects it.)
+ *
+ * Billing does not store cumulative payments — it reads them. So the check is
+ * DERIVED from Stripe's own history via `fetchPaidTopupsBeforeLaunchCents` (the same
+ * netted sum, as of launch), then FROZEN on the account so it costs at most one extra
+ * read per org, ever. Reading immutable history means it returns the same answer
+ * every time it is computed; and an org created after launch has no pre-launch
+ * payments by construction, so it can never be demoted.
+ *
  * ## Who drives it
  *
  * Server-side only. A browser returning from Stripe is never the authority: the
@@ -50,6 +71,7 @@ import {
   FREE_CREDIT_ENTITLEMENT_CENTS,
   FREE_CREDIT_PAID_TRIGGER_CENTS,
   WELCOME_COMPLETION_CODE,
+  WELCOME_COMPLETION_LAUNCH_AT_MS,
   WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS,
 } from "../db/schema.js";
 import { cmpCents, gte, subCents } from "./cents.js";
@@ -106,7 +128,9 @@ export type SettleReason =
   | "no_account"
   | "not_eligible"
   | "payments_below_trigger"
-  | "entitlement_already_full";
+  | "entitlement_already_full"
+  /** Payments had already crossed the trigger before the automation launched. */
+  | "trigger_crossed_before_launch";
 
 export interface WelcomeCompletionOutcome {
   granted: boolean;
@@ -129,14 +153,25 @@ const NOT_GRANTED = (reason: SettleReason): WelcomeCompletionOutcome => ({
  * sumSucceededTopupsFor{Customer,Org}. Money that was given back does not earn the
  * gift.
  *
+ * `fetchPaidTopupsBeforeLaunchCents` returns the SAME sum as of
+ * WELCOME_COMPLETION_LAUNCH_AT_ISO — the grandfather check (see the module doc).
+ * It is a callback, not a value, for two reasons: it costs a stripe-service read
+ * that almost no call ever needs, and the real-user and user-less surfaces read
+ * different stripe-service routes (`/v1/*` vs `/internal/*by-org`), which must not
+ * be collapsed. Required, so no caller can silently skip the check.
+ *
  * Idempotent and safe to call on every request. Fails loud.
  */
 export async function settleWelcomeCompletion(
   orgId: string,
-  paidTopupsCents: string
+  paidTopupsCents: string,
+  fetchPaidTopupsBeforeLaunchCents: () => Promise<string>
 ): Promise<WelcomeCompletionOutcome> {
   const [account] = await db
-    .select({ eligible: billingAccounts.welcomeCompletionEligible })
+    .select({
+      eligible: billingAccounts.welcomeCompletionEligible,
+      createdAt: billingAccounts.createdAt,
+    })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
@@ -154,6 +189,25 @@ export async function settleWelcomeCompletion(
   );
   if (cmpCents(remainingCents, ZERO) <= 0) {
     return NOT_GRANTED("entitlement_already_full");
+  }
+
+  // Grandfather check — the ONE population "no backfill" excludes. Reached only by
+  // an org that pre-dates the launch AND has since crossed the trigger AND still has
+  // entitlement left, and its outcome is terminal either way (excluded for good
+  // below, or granted just after and then permanently entitlement-full), so this
+  // read happens at most once per org. A post-launch org skips it entirely: it has
+  // no pre-launch payments by construction, so asking would always answer zero.
+  if (account.createdAt.getTime() < WELCOME_COMPLETION_LAUNCH_AT_MS) {
+    const paidBeforeLaunchCents = await fetchPaidTopupsBeforeLaunchCents();
+    if (gte(paidBeforeLaunchCents, toCents(FREE_CREDIT_PAID_TRIGGER_CENTS))) {
+      // Freeze the answer: it is derived from immutable payment history, so
+      // re-deriving it can only ever return the same thing.
+      await db
+        .update(billingAccounts)
+        .set({ welcomeCompletionEligible: false, updatedAt: new Date() })
+        .where(eq(billingAccounts.orgId, orgId));
+      return NOT_GRANTED("trigger_crossed_before_launch");
+    }
   }
 
   const code = await findWelcomeCompletionCode();
@@ -252,7 +306,9 @@ export async function decideCheckoutWelcomeOffer(
 /**
  * Org ids that could still earn the completion — the sweep's candidate set:
  * eligible accounts with no completion row yet. An org drops out permanently once
- * granted, so the set is bounded by recent signups, not by fleet size.
+ * granted, and an org excluded by the grandfather check drops out the first time it
+ * is settled, so the set is every org that genuinely still has the gift coming:
+ * new signups plus the pre-launch orgs that have not yet paid $25.
  *
  * Fails loud when the ledger key is missing (the sweep must not silently no-op).
  */
