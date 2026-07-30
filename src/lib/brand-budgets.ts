@@ -18,6 +18,16 @@ import {
   type BrandDailyBudgetChange,
 } from "../db/schema.js";
 
+export interface UpsertBrandDailyBudgetResult {
+  row: BrandDailyBudget;
+  /**
+   * The value stored for this org+brand BEFORE this write, read inside the same
+   * transaction (row-locked) so a concurrent write cannot make it wrong. null
+   * when this org+brand had no budget at all (a first-ever set).
+   */
+  previousDailyBudgetCents: string | null;
+}
+
 /**
  * Set / update a brand's daily budget for one org. `dailyBudgetCents` is a
  * canonical fixed-scale cents string.
@@ -26,14 +36,34 @@ import {
  * append-only history row (brand_daily_budget_changes) is inserted, both in ONE
  * transaction — so a budget change is never stored without its dated history
  * entry (the health-board timeline can never diverge from the current value).
+ *
+ * The pre-write value is SELECTed FOR UPDATE in that same transaction and
+ * returned, so the staff notification's "from" side can never be a stale read
+ * of a value another request has since changed. (A first-ever set has no row to
+ * lock, so two concurrent first-ever writes for the same org+brand would both
+ * report "unset"; the upsert still resolves the stored value correctly, and at
+ * ~one write every four days fleet-wide that race is not worth a table lock.)
  */
 export async function upsertBrandDailyBudget(
   orgId: string,
   brandId: string,
   dailyBudgetCents: string
-): Promise<BrandDailyBudget> {
+): Promise<UpsertBrandDailyBudgetResult> {
   return db.transaction(async (tx) => {
     const changedAt = new Date();
+
+    const [existing] = await tx
+      .select()
+      .from(brandDailyBudgets)
+      .where(
+        and(
+          eq(brandDailyBudgets.orgId, orgId),
+          eq(brandDailyBudgets.brandId, brandId)
+        )
+      )
+      .limit(1)
+      .for("update");
+
     const [row] = await tx
       .insert(brandDailyBudgets)
       .values({
@@ -58,7 +88,10 @@ export async function upsertBrandDailyBudget(
       changedAt,
     });
 
-    return row;
+    return {
+      row,
+      previousDailyBudgetCents: existing ? existing.dailyBudgetCents : null,
+    };
   });
 }
 

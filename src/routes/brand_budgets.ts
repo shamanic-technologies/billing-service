@@ -7,6 +7,7 @@ import {
   getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
 } from "../lib/brand-budgets.js";
+import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
 
 const router = Router();
 
@@ -105,6 +106,12 @@ router.get(
 // Body: { dailyBudgetCents } — non-negative (0 = explicit pause; null/unset is a
 // separate state expressed by never setting a row). Fractional cents allowed.
 // Resp: { brandId, orgId, dailyBudgetCents, updatedAt } | 400 invalid.
+//
+// Every REAL change (a different value, or a first-ever set) also notifies staff
+// via the transactional-email-service `brand_daily_budget_changed` event. The
+// pre-write value comes from the same transaction as the write, so the reported
+// "from" side cannot be stale. The send is strictly fire-and-forget: it can never
+// change this response or throw. See lib/brand-budget-notification.ts.
 router.patch(
   "/v1/brands/:brandId/daily-budget",
   requireOrgHeaders,
@@ -132,10 +139,25 @@ router.patch(
     }
 
     const orgId = req.headers["x-org-id"] as string;
-    const row = await upsertBrandDailyBudget(orgId, brandId, dailyBudgetCents);
+    const { row, previousDailyBudgetCents } = await upsertBrandDailyBudget(
+      orgId,
+      brandId,
+      dailyBudgetCents
+    );
     console.log(
       `[billing-service] brand daily budget set: brand=${brandId} org=${orgId} budget=${dailyBudgetCents}`
     );
+
+    notifyBrandDailyBudgetChanged({
+      orgId,
+      userId: req.headers["x-user-id"] as string,
+      runId: req.headers["x-run-id"] as string,
+      brandId,
+      previousDailyBudgetCents,
+      newDailyBudgetCents: row.dailyBudgetCents,
+      actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
+    });
+
     res.json({
       brandId: row.brandId,
       orgId: row.orgId,
