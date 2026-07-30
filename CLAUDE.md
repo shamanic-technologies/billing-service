@@ -10,7 +10,9 @@ psql -d postgres -c "CREATE ROLE test LOGIN PASSWORD 'test' SUPERUSER"
 createdb -O test test
 ```
 
-Then `pnpm test` (vitest, `fileParallelism:false`, `maxWorkers:1`). Diagnose an ECONNREFUSED as "Postgres not running", never as a regression from the diff.
+Then `pnpm test` (vitest, `fileParallelism:false`, `maxWorkers:1`). Diagnose an ECONNREFUSED as "Postgres not running", never as a regression from the diff. A fresh Conductor workspace also has no `node_modules` — `npx vitest` there dies with `Cannot find package 'vitest' imported from vitest.config.ts`, which means "run `pnpm install`", not a config break.
+
+**ONE `describe` per test FILE — a second `describe` in a file whose first one calls `closeDb()` in `afterAll` fails wholesale with `write CONNECTION_ENDED localhost:5432`.** `closeDb()` tears down the module-level postgres.js connection shared by every `describe` in that file, and vitest runs block 1's `afterAll` before block 2 starts. The symptom is a whole suite red on a connection error while the code under test is fine — indistinguishable at a glance from "Postgres not running". So when adding a feature-scoped block of tests to an existing suite, put it in its OWN file (vitest isolates modules per file, so each file gets a live connection) rather than appending a `describe` to a file that already closes the DB. Observed 2026-07-30: the daily-budget staff-notification tests were appended to `brand-daily-budget.test.ts` and all 12 failed on `CONNECTION_ENDED`; moving them verbatim to `brand-daily-budget-notification.test.ts` went green.
 
 ## Migrations are hand-authored AND hand-journaled — the journal is the apply-gate
 
