@@ -9,6 +9,7 @@ import {
   index,
   primaryKey,
   bigserial,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -26,6 +27,14 @@ export const billingAccounts = pgTable(
     orgId: uuid("org_id").notNull(),
     topupAmountCents: integer("topup_amount_cents"),
     topupThresholdCents: integer("topup_threshold_cents").default(200),
+    // Whether this org can still earn the welcome-COMPLETION gift (the second
+    // half of the "$25 in free credits" promise — see lib/welcome-completion).
+    // TRUE by default: a brand-new org is eligible. Migration 0029 flipped every
+    // account that existed when the feature shipped to FALSE — the $25 offer is
+    // the current offer, not a retroactive entitlement (no backfill).
+    welcomeCompletionEligible: boolean("welcome_completion_eligible")
+      .notNull()
+      .default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -124,6 +133,34 @@ export const INVITE_REWARD_CODE = "invite_reward";
 export const INVITE_WELCOME_CODE = "invite_welcome";
 export const FIRST_LOAD_MATCH_CODE = "first_load_match";
 export const FIRST_LOAD_MATCH_CAP_CENTS = 2500;
+
+// --- Welcome-completion gift (migration 0029) ---
+//
+// Onboarding promises "$25 in free credits". Signup grants only the `welcome`
+// row, so the REMAINDER is granted under this code, exactly once per org, once
+// the org's cumulative succeeded payments reach FREE_CREDIT_PAID_TRIGGER_CENTS.
+// The per-row amount is dynamic (entitlement MINUS what the org was already
+// gifted) and lives on local_promos — the promo-code row's amount_cents is a 0
+// placeholder, like first_load_match. See lib/welcome-completion.ts.
+export const WELCOME_COMPLETION_CODE = "welcome_completion";
+
+// Total free credits an org may ever receive, welcome gift INCLUDED. The
+// completion grant is deliberately DERIVED (entitlement − already-gifted), never
+// a hardcoded "$20", so it stays correct if the welcome amount changes or the org
+// never got a welcome row at all.
+export const FREE_CREDIT_ENTITLEMENT_CENTS = 2500;
+
+// Cumulative SUCCEEDED payments that earn the completion. The trigger is money
+// actually received — NOT usage consumed: the account model is threshold-postpaid,
+// so an org can consume on credit before paying anything, and we must not gift
+// credits to someone whose card may still fail.
+export const FREE_CREDIT_PAID_TRIGGER_CENTS = 2500;
+
+// Minimum FIRST checkout that may carry the gift as an up-front visible discount.
+// Not arbitrary: a $25 discount must not push the payment below the $25 that earns
+// the gift. At $50 the buyer pays exactly $25, which satisfies the trigger, and the
+// credit that lands is (payment) + (welcome) + (completion) = the $50 configured.
+export const WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS = 5000;
 
 // Admin-issued arbitrary-amount grant (staff oversight ledger, migration 0025).
 // Per-row amount lives on local_promos (like first_load_match); the promo-code

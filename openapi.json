@@ -94,6 +94,14 @@
           "credited_cents": {
             "type": "string"
           },
+          "credited_paid_cents": {
+            "type": "string",
+            "description": "Money the org actually paid us: SUM of succeeded Stripe payments NET of refunds and lost disputes. Together with credited_gifted_cents this decomposes credited_cents (credited_cents === credited_paid_cents + credited_gifted_cents), so a client can show 'credit paid' vs 'credits gifted' without computing money."
+          },
+          "credited_gifted_cents": {
+            "type": "string",
+            "description": "Credits we gave the org: SUM(local_promos) — signup welcome gift, welcome-completion gift, first-load match, invite grants, staff grants and redeemed promo codes. The other half of credited_cents alongside credited_paid_cents."
+          },
           "usage_cents": {
             "type": "string",
             "description": "Platform usage from runs-service, including actualized costs and provisioned holds. Already NET of any per-org usage discount (applied once at cost-write in runs-service). Use with balance_cents for spend authorization."
@@ -146,6 +154,8 @@
           "id",
           "org_id",
           "credited_cents",
+          "credited_paid_cents",
+          "credited_gifted_cents",
           "usage_cents",
           "balance_cents",
           "actual_balance_cents",
@@ -1590,7 +1600,7 @@
     "/v1/checkout-sessions": {
       "post": {
         "summary": "Create Stripe Checkout session via stripe-service",
-        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). Credit + first-load match land via the existing checkout.session.completed webhook in all modes.",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). Credit + first-load match land via the existing checkout.session.completed webhook in all modes. FREE CREDITS: payment-mode checkouts carry the '$25 in free credits' offer. On an org's FIRST-EVER payment of at least $50 the whole $25 is advanced as a visible pre-applied Stripe discount (buyer pays $50 minus $25, and the credit that lands is still the full $50). Otherwise the page shows a notice that the remainder arrives once cumulative payments reach $25. User-entered promotion codes are NOT offered (allow_promotion_codes is never set) — they are mutually exclusive with the pre-applied discount.",
         "parameters": [
           {
             "schema": {
