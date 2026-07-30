@@ -81,6 +81,44 @@ The only persistent ledger billing-service owns. One row per (org, promo_code) �
 
 `amount_cents` is positive (these are credits). `numeric(16,10)` — Drizzle returns it as a JS string. Use Decimal.js (via `src/lib/cents.ts` helpers) for arithmetic; never cast to Number for math.
 
+## Welcome-completion gift — "$25 in free credits", automatic (`src/lib/welcome-completion.ts`)
+
+Onboarding promises every new customer **$25 of free credits**. Signup only grants the `welcome` row ($5 today), so for months the remainder was granted BY HAND (staff `admin_grant` rows described "Welcome credits (2/2)"). `welcome_completion` (migration 0029) automates the remainder.
+
+**The rule (product-locked):**
+
+- An org receives **$25 in free credits IN TOTAL**, welcome gift included → `FREE_CREDIT_ENTITLEMENT_CENTS`.
+- The completion amount is **DERIVED**: `entitlement − SUM(local_promos)`. **Never hardcode $20** — it stays correct if the welcome amount is re-priced (0018/0019/0028 all moved it) or the org never got a welcome row at all. A re-priced $10 welcome leaves a $15 completion; an org already gifted $25 gets nothing.
+- It is **EARNED when cumulative SUCCEEDED payments reach $25** (`FREE_CREDIT_PAID_TRIGGER_CENTS`), net of refunds + lost disputes. The trigger is **money actually received, NOT usage consumed** — the account model is threshold-postpaid, so an org can consume on credit before paying anything, and we must not gift credits to someone whose card may still fail.
+
+**Who drives it (never the browser).** Nothing pushes into billing when a Checkout payment lands (stripe-service only mirrors the PaymentIntent), so `settleWelcomeCompletion(orgId, paidTopupsCents)` is called from every path that ALREADY holds the org's paid-topups sum — `composeAccountFunds` (so the dashboard read right after a payment makes it land in seconds) and the checkout route — plus, unconditionally, the hourly `runWelcomeCompletionSweep` on the existing dunning scheduler. A request can only make an already-EARNED grant land sooner; the condition is derived entirely from Stripe's record of money received plus billing's own ledger, so nothing a caller asserts can conjure a grant. `computeBalance` deliberately does NOT settle — `GET /internal/campaigns/:id/affordability` is documented side-effect-free and authorize stays hot-path-thin.
+
+**Idempotency** is the existing partial unique index `idx_local_promos_org_promo … WHERE idempotency_key IS NULL` — no new state. Concurrent settles race the INSERT; losers read `already_granted`.
+
+**NO BACKFILL** (explicit product decision, 2026-07-30): the $25 gift is the CURRENT offer, not a retroactive entitlement. `billing_accounts.welcome_completion_eligible` defaults **true** (a brand-new org is eligible) and migration 0029 flipped all 88 accounts that existed at ship time to **false**. Verified on a prod fork: 88/88 ineligible, 106 grant rows untouched. The cutoff is a literal timestamp, not `now()`, so re-applying the migration can never demote a later signup. **`insertTestAccount` therefore defaults `welcomeCompletionEligible: false`** — a hand-inserted fixture stands in for a pre-existing org, which keeps paid-topup mocks in unrelated suites from tripping the grant and shifting their credited totals. Pass `true` to exercise the gift.
+
+**Fail loud:** a missing `welcome_completion` seed THROWS (→ 502 on the account read). Swallowing it would leave a buyer short of credit they were promised, which is the exact failure this exists to remove. This is not paranoia — prod HAS lost promo-code seeds (`invite_reward`/`invite_welcome` never applied per 0017; `first_load_match` was seeded by journaled 0023 yet is absent from prod today, apparently hand-renamed to a `brand_welcome` row).
+
+### $25 discount on the FIRST checkout (advance of the same gift)
+
+`POST /v1/checkout-sessions` payment mode advances the whole entitlement as a **visible Stripe discount** (`discounts: [{coupon}]`) instead of granting it later. Every condition must hold, and each is load-bearing:
+
+| Condition | Why |
+|---|---|
+| org has **never paid** (`paidTopups == 0`) | otherwise every later top-up silently gets $25 off forever |
+| checkout ≥ **$50** (`WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS`) | a $25 discount must not push the payment below the $25 that EARNS the gift. At $50 the buyer pays exactly $25 → trigger satisfied → credit = payment + welcome + completion = the $50 configured. Also why the charge can never reach $0. **Do NOT add a branch discounting a smaller first checkout.** |
+| entitlement remaining > 0 | an org already gifted its full $25 is owed no advance |
+| org is eligible | an ineligible org will never get the completion, so a discount would short-change it |
+| `WELCOME_DISCOUNT_COUPON_ID` set **and** the `welcome_completion` seed exists | makes it structurally impossible for the discount to land without the matching grant being possible |
+
+Without the discount, the buyer pays full and gets the $25 on top ($32 paid → $57 credit). With it, they pay $25 and land at $50. Both honor "$25 free"; the discount just makes the first purchase cheaper.
+
+**`WELCOME_DISCOUNT_COUPON_ID`** is a Stripe coupon id (`amount_off: 2500`, `currency: usd`, `duration: once`). billing cannot create it — stripe-service owns the Stripe key and exposes no coupons route, and touching stripe-service was out of scope. Unset → no discount, and the notice below is shown instead (coherent, never short-changes anyone).
+
+**Checkout-page copy.** When no discount applies, `custom_text.submit.message` carries `WELCOME_COMPLETION_CHECKOUT_NOTICE` — product-approved **verbatim**, do not reword or interpolate: `You get $25 in free credits. $5 now, the rest once your payments reach $25.` It is deliberately withheld from an ineligible org and from one already gifted $25 (it would be a lie). Stripe caps `message` at 1200 chars.
+
+**`allow_promotion_codes` is gone and must not come back.** It was enabled for a single journalist comp (that is done) and Stripe makes user-entered promotion codes mutually exclusive with a pre-applied discount.
+
 ## Billing/runs ownership target
 
 - **Billing-service** owns: local promo grants (`local_promos`), topup config (`billing_accounts.topup_amount_cents`, `topup_threshold_cents`).
@@ -167,6 +205,8 @@ A slow spender whose balance never crosses the floor within a calendar month wou
   "id": "<uuid>",
   "org_id": "<uuid>",
   "credited_cents": "55200.0000000000",      // SUM(succeeded PI.(amount_received − amount_returned)) + SUM(local_promos.amount_cents). Refunds + lost disputes are netted out — see "Refunds and lost disputes"
+  "credited_paid_cents": "52700.0000000000", // the PAID half of credited_cents: succeeded Stripe payments NET of returns. Render as "Credit paid Stripe"
+  "credited_gifted_cents": "2500.0000000000",// the GIFTED half: SUM(local_promos) — welcome, welcome-completion, first-load match, invite + staff grants, redeemed promos. Render as "Welcome credits". INVARIANT: credited_cents === credited_paid_cents + credited_gifted_cents
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned). Already NET of any usage discount (frozen at cost-write in runs-service).
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates
   "actual_balance_cents": "16920.7042000000", // credited_cents − actualized usage only; display this as the user's credit balance
@@ -195,6 +235,7 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 1. `getCustomerByOrg(identity)` → Stripe customer (for `id`)
 2. `sumSucceededTopupsForCustomer(identity, customer.id)` → paginates `GET /v1/payment_intents?customer=cus_X` and sums `amount_received − amount_returned` where `status='succeeded'` (refunds + lost disputes netted out — see "Refunds and lost disputes")
 3. `sumLocalPromoCreditsForOrg(orgId)` → SUM `local_promos.amount_cents`
+3b. `settleWelcomeCompletion(orgId, paidTopups)` → grants the welcome-completion gift if earned (paid topups are its trigger and we already hold them here), then the freshly-granted amount is folded into the promo sum rather than re-querying. See "Welcome-completion gift". Fails loud → 502.
 4. `fetchRunsOrgUsageTotal(orgId, identity)` → reads runs-service **`net_spent_cents`** (the frozen-NET usage total, `SUM(COALESCE(net, gross))`), NOT the gross `spent_cents`. Returned to callers as `spent_cents` (billing's "usage" = the discounted amount the org owes).
 5. `fetchRunsOrgActualUsageTotal(orgId, identity)` → reads runs-service **`net_total_expected_cents`** (the frozen-NET actualized total), NOT the gross `total_expected_cents`, from actualized platform costs only.
 
@@ -202,7 +243,7 @@ Composition (`src/routes/accounts.ts:composeAccountFunds`):
 6. `hasAttachedCardPm(identity, customer.id)` → `has_payment_method` (≥1 chargeable PM: card or link)
 7. `getOrgCardDisplay(identity, customer.id)` → `{country, brand, last4, expMonth, expYear}` (one Stripe read of the first card PM) → `card_country`/`card_brand`/`card_last4`/`card_exp_month`/`card_exp_year` (display-only, null when no card PM) → `auto_reload_supported = !isAutoReloadBlockedCountry(card_country)` (see "Off_session auto-reload" below)
 8. `getUsageDiscountPct(orgId)` → `usage_discount_pct` (dashboard banner only; see "Per-org usage discount"). Does NOT enter the balance math — runs-service already served net usage.
-9. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`. runs-service usage is already NET of the discount, so billing subtracts it verbatim (no discount applied here).
+9. `credited_cents = paid_topups + local_credits`; `balance_cents = credited_cents − usage`; `actual_balance_cents = credited_cents − actualized_usage`. runs-service usage is already NET of the discount, so billing subtracts it verbatim (no discount applied here). The two halves are also exposed raw as `credited_paid_cents` / `credited_gifted_cents` so the dashboard never computes a money figure in the browser.
 
 ### `GET /public/stats/billing`
 
@@ -235,7 +276,7 @@ Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they rea
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `POST` | `/v1/accounts/wallet_setup` | first-campaign wallet setup: requires `initial_load_amount_cents`, `topup_amount_cents`, `topup_threshold_cents`; charges the initial load, stores org auto-topup config, grants `first_load_match` up to $25 once |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
-| `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup |
+| `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries the "$25 in free credits" offer: a visible $25 pre-applied discount on a first-ever checkout ≥ $50, else the gift-is-coming notice. No user promotion-code entry. See "Welcome-completion gift" |
 | `POST` | `/v1/portal-sessions` | Stripe Customer Portal session |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |

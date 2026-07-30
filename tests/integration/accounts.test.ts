@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
-import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
+import {
+  cleanTestData,
+  insertTestAccount,
+  insertTestPromoGrant,
+  closeDb,
+} from "../helpers/test-db.js";
 import {
   setupStripeMocks,
   customerWithDefaultPM,
@@ -281,7 +286,17 @@ describe("Accounts endpoints", () => {
       //
       // Numbers mirror the prod repro org 5fefaf5a…: gross usage $65.40, NET usage
       // $53.16 (Overview "Total spent"); gross actualized $33.24, NET actualized $27.84.
-      // Auto-create grants the $5 welcome bonus; paid topups seed the rest of credited.
+      // The $5 welcome bonus is seeded explicitly (rather than via auto-create) on a
+      // welcome-completion-INELIGIBLE account, so this stays a pure NET-usage test:
+      // an ELIGIBLE org with $67 of payments would also earn the $20 completion gift,
+      // which is covered in welcome-completion.test.ts.
+      await insertTestAccount({ orgId });
+      await insertTestPromoGrant({
+        orgId,
+        userId,
+        amountCents: 500,
+        promoCode: "welcome",
+      });
       ssMocks.hasAttachedCardPm.mockResolvedValue(false);
       ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("6700.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({

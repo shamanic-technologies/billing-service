@@ -39,6 +39,19 @@ export const BillingAccountSchema = z
     org_id: z.string().uuid(),
     /** Lifetime credits added: stripe-service paid topups + sum(local_promos). */
     credited_cents: CentsStringSchema,
+    /**
+     * Money the org actually PAID: succeeded Stripe payments net of refunds and
+     * lost disputes. Ready to render, no browser-side arithmetic.
+     */
+    credited_paid_cents: CentsStringSchema.openapi({
+      description:
+        "Money the org actually paid us: SUM of succeeded Stripe payments NET of refunds and lost disputes. Together with credited_gifted_cents this decomposes credited_cents (credited_cents === credited_paid_cents + credited_gifted_cents), so a client can show 'credit paid' vs 'credits gifted' without computing money.",
+    }),
+    /** Credits GIFTED to the org: SUM(local_promos) — welcome, welcome-completion, matches, invite + staff grants, redeemed promos. */
+    credited_gifted_cents: CentsStringSchema.openapi({
+      description:
+        "Credits we gave the org: SUM(local_promos) — signup welcome gift, welcome-completion gift, first-load match, invite grants, staff grants and redeemed promo codes. The other half of credited_cents alongside credited_paid_cents.",
+    }),
     /** Lifetime platform usage from runs-service /internal/org-usage-total. */
     usage_cents: UsageCentsSchema,
     /** Spendable funds = credited_cents − usage_cents. Use this for depletion/budget gates. */
@@ -694,7 +707,9 @@ registry.registerPath({
     "mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. " +
     "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. " +
     "EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). " +
-    "Credit + first-load match land via the existing checkout.session.completed webhook in all modes.",
+    "Credit + first-load match land via the existing checkout.session.completed webhook in all modes. " +
+    "FREE CREDITS: payment-mode checkouts carry the '$25 in free credits' offer. On an org's FIRST-EVER payment of at least $50 the whole $25 is advanced as a visible pre-applied Stripe discount (buyer pays $50 minus $25, and the credit that lands is still the full $50). Otherwise the page shows a notice that the remainder arrives once cumulative payments reach $25. " +
+    "User-entered promotion codes are NOT offered (allow_promotion_codes is never set) — they are mutually exclusive with the pre-applied discount.",
   request: {
     headers: protectedHeaders,
     body: {

@@ -204,6 +204,13 @@
       "when": 1790676000000,
       "tag": "0028_welcome_amount_500",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790762400000,
+      "tag": "0029_welcome_completion",
+      "breakpoints": true
     }
   ]
 }

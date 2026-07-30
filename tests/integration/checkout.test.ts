@@ -66,12 +66,19 @@ describe("POST /v1/checkout-sessions", () => {
           setup_future_usage: "off_session",
         },
         invoice_creation: { enabled: true },
-        allow_promotion_codes: true,
+        // Auto-created account is eligible and has only the $5 welcome, so the
+        // "rest is coming" notice rides along (below the $50 discount floor).
+        custom_text: {
+          submit: {
+            message:
+              "You get $25 in free credits. $5 now, the rest once your payments reach $25.",
+          },
+        },
       }
     );
   });
 
-  it("hosted payment-mode: offers Stripe promotion-code entry (allow_promotion_codes:true)", async () => {
+  it("hosted payment-mode: does NOT offer Stripe promotion-code entry", async () => {
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_abc",
       session_id: "cs_abc",
@@ -87,7 +94,7 @@ describe("POST /v1/checkout-sessions", () => {
       });
 
     const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
-    expect(sentBody.allow_promotion_codes).toBe(true);
+    expect(sentBody).not.toHaveProperty("allow_promotion_codes");
   });
 
   it("resolves Stripe customer before creating checkout session", async () => {
@@ -216,8 +223,10 @@ describe("POST /v1/checkout-sessions", () => {
     expect(sentBody).not.toHaveProperty("line_items");
     expect(sentBody).not.toHaveProperty("payment_intent_data");
     expect(sentBody).not.toHaveProperty("invoice_creation");
-    // Promotion-code entry is hosted-payment-only; never on a no-charge setup session.
+    // No charge → no free-credit offer surface, and never promotion-code entry.
     expect(sentBody).not.toHaveProperty("allow_promotion_codes");
+    expect(sentBody).not.toHaveProperty("custom_text");
+    expect(sentBody).not.toHaveProperty("discounts");
   });
 
   it("setup-mode: does NOT write a topup amount to the account", async () => {
@@ -319,13 +328,21 @@ describe("POST /v1/checkout-sessions", () => {
           setup_future_usage: "off_session",
         },
         invoice_creation: { enabled: true },
+        // The free-credit offer is org-scoped, not surface-scoped, so embedded
+        // checkout carries the same notice/discount as hosted.
+        custom_text: {
+          submit: {
+            message:
+              "You get $25 in free credits. $5 now, the rest once your payments reach $25.",
+          },
+        },
       }
     );
     // No redirect URLs on an embedded session.
     const sentBody = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(sentBody).not.toHaveProperty("success_url");
     expect(sentBody).not.toHaveProperty("cancel_url");
-    // Promotion-code entry is hosted-only; embedded checkout is out of scope.
+    // User-entered promotion codes are never offered on any surface.
     expect(sentBody).not.toHaveProperty("allow_promotion_codes");
   });
 

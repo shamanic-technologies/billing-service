@@ -14,6 +14,7 @@ import {
   INVITE_WELCOME_CODE,
   FIRST_LOAD_MATCH_CODE,
   ADMIN_GRANT_CODE,
+  WELCOME_COMPLETION_CODE,
   type CreditDepletionEpisode,
   type CampaignAuthorizeCost,
 } from "../../src/db/schema.js";
@@ -24,6 +25,7 @@ const SEEDED_PROMO_CODES = [
   INVITE_WELCOME_CODE,
   FIRST_LOAD_MATCH_CODE,
   ADMIN_GRANT_CODE,
+  WELCOME_COMPLETION_CODE,
 ];
 
 export async function cleanTestData() {
@@ -41,16 +43,31 @@ export async function cleanTestData() {
     .where(notInArray(localPromoCodes.code, SEEDED_PROMO_CODES));
   await db
     .insert(localPromoCodes)
-    .values({
-      code: FIRST_LOAD_MATCH_CODE,
-      amountCents: 0,
-      maxRedemptions: null,
-      expiresAt: null,
-    })
+    .values([
+      {
+        code: FIRST_LOAD_MATCH_CODE,
+        amountCents: 0,
+        maxRedemptions: null,
+        expiresAt: null,
+      },
+      {
+        code: WELCOME_COMPLETION_CODE,
+        amountCents: 0,
+        maxRedemptions: null,
+        expiresAt: null,
+      },
+    ])
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: 0 },
     });
+}
+
+/** Delete the welcome-completion ledger key — exercises the fail-loud / no-discount path. */
+export async function removeWelcomeCompletionCode() {
+  await db
+    .delete(localPromoCodes)
+    .where(eq(localPromoCodes.code, WELCOME_COMPLETION_CODE));
 }
 
 /** Insert a depletion episode directly (lets tests back-date started_at). */
@@ -96,10 +113,20 @@ export async function listEpisodes(orgId: string): Promise<CreditDepletionEpisod
     .where(eq(creditDepletionEpisodes.orgId, orgId));
 }
 
+/**
+ * Insert a billing account fixture.
+ *
+ * `welcomeCompletionEligible` defaults to FALSE: a hand-inserted fixture stands in
+ * for an org that already existed (exactly like the prod accounts migration 0029
+ * marked ineligible), so paid-topup mocks in unrelated suites never trip the
+ * welcome-completion grant and shift their credited totals. Pass `true` to
+ * exercise the gift.
+ */
 export async function insertTestAccount(data: {
   orgId: string;
   topupAmountCents?: number;
   topupThresholdCents?: number;
+  welcomeCompletionEligible?: boolean;
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -107,6 +134,7 @@ export async function insertTestAccount(data: {
       orgId: data.orgId,
       topupAmountCents: data.topupAmountCents ?? null,
       topupThresholdCents: data.topupThresholdCents ?? 200,
+      welcomeCompletionEligible: data.welcomeCompletionEligible ?? false,
     })
     .returning();
   return account;

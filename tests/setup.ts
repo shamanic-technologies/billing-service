@@ -31,6 +31,9 @@ beforeAll(async () => {
     )
   `;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_billing_accounts_org_id" ON "billing_accounts" ("org_id")`;
+  // Welcome-completion eligibility (migration 0029). DEFAULT true = a brand-new org
+  // is eligible; 0029 flipped pre-existing prod accounts to false (no backfill).
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "welcome_completion_eligible" boolean NOT NULL DEFAULT true`;
 
   // Drop legacy columns if a stale local DB still has them.
   await sql`ALTER TABLE "billing_accounts" DROP COLUMN IF EXISTS "balance_cents"`;
@@ -174,7 +177,8 @@ beforeAll(async () => {
     VALUES ('invite_reward', 2500, NULL, NULL),
            ('invite_welcome', 2500, NULL, NULL),
            ('first_load_match', 0, NULL, NULL),
-           ('admin_grant', 0, NULL, NULL)
+           ('admin_grant', 0, NULL, NULL),
+           ('welcome_completion', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

@@ -11,6 +11,7 @@
 
 import { runDunningTick } from "./dunning.js";
 import { runMonthEndSweep } from "./month-end-sweep.js";
+import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
 // is plenty frequent for both follow-ups and recharge detection.
@@ -48,6 +49,21 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] month-end sweep failed:", err);
+      }
+
+      // Welcome-completion sweep — the unconditional server-side driver for the
+      // "$25 in free credits" completion gift. Isolated so a failure here never
+      // blocks dunning or the month-end sweep, and vice-versa.
+      try {
+        const w = await runWelcomeCompletionSweep();
+        if (w.granted > 0 || w.failed > 0) {
+          console.log(
+            `[billing-service] welcome-completion sweep: candidates=${w.candidates} ` +
+              `granted=${w.granted} failed=${w.failed}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] welcome-completion sweep failed:", err);
       }
     } finally {
       timer = setTimeout(tick, TICK_INTERVAL_MS);
