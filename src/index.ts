@@ -19,6 +19,7 @@ import brandBudgetsRoutes from "./routes/brand_budgets.js";
 import usageDiscountRoutes from "./routes/usage_discount.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
+import { deployEmailTemplates } from "./instrument.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +71,10 @@ if (process.env.NODE_ENV !== "test") {
       startDunningScheduler();
       app.listen(Number(PORT), "::", () => {
         console.log(`Billing service running on port ${PORT}`);
+        // AFTER listen + not awaited: one idempotent upsert per billing-owned
+        // template. An unregistered template makes every send of that event 404
+        // in the email service, so this must stay wired. Never throws.
+        void deployEmailTemplates();
       });
     })
     .catch((err) => {
