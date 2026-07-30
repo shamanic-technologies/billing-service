@@ -13,7 +13,7 @@ import {
   customerWithoutPM,
 } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
-import { localPromoCodes, localPromos, FIRST_LOAD_MATCH_CODE } from "../../src/db/schema.js";
+import { localPromoCodes, localPromos } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 describe("Accounts endpoints", () => {
@@ -506,100 +506,14 @@ describe("Accounts endpoints", () => {
     });
   });
 
-  describe("POST /v1/accounts/wallet_setup", () => {
-    it.each([
-      { orgId: "00000000-0000-0000-0000-000000000101", load: 1000, expectedBonus: "1000.0000000000", expectedBalance: "2000.0000000000" },
-      { orgId: "00000000-0000-0000-0000-000000000102", load: 2500, expectedBonus: "2500.0000000000", expectedBalance: "5000.0000000000" },
-      { orgId: "00000000-0000-0000-0000-000000000103", load: 5000, expectedBonus: "2500.0000000000", expectedBalance: "7500.0000000000" },
-    ])(
-      "charges initial load $load and applies capped first-load match",
-      async ({ orgId, load, expectedBonus, expectedBalance }) => {
-        ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(`${load}.0000000000`);
-
-        const res = await request(app)
-          .post("/v1/accounts/wallet_setup")
-          .set(getAuthHeaders(orgId, userId))
-          .send({
-            initial_load_amount_cents: load,
-            topup_amount_cents: 3000,
-            topup_threshold_cents: 700,
-          });
-
-        expect(res.status).toBe(200);
-        // Posted daily amount/threshold (3000/700) are only the enabled flag;
-        // the response returns the derived tier. These loads (≤ $50) all resolve
-        // to the start tier → amount 5000, threshold -5000.
-        expect(res.body.topup_amount_cents).toBe(5000);
-        expect(res.body.topup_threshold_cents).toBe(-5000);
-        expect(res.body.has_auto_topup).toBe(true);
-        expect(res.body.first_load_match_applied).toBe(true);
-        expect(res.body.first_load_match_cents).toBe(expectedBonus);
-        expect(res.body.balance_cents).toBe(expectedBalance);
-        expect(ssMocks.reloadViaInvoice).toHaveBeenCalledWith(
-          expect.objectContaining({ "x-org-id": orgId }),
-          load,
-          expect.any(String),
-          { org_id: orgId, billing_reason: "initial_load" }
-        );
-      }
-    );
-
-    it("does not apply the first-load match more than once per org", async () => {
-      const paidByCall = ["1000.0000000000", "2000.0000000000"];
-      ssMocks.sumSucceededTopupsForCustomer.mockImplementation(async () => {
-        return paidByCall.shift() ?? "2000.0000000000";
-      });
-
-      const body = {
-        initial_load_amount_cents: 1000,
-        topup_amount_cents: 3000,
-        topup_threshold_cents: 700,
-      };
-
-      const first = await request(app)
-        .post("/v1/accounts/wallet_setup")
-        .set(getAuthHeaders(orgId, userId))
-        .send(body);
-      const second = await request(app)
-        .post("/v1/accounts/wallet_setup")
-        .set(getAuthHeaders(orgId, userId))
-        .send(body);
-
-      expect(first.status).toBe(200);
-      expect(second.status).toBe(200);
-      expect(first.body.first_load_match_applied).toBe(true);
-      expect(first.body.first_load_match_cents).toBe("1000.0000000000");
-      expect(second.body.first_load_match_applied).toBe(false);
-      expect(second.body.first_load_match_cents).toBe("0.0000000000");
-      expect(second.body.balance_cents).toBe("3000.0000000000");
-
-      const [matchCode] = await db
-        .select()
-        .from(localPromoCodes)
-        .where(eq(localPromoCodes.code, FIRST_LOAD_MATCH_CODE))
-        .limit(1);
-      const grants = await db
-        .select()
-        .from(localPromos)
-        .where(eq(localPromos.promoCodeId, matchCode.id));
-      expect(grants).toHaveLength(1);
-      expect(grants[0].amountCents).toBe("1000.0000000000");
-    });
-
-    it("requires all wallet setup amounts explicitly", async () => {
-      const res = await request(app)
-        .post("/v1/accounts/wallet_setup")
-        .set(getAuthHeaders(orgId, userId))
-        .send({ initial_load_amount_cents: 1000, topup_amount_cents: 3000 });
-
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain("topup_threshold_cents");
-      expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
-    });
-
-    it("rejects wallet setup when no payment method is attached", async () => {
-      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
-
+  // The wallet_setup endpoint and its first-load match were REMOVED (migration
+  // 0030). Onboarding never used it (the dashboard's own onboarding-flow test
+  // asserts the flow does not contain `wallet_setup`) and prod never completed
+  // one. Its "$25 free on first money in" promise is served by the
+  // welcome-completion gift, which respects the single $25 entitlement — the
+  // first-load match did not, so welcome + match granted $30 against a $25 cap.
+  describe("removed surfaces", () => {
+    it("POST /v1/accounts/wallet_setup is gone (404)", async () => {
       const res = await request(app)
         .post("/v1/accounts/wallet_setup")
         .set(getAuthHeaders(orgId, userId))
@@ -609,9 +523,16 @@ describe("Accounts endpoints", () => {
           topup_threshold_cents: 700,
         });
 
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain("Payment method required");
-      expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+      expect(res.status).toBe(404);
+    });
+
+    it("no first_load_match ledger key exists", async () => {
+      const rows = await db
+        .select()
+        .from(localPromoCodes)
+        .where(eq(localPromoCodes.code, "first_load_match"));
+
+      expect(rows).toHaveLength(0);
     });
   });
 

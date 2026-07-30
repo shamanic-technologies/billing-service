@@ -6,13 +6,10 @@ import {
   localPromos,
   WELCOME_PROMO_CODE,
   INVITE_WELCOME_CODE,
-  FIRST_LOAD_MATCH_CAP_CENTS,
-  FIRST_LOAD_MATCH_CODE,
   ADMIN_GRANT_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
-import { Decimal } from "decimal.js";
 
 export class PromoNotFoundError extends Error {
   constructor(code: string) {
@@ -190,12 +187,6 @@ export class GrantPromoCodeMissingError extends Error {
   }
 }
 
-export class FirstLoadMatchPromoCodeMissingError extends Error {
-  constructor() {
-    super(`first-load match promo code seed missing: ${FIRST_LOAD_MATCH_CODE}`);
-  }
-}
-
 export interface GrantResult {
   localPromoId: string;
   promoCodeId: string;
@@ -316,75 +307,6 @@ export async function grantCredit(
 /** Re-export billing_accounts table for callers that need it alongside promo helpers. */
 export { billingAccounts };
 
-export interface FirstLoadMatchResult {
-  applied: boolean;
-  amountCents: string;
-  localPromoId: string | null;
-}
-
-function formatIntegerCents(amountCents: number): string {
-  return new Decimal(amountCents).toFixed(10);
-}
-
-/**
- * Grant the org's first-load match: dollar-for-dollar up to $25, exactly once.
- *
- * The unique `(org_id, promo_code_id)` index is the hard once-per-org guard. A
- * repeated paid load returns `applied:false` and a zero newly-granted amount.
- */
-export async function grantFirstLoadMatch(
-  orgId: string,
-  userId: string,
-  paidLoadAmountCents: number
-): Promise<FirstLoadMatchResult> {
-  const matchAmountCents = Math.min(paidLoadAmountCents, FIRST_LOAD_MATCH_CAP_CENTS);
-
-  const [promo] = await db
-    .select()
-    .from(localPromoCodes)
-    .where(eq(localPromoCodes.code, FIRST_LOAD_MATCH_CODE))
-    .limit(1);
-
-  if (!promo) throw new FirstLoadMatchPromoCodeMissingError();
-
-  const inserted = await db
-    .insert(localPromos)
-    .values({
-      orgId,
-      userId,
-      amountCents: formatIntegerCents(matchAmountCents),
-      promoCodeId: promo.id,
-      description: `First-load match: $${(matchAmountCents / 100).toFixed(2)}`,
-    })
-    // (org, promo_code) uniqueness is PARTIAL (WHERE idempotency_key IS NULL,
-    // migration 0025) — the conflict target must carry the predicate.
-    .onConflictDoNothing({
-      target: [localPromos.orgId, localPromos.promoCodeId],
-      where: rawSql`idempotency_key IS NULL`,
-    })
-    .returning();
-
-  if (inserted.length > 0) {
-    return {
-      applied: true,
-      amountCents: formatIntegerCents(matchAmountCents),
-      localPromoId: inserted[0].id,
-    };
-  }
-
-  const [existing] = await db
-    .select({ id: localPromos.id })
-    .from(localPromos)
-    .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, promo.id)))
-    .limit(1);
-
-  return {
-    applied: false,
-    amountCents: formatIntegerCents(0),
-    localPromoId: existing?.id ?? null,
-  };
-}
-
 // --- Admin-issued grants (staff oversight ledger) ---
 
 export interface AdminGrantResult {
@@ -496,7 +418,7 @@ function toGrantItem(row: {
 /**
  * List every credit grant (all local_promos rows) for one org — the per-org
  * oversight ledger. `reason` is the promo CODE (admin_grant, invite_*, welcome,
- * first_load_match, or any redeemed promo). Newest first.
+ * welcome_completion, or any redeemed promo). Newest first.
  */
 export async function listGrantsForOrg(orgId: string): Promise<GrantListItem[]> {
   const rows = await db
