@@ -13,7 +13,6 @@
  *     replicas never double-send.
  */
 
-import crypto from "crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -27,6 +26,7 @@ import {
 } from "../db/schema.js";
 import { isDepleted, cmpCents } from "./cents.js";
 import { computeBalance } from "./balance.js";
+import { createPlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
 
@@ -230,7 +230,23 @@ export async function runDunningTick(): Promise<DunningTickResult> {
 
     const ageMs = now - ep.startedAt.getTime();
     const recipientEmail = snapshot.customer.email ?? undefined;
-    const runId = ep.runId ?? crypto.randomUUID();
+
+    // The follow-ups run on a scheduler tick, so there is no request run to
+    // borrow when the episode was opened without one. A minted UUID is NOT a
+    // usable substitute: transactional-email-service hangs its send off this id
+    // as a child run, so runs-service rejects a parent that does not exist and
+    // the send is dropped with `{sent: false, reason: "Run creation failed…"}` —
+    // silently, because the send is fire-and-forget. Open a real platform run
+    // instead, and skip the episode this tick if we cannot (the stage markers
+    // are claimed below, so an unsent stage stays due and retries next tick).
+    const runId = ep.runId ?? (await createPlatformRun("dunning-followup"));
+    if (!runId) {
+      console.error(
+        `[billing-service] dunning tick: no run available for org ${ep.orgId}, ` +
+          `follow-ups deferred to the next tick`
+      );
+      continue;
+    }
 
     // Stages are independent: if the scheduler was down past both windows,
     // each unsent due stage still fires (at most once each, via atomic claim).
