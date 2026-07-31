@@ -9,12 +9,17 @@ import {
   runMonthEndSweep,
   monthBucket,
   sweepIdempotencyKey,
+  SWEEP_HOUR_UTC,
 } from "../../src/lib/month-end-sweep.js";
 
-// A last calendar day of the month (UTC) — the sweep trigger. Jan 31.
-const LAST_DAY = new Date(Date.UTC(2026, 0, 31, 12, 0, 0));
+// The month's single sweep tick (UTC): last calendar day, at the sweep hour.
+// The HOUR is part of the trigger — a last-day tick at any other hour must
+// no-op, or an org that keeps spending is re-charged every hour of that day.
+const LAST_DAY = new Date(Date.UTC(2026, 0, 31, SWEEP_HOUR_UTC, 0, 0));
+// The last day, but the wrong hour — the sweep must no-op.
+const LAST_DAY_WRONG_HOUR = new Date(Date.UTC(2026, 0, 31, 12, 0, 0));
 // A non-last day — the sweep must no-op.
-const MID_MONTH = new Date(Date.UTC(2026, 0, 15, 12, 0, 0));
+const MID_MONTH = new Date(Date.UTC(2026, 0, 15, SWEEP_HOUR_UTC, 0, 0));
 
 const orgA = "00000000-0000-0000-0000-00000000f001";
 const orgB = "00000000-0000-0000-0000-00000000f002";
@@ -268,5 +273,55 @@ describe("Month-end forced top-up sweep", () => {
     expect(res.eligible).toBe(0);
     expect(res.charged).toBe(0);
     expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+  });
+
+  it("AC7: no-op on the last day at any hour other than the sweep hour", async () => {
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage(orgA, "5000.0000000000"); // deeply negative — would charge at the sweep hour
+
+    const res = await runMonthEndSweep(LAST_DAY_WRONG_HOUR);
+
+    expect(res.ranSweep).toBe(false);
+    expect(res.eligible).toBe(0);
+    expect(res.charged).toBe(0);
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+  });
+
+  it("AC8: an org that keeps spending after its settle is NOT re-charged later the same day", async () => {
+    // The 2026-07-31 prod bug. The balance re-check is the sweep's idempotency
+    // guard, and it only holds for an org that stops spending: one that keeps
+    // consuming goes negative again within the hour, so a day-only gate billed
+    // it on every remaining tick (one org: $500, then $1.00, then $20.00 in
+    // seven hours — each amount correct, the statement a mess).
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage(orgA, "100.0000000000"); // balance -100
+
+    const swept = await runMonthEndSweep(LAST_DAY);
+    expect(swept.charged).toBe(1);
+
+    // Settle lands (credited rises to 100), then the org spends 20 more cents.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
+    setUsage(orgA, "120.0000000000"); // balance -20 again
+
+    for (const hour of [SWEEP_HOUR_UTC - 1, SWEEP_HOUR_UTC + 1]) {
+      const later = await runMonthEndSweep(
+        new Date(Date.UTC(2026, 0, 31, ((hour % 24) + 24) % 24, 30, 0))
+      );
+      expect(later.ranSweep).toBe(false);
+      expect(later.charged).toBe(0);
+    }
+
+    // Still exactly ONE charge for the month.
+    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
   });
 });
