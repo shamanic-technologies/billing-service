@@ -84,6 +84,10 @@ import {
 } from "../db/schema.js";
 import { gte, subCents } from "./cents.js";
 import { sumEntitlementGrantsForOrg } from "./promos.js";
+import {
+  resolveOrgDisplayIdentity,
+  type OrgDisplayIdentity,
+} from "./brand-service-client.js";
 
 /** System sentinel — a promise grant has no human user (it is platform-issued). */
 const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
@@ -538,6 +542,17 @@ export interface FreeCreditPromiseView {
   progress_pct: number;
   /** The referred org whose conversion caused this promise; null otherwise. */
   referred_org_id: string | null;
+  /**
+   * Display name of that referred org, so an inviter holding three pending $500s
+   * sees WHICH referral earned each one instead of three identical rows.
+   *
+   * Absent (undefined) on a promise with no referred org, and null whenever the
+   * lookup resolved nothing real. Never fabricated from the UUID: a placeholder
+   * name is worse than no name. See lib/brand-service-client.ts.
+   */
+  referred_org_name?: string | null;
+  /** Domain of that org — what the dashboard turns into a logo. Same rules as above. */
+  referred_org_domain?: string | null;
   /** The org that referred us, on our own referral promise; null otherwise. */
   referrer_org_id: string | null;
   created_at: string;
@@ -600,4 +615,48 @@ export async function listOutstandingPromises(
     });
   }
   return out;
+}
+
+/**
+ * Attach a display identity to every promise that exists because a referral
+ * converted, so the dashboard can render a name and a logo instead of a raw UUID.
+ *
+ * Only `referred_org_id` is resolved. The invitee's own `referrer_org_id` is
+ * deliberately left bare: the invitee reached us THROUGH that org's invite link, so
+ * they already know who it was, they hold exactly one referral promise (nothing to
+ * disambiguate), and no consumer reads it. Revealing less is the default.
+ *
+ * One lookup per DISTINCT org, run in parallel. Never throws: a promise is the
+ * money-bearing information and must be returned with its amounts intact even when
+ * every identity lookup fails — an org that resolves to nothing simply carries no
+ * name, which is the honest rendering.
+ */
+export async function attachReferredOrgIdentities(
+  promises: FreeCreditPromiseView[]
+): Promise<FreeCreditPromiseView[]> {
+  const orgIds = [
+    ...new Set(
+      promises
+        .map((p) => p.referred_org_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    ),
+  ];
+  if (orgIds.length === 0) return promises;
+
+  const resolved = new Map<string, OrgDisplayIdentity | null>();
+  await Promise.all(
+    orgIds.map(async (id) => {
+      resolved.set(id, await resolveOrgDisplayIdentity(id));
+    })
+  );
+
+  return promises.map((p) => {
+    if (!p.referred_org_id) return p;
+    const identity = resolved.get(p.referred_org_id) ?? null;
+    return {
+      ...p,
+      referred_org_name: identity?.name ?? null,
+      referred_org_domain: identity?.domain ?? null,
+    };
+  });
 }
