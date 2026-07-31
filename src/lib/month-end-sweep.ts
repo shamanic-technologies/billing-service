@@ -13,13 +13,14 @@
  * self-gates on the last calendar day of the month (UTC), so on any other day it
  * is a single date check and returns immediately.
  *
- * Idempotency: a month-bucketed ("YYYY-MM") Stripe idempotency key collapses any
- * two sweep charges for the same org in the same month into ONE PaymentIntent.
- * The primary guard is the balance re-check itself — once the first charge lands,
- * `credited` rises and the org reads non-negative, so later ticks skip it. The
- * month-bucketed key covers the mirror-sync-lag window: all last-day ticks fall
- * inside Stripe's ~24h idempotency-key retention, so a same-day double tick (even
- * across replicas) can never double-charge. No new storage.
+ * Idempotency: the primary guard is the balance re-check itself — once the first
+ * charge lands, `credited` rises and the org reads non-negative, so later ticks
+ * skip it. A Stripe idempotency key scoped to (org, month, amount) covers the
+ * mirror-sync-lag window on top of that: a re-tick before the charge is mirrored
+ * reads the same balance, so it computes the same amount, hits the same key and
+ * collapses onto the one invoice. All last-day ticks fall inside Stripe's ~24h
+ * key retention. The amount is IN the key on purpose — see sweepIdempotencyKey.
+ * No new storage.
  *
  * No cost declaration: a reload collects the org's OWN money via Stripe (the org
  * paid its provider) — it is not a metered platform cost, exactly like the
@@ -100,14 +101,41 @@ export function monthBucket(date: Date): string {
 }
 
 /**
- * Amount-independent, month-scoped Stripe idempotency key. Any two sweep charges
- * for the same org in the same month collapse to one PaymentIntent regardless of
- * the computed amount.
+ * Stripe idempotency key scoped to (org, month, charge amount).
+ *
+ * stripe-service derives one Stripe key per step from this single key
+ * (`:invoice` / `:item` / `:finalize` / `:pay`), and Stripe rejects a replayed
+ * key whose parameters changed. `invoiceItems.create` carries the amount, so an
+ * AMOUNT-INDEPENDENT key (what this used to be) makes a second sweep charge of a
+ * DIFFERENT amount in the same month impossible: Stripe 400s with "Keys for
+ * idempotent requests can only be used with the same parameters they were first
+ * used with" and the org goes uncollected for the rest of the month. Worse, step
+ * 1 (`invoices.create`) carries no amount, so it REPLAYS the first attempt's
+ * invoice — which may since have been voided or paid.
+ *
+ * That fired in prod on 2026-07-31: the over-collection hotfix changed the
+ * computed amount mid-month, so the corrected charge collided with the key its
+ * own over-charge had burned (`failed=3, charged=0`) — including one org whose
+ * replayed invoice was by then void.
+ *
+ * Including the amount keeps every case the month bucket was there for:
+ * concurrent replicas compute the same deficit from the same balance, and a
+ * re-tick during mirror-sync lag reads an unchanged balance, so both produce the
+ * SAME amount and collapse onto one Stripe invoice. What it no longer does is
+ * block a legitimately different amount — a corrected charge, or a fresh deficit
+ * after a refund. Residual: if a charge lands, is not yet mirrored, AND usage
+ * accrues before the next hourly tick, the deficit differs and a second charge
+ * is possible; the balance re-check is the guard, and the mirror is
+ * webhook-driven (seconds) against an hourly tick.
  */
-export function sweepIdempotencyKey(orgId: string, bucket: string): string {
+export function sweepIdempotencyKey(
+  orgId: string,
+  bucket: string,
+  chargeAmountCents: number
+): string {
   return crypto
     .createHash("sha256")
-    .update(`month-end-sweep:${orgId}:${bucket}`)
+    .update(`month-end-sweep:${orgId}:${bucket}:${chargeAmountCents}`)
     .digest("hex")
     .slice(0, 32);
 }
@@ -222,7 +250,7 @@ export async function runMonthEndSweep(
           reloadViaInvoice(
             identity,
             chargeAmount,
-            sweepIdempotencyKey(account.orgId, bucket),
+            sweepIdempotencyKey(account.orgId, bucket, chargeAmount),
             { reason: "month_end_sweep", month: bucket }
           )
         )
