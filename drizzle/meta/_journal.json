@@ -225,6 +225,13 @@
       "when": 1790935200000,
       "tag": "0031_drop_first_load_match",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791021600000,
+      "tag": "0032_per_account_free_credit_offer",
+      "breakpoints": true
     }
   ]
 }

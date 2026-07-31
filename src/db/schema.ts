@@ -18,6 +18,40 @@ import { sql } from "drizzle-orm";
 const FRACTIONAL_PRECISION = 16;
 const FRACTIONAL_SCALE = 10;
 
+// --- Free-credit offer: a PER-ACCOUNT property, frozen at account creation ---
+//
+// The offer is "$N in free credits in total, the remainder earned once your
+// cumulative succeeded payments reach $N". Both figures used to be one global
+// constant, so re-pricing the offer re-priced it for EVERY existing customer at
+// once. They now live on the billing_accounts row (migration 0032), written ONCE
+// from the DB column default at INSERT and never touched again — so a re-price is
+// a one-line default change that grandfathers every existing org automatically,
+// with no cutoff date and no backfill.
+//
+// The constants below are DEFAULTS AND DOCUMENTATION, never the value to apply to
+// an org: always read `free_credit_entitlement_cents` / `free_credit_paid_trigger_cents`
+// off the account. (There is deliberately no bare `FREE_CREDIT_ENTITLEMENT_CENTS`
+// export any more — a global entitlement is the bug this shape exists to prevent.)
+
+/** Total free credits a NEWLY created account may ever receive, welcome gift INCLUDED. */
+export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 40000;
+
+/**
+ * Cumulative SUCCEEDED payments that earn the completion for a NEWLY created
+ * account. The trigger is money actually received — NOT usage consumed: the
+ * account model is threshold-postpaid, so an org can consume on credit before
+ * paying anything, and we must not gift credits to someone whose card may fail.
+ */
+export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 40000;
+
+/**
+ * What every account that existed before migration 0032 carries, permanently.
+ * Kept as a named constant because it is the value the grandfathered cohort must
+ * keep reading forever — not a historical footnote. Do NOT re-price it.
+ */
+export const GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS = 2500;
+export const GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS = 2500;
+
 // billing_accounts: org ↔ topup config only. All Stripe state (customer id,
 // payment method, paid balance) lives in stripe-service post-#0016.
 export const billingAccounts = pgTable(
@@ -38,6 +72,18 @@ export const billingAccounts = pgTable(
     welcomeCompletionEligible: boolean("welcome_completion_eligible")
       .notNull()
       .default(true),
+    // The org's OWN free-credit offer, frozen at account creation (migration 0032).
+    // Written from the DB column DEFAULT on INSERT and never updated: re-pricing the
+    // offer moves the default for FUTURE accounts only, so every existing org keeps
+    // the offer it signed up under with no cutoff rule and no backfill. Accounts that
+    // predate 0032 carry GRANDFATHERED_* (2500/2500); accounts created after it carry
+    // CURRENT_* (40000/40000). Read these — never a module-level constant.
+    freeCreditEntitlementCents: integer("free_credit_entitlement_cents")
+      .notNull()
+      .default(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS),
+    freeCreditPaidTriggerCents: integer("free_credit_paid_trigger_cents")
+      .notNull()
+      .default(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -138,36 +184,25 @@ export const INVITE_WELCOME_CODE = "invite_welcome";
 // NOTE: `first_load_match` is GONE (migration 0031). It backed the retired
 // `POST /v1/accounts/wallet_setup` first-load-match, which onboarding abandoned
 // and prod never once completed. Do NOT reintroduce it: it capped at $25 on its
-// OWN with no reference to FREE_CREDIT_ENTITLEMENT_CENTS below, so welcome +
+// OWN with no reference to the free-credit entitlement above, so welcome +
 // first_load_match granted $30 of free credit against a $25 entitlement. The
 // promise it encoded is served by `welcome_completion`.
 
 // --- Welcome-completion gift (migration 0029) ---
 //
-// Onboarding promises "$25 in free credits". Signup grants only the `welcome`
+// Onboarding promises "$N in free credits". Signup grants only the `welcome`
 // row, so the REMAINDER is granted under this code, exactly once per org, once
-// the org's cumulative succeeded payments reach FREE_CREDIT_PAID_TRIGGER_CENTS.
-// The per-row amount is dynamic (entitlement MINUS what the org was already
-// gifted) and lives on local_promos — the promo-code row's amount_cents is a 0
-// placeholder, like admin_grant. See lib/welcome-completion.ts.
+// the org's cumulative succeeded payments reach that account's OWN
+// free_credit_paid_trigger_cents. The per-row amount is dynamic (that account's
+// entitlement MINUS what the org was already gifted) and lives on local_promos —
+// the promo-code row's amount_cents is a 0 placeholder, like admin_grant.
+// See lib/welcome-completion.ts.
 export const WELCOME_COMPLETION_CODE = "welcome_completion";
-
-// Total free credits an org may ever receive, welcome gift INCLUDED. The
-// completion grant is deliberately DERIVED (entitlement − already-gifted), never
-// a hardcoded "$20", so it stays correct if the welcome amount changes or the org
-// never got a welcome row at all.
-export const FREE_CREDIT_ENTITLEMENT_CENTS = 2500;
-
-// Cumulative SUCCEEDED payments that earn the completion. The trigger is money
-// actually received — NOT usage consumed: the account model is threshold-postpaid,
-// so an org can consume on credit before paying anything, and we must not gift
-// credits to someone whose card may still fail.
-export const FREE_CREDIT_PAID_TRIGGER_CENTS = 2500;
 
 // Instant the welcome-completion automation went live (migration 0029 shipped).
 //
 // This is the ONLY thing "no backfill" means: an org whose cumulative payments had
-// ALREADY crossed FREE_CREDIT_PAID_TRIGGER_CENTS before this instant is owed
+// ALREADY crossed its own free_credit_paid_trigger_cents before this instant is owed
 // nothing, because granting it would be a retroactive credit for a trigger that was
 // satisfied before the offer existed. An org that had NOT yet crossed it earns the
 // gift on its FUTURE payments exactly like a brand-new signup — most of the orgs the
@@ -185,12 +220,6 @@ export const WELCOME_COMPLETION_LAUNCH_AT_MS = Date.parse(
 export const WELCOME_COMPLETION_LAUNCH_AT_UNIX = Math.floor(
   WELCOME_COMPLETION_LAUNCH_AT_MS / 1000
 );
-
-// Minimum FIRST checkout that may carry the gift as an up-front visible discount.
-// Not arbitrary: a $25 discount must not push the payment below the $25 that earns
-// the gift. At $50 the buyer pays exactly $25, which satisfies the trigger, and the
-// credit that lands is (payment) + (welcome) + (completion) = the $50 configured.
-export const WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS = 5000;
 
 // Admin-issued arbitrary-amount grant (staff oversight ledger, migration 0025).
 // Per-row amount lives on local_promos; the promo-code

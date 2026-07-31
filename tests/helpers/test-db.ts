@@ -14,6 +14,8 @@ import {
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
+  GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
+  GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
   type CreditDepletionEpisode,
   type CampaignAuthorizeCost,
 } from "../../src/db/schema.js";
@@ -114,6 +116,12 @@ export async function listEpisodes(orgId: string): Promise<CreditDepletionEpisod
  * `createdAt` defaults to now (a post-launch signup, which skips the grandfather
  * check). Pass a pre-WELCOME_COMPLETION_LAUNCH_AT_ISO date to stand in for one of
  * the orgs that existed before the automation launched.
+ *
+ * The free-credit offer defaults to the GRANDFATHERED $25/$25 — i.e. a pre-0032
+ * account — so every suite written before the re-price keeps exercising the exact
+ * offer it was written against. Pass CURRENT_FREE_CREDIT_* to stand in for a new
+ * signup. To exercise what a REAL signup gets, insert with no offer columns at all
+ * (findOrCreateAccount inserts org_id only) so the DB DEFAULT applies.
  */
 export async function insertTestAccount(data: {
   orgId: string;
@@ -121,6 +129,8 @@ export async function insertTestAccount(data: {
   topupThresholdCents?: number;
   welcomeCompletionEligible?: boolean;
   createdAt?: Date;
+  freeCreditEntitlementCents?: number;
+  freeCreditPaidTriggerCents?: number;
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -129,6 +139,12 @@ export async function insertTestAccount(data: {
       topupAmountCents: data.topupAmountCents ?? null,
       topupThresholdCents: data.topupThresholdCents ?? 200,
       welcomeCompletionEligible: data.welcomeCompletionEligible ?? false,
+      freeCreditEntitlementCents:
+        data.freeCreditEntitlementCents ??
+        GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
+      freeCreditPaidTriggerCents:
+        data.freeCreditPaidTriggerCents ??
+        GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
     })
     .returning();

@@ -67,11 +67,13 @@ describe("POST /v1/checkout-sessions", () => {
         },
         invoice_creation: { enabled: true },
         // Auto-created account is eligible and has only the $5 welcome, so the
-        // "rest is coming" notice rides along (below the $50 discount floor).
+        // "rest is coming" notice rides along. It quotes the CURRENT offer ($400)
+        // because findOrCreateAccount inserts org_id only and the account picks up
+        // the column default, and it is below that offer's $800 discount floor.
         custom_text: {
           submit: {
             message:
-              "You get $25 in free credits. $5 now, the rest once your payments reach $25.",
+              "You get $400 in free credits. $5 now, the rest once your payments reach $400.",
           },
         },
       }
@@ -333,7 +335,7 @@ describe("POST /v1/checkout-sessions", () => {
         custom_text: {
           submit: {
             message:
-              "You get $25 in free credits. $5 now, the rest once your payments reach $25.",
+              "You get $400 in free credits. $5 now, the rest once your payments reach $400.",
           },
         },
       }
