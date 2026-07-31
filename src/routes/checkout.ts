@@ -13,7 +13,6 @@ import { findOrCreateAccount } from "../lib/account.js";
 import {
   decideCheckoutWelcomeOffer,
   settleWelcomeCompletion,
-  WELCOME_COMPLETION_CHECKOUT_NOTICE,
 } from "../lib/welcome-completion.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -128,15 +127,17 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           invoice_creation: { enabled: true },
         };
         if (offer.applyDiscount) {
-          // Advance the whole $25 free-credit entitlement as a visible discount.
-          // Gated on a >= $50 checkout, so the buyer still pays >= $25 (which EARNS
-          // the completion) and the charge can never reach $0. The credit that lands
-          // is (payment) + (welcome) + (completion) = exactly the amount configured.
+          // Advance the whole free-credit entitlement as a visible discount. Gated on
+          // a checkout of at least (entitlement + trigger), so the buyer still pays at
+          // least the trigger that EARNS the completion and the charge can never reach
+          // $0. The credit that lands is (payment) + (welcome) + (completion) =
+          // exactly the amount configured.
           body.discounts = [{ coupon: offer.couponId! }];
-        } else if (offer.showNotice) {
+        } else if (offer.noticeMessage) {
           // No discount on this checkout: tell the buyer the gift is still coming,
-          // so the promise is visible at the moment of payment.
-          body.custom_text = { submit: { message: WELCOME_COMPLETION_CHECKOUT_NOTICE } };
+          // so the promise is visible at the moment of payment. The figures quoted
+          // are this org's own offer.
+          body.custom_text = { submit: { message: offer.noticeMessage } };
         }
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —
