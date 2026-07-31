@@ -12,7 +12,7 @@ import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
-import { settleWelcomeCompletion } from "../lib/welcome-completion.js";
+import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
   getCustomerByOrg,
@@ -71,22 +71,21 @@ async function composeAccountFunds(
       getOrgCardDisplay(identity, customer.id),
       getUsageDiscountPct(orgId),
     ]);
-  // Welcome-completion gift: paid topups are the trigger and we already hold them,
-  // so settle here — the dashboard reads this endpoint right after a payment, which
-  // is what makes the gift land in seconds rather than waiting for the hourly sweep.
-  // The grant condition is derived entirely from Stripe's record of money received,
-  // never from anything the caller asserts. Fails loud (→ 502 at the call site).
-  // Fold the freshly-granted amount in rather than re-querying the ledger.
-  const completion = await settleWelcomeCompletion(orgId, paidTopups, () =>
+  // Free-credit promises (welcome + referral): paid topups are the trigger for all
+  // of them and we already hold the figure, so settle here — the dashboard reads this
+  // endpoint right after a payment, which is what makes a gift land in seconds rather
+  // than waiting for the hourly sweep. Every grant condition is derived entirely from
+  // Stripe's record of money received, never from anything the caller asserts. Fails
+  // loud (→ 502 at the call site). Fold the freshly-granted total in rather than
+  // re-querying the ledger.
+  const settled = await settleFreeCreditPromises(orgId, paidTopups, () =>
     sumSucceededTopupsForCustomerBefore(
       identity,
       customer.id,
       WELCOME_COMPLETION_LAUNCH_AT_UNIX
     )
   );
-  const localCredits = completion.granted
-    ? addCents(localCreditsBeforeSettle, completion.amountCents)
-    : localCreditsBeforeSettle;
+  const localCredits = addCents(localCreditsBeforeSettle, settled.grantedCents);
   const cardCountry = cardDisplay?.country ?? null;
   const creditedCents = addCents(paidTopups, localCredits);
   // runs-service usage is already NET of the org's usage discount (frozen at

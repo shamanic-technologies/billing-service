@@ -232,6 +232,13 @@
       "when": 1791021600000,
       "tag": "0032_per_account_free_credit_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791108000000,
+      "tag": "0033_free_credit_promises",
+      "breakpoints": true
     }
   ]
 }

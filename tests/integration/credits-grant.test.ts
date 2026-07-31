@@ -119,7 +119,10 @@ describe("POST /internal/credits/grant", () => {
     expect(grants[0].promoCodeId).toBe(inviteRewardId);
   });
 
-  it("T3: invite_welcome override — replaces existing $5 welcome (final $25, not $30)", async () => {
+  it("T3: invite_welcome STACKS with the $5 welcome — it never deletes it (final $30)", async () => {
+    // It used to DELETE the welcome row so the two could not stack. That is retired:
+    // nothing on an invite / referral path may remove or reduce an existing promise
+    // or an already-granted credit.
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({
       orgId,
@@ -134,13 +137,18 @@ describe("POST /internal/credits/grant", () => {
       .send({ orgId, amountCents: 2500, reason: "invite_welcome" });
 
     expect(res.status).toBe(200);
-    expect(res.body.newBalanceCents).toBe("2500.0000000000");
+    expect(res.body.newBalanceCents).toBe("3000.0000000000");
 
     const grants = await getPromosForOrg(orgId);
-    expect(grants).toHaveLength(1);
+    expect(grants).toHaveLength(2);
     const inviteWelcomeId = await getPromoCodeId(INVITE_WELCOME_CODE);
-    expect(grants[0].promoCodeId).toBe(inviteWelcomeId);
-    expect(grants[0].amountCents).toBe("2500.0000000000");
+    const inviteRow = grants.find((g) => g.promoCodeId === inviteWelcomeId);
+    expect(inviteRow?.amountCents).toBe("2500.0000000000");
+    // The $5 welcome row is still there, untouched.
+    const welcomeId = await getPromoCodeId(WELCOME_PROMO_CODE);
+    expect(grants.find((g) => g.promoCodeId === welcomeId)?.amountCents).toBe(
+      "500.0000000000"
+    );
   });
 
   it("T4: double invite_welcome grant is idempotent (balance unchanged)", async () => {
