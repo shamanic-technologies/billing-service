@@ -98,6 +98,106 @@ export async function fetchRunsOrgUsageTotal(
 }
 
 /**
+ * Open a platform-level run and return its id, or null when one cannot be opened.
+ *
+ * transactional-email-service records every send as a run CHILD of the `x-run-id`
+ * it is given, so that header must name a run that actually exists: runs-service
+ * rejects the create with `parentRunId <uuid> does not exist` and the email service
+ * answers 200 with `{sent: false, reason: "Run creation failed: …"}`. A freshly
+ * minted `crypto.randomUUID()` therefore does NOT work — the mail is dropped, and
+ * because every send here is fire-and-forget, nothing surfaces it.
+ *
+ * A platform run is the right shape for a send with no end user behind it (an
+ * hourly sweep, a settle): `POST /v1/platform-runs` takes `x-api-key` +
+ * `x-service-name` and carries no org, user or parent. It declares NO cost —
+ * billing spends nothing to ask another service to send an email, and the email
+ * service declares its own.
+ *
+ * Returns null rather than throwing: every caller is on a fail-soft notification
+ * path, and a caller that cannot get a run must skip the send and retry later
+ * rather than take a grant down with it.
+ */
+export async function createPlatformRun(taskName: string): Promise<string | null> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    console.error(
+      "[billing-service] RUNS_SERVICE not configured — cannot open a platform run, notification skipped"
+    );
+    return null;
+  }
+
+  try {
+    const res = await fetchWithRetry(`${config.url}/v1/platform-runs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": config.apiKey,
+        "x-service-name": "billing-service",
+      },
+      body: JSON.stringify({ serviceName: "billing-service", taskName }),
+    });
+
+    if (!res.ok) {
+      console.error(
+        `[billing-service] runs-service platform-run create failed: ${res.status} ${await res.text()}`
+      );
+      return null;
+    }
+
+    const body = (await res.json()) as { id?: string };
+    if (!body.id) {
+      console.error(
+        "[billing-service] runs-service platform-run create returned no id"
+      );
+      return null;
+    }
+    return body.id;
+  } catch (err) {
+    console.error("[billing-service] runs-service platform-run create threw:", err);
+    return null;
+  }
+}
+
+/**
+ * Close a platform run opened by `createPlatformRun`.
+ *
+ * The create ignores any `status` in its body and always stores `running`, so
+ * without this every notification would leave a run open forever. Best-effort and
+ * silent about its own failure beyond a log: the email has already been dispatched
+ * by the time this runs, and a run left open is untidy rather than harmful (these
+ * runs declare no cost).
+ */
+export async function completePlatformRun(runId: string): Promise<void> {
+  const config = getRunsServiceConfig();
+  if (!config) return;
+
+  try {
+    const res = await fetchWithRetry(
+      `${config.url}/v1/platform-runs/${encodeURIComponent(runId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": config.apiKey,
+          "x-service-name": "billing-service",
+        },
+        body: JSON.stringify({ status: "completed" }),
+      }
+    );
+    if (!res.ok) {
+      console.error(
+        `[billing-service] runs-service platform-run ${runId} status PATCH failed: ${res.status} ${await res.text()}`
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[billing-service] runs-service platform-run ${runId} status PATCH threw:`,
+      err
+    );
+  }
+}
+
+/**
  * Fetch canonical actual-only org usage from runs-service.
  *
  * This excludes provisioned holds, so consumers can display money that has
