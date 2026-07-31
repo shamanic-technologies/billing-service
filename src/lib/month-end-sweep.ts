@@ -10,17 +10,18 @@
  * negative by charging EXACTLY the outstanding amount, back to 0.
  *
  * Runs from the hourly dunning scheduler (post-listen, never the boot path). It
- * self-gates on the last calendar day of the month (UTC), so on any other day it
- * is a single date check and returns immediately.
+ * self-gates on ONE tick — the last calendar day of the month, at
+ * SWEEP_HOUR_UTC — so on every other tick it is a single date check and returns
+ * immediately. See isSweepTick for why the hour is part of the gate.
  *
  * Idempotency: the primary guard is the balance re-check itself — once the first
  * charge lands, `credited` rises and the org reads non-negative, so later ticks
  * skip it. A Stripe idempotency key scoped to (org, month, amount) covers the
  * mirror-sync-lag window on top of that: a re-tick before the charge is mirrored
  * reads the same balance, so it computes the same amount, hits the same key and
- * collapses onto the one invoice. All last-day ticks fall inside Stripe's ~24h
- * key retention. The amount is IN the key on purpose — see sweepIdempotencyKey.
- * No new storage.
+ * collapses onto the one invoice. Every tick of the sweep hour falls inside
+ * Stripe's ~24h key retention. The amount is IN the key on purpose — see
+ * sweepIdempotencyKey. No new storage.
  *
  * No cost declaration: a reload collects the org's OWN money via Stripe (the org
  * paid its provider) — it is not a metered platform cost, exactly like the
@@ -93,6 +94,42 @@ export function isLastDayOfMonth(date: Date): boolean {
   return next.getUTCMonth() !== m;
 }
 
+/**
+ * The single UTC hour of the last day on which the sweep charges. 23:00 puts it
+ * at the close of the accounting month, so the deficit it settles is the whole
+ * month's outstanding spend.
+ */
+export const SWEEP_HOUR_UTC = 23;
+
+/**
+ * True iff `date` is the ONE hourly tick the sweep is allowed to charge on.
+ *
+ * The day gate alone is NOT enough, and that is the whole reason this exists.
+ * The sweep runs on the hourly dunning tick, and its idempotency rests on the
+ * balance re-check ("once the charge lands the org reads non-negative, so later
+ * ticks skip it"). That holds only for an org that stops spending. An org still
+ * consuming goes negative again within the hour, so a day-only gate re-charges
+ * it on EVERY remaining tick of the last day — up to 24 separate card charges
+ * for one month's spend.
+ *
+ * That is what prod did on 2026-07-31: one org was charged three times in seven
+ * hours ($500 → $174.07 refunded, then $1.00, then $20.00), each amount a
+ * correct deficit, the total correct, and the customer's statement a mess. The
+ * bug is fragmentation, not over-collection — which is why it survived both the
+ * exact-deficit fix and the idempotency-key fix that shipped the same day.
+ *
+ * Restricting to one tick per month needs no new state: a missed sweep (service
+ * restarting through the hour) is not lost revenue, because the balance is
+ * cumulative — the next month's sweep collects the larger deficit, and in-month
+ * exposure stays bounded by the postpaid credit-line floor, which keeps firing
+ * its own reload the whole time. Residual: a restart inside the sweep hour
+ * re-ticks 60s after boot; the Stripe key collapses it when the deficit is
+ * unchanged.
+ */
+export function isSweepTick(date: Date): boolean {
+  return isLastDayOfMonth(date) && date.getUTCHours() === SWEEP_HOUR_UTC;
+}
+
 /** "YYYY-MM" bucket (UTC) — the idempotency scope for one calendar month. */
 export function monthBucket(date: Date): string {
   const y = date.getUTCFullYear();
@@ -160,7 +197,7 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
 }
 
 export interface MonthEndSweepResult {
-  /** False when `now` is not the last day of the month — the sweep no-ops. */
+  /** False when `now` is not the month's single sweep tick — the sweep no-ops. */
   ranSweep: boolean;
   /** Auto-topup-enabled accounts examined. */
   eligible: number;
@@ -173,9 +210,9 @@ export interface MonthEndSweepResult {
 }
 
 /**
- * Settle every reload-capable org with a negative balance on the last day of the
- * month. Per-org failure is logged and skipped — one unreachable org never blocks
- * the rest (same shape as runDunningTick).
+ * Settle every reload-capable org with a negative balance, on the month's single
+ * sweep tick. Per-org failure is logged and skipped — one unreachable org never
+ * blocks the rest (same shape as runDunningTick).
  */
 export async function runMonthEndSweep(
   now: Date = new Date()
@@ -188,7 +225,7 @@ export async function runMonthEndSweep(
     failed: 0,
   };
 
-  if (!isLastDayOfMonth(now)) return result;
+  if (!isSweepTick(now)) return result;
   result.ranSweep = true;
   const bucket = monthBucket(now);
 
