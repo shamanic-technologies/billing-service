@@ -16,6 +16,7 @@ import {
   brandDailyBudgets,
   campaignAuthorizeCosts,
   creditDepletionEpisodes,
+  freeCreditPromises,
   localPromos,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
@@ -37,6 +38,7 @@ async function orgRowCounts(orgId: string) {
     episodeRows,
     campaignCostRows,
     brandBudgetRows,
+    promiseRows,
   ] = await Promise.all([
     db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId)),
     db.select().from(localPromos).where(eq(localPromos.orgId, orgId)),
@@ -49,6 +51,7 @@ async function orgRowCounts(orgId: string) {
       .from(campaignAuthorizeCosts)
       .where(eq(campaignAuthorizeCosts.orgId, orgId)),
     db.select().from(brandDailyBudgets).where(eq(brandDailyBudgets.orgId, orgId)),
+    db.select().from(freeCreditPromises).where(eq(freeCreditPromises.orgId, orgId)),
   ]);
 
   return {
@@ -58,6 +61,7 @@ async function orgRowCounts(orgId: string) {
     campaignAuthorizeCosts: campaignCostRows.length,
     brandDailyBudgets: brandBudgetRows.length,
     welcomeCreditClaims: 0,
+    freeCreditPromises: promiseRows.length,
   };
 }
 
@@ -125,6 +129,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
         campaignAuthorizeCosts: 1,
         brandDailyBudgets: 1,
         welcomeCreditClaims: 0,
+        freeCreditPromises: 0,
       },
     });
     expect(await orgRowCounts(targetOrgId)).toEqual({
@@ -134,6 +139,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 0,
       brandDailyBudgets: 0,
       welcomeCreditClaims: 0,
+      freeCreditPromises: 0,
     });
     expect(await orgRowCounts(otherOrgId)).toEqual({
       billingAccounts: 1,
@@ -142,6 +148,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 1,
       brandDailyBudgets: 1,
       welcomeCreditClaims: 0,
+      freeCreditPromises: 0,
     });
   });
 
@@ -158,6 +165,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 0,
       brandDailyBudgets: 0,
       welcomeCreditClaims: 0,
+      freeCreditPromises: 0,
     });
   });
 

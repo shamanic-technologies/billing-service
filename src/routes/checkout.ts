@@ -10,10 +10,8 @@ import {
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import {
-  decideCheckoutWelcomeOffer,
-  settleWelcomeCompletion,
-} from "../lib/welcome-completion.js";
+import { decideCheckoutWelcomeOffer } from "../lib/welcome-completion.js";
+import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
 
 const CHECKOUT_PRODUCT_NAME = "Distribute credit top-up";
@@ -86,7 +84,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // loud (the catch below → 502): a buyer must never get a discount without
         // the matching credit grant.
         const paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
-        await settleWelcomeCompletion(orgId, paidTopupsCents, () =>
+        await settleFreeCreditPromises(orgId, paidTopupsCents, () =>
           sumSucceededTopupsForCustomerBefore(
             identity,
             customer.id,

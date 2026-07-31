@@ -424,6 +424,9 @@
           },
           "welcomeCreditClaims": {
             "type": "integer"
+          },
+          "freeCreditPromises": {
+            "type": "integer"
           }
         },
         "required": [
@@ -432,7 +435,8 @@
           "creditDepletionEpisodes",
           "campaignAuthorizeCosts",
           "brandDailyBudgets",
-          "welcomeCreditClaims"
+          "welcomeCreditClaims",
+          "freeCreditPromises"
         ]
       },
       "InternalAccountTeardownResponse": {
@@ -876,6 +880,178 @@
           "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
+        ]
+      },
+      "FreeCreditPromise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "paidTriggerCents": {
+            "type": "integer"
+          },
+          "referrerOrgId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "referredOrgId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "grantedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "kind",
+          "amountCents",
+          "paidTriggerCents",
+          "referrerOrgId",
+          "referredOrgId",
+          "grantedAt",
+          "createdAt"
+        ]
+      },
+      "ReferralClaimResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyClaimed": {
+            "type": "boolean"
+          },
+          "promise": {
+            "$ref": "#/components/schemas/FreeCreditPromise"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyClaimed",
+          "promise"
+        ]
+      },
+      "ReferralClaimRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "referrerOrgId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "orgId",
+          "referrerOrgId"
+        ]
+      },
+      "OutstandingFreeCreditPromise": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "string"
+          },
+          "paid_trigger_cents": {
+            "type": "string"
+          },
+          "paid_so_far_cents": {
+            "type": "string"
+          },
+          "remaining_to_unlock_cents": {
+            "type": "string"
+          },
+          "progress_pct": {
+            "type": "integer"
+          },
+          "referred_org_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "referred_org_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "referred_org_domain": {
+            "type": "string",
+            "nullable": true
+          },
+          "referrer_org_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "amount_cents",
+          "paid_trigger_cents",
+          "paid_so_far_cents",
+          "remaining_to_unlock_cents",
+          "progress_pct",
+          "referred_org_id",
+          "referrer_org_id",
+          "created_at"
+        ]
+      },
+      "FreeCreditPromisesResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paid_topups_cents": {
+            "type": "string"
+          },
+          "promises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutstandingFreeCreditPromise"
+            }
+          }
+        },
+        "required": [
+          "org_id",
+          "paid_topups_cents",
+          "promises"
         ]
       }
     },
@@ -3097,6 +3273,139 @@
           },
           "502": {
             "description": "stripe-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/referrals/claim": {
+      "post": {
+        "summary": "Record that an org was referred, and open its outstanding referral promise",
+        "description": "Called by client-service when a new org signs up through another org's invite link. Opens the INVITEE's outstanding free-credit promise (its bar stacks above every bar the invitee already carries) and remembers who referred them. Grants NOTHING: the referral offer has no up-front portion, the whole amount lands when the bar is crossed. The INVITER's own promise is opened later, at the moment the invitee EARNS theirs, never from the invitee merely signing up. Idempotent: re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferralClaimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Referral promise opened (or already open — idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferralClaimResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or an org referring itself",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This org was already referred by a DIFFERENT org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "referral_reward ledger key seed missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/free-credit-promises": {
+      "get": {
+        "summary": "Free-credit promises this org is still waiting on",
+        "description": "Every outstanding promise, cheapest bar first: what it is worth, what unlocks it, how far along the org is, and — when the promise exists because someone they referred converted — which org that was, by name and domain (referred_org_name / referred_org_domain, resolved through brand-service and fail-soft: absent or null, never fabricated, never blocking the amounts). An outstanding promise is a promise, not money: it is NOT part of credited / balance / spendable. Settles first, so a customer returning from Stripe sees an already-earned grant land immediately; that can only make an earned grant land sooner, never conjure one.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outstanding promises for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeCreditPromisesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid org headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unavailable, or a promise could not be settled",
             "content": {
               "application/json": {
                 "schema": {

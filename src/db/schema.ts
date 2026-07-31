@@ -176,8 +176,10 @@ export const WELCOME_PROMO_CODE = "welcome";
 export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 
 // Platform-issued grant codes (DIS-64 Wave 0.5 invite-only gate).
-// Backed by migration 0017. The invite_welcome grant replaces (not stacks)
-// the welcome row at grant time — see lib/promos.ts grantCredit.
+// Backed by migration 0017. Both are purely ADDITIVE: `invite_welcome` used to
+// DELETE the org's `welcome` row so the two could not stack, which is exactly the
+// behaviour the referral offer retires — nothing on an invite/referral path may
+// remove or reduce an existing promise or an already-granted credit.
 export const INVITE_REWARD_CODE = "invite_reward";
 export const INVITE_WELCOME_CODE = "invite_welcome";
 
@@ -220,6 +222,106 @@ export const WELCOME_COMPLETION_LAUNCH_AT_MS = Date.parse(
 export const WELCOME_COMPLETION_LAUNCH_AT_UNIX = Math.floor(
   WELCOME_COMPLETION_LAUNCH_AT_MS / 1000
 );
+
+// --- Free-credit promises (migration 0033) ---
+//
+// An org may carry SEVERAL outstanding free-credit promises at once, each worth a
+// different amount, each earned at a different bar, and some of them earned because
+// somebody ELSE paid. `billing_accounts.free_credit_*` can express exactly one, which
+// is why this table exists.
+//
+// A promise is a PROMISE, not money: no `local_promos` row is written until it is
+// earned, so an outstanding promise never enters credited / balance / spendable.
+//
+// `amount_cents` and `paid_trigger_cents` are FROZEN at creation and never updated —
+// same grandfathering discipline as the per-account offer (0032): re-pricing the
+// referral offer reaches only promises created after the re-price, with no cutoff
+// date and no backfill.
+export const freeCreditPromises = pgTable(
+  "free_credit_promises",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    /** 'welcome' (the signup offer) | 'referral' (the invite offer). */
+    kind: text("kind").notNull(),
+    /** What lands when this promise is earned. Frozen at creation. */
+    amountCents: integer("amount_cents").notNull(),
+    /**
+     * The bar: cumulative SUCCEEDED payments (net of refunds + lost disputes) that
+     * earn this promise. Frozen at creation as
+     * (highest bar the org already carries) + (this promise's own amount).
+     */
+    paidTriggerCents: integer("paid_trigger_cents").notNull(),
+    /**
+     * Set on the INVITEE's promise: the org that referred them. Granting the
+     * invitee's promise is what opens the inviter's — never the invitee signing up.
+     */
+    referrerOrgId: uuid("referrer_org_id"),
+    /**
+     * Set on the INVITER's promise: which referred org converted and caused it. The
+     * dashboard resolves this org to a brand name + logo through brand-service.
+     */
+    referredOrgId: uuid("referred_org_id"),
+    /** NULL while outstanding. Stamped when the matching credit grant lands. */
+    grantedAt: timestamp("granted_at", { withTimezone: true }),
+    /** The `local_promos` row that granted it (audit link); NULL while outstanding. */
+    grantedLocalPromoId: uuid("granted_local_promo_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One welcome promise per org.
+    uniqueIndex("idx_free_credit_promises_org_welcome")
+      .on(table.orgId)
+      .where(sql`kind = 'welcome'`),
+    // An org is REFERRED at most once — a re-claimed invite is a no-op, and a claim
+    // by a different inviter is rejected rather than silently stacked.
+    uniqueIndex("idx_free_credit_promises_org_referrer")
+      .on(table.orgId)
+      .where(sql`referrer_org_id IS NOT NULL`),
+    // One inviter promise per (inviter, invitee) pair — the exactly-once guard on a
+    // replayed or concurrent settle of the invitee's promise.
+    uniqueIndex("idx_free_credit_promises_org_referred")
+      .on(table.orgId, table.referredOrgId)
+      .where(sql`referred_org_id IS NOT NULL`),
+    index("idx_free_credit_promises_org").on(table.orgId),
+    index("idx_free_credit_promises_outstanding")
+      .on(table.grantedAt)
+      .where(sql`granted_at IS NULL`),
+  ]
+);
+
+export type FreeCreditPromise = typeof freeCreditPromises.$inferSelect;
+export type NewFreeCreditPromise = typeof freeCreditPromises.$inferInsert;
+
+export const PROMISE_KIND_WELCOME = "welcome";
+export const PROMISE_KIND_REFERRAL = "referral";
+export type FreeCreditPromiseKind =
+  | typeof PROMISE_KIND_WELCOME
+  | typeof PROMISE_KIND_REFERRAL;
+
+/**
+ * Ledger key for a GRANTED referral promise (migration 0033).
+ *
+ * Unlike `admin_grant` / `welcome_completion`, this code row's `amount_cents` is not
+ * a placeholder: it is the amount a NEW referral promise freezes ($500 today). It is
+ * the live, runtime-re-priceable source (PATCH /internal/promo-codes/referral_reward),
+ * so re-pricing the referral offer needs no migration and cannot reach a promise that
+ * already froze its own figure.
+ *
+ * Referral grants STACK — an inviter with ten converting referrals holds ten of them
+ * — so each grant row carries an `idempotency_key` (`promise:<promise_id>`), which
+ * exempts it from the (org, promo_code) uniqueness and dedups on the promise instead.
+ */
+export const REFERRAL_REWARD_CODE = "referral_reward";
+
+/**
+ * What a NEWLY created referral promise is worth. DOCUMENTATION + the seed value in
+ * migration 0033 — never the value to apply to an existing promise, which carries its
+ * own frozen `amount_cents`. The live figure is the `referral_reward` promo-code row.
+ */
+export const CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS = 50000;
 
 // Admin-issued arbitrary-amount grant (staff oversight ledger, migration 0025).
 // Per-row amount lives on local_promos; the promo-code

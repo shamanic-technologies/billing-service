@@ -10,6 +10,7 @@ import {
   brandDailyBudgets,
   campaignAuthorizeCosts,
   creditDepletionEpisodes,
+  freeCreditPromises,
   localPromos,
 } from "../db/schema.js";
 import {
@@ -85,6 +86,15 @@ async function deleteBillingStateByOrg(
       .where(eq(brandDailyBudgets.orgId, orgId))
       .returning({ brandId: brandDailyBudgets.brandId });
 
+    // This org's OWN promises. A promise held by ANOTHER org that merely REFERENCES
+    // this one (an inviter's promise naming this org as the referral that converted)
+    // is deliberately left alone: the inviter genuinely earned it, and it stays
+    // payable whether or not the org they referred still exists.
+    const deletedPromises = await tx
+      .delete(freeCreditPromises)
+      .where(eq(freeCreditPromises.orgId, orgId))
+      .returning({ id: freeCreditPromises.id });
+
     const deletedBillingAccounts = await tx
       .delete(billingAccounts)
       .where(eq(billingAccounts.orgId, orgId))
@@ -97,6 +107,7 @@ async function deleteBillingStateByOrg(
       campaignAuthorizeCosts: deletedCampaignCosts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,
+      freeCreditPromises: deletedPromises.length,
     };
   });
 }
