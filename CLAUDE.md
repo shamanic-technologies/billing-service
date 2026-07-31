@@ -164,6 +164,29 @@ Verified on a prod fork (`br-withered-fog-a1a1bnsc` off the prod default): 89/89
 - **`referrer_org_id` is deliberately NOT resolved.** The invitee reached us through that org's own invite link, so they already know who it was; they hold exactly one referral promise (nothing to disambiguate); and no consumer reads it. Revealing less is the default.
 - Needs `BRAND_SERVICE_URL` + `BRAND_SERVICE_API_KEY` (both `${{shared.*}}` references on Railway, prod + staging).
 
+### Telling the two sides (`src/lib/referral-notifications.ts`, migration 0034)
+
+The money worked end to end before this and nobody was ever told. A referrer has no reason to open the dashboard on the day someone they invited converts, so they could bring in three converting customers and never learn the referral worked. billing is the service that opens the promises and grants them, so it is the only place that can observe those moments.
+
+**TWO messages, and the list of what was dropped is the design:**
+
+| eventType | to | when |
+|---|---|---|
+| `referral-reward-opened` | the REFERRER | someone they invited converted, so a reward opened at their own next bar |
+| `referral-credits-granted` | whoever earned it, either side | the credits actually landed |
+
+Not sent, deliberately: **the invitee's promise being CREATED at signup** (nothing is earned yet, and they are mid-onboarding reading the same thing on screen); **"opened" when the reward is already earned as it opens** (see below); and anything about the welcome offer, which is the other promise kind.
+
+**The collapse rule is the whole reason `alreadyEarned` exists.** An inviter's new bar is `(their highest bar) + $500`, which says nothing about what they have already paid — so a referrer already past that bar earns the reward on the very next settle. Sending "$500 is on its way" and then, minutes later, "$500 arrived" teaches nothing with the second message. `notifyReferralRewardOpened` therefore reads that org's paid topups once, and stays silent when the bar is already met; the granted message carries the whole story and names the same referral. That read **fails OPEN** (a throw means "not yet earned", so the referrer is still told) — a possible duplicate beats silence about money.
+
+**Exactly-once is its own state, because "did we grant" and "did we tell them" are different questions.** The grant's idempotency cannot answer the second: the hourly sweep re-examines every outstanding promise on every tick, so with no marker a customer would be mailed about the same event forever. Migration 0034 adds `opened_notified_at` / `granted_notified_at` to `free_credit_promises`, each claimed by a conditional `UPDATE … WHERE <marker> IS NULL RETURNING` — only the caller whose update returns a row sends, so two racing settles produce one email. **The claim is taken AFTER the recipient resolves**, so a cold stripe-service leaves the marker NULL and the next tick retries instead of burning the only send; an org whose billing customer exists with no address IS marked, because there is nothing to retry against. 0034 also backfills every pre-existing promise as already-notified, so the first sweep after the deploy cannot mail anyone about days-old activity. (Measured on prod at ship time: 89 welcome rows, **zero** referral rows, so the backfill was belt-and-braces.)
+
+**Fail-soft, the documented exception to fail-loud, same posture as the identity lookup above.** Every path logs loudly and returns; nothing here can fail, delay or roll back a grant, and the grant transaction has already committed before any of it runs. A notification failure must never touch the money it describes.
+
+**Recipient = the org's Stripe billing email** (`fetchOrgCustomer`, the user-less org-keyed read), passed as `recipientEmail` — transactional-email-service accepts it in place of an `x-user-id` lookup, so no fake user identity is invented on a settle. Both messages name the referral through the same `resolveOrgDisplayIdentity` the Billing page uses, under the same authorization, and never fabricate anything from the UUID: an unresolvable org renders as "A new customer" in the opened message and drops out of the granted message's `{{reason}}` sentence.
+
+**Both templates are registered by THIS service** (`src/instrument.ts`), since the fleet convention is that a template belongs to whoever SENDS it. Every `{{variable}}` in them is always supplied and never empty — an unset one renders as a literal `{{placeholder}}` in a customer's inbox, which is why `referredOrg` carries a phrase rather than a possibly-null name and why `reason` is composed in code rather than branched in the template. A test pins the template's variable set against the sender's.
+
 ## Welcome-completion gift — "$N in free credits", automatic (`src/lib/welcome-completion.ts`)
 
 Onboarding promises every new customer **$N of free credits**. Signup only grants the `welcome` row ($5 today), so for months the remainder was granted BY HAND (staff `admin_grant` rows described "Welcome credits (2/2)"). `welcome_completion` (migration 0029) automates the remainder.

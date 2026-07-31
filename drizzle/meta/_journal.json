@@ -239,6 +239,13 @@
       "when": 1791108000000,
       "tag": "0033_free_credit_promises",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791108000001,
+      "tag": "0034_referral_notification_markers",
+      "breakpoints": true
     }
   ]
 }

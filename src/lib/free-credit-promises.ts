@@ -88,6 +88,10 @@ import {
   resolveOrgDisplayIdentity,
   type OrgDisplayIdentity,
 } from "./brand-service-client.js";
+import {
+  notifyReferralRewardOpened,
+  notifyReferralCreditsGranted,
+} from "./referral-notifications.js";
 
 /** System sentinel — a promise grant has no human user (it is platform-issued). */
 const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
@@ -388,7 +392,15 @@ export async function reconcileInviterPromises(orgId: string): Promise<number> {
       orgId,
       promise.amountCents
     );
-    if (created) opened += 1;
+    if (created) {
+      opened += 1;
+      // The referrer cannot see this coming from anywhere else: it happened
+      // because somebody ELSE paid. Awaited only so its marker claim settles
+      // before the next pass could reach the same promise; the send itself is
+      // fire-and-forget inside, and every failure path is swallowed and logged
+      // so a mail can never disturb the grant that produced it.
+      await notifyReferralRewardOpened(created);
+    }
   }
   return opened;
 }
@@ -481,6 +493,9 @@ export async function settleReferralPromises(
           .plus(promise.amountCents)
           .toFixed(10);
         granted.push(landed.stamped);
+        // Strictly AFTER the transaction commits: the money is the point, and a
+        // notification must never sit inside the transaction that moves it.
+        await notifyReferralCreditsGranted(landed.stamped);
       }
     }
   }
