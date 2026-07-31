@@ -50,13 +50,13 @@ describe("Month-end forced top-up sweep", () => {
     await closeDb();
   });
 
-  it("AC1: charges a reload-capable, enabled org with a negative balance", async () => {
+  it("AC1: charges a reload-capable, enabled org EXACTLY its negative balance", async () => {
     await insertTestAccount({
       orgId: orgA,
       topupAmountCents: 1000,
       topupThresholdCents: 500,
     });
-    // paid 0 → tier amount 5000. usage 100 → balance -100 → settle to >= 0.
+    // usage 100 → balance -100 → settle to exactly 0.
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage(orgA, "100.0000000000");
 
@@ -68,12 +68,76 @@ describe("Month-end forced top-up sweep", () => {
     expect(res.skipped).toBe(0);
     expect(res.failed).toBe(0);
     expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
-    // One tier-amount multiple (5000) clears the -100 deficit to +4900.
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    // The deficit itself — NOT the $50 tier multiple the sweep used to charge.
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(100);
     // Month-scoped idempotency key.
     expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[2]).toBe(
       sweepIdempotencyKey(orgA, monthBucket(LAST_DAY))
     );
+  });
+
+  it("AC1: a small deficit is NOT rounded up to the base tier amount", async () => {
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    // Reproduces the 2026-07-31 prod overcharge: balance -$9.61 was billed $50.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage(orgA, "961.0000000000");
+
+    const res = await runMonthEndSweep(LAST_DAY);
+
+    expect(res.charged).toBe(1);
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(961);
+  });
+
+  it("AC1: a high-tier org is not rounded up to the $500 tier amount either", async () => {
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    // paid >= $1000 → the old code charged the $500 tier multiple for -$325.93.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("357889.0000000000");
+    setUsage(orgA, "390482.0000000000"); // balance -32593
+
+    const res = await runMonthEndSweep(LAST_DAY);
+
+    expect(res.charged).toBe(1);
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(32593);
+  });
+
+  it("AC1: a fractional-cent deficit is rounded UP to the whole cent", async () => {
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage(orgA, "1068.9600000000"); // balance -1068.96
+
+    const res = await runMonthEndSweep(LAST_DAY);
+
+    expect(res.charged).toBe(1);
+    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(1069);
+  });
+
+  it("AC2: a deficit below Stripe's 50-cent minimum is skipped, not charged", async () => {
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 1000,
+      topupThresholdCents: 500,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    setUsage(orgA, "30.0000000000"); // balance -30 cents
+
+    const res = await runMonthEndSweep(LAST_DAY);
+
+    expect(res.charged).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.failed).toBe(0);
+    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
   });
 
   it("AC2: does NOT charge a non-negative balance", async () => {
@@ -150,8 +214,8 @@ describe("Month-end forced top-up sweep", () => {
     const first = await runMonthEndSweep(LAST_DAY);
     expect(first.charged).toBe(1);
 
-    // The $50 settle lands → credited rises past usage → balance non-negative.
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("5000.0000000000");
+    // The exact settle lands → credited rises to usage → balance exactly 0.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
 
     const second = await runMonthEndSweep(LAST_DAY);
     expect(second.charged).toBe(0);
