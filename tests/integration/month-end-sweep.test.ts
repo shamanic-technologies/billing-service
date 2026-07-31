@@ -70,9 +70,11 @@ describe("Month-end forced top-up sweep", () => {
     expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
     // The deficit itself — NOT the $50 tier multiple the sweep used to charge.
     expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(100);
-    // Month-scoped idempotency key.
+    // Idempotency key scoped to (org, month, charge amount) — the amount is in
+    // the key so a corrected/second charge of a DIFFERENT amount in the same
+    // month is not blocked by the first attempt's Stripe idempotency record.
     expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[2]).toBe(
-      sweepIdempotencyKey(orgA, monthBucket(LAST_DAY))
+      sweepIdempotencyKey(orgA, monthBucket(LAST_DAY), 100)
     );
   });
 

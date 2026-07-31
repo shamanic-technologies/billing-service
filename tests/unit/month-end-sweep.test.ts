@@ -95,29 +95,40 @@ describe("computeSettleCharge — the EXACT deficit, never a tier multiple", () 
   });
 });
 
-describe("sweepIdempotencyKey — stable, month-scoped, 32-hex", () => {
+describe("sweepIdempotencyKey — stable per (org, month, amount), 32-hex", () => {
   const org = "00000000-0000-0000-0000-00000000e001";
 
-  it("is deterministic for the same org + bucket", () => {
-    expect(sweepIdempotencyKey(org, "2026-01")).toBe(
-      sweepIdempotencyKey(org, "2026-01")
+  it("is deterministic for the same org + bucket + amount", () => {
+    expect(sweepIdempotencyKey(org, "2026-01", 961)).toBe(
+      sweepIdempotencyKey(org, "2026-01", 961)
+    );
+  });
+
+  it("differs when the amount differs", () => {
+    // Reproduces the 2026-07-31 prod failure: the over-collection hotfix changed
+    // the computed amount mid-month, and the amount-INDEPENDENT key made the
+    // corrected charge collide with the one its own over-charge had burned —
+    // Stripe 400 "Keys for idempotent requests can only be used with the same
+    // parameters", so the org went uncollected for the rest of the month.
+    expect(sweepIdempotencyKey(org, "2026-07", 961)).not.toBe(
+      sweepIdempotencyKey(org, "2026-07", 50000)
     );
   });
 
   it("differs across months (so a new month can charge again)", () => {
-    expect(sweepIdempotencyKey(org, "2026-01")).not.toBe(
-      sweepIdempotencyKey(org, "2026-02")
+    expect(sweepIdempotencyKey(org, "2026-01", 961)).not.toBe(
+      sweepIdempotencyKey(org, "2026-02", 961)
     );
   });
 
   it("differs across orgs", () => {
     const other = "00000000-0000-0000-0000-00000000e002";
-    expect(sweepIdempotencyKey(org, "2026-01")).not.toBe(
-      sweepIdempotencyKey(other, "2026-01")
+    expect(sweepIdempotencyKey(org, "2026-01", 961)).not.toBe(
+      sweepIdempotencyKey(other, "2026-01", 961)
     );
   });
 
   it("is 32 hex chars", () => {
-    expect(sweepIdempotencyKey(org, "2026-01")).toMatch(/^[0-9a-f]{32}$/);
+    expect(sweepIdempotencyKey(org, "2026-01", 961)).toMatch(/^[0-9a-f]{32}$/);
   });
 });
