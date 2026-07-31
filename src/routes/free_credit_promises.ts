@@ -12,6 +12,7 @@ import {
   sumSucceededTopupsForCustomerBefore,
 } from "../lib/stripe-service-client.js";
 import {
+  attachReferredOrgIdentities,
   claimReferral,
   listOutstandingPromises,
   ReferralAlreadyClaimedError,
@@ -90,8 +91,12 @@ router.post("/internal/referrals/claim", async (req, res) => {
 //
 // Per promise: what it is worth, what unlocks it, how far along the org is, and —
 // when the promise exists because someone they referred converted — WHICH org that
-// was (`referred_org_id`, which the dashboard resolves to a brand name + logo
-// through brand-service; billing does not resolve it).
+// was, by name and domain (`referred_org_name` / `referred_org_domain`), so three
+// pending $500s do not render as three identical rows. billing resolves that itself:
+// it is the only service that knows the referral relationship exists, and that
+// relationship is what authorizes revealing anything about the other org at all.
+// The identity is fail-soft — it is absent or null, never fabricated, and never
+// takes the amounts down with it.
 //
 // Settles first, so a customer coming back from Stripe sees an already-earned grant
 // land immediately. That can only make an earned grant land SOONER: every condition
@@ -122,7 +127,9 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
           WELCOME_COMPLETION_LAUNCH_AT_UNIX
         )
       );
-      promises = await listOutstandingPromises(orgId, paidTopupsCents);
+      promises = await attachReferredOrgIdentities(
+        await listOutstandingPromises(orgId, paidTopupsCents)
+      );
     } catch (err) {
       console.error("[billing-service] Failed to compose free-credit promises:", err);
       res.status(502).json({ error: "Failed to compose free-credit promises" });

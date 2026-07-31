@@ -1001,6 +1001,14 @@
             "nullable": true,
             "format": "uuid"
           },
+          "referred_org_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "referred_org_domain": {
+            "type": "string",
+            "nullable": true
+          },
           "referrer_org_id": {
             "type": "string",
             "nullable": true,
@@ -3346,7 +3354,7 @@
     "/v1/free-credit-promises": {
       "get": {
         "summary": "Free-credit promises this org is still waiting on",
-        "description": "Every outstanding promise, cheapest bar first: what it is worth, what unlocks it, how far along the org is, and — when the promise exists because someone they referred converted — which org that was (referred_org_id, resolved to a brand by the dashboard through brand-service). An outstanding promise is a promise, not money: it is NOT part of credited / balance / spendable. Settles first, so a customer returning from Stripe sees an already-earned grant land immediately; that can only make an earned grant land sooner, never conjure one.",
+        "description": "Every outstanding promise, cheapest bar first: what it is worth, what unlocks it, how far along the org is, and — when the promise exists because someone they referred converted — which org that was, by name and domain (referred_org_name / referred_org_domain, resolved through brand-service and fail-soft: absent or null, never fabricated, never blocking the amounts). An outstanding promise is a promise, not money: it is NOT part of credited / balance / spendable. Settles first, so a customer returning from Stripe sees an already-earned grant land immediately; that can only make an earned grant land sooner, never conjure one.",
         "parameters": [
           {
             "schema": {
