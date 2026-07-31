@@ -34,6 +34,14 @@ beforeAll(async () => {
   // Welcome-completion eligibility (migration 0029). DEFAULT true = a brand-new org
   // is eligible; 0029 flipped pre-existing prod accounts to false (no backfill).
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "welcome_completion_eligible" boolean NOT NULL DEFAULT true`;
+  // Per-account free-credit offer (migration 0032). Existing rows were backfilled to
+  // the grandfathered $25/$25; the DEFAULT is the current $400/$400 offer, so any
+  // account inserted WITHOUT these columns resolves to the new offer — which is
+  // exactly how a real signup gets it (findOrCreateAccount inserts org_id only).
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_entitlement_cents" integer NOT NULL DEFAULT 2500`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_paid_trigger_cents" integer NOT NULL DEFAULT 2500`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 40000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 40000`;
 
   // Drop legacy columns if a stale local DB still has them.
   await sql`ALTER TABLE "billing_accounts" DROP COLUMN IF EXISTS "balance_cents"`;

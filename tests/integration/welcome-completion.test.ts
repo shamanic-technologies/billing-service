@@ -24,11 +24,18 @@ import { sumSucceededTopupsForOrgBefore } from "../../src/lib/stripe-service-cli
 import {
   settleWelcomeCompletion,
   WelcomeCompletionPromoCodeMissingError,
-  WELCOME_COMPLETION_CHECKOUT_NOTICE,
 } from "../../src/lib/welcome-completion.js";
 import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-sweep.js";
 
 const COUPON_ID = "coupon_welcome25";
+
+/**
+ * The notice a GRANDFATHERED ($25/$25) org sees — byte-equal to the string this
+ * service shipped before the offer became per-account. `insertTestAccount` defaults
+ * to that cohort, so every case in this suite quotes it.
+ */
+const GRANDFATHERED_NOTICE =
+  "You get $25 in free credits. $5 now, the rest once your payments reach $25.";
 const orgId = "00000000-0000-0000-0000-0000000000c1";
 const userId = "00000000-0000-0000-0000-0000000000c2";
 
@@ -87,7 +94,11 @@ async function isEligible(org: string): Promise<boolean> {
 const paidBeforeLaunch = (org: string) => () =>
   sumSucceededTopupsForOrgBefore(org, WELCOME_COMPLETION_LAUNCH_AT_UNIX);
 
-describe("welcome-completion gift ($25 total free credits)", () => {
+// Every fixture here is a GRANDFATHERED account (insertTestAccount defaults to the
+// $25/$25 offer), so this suite is also the regression guard that the re-price left
+// pre-existing orgs byte-identical. The $400 cohort lives in
+// tests/integration/free-credit-offer-cohorts.test.ts.
+describe("welcome-completion gift ($25 grandfathered offer)", () => {
   const app = createTestApp();
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
@@ -215,7 +226,7 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     // Below the $50 floor → no discount, but the promise is shown.
     expect(body).not.toHaveProperty("discounts");
     expect(body.custom_text).toEqual({
-      submit: { message: WELCOME_COMPLETION_CHECKOUT_NOTICE },
+      submit: { message: GRANDFATHERED_NOTICE },
     });
 
     // $8 paid: $13 of credit, no gift yet.
@@ -286,7 +297,7 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(body).not.toHaveProperty("discounts");
     expect(body.custom_text).toEqual({
-      submit: { message: WELCOME_COMPLETION_CHECKOUT_NOTICE },
+      submit: { message: GRANDFATHERED_NOTICE },
     });
   });
 
@@ -333,7 +344,7 @@ describe("welcome-completion gift ($25 total free credits)", () => {
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(body).not.toHaveProperty("discounts");
     expect(body.custom_text).toEqual({
-      submit: { message: WELCOME_COMPLETION_CHECKOUT_NOTICE },
+      submit: { message: GRANDFATHERED_NOTICE },
     });
   });
 

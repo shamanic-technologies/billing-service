@@ -1,19 +1,29 @@
 /**
- * Welcome-completion gift — the second half of the "$25 in free credits" promise.
+ * Welcome-completion gift — the second half of the "$N in free credits" promise.
  *
  * ## The rule
  *
- * An org receives FREE_CREDIT_ENTITLEMENT_CENTS ($25) in free credits IN TOTAL,
- * welcome gift included. Signup grants only the `welcome` row ($5 today), so the
- * completion is worth the remainder. The remainder is DERIVED from what the org
- * has actually been gifted (SUM(local_promos)), never from a hardcoded $20 — so it
- * stays correct if the welcome amount is re-priced or the org never got one.
+ * An org receives ITS OWN `free_credit_entitlement_cents` in free credits IN TOTAL,
+ * welcome gift included. Signup grants only the `welcome` row ($5 today, for every
+ * cohort), so the completion is worth the remainder. The remainder is DERIVED from
+ * what the org has actually been gifted (SUM(local_promos)), never from a hardcoded
+ * difference — so it stays correct across cohorts, if the welcome amount is
+ * re-priced, or if the org never got a welcome row at all.
  *
- * The completion is EARNED once the org's cumulative SUCCEEDED payments reach
- * FREE_CREDIT_PAID_TRIGGER_CENTS ($25). The trigger is money actually received,
+ * The completion is EARNED once the org's cumulative SUCCEEDED payments reach ITS
+ * OWN `free_credit_paid_trigger_cents`. The trigger is money actually received,
  * NOT usage consumed: the account model is threshold-postpaid (an org can consume
  * on credit before paying anything), and we must not gift credits to someone whose
  * card may still fail.
+ *
+ * ## Why the amounts live on the account
+ *
+ * Both figures are a PROPERTY OF THE ORG, decided once when its billing account is
+ * created (migration 0032) and never moved afterwards. Re-pricing the offer changes
+ * the COLUMN DEFAULT, which reaches future signups only — every existing customer
+ * keeps the offer it signed up under, permanently, with no cutoff date to maintain
+ * and no backfill. A third re-price grandfathers automatically for the same reason.
+ * Accounts predating 0032 carry $25/$25; accounts created after it carry $400/$400.
  *
  * ## Who is excluded ("no backfill", precisely)
  *
@@ -68,11 +78,8 @@ import {
   billingAccounts,
   localPromoCodes,
   localPromos,
-  FREE_CREDIT_ENTITLEMENT_CENTS,
-  FREE_CREDIT_PAID_TRIGGER_CENTS,
   WELCOME_COMPLETION_CODE,
   WELCOME_COMPLETION_LAUNCH_AT_MS,
-  WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS,
 } from "../db/schema.js";
 import { cmpCents, gte, subCents } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
@@ -84,13 +91,52 @@ const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 const ZERO = "0.0000000000";
 
+/** The org's own free-credit offer, as frozen on its billing account. */
+export interface FreeCreditOffer {
+  /** Total free credits this org may ever receive, welcome gift INCLUDED. */
+  entitlementCents: number;
+  /** Cumulative succeeded payments that earn this org's completion grant. */
+  paidTriggerCents: number;
+}
+
+/** Whole dollars, e.g. 40000 → "$400". Amounts are always whole-dollar offers. */
+function dollars(cents: number): string {
+  return `$${new Decimal(cents).dividedBy(100).toFixed(0)}`;
+}
+
 /**
  * Copy shown on the checkout page when NO up-front discount applies, so the buyer
- * knows the gift is coming before deciding to pay. Approved verbatim by the product
- * owner — do not reword, do not interpolate. (No em-dash: customer-facing copy.)
+ * knows the gift is coming before deciding to pay. The SENTENCE is approved verbatim
+ * by the product owner — do not reword it. The two figures are substituted from the
+ * org's OWN offer, because they now differ per cohort and quoting the wrong one would
+ * promise money we will not grant (or hide money we will). The "$5" is a literal on
+ * purpose: the up-front welcome gift is $5 for every cohort.
+ * (No em-dash: customer-facing copy.)
  */
-export const WELCOME_COMPLETION_CHECKOUT_NOTICE =
-  "You get $25 in free credits. $5 now, the rest once your payments reach $25.";
+export function welcomeCompletionCheckoutNotice(offer: FreeCreditOffer): string {
+  return `You get ${dollars(offer.entitlementCents)} in free credits. $5 now, the rest once your payments reach ${dollars(offer.paidTriggerCents)}.`;
+}
+
+/**
+ * Smallest FIRST checkout that may carry the gift as an up-front visible discount.
+ *
+ * Not arbitrary, and the ONE invariant that keeps the discount honest: the discount
+ * advances the whole entitlement, so the post-discount charge must still reach the
+ * payment trigger that EARNS the gift. Hence `entitlement + trigger` — at the
+ * grandfathered $25/$25 that is exactly today's $50 floor, where the buyer pays $25,
+ * satisfies the trigger, and the credit that lands is (payment) + (welcome) +
+ * (completion) = the $50 configured. It also keeps the charge away from $0.
+ *
+ * DERIVED, never a constant: a re-price must move this floor in lockstep or the
+ * discount would hand over credit nobody paid for. At the $400/$400 offer the floor is
+ * $800, well above any realistic first checkout (onboarding charges roughly one day of
+ * budget), so the discount branch is effectively unreachable for new signups and they
+ * fall to the notice path instead. That is expected: do NOT relax the floor to keep
+ * the branch alive.
+ */
+export function minDiscountedCheckoutCents(offer: FreeCreditOffer): number {
+  return offer.entitlementCents + offer.paidTriggerCents;
+}
 
 export class WelcomeCompletionPromoCodeMissingError extends Error {
   constructor() {
@@ -171,6 +217,8 @@ export async function settleWelcomeCompletion(
     .select({
       eligible: billingAccounts.welcomeCompletionEligible,
       createdAt: billingAccounts.createdAt,
+      entitlementCents: billingAccounts.freeCreditEntitlementCents,
+      paidTriggerCents: billingAccounts.freeCreditPaidTriggerCents,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
@@ -178,13 +226,15 @@ export async function settleWelcomeCompletion(
 
   if (!account) return NOT_GRANTED("no_account");
   if (!account.eligible) return NOT_GRANTED("not_eligible");
-  if (!gte(paidTopupsCents, toCents(FREE_CREDIT_PAID_TRIGGER_CENTS))) {
+  // This org's OWN trigger, frozen when its account was created — never a
+  // module-level constant, or a re-price would move every existing org's bar.
+  if (!gte(paidTopupsCents, toCents(account.paidTriggerCents))) {
     return NOT_GRANTED("payments_below_trigger");
   }
 
   const giftedCents = await sumLocalPromoCreditsForOrg(orgId);
   const remainingCents = subCents(
-    toCents(FREE_CREDIT_ENTITLEMENT_CENTS),
+    toCents(account.entitlementCents),
     giftedCents
   );
   if (cmpCents(remainingCents, ZERO) <= 0) {
@@ -199,7 +249,7 @@ export async function settleWelcomeCompletion(
   // no pre-launch payments by construction, so asking would always answer zero.
   if (account.createdAt.getTime() < WELCOME_COMPLETION_LAUNCH_AT_MS) {
     const paidBeforeLaunchCents = await fetchPaidTopupsBeforeLaunchCents();
-    if (gte(paidBeforeLaunchCents, toCents(FREE_CREDIT_PAID_TRIGGER_CENTS))) {
+    if (gte(paidBeforeLaunchCents, toCents(account.paidTriggerCents))) {
       // Freeze the answer: it is derived from immutable payment history, so
       // re-deriving it can only ever return the same thing.
       await db
@@ -243,14 +293,18 @@ export interface CheckoutWelcomeOffer {
   applyDiscount: boolean;
   /** Stripe coupon id to attach (only set when applyDiscount). */
   couponId: string | null;
-  /** Show the "gift is coming" notice on the checkout page. */
-  showNotice: boolean;
+  /**
+   * "Gift is coming" copy for the checkout page, quoting THIS org's own offer;
+   * null when no notice should be shown. Built here rather than in the route so
+   * the figures can never drift from the account the decision was made against.
+   */
+  noticeMessage: string | null;
 }
 
 const NO_OFFER: CheckoutWelcomeOffer = {
   applyDiscount: false,
   couponId: null,
-  showNotice: false,
+  noticeMessage: null,
 };
 
 /**
@@ -261,10 +315,10 @@ const NO_OFFER: CheckoutWelcomeOffer = {
  *   - the org has NEVER paid before (`paidTopupsCents` is 0) — otherwise every
  *     later top-up would silently get $25 off forever;
  *   - the org still has free-credit entitlement left to advance;
- *   - the checkout is for at least WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS ($50), so
- *     the post-discount charge still reaches the $25 that EARNS the gift (this is
- *     what makes it impossible to discount without the matching grant, and what
- *     keeps the charge away from $0);
+ *   - the checkout is for at least `minDiscountedCheckoutCents` of THIS org's offer,
+ *     so the post-discount charge still reaches the payment trigger that EARNS the
+ *     gift (this is what makes it impossible to discount without the matching grant,
+ *     and what keeps the charge away from $0);
  *   - a completion grant is actually possible (ledger key seeded) and a coupon is
  *     configured.
  *
@@ -279,28 +333,38 @@ export async function decideCheckoutWelcomeOffer(
   checkoutAmountCents: number
 ): Promise<CheckoutWelcomeOffer> {
   const [account] = await db
-    .select({ eligible: billingAccounts.welcomeCompletionEligible })
+    .select({
+      eligible: billingAccounts.welcomeCompletionEligible,
+      entitlementCents: billingAccounts.freeCreditEntitlementCents,
+      paidTriggerCents: billingAccounts.freeCreditPaidTriggerCents,
+    })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
   if (!account || !account.eligible) return NO_OFFER;
 
+  const offer: FreeCreditOffer = {
+    entitlementCents: account.entitlementCents,
+    paidTriggerCents: account.paidTriggerCents,
+  };
+
   const giftedCents = await sumLocalPromoCreditsForOrg(orgId);
-  const remainingCents = subCents(
-    toCents(FREE_CREDIT_ENTITLEMENT_CENTS),
-    giftedCents
-  );
+  const remainingCents = subCents(toCents(offer.entitlementCents), giftedCents);
   if (cmpCents(remainingCents, ZERO) <= 0) return NO_OFFER;
 
   const neverPaid = cmpCents(paidTopupsCents, ZERO) <= 0;
-  const meetsFloor = checkoutAmountCents >= WELCOME_DISCOUNT_MIN_CHECKOUT_CENTS;
+  const meetsFloor = checkoutAmountCents >= minDiscountedCheckoutCents(offer);
   const couponId = process.env.WELCOME_DISCOUNT_COUPON_ID?.trim() || null;
   const grantable = couponId !== null && (await welcomeCompletionCodeExists());
 
   if (neverPaid && meetsFloor && grantable) {
-    return { applyDiscount: true, couponId, showNotice: false };
+    return { applyDiscount: true, couponId, noticeMessage: null };
   }
-  return { applyDiscount: false, couponId: null, showNotice: true };
+  return {
+    applyDiscount: false,
+    couponId: null,
+    noticeMessage: welcomeCompletionCheckoutNotice(offer),
+  };
 }
 
 /**
