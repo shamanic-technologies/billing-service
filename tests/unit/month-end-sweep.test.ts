@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   computeSettleCharge,
   isLastDayOfMonth,
+  isSweepTick,
   monthBucket,
   STRIPE_MIN_CHARGE_CENTS,
+  SWEEP_HOUR_UTC,
   sweepIdempotencyKey,
 } from "../../src/lib/month-end-sweep.js";
 
@@ -42,6 +44,43 @@ describe("isLastDayOfMonth — UTC last-day detection", () => {
   it("time-of-day on the last day does not matter", () => {
     expect(isLastDayOfMonth(new Date(Date.UTC(2026, 0, 31, 23, 59, 59)))).toBe(true);
     expect(isLastDayOfMonth(new Date(Date.UTC(2026, 0, 31, 0, 0, 0)))).toBe(true);
+  });
+});
+
+describe("isSweepTick — ONE tick per month, not one per hour", () => {
+  const at = (y: number, monthIndex: number, day: number, hour: number) =>
+    new Date(Date.UTC(y, monthIndex, day, hour, 0, 0));
+
+  it("fires on the last day at the sweep hour", () => {
+    expect(isSweepTick(at(2026, 0, 31, SWEEP_HOUR_UTC))).toBe(true);
+    expect(isSweepTick(at(2026, 3, 30, SWEEP_HOUR_UTC))).toBe(true);
+    expect(isSweepTick(at(2026, 11, 31, SWEEP_HOUR_UTC))).toBe(true);
+  });
+
+  it("does NOT fire on the other 23 ticks of the last day", () => {
+    // The 2026-07-31 fragmentation bug: a day-only gate re-charged an org that
+    // kept spending on every remaining hourly tick (three charges in 7 hours).
+    for (let hour = 0; hour < 24; hour += 1) {
+      if (hour === SWEEP_HOUR_UTC) continue;
+      expect(isSweepTick(at(2026, 6, 31, hour))).toBe(false);
+    }
+  });
+
+  it("does NOT fire mid-month, even at the sweep hour", () => {
+    expect(isSweepTick(at(2026, 0, 15, SWEEP_HOUR_UTC))).toBe(false);
+    expect(isSweepTick(at(2026, 0, 30, SWEEP_HOUR_UTC))).toBe(false);
+  });
+
+  it("fires on the real last day of February, leap and non-leap", () => {
+    expect(isSweepTick(at(2026, 1, 28, SWEEP_HOUR_UTC))).toBe(true);
+    expect(isSweepTick(at(2024, 1, 29, SWEEP_HOUR_UTC))).toBe(true);
+    expect(isSweepTick(at(2024, 1, 28, SWEEP_HOUR_UTC))).toBe(false);
+  });
+
+  it("fires anywhere inside the sweep hour, not only on the hour", () => {
+    expect(
+      isSweepTick(new Date(Date.UTC(2026, 0, 31, SWEEP_HOUR_UTC, 59, 59)))
+    ).toBe(true);
   });
 });
 
