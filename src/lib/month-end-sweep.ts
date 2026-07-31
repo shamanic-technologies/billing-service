@@ -7,7 +7,7 @@
  * calendar month would go a whole month un-charged. Google/Meta Ads sweep any
  * outstanding spend on the monthly bill date regardless of amount — this
  * replicates that: once a month, settle every reload-capable org whose balance is
- * negative by forcing ONE tier-amount reload back to >= 0.
+ * negative by charging EXACTLY the outstanding amount, back to 0.
  *
  * Runs from the hourly dunning scheduler (post-listen, never the boot path). It
  * self-gates on the last calendar day of the month (UTC), so on any other day it
@@ -28,11 +28,11 @@
  */
 
 import crypto from "crypto";
+import { Decimal } from "decimal.js";
 import { and, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { computeBalance } from "./balance.js";
-import { tierFor, computeTopupCharge } from "./topup-tier.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
 import { reloadViaInvoice } from "./reload.js";
@@ -45,6 +45,37 @@ const SWEEP_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 // A hung stripe-service call must not stall the whole sweep loop.
 const RELOAD_TIMEOUT_MS = 30_000;
+
+/**
+ * Stripe's minimum card charge in USD (50 cents). A smaller amount is rejected
+ * outright (`amount_too_small`), so a deficit under it cannot be settled — it
+ * simply rolls into the next month's sweep.
+ */
+export const STRIPE_MIN_CHARGE_CENTS = 50;
+
+/**
+ * Cents to charge to settle `balanceCents` back to exactly 0.
+ *
+ * The sweep exists to collect OUTSTANDING SPEND, so it bills the deficit itself —
+ * NOT a multiple of the org's postpaid tier amount. Tier multiples belong to the
+ * in-month reload paths (authorize / usage_apply), where a charge buys back one
+ * crossed notch of the credit line; on the monthly settle there is no line to
+ * restore, only a balance to zero. Charging a $50/$200/$500 multiple here
+ * over-collects from every org whose deficit is smaller than one notch — on
+ * 2026-07-31 that billed a -$9.61 org $50 and a -$325.93 org $500, $283.39 of
+ * over-collection across four orgs.
+ *
+ * Fractional cents round UP (Stripe charges whole cents, and rounding down would
+ * leave the org a fraction negative, re-arming the sweep next month for pennies).
+ * Returns 0 when the balance is already non-negative, or when the deficit sits
+ * below Stripe's minimum charge.
+ */
+export function computeSettleCharge(balanceCents: string): number {
+  const deficit = new Decimal(balanceCents).negated();
+  if (deficit.lessThanOrEqualTo(0)) return 0;
+  const cents = deficit.toDecimalPlaces(0, Decimal.ROUND_CEIL).toNumber();
+  return cents < STRIPE_MIN_CHARGE_CENTS ? 0 : cents;
+}
 
 /**
  * True iff `date` is the last calendar day of its month in UTC.
@@ -167,15 +198,16 @@ export async function runMonthEndSweep(
         continue;
       }
 
-      // Force ONE reload of tier-amount multiples toward a target of 0, settling
-      // the balance back to >= 0.
-      const tier = tierFor(snapshot.paidTopupsCents);
-      const chargeAmount = computeTopupCharge(
-        snapshot.balanceCents,
-        "0",
-        tier.amountCents
-      );
+      // Charge EXACTLY the outstanding amount, settling the balance back to 0.
+      const chargeAmount = computeSettleCharge(snapshot.balanceCents);
       if (chargeAmount <= 0) {
+        // Only reachable below Stripe's minimum charge (the non-negative case
+        // returned above) — the remainder rolls into next month's sweep.
+        console.log(
+          `[billing-service] month-end sweep: org ${account.orgId} owes ` +
+            `${snapshot.balanceCents} cents, below the ` +
+            `${STRIPE_MIN_CHARGE_CENTS}-cent Stripe minimum — skipped (${bucket})`
+        );
         result.skipped += 1;
         continue;
       }

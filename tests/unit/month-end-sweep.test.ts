@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  computeSettleCharge,
   isLastDayOfMonth,
   monthBucket,
+  STRIPE_MIN_CHARGE_CENTS,
   sweepIdempotencyKey,
 } from "../../src/lib/month-end-sweep.js";
 
@@ -48,6 +50,48 @@ describe("monthBucket — YYYY-MM (UTC)", () => {
     expect(monthBucket(utc(2026, 0, 31))).toBe("2026-01");
     expect(monthBucket(utc(2026, 8, 30))).toBe("2026-09");
     expect(monthBucket(utc(2026, 11, 31))).toBe("2026-12");
+  });
+});
+
+describe("computeSettleCharge — the EXACT deficit, never a tier multiple", () => {
+  it("charges exactly the deficit for a whole-cent negative balance", () => {
+    expect(computeSettleCharge("-961.0000000000")).toBe(961);
+    expect(computeSettleCharge("-2037.9100000000")).toBe(2038);
+    expect(computeSettleCharge("-32593.0000000000")).toBe(32593);
+    expect(computeSettleCharge("-40924.3800000000")).toBe(40925);
+  });
+
+  it("rounds a fractional-cent deficit UP to the whole cent (never under-settles)", () => {
+    expect(computeSettleCharge("-1068.9600000000")).toBe(1069);
+    expect(computeSettleCharge("-100.0000000001")).toBe(101);
+  });
+
+  it("charges nothing when the balance is already non-negative", () => {
+    expect(computeSettleCharge("0")).toBe(0);
+    expect(computeSettleCharge("0.0000000000")).toBe(0);
+    expect(computeSettleCharge("4900.0000000000")).toBe(0);
+  });
+
+  it("charges nothing below Stripe's minimum card charge (50 cents)", () => {
+    expect(computeSettleCharge("-1.0000000000")).toBe(0);
+    expect(computeSettleCharge("-49.0000000000")).toBe(0);
+    // 48.5 cents rounds UP to 49, still below the minimum.
+    expect(computeSettleCharge("-48.5000000000")).toBe(0);
+  });
+
+  it("charges exactly at Stripe's minimum", () => {
+    expect(STRIPE_MIN_CHARGE_CENTS).toBe(50);
+    expect(computeSettleCharge("-50.0000000000")).toBe(50);
+    expect(computeSettleCharge("-51.0000000000")).toBe(51);
+    // Rounding up is what carries this one over the minimum.
+    expect(computeSettleCharge("-49.9999999999")).toBe(50);
+  });
+
+  it("never charges more than the deficit (the overcharge bug)", () => {
+    for (const balance of ["-50", "-100", "-961", "-2038", "-32593", "-40925"]) {
+      const charge = computeSettleCharge(balance);
+      expect(charge).toBe(Math.abs(Number(balance)));
+    }
   });
 });
 
