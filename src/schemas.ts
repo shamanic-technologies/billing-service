@@ -408,13 +408,33 @@ export const OutstandingFreeCreditPromiseSchema = z
     remaining_to_unlock_cents: CentsStringSchema,
     /** Progress as an integer percentage, 0–100. */
     progress_pct: z.number().int(),
-    /**
-     * The referred org whose conversion caused this promise; null otherwise. An org
-     * identifier is enough — the dashboard resolves it to a brand name + logo through
-     * brand-service, billing does not.
-     */
+    /** The referred org whose conversion caused this promise; null otherwise. */
     referred_org_id: z.string().uuid().nullable(),
-    /** The org that referred us, on our own referral promise; null otherwise. */
+    /**
+     * Display name of that referred org, so an inviter holding three pending $500s
+     * can tell WHICH referral earned each one. billing resolves it through
+     * brand-service: it is the only service that knows the referral relationship
+     * exists, and that relationship is what authorizes revealing the other org's
+     * identity at all. Only the name and the domain are revealed — never anything
+     * about that org's spend, campaigns, credits or performance.
+     *
+     * Absent on a promise with no referred org, and null whenever the lookup
+     * resolved nothing real (org has no brand, brand-service unreachable). NEVER
+     * fabricated from the UUID: a placeholder name is worse than no name, and the
+     * promise is always returned with its amounts intact regardless.
+     */
+    referred_org_name: z.string().nullable().optional(),
+    /**
+     * Normalized domain of that org — what the dashboard turns into a logo. Same
+     * absent/null/never-fabricated rules as the name.
+     */
+    referred_org_domain: z.string().nullable().optional(),
+    /**
+     * The org that referred us, on our own referral promise; null otherwise. Left
+     * bare on purpose: the invitee reached us through that org's own invite link, so
+     * they already know who it was, and they hold exactly one referral promise —
+     * nothing to disambiguate. Revealing less is the default.
+     */
     referrer_org_id: z.string().uuid().nullable(),
     created_at: z.string(),
   })
@@ -1457,8 +1477,10 @@ registry.registerPath({
   description:
     "Every outstanding promise, cheapest bar first: what it is worth, what unlocks " +
     "it, how far along the org is, and — when the promise exists because someone they " +
-    "referred converted — which org that was (referred_org_id, resolved to a brand by " +
-    "the dashboard through brand-service). An outstanding promise is a promise, not " +
+    "referred converted — which org that was, by name and domain " +
+    "(referred_org_name / referred_org_domain, resolved through brand-service and " +
+    "fail-soft: absent or null, never fabricated, never blocking the amounts). An " +
+    "outstanding promise is a promise, not " +
     "money: it is NOT part of credited / balance / spendable. Settles first, so a " +
     "customer returning from Stripe sees an already-earned grant land immediately; " +
     "that can only make an earned grant land sooner, never conjure one.",
