@@ -337,6 +337,7 @@ export const InternalAccountTeardownDeletedRowsSchema = z
     campaignAuthorizeCosts: z.number().int(),
     brandDailyBudgets: z.number().int(),
     welcomeCreditClaims: z.number().int(),
+    freeCreditPromises: z.number().int(),
   })
   .openapi("InternalAccountTeardownDeletedRows");
 
@@ -347,6 +348,90 @@ export const InternalAccountTeardownResponseSchema = z
     deletedRows: InternalAccountTeardownDeletedRowsSchema,
   })
   .openapi("InternalAccountTeardownResponse");
+
+// --- Free-credit promises (stacked welcome + referral offers, migration 0033) ---
+
+export const ReferralClaimRequestSchema = z
+  .object({
+    /** The org that signed up through the invite link (the invitee). */
+    orgId: z.string().uuid(),
+    /** The org whose invite link they used (the inviter). */
+    referrerOrgId: z.string().uuid(),
+  })
+  .openapi("ReferralClaimRequest");
+
+export const FreeCreditPromiseSchema = z
+  .object({
+    id: z.string().uuid(),
+    orgId: z.string().uuid(),
+    /** 'welcome' (the signup offer) | 'referral' (the invite offer). */
+    kind: z.string(),
+    /** What lands when it unlocks; frozen at creation, integer cents. */
+    amountCents: z.number().int(),
+    /** Cumulative succeeded payments (net of returns) that unlock it; frozen. */
+    paidTriggerCents: z.number().int(),
+    /** On our own referral promise: the org that referred us. */
+    referrerOrgId: z.string().uuid().nullable(),
+    /** On an inviter's promise: the referred org whose conversion caused it. */
+    referredOrgId: z.string().uuid().nullable(),
+    /** ISO-8601 instant the promise was granted; null while outstanding. */
+    grantedAt: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .openapi("FreeCreditPromise");
+
+export const ReferralClaimResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** True when this invite had already been claimed (no second promise opened). */
+    alreadyClaimed: z.boolean(),
+    promise: FreeCreditPromiseSchema,
+  })
+  .openapi("ReferralClaimResponse");
+
+export const OutstandingFreeCreditPromiseSchema = z
+  .object({
+    id: z.string().uuid(),
+    kind: z.string(),
+    /**
+     * What would actually land if it unlocked right now. For a welcome promise that
+     * is its frozen entitlement MINUS the free credit already gifted (the $5 signup
+     * gift, staff grants, redeemed codes) — referral rewards excluded, since they
+     * stack with the welcome offer rather than replacing it.
+     */
+    amount_cents: CentsStringSchema,
+    /** The bar: cumulative succeeded payments, net of returns, that unlock it. */
+    paid_trigger_cents: CentsStringSchema,
+    /** Progress toward the bar, capped at it. */
+    paid_so_far_cents: CentsStringSchema,
+    /** Bar minus progress. */
+    remaining_to_unlock_cents: CentsStringSchema,
+    /** Progress as an integer percentage, 0–100. */
+    progress_pct: z.number().int(),
+    /**
+     * The referred org whose conversion caused this promise; null otherwise. An org
+     * identifier is enough — the dashboard resolves it to a brand name + logo through
+     * brand-service, billing does not.
+     */
+    referred_org_id: z.string().uuid().nullable(),
+    /** The org that referred us, on our own referral promise; null otherwise. */
+    referrer_org_id: z.string().uuid().nullable(),
+    created_at: z.string(),
+  })
+  .openapi("OutstandingFreeCreditPromise");
+
+export const FreeCreditPromisesResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    /** Cumulative succeeded payments, net of refunds + lost disputes. */
+    paid_topups_cents: CentsStringSchema,
+    /**
+     * Promises still outstanding, cheapest bar first. An outstanding promise is a
+     * promise, not money: it is NOT part of credited / balance / spendable anywhere.
+     */
+    promises: z.array(OutstandingFreeCreditPromiseSchema),
+  })
+  .openapi("FreeCreditPromisesResponse");
 
 // --- Internal Promo-code config (re-price welcome / admin codes, no migration) ---
 
@@ -1322,6 +1407,81 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/referrals/claim",
+  summary: "Record that an org was referred, and open its outstanding referral promise",
+  description:
+    "Called by client-service when a new org signs up through another org's invite " +
+    "link. Opens the INVITEE's outstanding free-credit promise (its bar stacks above " +
+    "every bar the invitee already carries) and remembers who referred them. Grants " +
+    "NOTHING: the referral offer has no up-front portion, the whole amount lands when " +
+    "the bar is crossed. The INVITER's own promise is opened later, at the moment the " +
+    "invitee EARNS theirs, never from the invitee merely signing up. Idempotent: " +
+    "re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
+  request: {
+    headers: internalHeaders,
+    body: {
+      content: { "application/json": { schema: ReferralClaimRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Referral promise opened (or already open — idempotent)",
+      content: { "application/json": { schema: ReferralClaimResponseSchema } },
+    },
+    400: {
+      description: "Invalid body, or an org referring itself",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "This org was already referred by a DIFFERENT org",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "referral_reward ledger key seed missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/free-credit-promises",
+  summary: "Free-credit promises this org is still waiting on",
+  description:
+    "Every outstanding promise, cheapest bar first: what it is worth, what unlocks " +
+    "it, how far along the org is, and — when the promise exists because someone they " +
+    "referred converted — which org that was (referred_org_id, resolved to a brand by " +
+    "the dashboard through brand-service). An outstanding promise is a promise, not " +
+    "money: it is NOT part of credited / balance / spendable. Settles first, so a " +
+    "customer returning from Stripe sees an already-earned grant land immediately; " +
+    "that can only make an earned grant land sooner, never conjure one.",
+  request: {
+    headers: z.object({
+      "x-api-key": z.string(),
+      "x-org-id": z.string().uuid(),
+      "x-user-id": z.string().uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Outstanding promises for this org",
+      content: {
+        "application/json": { schema: FreeCreditPromisesResponseSchema },
+      },
+    },
+    400: {
+      description: "Missing or invalid org headers",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable, or a promise could not be settled",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

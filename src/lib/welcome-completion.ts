@@ -82,7 +82,8 @@ import {
   WELCOME_COMPLETION_LAUNCH_AT_MS,
 } from "../db/schema.js";
 import { cmpCents, gte, subCents } from "./cents.js";
-import { sumLocalPromoCreditsForOrg } from "./promos.js";
+import { sumEntitlementGrantsForOrg } from "./promos.js";
+import { markWelcomePromiseGranted } from "./free-credit-promises.js";
 import { Decimal } from "decimal.js";
 
 // System sentinel — the completion has no human user (it is platform-issued).
@@ -232,7 +233,12 @@ export async function settleWelcomeCompletion(
     return NOT_GRANTED("payments_below_trigger");
   }
 
-  const giftedCents = await sumLocalPromoCreditsForOrg(orgId);
+  // Referral rewards are deliberately NOT counted here: they are additional money
+  // earned by a separate promise at a separate bar, so letting a $500 referral
+  // swallow the welcome remainder would replace the welcome offer instead of
+  // stacking with it. An org that was never referred has no such rows, so this is
+  // the same sum as before.
+  const giftedCents = await sumEntitlementGrantsForOrg(orgId);
   const remainingCents = subCents(
     toCents(account.entitlementCents),
     giftedCents
@@ -283,6 +289,11 @@ export async function settleWelcomeCompletion(
     .returning();
 
   if (inserted.length > 0) {
+    // Close the org's `welcome` promise row so the dashboard stops listing it as
+    // outstanding. The row is a mirror of the account columns this function already
+    // decided against, so stamping it cannot change who gets what — and a missing
+    // row (an account that predates the promise table) simply updates nothing.
+    await markWelcomePromiseGranted(orgId, inserted[0].id);
     return { granted: true, amountCents: remainingCents, reason: "granted" };
   }
   return NOT_GRANTED("already_granted");
@@ -348,7 +359,9 @@ export async function decideCheckoutWelcomeOffer(
     paidTriggerCents: account.paidTriggerCents,
   };
 
-  const giftedCents = await sumLocalPromoCreditsForOrg(orgId);
+  // Same exclusion as settleWelcomeCompletion — the discount advances the WELCOME
+  // entitlement, so referral rewards must not count against what is left of it.
+  const giftedCents = await sumEntitlementGrantsForOrg(orgId);
   const remainingCents = subCents(toCents(offer.entitlementCents), giftedCents);
   if (cmpCents(remainingCents, ZERO) <= 0) return NO_OFFER;
 
