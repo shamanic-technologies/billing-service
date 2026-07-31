@@ -7,6 +7,10 @@ import {
   REGISTERED_TEMPLATE_NAMES,
 } from "../../src/instrument.js";
 import { BRAND_DAILY_BUDGET_CHANGED_EVENT } from "../../src/lib/brand-budget-notification.js";
+import {
+  REFERRAL_REWARD_OPENED_EVENT,
+  REFERRAL_CREDITS_GRANTED_EVENT,
+} from "../../src/lib/referral-notifications.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -74,7 +78,12 @@ describe("boot-time email template registration", () => {
     expect(headers["x-run-id"]).toBe("00000000-0000-0000-0000-000000000000");
 
     const names = lastBody(fetchMock).templates.map((t) => t.name);
-    expect(names).toEqual(["credits-reload-failed", BRAND_DAILY_BUDGET_CHANGED_EVENT]);
+    expect(names).toEqual([
+      "credits-reload-failed",
+      BRAND_DAILY_BUDGET_CHANGED_EVENT,
+      REFERRAL_REWARD_OPENED_EVENT,
+      REFERRAL_CREDITS_GRANTED_EVENT,
+    ]);
     expect(names).toEqual(REGISTERED_TEMPLATE_NAMES);
   });
 
@@ -160,5 +169,54 @@ describe("boot-time email template registration", () => {
     );
     expect(balance).toContain('eventType: "credits-reload-failed"');
     expect(REGISTERED_TEMPLATE_NAMES).toContain(BRAND_DAILY_BUDGET_CHANGED_EVENT);
+    // The referral senders import their names from the same constants the
+    // templates are keyed on, so the row and the eventType cannot drift.
+    expect(REGISTERED_TEMPLATE_NAMES).toContain(REFERRAL_REWARD_OPENED_EVENT);
+    expect(REGISTERED_TEMPLATE_NAMES).toContain(REFERRAL_CREDITS_GRANTED_EVENT);
+  });
+
+  it("interpolates only variables the senders actually supply", async () => {
+    // A template variable the sender never sets renders as a literal
+    // `{{placeholder}}` in a customer's inbox. The referral senders build every
+    // one of these, including the two that stand in for a failed identity
+    // lookup, so the set here and the set they emit must match exactly.
+    await deployEmailTemplates();
+    const templates = lastBody(fetchMock).templates;
+    const varsOf = (name: string) => {
+      const t = templates.find((x) => x.name === name)!;
+      return new Set(
+        [...`${t.subject} ${t.htmlBody} ${t.textBody}`.matchAll(/\{\{(\w+)\}\}/g)].map(
+          (m) => m[1],
+        ),
+      );
+    };
+
+    expect(varsOf(REFERRAL_REWARD_OPENED_EVENT)).toEqual(
+      new Set(["amount", "unlockAt", "referredOrg"]),
+    );
+    // The landed message carries WHO converted inside {{reason}}, which the
+    // sender composes: the two sides of a referral earned the same amount for
+    // opposite reasons, and only one of them has a third party to name.
+    expect(varsOf(REFERRAL_CREDITS_GRANTED_EVENT)).toEqual(
+      new Set(["amount", "reason"]),
+    );
+
+    const sender = readFileSync(
+      resolve(HERE, "../../src/lib/referral-notifications.ts"),
+      "utf-8",
+    );
+    for (const v of ["amount", "unlockAt", "referredOrg", "reason"]) {
+      expect(sender).toContain(`${v}:`);
+    }
+  });
+
+  it("uses no em-dash in customer-facing referral copy", async () => {
+    await deployEmailTemplates();
+    for (const t of lastBody(fetchMock).templates) {
+      if (!t.name.startsWith("referral")) continue;
+      expect(t.subject).not.toContain("—");
+      expect(t.textBody).not.toContain("—");
+      expect(t.htmlBody).not.toContain("—");
+    }
   });
 });

@@ -17,11 +17,17 @@
  * that appears in a `sendEmail` call:
  *   - `credits-reload-failed`      → src/routes/customer_balance.ts
  *   - `brand_daily_budget_changed` → src/lib/brand-budget-notification.ts
+ *   - `referral-reward-opened`     → src/lib/referral-notifications.ts
+ *   - `referral-credits-granted`   → src/lib/referral-notifications.ts
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
 import { fetchWithRetry } from "./lib/fetch-retry.js";
 import { BRAND_DAILY_BUDGET_CHANGED_EVENT } from "./lib/brand-budget-notification.js";
+import {
+  REFERRAL_REWARD_OPENED_EVENT,
+  REFERRAL_CREDITS_GRANTED_EVENT,
+} from "./lib/referral-notifications.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -57,6 +63,37 @@ const TEMPLATES = [
 <li>Org: {{orgId}}</li>
 </ul>`,
     textBody: "{{email}} changed a brand's daily budget. Was: {{previousBudget}}. Now: {{newBudget}}. Brand: {{brandId}}. Org: {{orgId}}.",
+  },
+  {
+    // Someone the recipient invited has converted, so a reward just opened for
+    // them. The one moment in the referral that cannot be inferred from anything
+    // they can see, because it happened when somebody ELSE paid.
+    //
+    // Every variable here is ALWAYS supplied and never empty: the identity lookup
+    // is fail-soft, so the sender substitutes a phrase that names nobody rather
+    // than leaving {{referredOrg}} blank in the middle of a sentence. See
+    // lib/referral-notifications.ts.
+    name: REFERRAL_REWARD_OPENED_EVENT,
+    subject: "You earned {{amount}} in free credits",
+    htmlBody: `<p>{{referredOrg}} signed up through your invite link and started paying, so {{amount}} in free credits is now yours.</p>
+<p>It lands in your account once your own payments reach {{unlockAt}}. Nothing to claim.</p>`,
+    textBody:
+      "{{referredOrg}} signed up through your invite link and started paying, so {{amount}} in free credits is now yours. It lands in your account once your own payments reach {{unlockAt}}. Nothing to claim.",
+  },
+  {
+    // The credits actually arrived, on either side of the referral.
+    //
+    // {{reason}} carries WHO converted, composed by the sender because the two
+    // sides earned the same amount for opposite reasons. It matters most when the
+    // referrer was already past the new bar and this is the only message they get
+    // about that referral.
+    name: REFERRAL_CREDITS_GRANTED_EVENT,
+    subject: "{{amount}} in free credits just landed",
+    htmlBody: `<p>{{amount}} in referral credits is now in your account.</p>
+<p>{{reason}}</p>
+<p>The credits come off what you spend from here, so there is nothing to claim.</p>`,
+    textBody:
+      "{{amount}} in referral credits is now in your account. {{reason}} The credits come off what you spend from here, so there is nothing to claim.",
   },
 ] as const;
 
