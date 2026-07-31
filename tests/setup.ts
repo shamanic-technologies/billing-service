@@ -190,6 +190,8 @@ beforeAll(async () => {
       "referrer_org_id" uuid,
       "referred_org_id" uuid,
       "granted_at" timestamp with time zone,
+      "opened_notified_at" timestamp with time zone,
+      "granted_notified_at" timestamp with time zone,
       "granted_local_promo_id" uuid,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL,
       CONSTRAINT "free_credit_promises_kind_check" CHECK ("kind" IN ('welcome', 'referral'))
@@ -200,6 +202,12 @@ beforeAll(async () => {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_referred" ON "free_credit_promises" ("org_id", "referred_org_id") WHERE "referred_org_id" IS NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_org" ON "free_credit_promises" ("org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_outstanding" ON "free_credit_promises" ("granted_at") WHERE "granted_at" IS NULL`;
+  // Notification markers (migration 0034). ALTERed rather than only declared above,
+  // because CREATE TABLE IF NOT EXISTS is a no-op against a local DB built before
+  // they existed — the table would keep the old shape and every promise suite would
+  // fail on a column that is present in schema.ts.
+  await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "opened_notified_at" timestamp with time zone`;
+  await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "granted_notified_at" timestamp with time zone`;
 
   // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW

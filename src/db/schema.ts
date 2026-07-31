@@ -264,6 +264,17 @@ export const freeCreditPromises = pgTable(
     referredOrgId: uuid("referred_org_id"),
     /** NULL while outstanding. Stamped when the matching credit grant lands. */
     grantedAt: timestamp("granted_at", { withTimezone: true }),
+    /**
+     * Notification markers. "Did we grant" and "did we tell them" are different
+     * questions, so they get different columns: the sweep re-examines a promise
+     * on every tick, and without these it would re-send on each pass.
+     *
+     * Stamped by a CONDITIONAL update that claims the right to send, so exactly
+     * one caller sends even when two settles race. Never blocks a grant: a
+     * notification that cannot go out leaves the money committed.
+     */
+    openedNotifiedAt: timestamp("opened_notified_at", { withTimezone: true }),
+    grantedNotifiedAt: timestamp("granted_notified_at", { withTimezone: true }),
     /** The `local_promos` row that granted it (audit link); NULL while outstanding. */
     grantedLocalPromoId: uuid("granted_local_promo_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
