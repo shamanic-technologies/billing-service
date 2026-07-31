@@ -179,13 +179,38 @@ beforeAll(async () => {
     )
   `;
 
-  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025).
+  // free_credit_promises (stacked welcome + referral offers, migration 0033).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "free_credit_promises" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "org_id" uuid NOT NULL,
+      "kind" text NOT NULL,
+      "amount_cents" integer NOT NULL,
+      "paid_trigger_cents" integer NOT NULL,
+      "referrer_org_id" uuid,
+      "referred_org_id" uuid,
+      "granted_at" timestamp with time zone,
+      "granted_local_promo_id" uuid,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "free_credit_promises_kind_check" CHECK ("kind" IN ('welcome', 'referral'))
+    )
+  `;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_welcome" ON "free_credit_promises" ("org_id") WHERE "kind" = 'welcome'`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_referrer" ON "free_credit_promises" ("org_id") WHERE "referrer_org_id" IS NOT NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_referred" ON "free_credit_promises" ("org_id", "referred_org_id") WHERE "referred_org_id" IS NOT NULL`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_org" ON "free_credit_promises" ("org_id")`;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_outstanding" ON "free_credit_promises" ("granted_at") WHERE "granted_at" IS NULL`;
+
+  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033).
+  // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
+  // referral promise freezes ($500), re-priceable at runtime.
   await sql`
     INSERT INTO "local_promo_codes" ("code", "amount_cents", "max_redemptions", "expires_at")
     VALUES ('invite_reward', 2500, NULL, NULL),
            ('invite_welcome', 2500, NULL, NULL),
            ('admin_grant', 0, NULL, NULL),
-           ('welcome_completion', 0, NULL, NULL)
+           ('welcome_completion', 0, NULL, NULL),
+           ('referral_reward', 50000, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

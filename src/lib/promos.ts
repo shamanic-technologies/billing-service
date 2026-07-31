@@ -7,6 +7,7 @@ import {
   WELCOME_PROMO_CODE,
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
+  REFERRAL_REWARD_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
@@ -107,6 +108,33 @@ export async function sumLocalPromoCreditsForOrg(orgId: string): Promise<string>
   return row?.total ?? "0.0000000000";
 }
 
+/**
+ * Sum of the local promo credits that count against the org's WELCOME entitlement —
+ * i.e. every grant EXCEPT a referral reward.
+ *
+ * The welcome-completion remainder is `entitlement − what the org was already
+ * gifted`, which is what keeps it correct across cohorts and re-prices. Referral
+ * rewards are additional money on top of the welcome offer, never a replacement for
+ * it (a $500 referral must not swallow a $400 welcome remainder), so they are the one
+ * grant kind excluded here. For an org that was never referred this is byte-identical
+ * to `sumLocalPromoCreditsForOrg` — there are no referral rows to exclude.
+ */
+export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string> {
+  const [row] = await db
+    .select({
+      total: rawSql<string>`COALESCE(SUM(${localPromos.amountCents}), 0)::numeric(16,10)::text`,
+    })
+    .from(localPromos)
+    .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .where(
+      and(
+        eq(localPromos.orgId, orgId),
+        rawSql`${localPromoCodes.code} <> ${REFERRAL_REWARD_CODE}`
+      )
+    );
+  return row?.total ?? "0.0000000000";
+}
+
 /** Find welcome promo code row (seeded by migration 0016). Throws if missing. */
 export async function getWelcomePromoCode() {
   const [row] = await db
@@ -200,12 +228,12 @@ export interface GrantResult {
  * Idempotency: the UNIQUE (org_id, promo_code_id) index on local_promos makes
  * repeated calls with the same (orgId, reason) a no-op (no double-grant).
  *
- * `invite_welcome` semantics: replaces (not stacks with) the $5 welcome row.
- * The tx (a) inserts billing_accounts ON CONFLICT DO NOTHING so a concurrent
- * findOrCreateAccount won't fire its own welcome-redeem branch, then (b)
- * deletes any existing welcome row, then (c) inserts the invite_welcome row.
- *
- * `invite_reward` is purely additive — no override.
+ * BOTH reasons are purely ADDITIVE. `invite_welcome` used to DELETE the org's `welcome`
+ * row in the same tx so the two could not stack; that is retired. Nothing on an
+ * invite / referral path may remove or reduce an existing promise or an
+ * already-granted credit — invite and referral credits are additional money, never a
+ * replacement. (The tx still pre-inserts billing_accounts ON CONFLICT DO NOTHING so a
+ * concurrent findOrCreateAccount does not fire its own welcome-redeem branch.)
  *
  * Fails loud on unknown reasons (rejected upstream at the route).
  */
@@ -218,22 +246,12 @@ export async function grantCredit(
     throw new UnknownGrantReasonError(reason);
   }
 
-  const codeRows = await db
+  const [grantCode] = await db
     .select()
     .from(localPromoCodes)
-    .where(
-      reason === INVITE_WELCOME_CODE
-        ? rawSql`${localPromoCodes.code} IN (${reason}, ${WELCOME_PROMO_CODE})`
-        : eq(localPromoCodes.code, reason)
-    );
-
-  const grantCode = codeRows.find((r) => r.code === reason);
+    .where(eq(localPromoCodes.code, reason))
+    .limit(1);
   if (!grantCode) throw new GrantPromoCodeMissingError(reason);
-
-  const welcomeCode =
-    reason === INVITE_WELCOME_CODE
-      ? codeRows.find((r) => r.code === WELCOME_PROMO_CODE)
-      : undefined;
 
   const description =
     reason === INVITE_WELCOME_CODE
@@ -247,17 +265,6 @@ export async function grantCredit(
       .insert(billingAccounts)
       .values({ orgId })
       .onConflictDoNothing();
-
-    if (reason === INVITE_WELCOME_CODE && welcomeCode) {
-      await tx
-        .delete(localPromos)
-        .where(
-          and(
-            eq(localPromos.orgId, orgId),
-            eq(localPromos.promoCodeId, welcomeCode.id)
-          )
-        );
-    }
 
     const inserted = await tx
       .insert(localPromos)

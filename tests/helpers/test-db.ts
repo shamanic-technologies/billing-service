@@ -1,4 +1,4 @@
-import { eq, notInArray } from "drizzle-orm";
+import { asc, eq, notInArray } from "drizzle-orm";
 import { db, sql } from "../../src/db/index.js";
 import {
   billingAccounts,
@@ -9,11 +9,14 @@ import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
   orgUsageDiscounts,
+  freeCreditPromises,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
+  REFERRAL_REWARD_CODE,
+  CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
   GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
   type CreditDepletionEpisode,
@@ -26,9 +29,11 @@ const SEEDED_PROMO_CODES = [
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
+  REFERRAL_REWARD_CODE,
 ];
 
 export async function cleanTestData() {
+  await db.delete(freeCreditPromises);
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignAuthorizeCosts);
   await db.delete(brandDailyBudgetChanges);
@@ -54,6 +59,36 @@ export async function cleanTestData() {
       target: localPromoCodes.code,
       set: { amountCents: 0 },
     });
+  // referral_reward's amount IS the live figure a new referral promise freezes, so
+  // restore it to $500 (a test may have re-priced or removed it).
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: REFERRAL_REWARD_CODE,
+      amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS },
+    });
+}
+
+/** Delete the referral ledger key — exercises the fail-loud referral path. */
+export async function removeReferralRewardCode() {
+  await db
+    .delete(localPromoCodes)
+    .where(eq(localPromoCodes.code, REFERRAL_REWARD_CODE));
+}
+
+/** Every promise row for an org, cheapest bar first — lets tests assert the ladder. */
+export async function listPromises(orgId: string) {
+  return db
+    .select()
+    .from(freeCreditPromises)
+    .where(eq(freeCreditPromises.orgId, orgId))
+    .orderBy(asc(freeCreditPromises.paidTriggerCents));
 }
 
 /** Delete the welcome-completion ledger key — exercises the fail-loud / no-discount path. */

@@ -97,7 +97,57 @@ The only persistent ledger billing-service owns. One row per (org, promo_code) �
 
 **Changing the welcome SEED DEFAULT (migration path) = 4 sites in lockstep (tests do NOT run drizzle migrations — they hand-build schema + seed in `tests/setup.ts`):** (1) `drizzle/NNNN_*.sql` migration row + journal entry, (2) `WELCOME_PROMO_AMOUNT_CENTS` in `src/db/schema.ts` + its comment, (3) the `local_promo_codes` welcome seed in `tests/setup.ts`, (4) the welcome-amount assertions + comments across the WHOLE integration suite — NOT just `{promo,accounts}.test.ts`. As of v0.49.1 the welcome amount is asserted (directly or via a derived total) in `tests/integration/{promo,accounts,promo-codes,public-stats,admin-grants,credits-grant,internal-account-teardown}.test.ts`. Do NOT trust a mental list of files — `git grep -n "welcome" tests/` and cross-check every bare `200`/`$2` (assertions pass values positionally, e.g. a `welcome + promo = TOTAL` derived sum, an `insertTestPromoGrant({ amountCents: 200, promoCode: "welcome" })` fixture, or an `invite_welcome/invite_reward` doc comment). Miss (3)/(4) and the suite goes red (or worse, silently asserts the old amount). The `INVITE_GRANT_AMOUNT_CENTS` / `invite_welcome` / `invite_reward` grant AMOUNT is independent — leave it at 2500 — but its test COMMENTS reference the welcome row's dollar figure ("replaces the $X welcome row", "$X + $25 = $Y"), so those strings + any additive T6-style total DO move with the welcome amount.
 
+Referral-promise grants use `code='referral_reward'` (migration 0033) and are the second STACKING kind alongside `admin_grant`: they carry `idempotency_key = promise:<promise_id>`, which exempts them from the `(org, promo_code)` uniqueness so one inviter can hold several. Its `amount_cents` is **not** a placeholder — it is the live figure a NEW referral promise freezes ($500). See "Free-credit promises".
+
 `amount_cents` is positive (these are credits). `numeric(16,10)` — Drizzle returns it as a JS string. Use Decimal.js (via `src/lib/cents.ts` helpers) for arithmetic; never cast to Number for math.
+
+## Free-credit promises — an org carries SEVERAL at once (`src/lib/free-credit-promises.ts`, migration 0033)
+
+A **promise** is an amount of free credit an org will receive once its cumulative SUCCEEDED payments (net of refunds and lost disputes — the same figure the welcome completion uses) reach a **bar**. One row per promise in `free_credit_promises`.
+
+Until 0033 an org had exactly ONE outstanding promise, expressed as the two `billing_accounts.free_credit_*` columns. The referral offer breaks that shape: an inviter who converts ten referrals carries ten promises at once, each worth a different amount, each earned at a different bar, and each of them created because somebody ELSE paid. A single pair of numbers on the account cannot express that.
+
+**The rules (product-locked):**
+
+- `amount_cents` and `paid_trigger_cents` are **FROZEN at creation and never updated**. Re-pricing an offer later reaches only promises created after the re-price — no cutoff date, no backfill, every existing customer grandfathered by construction. Same discipline as 0032, and the reason `insertStackedPromise` is the ONLY writer.
+- **The bar of a NEW promise is `(highest bar this org already carries) + (its own amount)`** — whether or not that earlier promise has been earned, because cumulative payments only ever go up. `highestBarCents` reads BOTH the promises table and the account's own frozen trigger, so it is right even for an org whose welcome promise row was never materialised. The ladder:
+
+  | situation | ladder |
+  |---|---|
+  | brand-new $400 account | $400 @ $400 (unchanged from today) |
+  | ...then referred | + $500 @ $900 |
+  | ...a third promise | + $500 @ $1,400, and so on, no ceiling |
+  | grandfathered $25 account, referred | $25 @ $25, then $500 @ $525 |
+
+- **An outstanding promise is a promise, not money.** No `local_promos` row exists until it is granted, so it is absent from `credited` / `balance` / `actual_balance` / spendable everywhere. Do NOT "helpfully" surface it in a balance figure.
+- **The referral offer has NO up-front portion** — the whole amount lands when the bar is crossed. The $5 up-front gift belongs to the welcome offer only, and is unchanged for every cohort.
+- **Referral credits STACK with the welcome offer, never replace it.** Two consequences that are easy to get backwards: (a) the welcome remainder subtracts `sumEntitlementGrantsForOrg` (everything EXCEPT `referral_reward`) — counting a $500 referral there would silently cancel a $400 welcome remainder; (b) `grantCredit('invite_welcome')` no longer DELETES the org's `welcome` row (it used to, so the two could not stack). **Nothing on an invite / referral path may remove or reduce an existing promise or an already-granted credit.**
+
+### The referral chain
+
+1. Someone signs up through another org's invite link. client-service calls **`POST /internal/referrals/claim`** `{orgId, referrerOrgId}`; the INVITEE gets an outstanding promise carrying `referrer_org_id`, and nothing is granted.
+2. When the INVITEE **EARNS** it (their OWN payments cross their bar), that same moment opens an identical promise for the INVITER, carrying `referred_org_id` = the invitee, at the INVITER's own next bar.
+3. The inviter earns it only on their OWN payments. **It is never granted for free, and it is never opened by the invitee merely signing up.** Repeats without limit.
+
+**The referral amount lives on the `referral_reward` `local_promo_codes` row ($500 today)** — NOT a code constant and NOT a column default. That row is already re-priceable at runtime via `PATCH /internal/promo-codes/referral_reward`, so re-pricing the referral offer needs no migration and cannot reach a promise that already froze its own figure. Unlike `admin_grant` / `welcome_completion`, its `amount_cents` is therefore **not** a 0 placeholder. The INVITER's promise copies the INVITEE's frozen amount (literally "identical"), not the current price.
+
+**Exactly-once is structural — no new bookkeeping:**
+
+- the grant is a `local_promos` row with `idempotency_key = promise:<id>`, deduped by `idx_local_promos_org_idempotency`. It uses the STACKING key (like `admin_grant`) rather than `(org, promo_code)`, because an inviter legitimately holds several referral grants under one code.
+- the inviter promise is deduped by the partial unique index on `(org_id, referred_org_id)`.
+- a re-claimed invite hits the partial unique index on `org_id WHERE referrer_org_id IS NOT NULL` and is a no-op; a claim by a DIFFERENT inviter is a **409** (an org is referred once — guessing which inviter wins is not billing's call).
+
+**Deadlock + crash safety.** The invitee's grant + stamp commit in one transaction; the inviter's promise is opened in a **SEPARATE** transaction afterwards — never nested, because A referring B while B refers A would otherwise deadlock on each other's `billing_accounts` row lock. If the process dies in between, `reconcileInviterPromises` re-opens it on the next settle, and the sweep keeps that org in its candidate set until the inviter promise exists.
+
+**Who drives it (never the browser).** `settleFreeCreditPromises` (`src/lib/free-credit-settlement.ts`) is the ONE entry point — it materialises the welcome promise, runs `settleWelcomeCompletion`, then `settleReferralPromises`. Called from `composeAccountFunds`, the checkout route, `GET /v1/free-credit-promises`, and unconditionally from the hourly sweep. A request can only make an already-EARNED grant land sooner; every condition is derived from Stripe's record of money received plus billing's own ledger. `computeBalance` still deliberately does NOT settle.
+
+**Fail loud:** a missing `referral_reward` seed THROWS (→ 500 on the claim, 502 on the account read), exactly like the `welcome_completion` seed. Prod HAS lost promo-code seeds before (see the migrations section).
+
+**The welcome promise row is a MIRROR, not the source of truth for the welcome grant.** `settleWelcomeCompletion` still reads `billing_accounts.free_credit_*` and its arithmetic is untouched; `ensureWelcomePromise` copies those frozen figures into a row so the welcome offer is one of the listed promises and so a referral bar can stack above it. It is deliberately NOT created for an account excluded from the welcome completion (that promise can never be granted, so listing it would be a lie), which is also why the sweep's candidate query skips a `welcome` promise whose account is ineligible.
+
+Verified on a prod fork (`br-withered-fog-a1a1bnsc` off the prod default): 89/89 eligible accounts backfilled to a welcome promise, all at the grandfathered **2500/2500** copied from their own rows, 0 marked granted (prod has no `welcome_completion` grant yet), the 112 promo rows and $1,093 gifted total untouched, re-applying the migration touches **0** rows, and a real grandfathered org referred today resolves to **$500 @ $525**.
+
+**Teardown** deletes an org's OWN promises. A promise held by ANOTHER org that merely REFERENCES it (an inviter's promise naming the deleted org as the referral that converted) is deliberately left alone — the inviter genuinely earned it.
 
 ## Welcome-completion gift — "$N in free credits", automatic (`src/lib/welcome-completion.ts`)
 
@@ -106,7 +156,7 @@ Onboarding promises every new customer **$N of free credits**. Signup only grant
 **The rule (product-locked):**
 
 - An org receives **its own `free_credit_entitlement_cents` in free credits IN TOTAL**, welcome gift included.
-- The completion amount is **DERIVED**: `entitlement − SUM(local_promos)`. **Never hardcode the difference** — it stays correct across cohorts, if the welcome amount is re-priced (0018/0019/0028 all moved it), or if the org never got a welcome row at all. A re-priced $10 welcome leaves a $15 completion on a $25 account; an org already gifted its full entitlement gets nothing.
+- The completion amount is **DERIVED**: `entitlement − SUM(local_promos EXCLUDING referral rewards)` (`sumEntitlementGrantsForOrg`). **Never hardcode the difference** — it stays correct across cohorts, if the welcome amount is re-priced (0018/0019/0028 all moved it), or if the org never got a welcome row at all. A re-priced $10 welcome leaves a $15 completion on a $25 account; an org already gifted its full entitlement gets nothing.
 - It is **EARNED when cumulative SUCCEEDED payments reach that account's own `free_credit_paid_trigger_cents`**, net of refunds + lost disputes. The trigger is **money actually received, NOT usage consumed** — the account model is threshold-postpaid, so an org can consume on credit before paying anything, and we must not gift credits to someone whose card may still fail.
 
 ### The offer amount is a PER-ACCOUNT property, frozen at account creation (migration 0032)
@@ -332,9 +382,11 @@ Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they rea
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
-| `DELETE` | `/internal/accounts/by-org/:orgId` | client-service org teardown leg. Service-auth only; `:orgId` is the internal org UUID. Deletes billing-owned org rows (`billing_accounts`, `local_promos`, `credit_depletion_episodes`, `campaign_authorize_costs`, `brand_daily_budgets`, `welcome_credit_claims`) in one transaction. Idempotent: no rows → success. No cross-service fan-out. |
-| `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. `invite_welcome` replaces the existing `$25` welcome row. Used by api-service invite claim handler (DIS-64). |
+| `DELETE` | `/internal/accounts/by-org/:orgId` | client-service org teardown leg. Service-auth only; `:orgId` is the internal org UUID. Deletes billing-owned org rows (`billing_accounts`, `local_promos`, `credit_depletion_episodes`, `campaign_authorize_costs`, `brand_daily_budgets`, `welcome_credit_claims`, `free_credit_promises`) in one transaction. A promise held by ANOTHER org that merely references this one is deliberately kept. Idempotent: no rows → success. No cross-service fan-out. |
+| `POST` | `/internal/credits/grant` | platform-issued grant — body `{orgId, amountCents, reason: invite_reward\|invite_welcome}` → `{ok, newBalanceCents}`. Idempotent on `(orgId, reason)`. BOTH reasons are purely ADDITIVE — `invite_welcome` used to DELETE the org's `welcome` row so the two could not stack; that is retired (see "Free-credit promises"). Used by api-service invite claim handler (DIS-64). |
 | `GET` | `/internal/accounts/by-org/:orgId/balance` | user-less spendable-balance read for platform/fleet aggregators (features-service accounts audit). Service-auth + `:orgId` PATH only — NO `x-org-id`/`x-user-id`/sentinel. Pure read (no reload, no episode mutation). → `{ balance_cents, actual_balance_cents, depleted, has_auto_topup }`. `has_auto_topup` — SAME field name + semantics as `/v1/accounts` (topup config present AND chargeable card AND non-blocked issuing country) — the "never runs dry" signal fleet aggregators use to keep a low-balance auto-topup org classified active. 404 no account, 502 stripe/runs down. |
+| `POST` | `/internal/referrals/claim` | client-service records that an org signed up through another org's invite link — body `{orgId, referrerOrgId}` → `{ok, alreadyClaimed, promise}`. Opens the INVITEE's outstanding referral promise (bar stacks above every bar it already carries) and remembers the referrer; grants NOTHING. Service-auth only. Idempotent on a re-claim; **409** when the org was already referred by a DIFFERENT org; 400 on self-referral; 500 when the `referral_reward` seed is missing. See "Free-credit promises". |
+| `GET` | `/v1/free-credit-promises` | every promise this org is still waiting on, for the customer dashboard (via the api-service gateway; org headers). → `{org_id, paid_topups_cents, promises[]}` cheapest bar first, each with `amount_cents` (what would actually land), `paid_trigger_cents`, `paid_so_far_cents`, `remaining_to_unlock_cents`, `progress_pct`, `referred_org_id` (the referred org that caused it — the dashboard resolves the brand), `referrer_org_id`. Settles first, so an earned grant lands sooner; it can never conjure one. 502 when stripe-service is down. |
 | `POST` | `/internal/dunning/tick` | run one out-of-credit dunning pass (ops/manual). Same pass runs on the in-process hourly scheduler. → `{processed, recovered, followup3dSent, followup10dSent}`. |
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget` | READ this org's current daily budget for a brand (service auth + `x-org-id`). → `{brandId, dailyBudgetCents, updatedAt}`; unset for that org → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
