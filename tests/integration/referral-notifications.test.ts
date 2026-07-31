@@ -67,6 +67,14 @@ describe("referral notifications", () => {
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockResolvedValue({
       totalCostInUsdCents: "0",
     } as never);
+    // Every send hangs off a REAL run: the email service creates its own run as a
+    // child of x-run-id, so runs-service rejects a parent that does not exist.
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(
+      "dddddddd-1111-4ddd-8ddd-111111111111" as never
+    );
+    vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(
+      undefined as never
+    );
     vi.spyOn(brandClient, "resolveOrgDisplayIdentity").mockResolvedValue({
       brandId: "cccccccc-1111-4ccc-8ccc-111111111111",
       name: "Acme",
@@ -252,6 +260,45 @@ describe("referral notifications", () => {
     expect(result.granted).toHaveLength(1);
     expect(result.inviterPromisesOpened).toBe(1);
     expect(console.error).toHaveBeenCalled();
+  });
+
+  it("hangs every send off a real platform run, never a minted UUID", async () => {
+    // transactional-email-service creates its send as a run CHILD of x-run-id, so
+    // runs-service 400s on a parent that does not exist and the mail is dropped
+    // with {sent:false} — silently, because the send is fire-and-forget. Verified
+    // against prod: a random uuid gives sent:false, a real platform run sent:true.
+    await newSignup(inviter);
+    await newSignup(invitee);
+    await claimReferral(invitee, inviter);
+    await settleReferralPromises(invitee, cents(900));
+
+    expect(runsClient.createPlatformRun).toHaveBeenCalled();
+    for (const call of sendMock.mock.calls) {
+      expect((call[0] as { runId: string }).runId).toBe(
+        "dddddddd-1111-4ddd-8ddd-111111111111"
+      );
+    }
+    // And the run it opened is closed again, so notifications do not pile up
+    // `running` platform runs forever.
+    expect(runsClient.completePlatformRun).toHaveBeenCalled();
+  });
+
+  it("skips the send, and does NOT burn the marker, when no run can be opened", async () => {
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(null as never);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await newSignup(inviter);
+    await newSignup(invitee);
+    await claimReferral(invitee, inviter);
+    await settleReferralPromises(invitee, cents(900));
+
+    expect(sendMock).not.toHaveBeenCalled();
+    const rows = await db
+      .select()
+      .from(freeCreditPromises)
+      .where(eq(freeCreditPromises.orgId, inviter));
+    const referral = rows.find((r) => r.referredOrgId === invitee)!;
+    expect(referral.openedNotifiedAt).toBeNull();
   });
 
   it("still sends when the referred org cannot be named", async () => {

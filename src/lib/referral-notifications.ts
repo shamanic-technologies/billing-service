@@ -45,6 +45,17 @@
  * the caller whose update returns a row sends. Two racing settles therefore
  * produce one email, and a replayed payment produces none.
  *
+ * ## Every send needs a REAL run
+ *
+ * transactional-email-service records each send as a run child of the `x-run-id`
+ * it is handed, so that header must name a run runs-service already knows. There
+ * is no end user on a settle, so this module opens a PLATFORM run per message
+ * (`createPlatformRun`) and closes it afterwards. A minted-on-the-spot UUID looks
+ * right and is silently fatal: the email service answers 200 with
+ * `{sent: false, reason: "Run creation failed: parentRunId … does not exist"}`,
+ * and because the send is fire-and-forget nothing surfaces it. Verified against
+ * prod both ways before this was written.
+ *
  * ## Fail-soft, deliberately
  *
  * The documented exception to this repo's fail-loud rule, same posture as the
@@ -52,7 +63,6 @@
  * information and the mail is not. A recipient we cannot resolve, or a send that
  * throws, logs loudly and returns. It never fails, delays or rolls back a grant.
  */
-import crypto from "crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { freeCreditPromises, type FreeCreditPromise } from "../db/schema.js";
@@ -62,6 +72,7 @@ import {
   sumSucceededTopupsForOrg,
 } from "./stripe-service-client.js";
 import { resolveOrgDisplayIdentity } from "./brand-service-client.js";
+import { completePlatformRun, createPlatformRun } from "./runs-client.js";
 import { gte } from "./cents.js";
 import { Decimal } from "decimal.js";
 
@@ -102,6 +113,25 @@ async function claimNotification(
     .returning({ id: freeCreditPromises.id });
 
   return claimed.length > 0;
+}
+
+/**
+ * Open the run the email service will hang its own send under.
+ *
+ * NOT optional and NOT cosmetic: transactional-email-service creates its send as a
+ * child of the `x-run-id` it receives, so runs-service rejects a parent that does
+ * not exist and the email service answers 200 with
+ * `{sent: false, reason: "Run creation failed: parentRunId <uuid> does not exist"}`.
+ * A `crypto.randomUUID()` here would drop every referral message on the floor, and
+ * since the send is fire-and-forget nothing would ever surface it. Verified
+ * against prod: a random id yields `sent: false`, a real platform run `sent: true`.
+ *
+ * Null when no run could be opened, which the callers treat exactly like an
+ * unresolvable recipient — skip without claiming the marker, so the next sweep
+ * retries instead of losing the message.
+ */
+async function openNotificationRun(eventType: string): Promise<string | null> {
+  return createPlatformRun(`referral-notification:${eventType}`);
 }
 
 /** The address to write to, or null when the org has no billing customer yet. */
@@ -174,6 +204,11 @@ export async function notifyReferralRewardOpened(
     const recipientEmail = await recipientFor(promise.orgId);
     if (!recipientEmail) return;
 
+    // Also before claiming, for the same reason: no run means the email service
+    // would refuse the send, and burning the marker would lose it for good.
+    const runId = await openNotificationRun(REFERRAL_REWARD_OPENED_EVENT);
+    if (!runId) return;
+
     if (!(await claimNotification(promise.id, "openedNotifiedAt"))) return;
 
     const identity = promise.referredOrgId
@@ -184,7 +219,7 @@ export async function notifyReferralRewardOpened(
       eventType: REFERRAL_REWARD_OPENED_EVENT,
       orgId: promise.orgId,
       userId: SYSTEM_USER_ID,
-      runId: crypto.randomUUID(),
+      runId,
       recipientEmail,
       metadata: {
         amount: dollars(promise.amountCents),
@@ -195,6 +230,7 @@ export async function notifyReferralRewardOpened(
         referredOrg: identity?.name ?? "A new customer",
       },
     });
+    await completePlatformRun(runId);
   } catch (err) {
     // Never let a notification touch the money it is describing.
     console.error(
@@ -232,9 +268,12 @@ export async function notifyReferralCreditsGranted(
   promise: FreeCreditPromise
 ): Promise<void> {
   try {
-    // Recipient first, then claim — see notifyReferralRewardOpened.
+    // Recipient and run first, then claim — see notifyReferralRewardOpened.
     const recipientEmail = await recipientFor(promise.orgId);
     if (!recipientEmail) return;
+
+    const runId = await openNotificationRun(REFERRAL_CREDITS_GRANTED_EVENT);
+    if (!runId) return;
 
     if (!(await claimNotification(promise.id, "grantedNotifiedAt"))) return;
 
@@ -246,13 +285,14 @@ export async function notifyReferralCreditsGranted(
       eventType: REFERRAL_CREDITS_GRANTED_EVENT,
       orgId: promise.orgId,
       userId: SYSTEM_USER_ID,
-      runId: crypto.randomUUID(),
+      runId,
       recipientEmail,
       metadata: {
         amount: dollars(promise.amountCents),
         reason: grantReason(promise, identity?.name ?? null),
       },
     });
+    await completePlatformRun(runId);
   } catch (err) {
     console.error(
       `[billing-service] referral-credits-granted notification failed for promise ${promise.id}`,

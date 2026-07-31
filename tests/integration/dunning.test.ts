@@ -52,6 +52,13 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
       spent_cents: usage,
       as_of: "2026-06-08T00:00:00.000Z",
     }));
+    // Episodes opened without a request run (these fixtures) need a platform run
+    // for the follow-ups: transactional-email-service hangs its send off x-run-id
+    // as a child run, so a parent that does not exist means the mail is dropped.
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(
+      "eeeeeeee-1111-4eee-8eee-111111111111"
+    );
+    vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
 
     const emailClient = await import("../../src/lib/email-client.js");
     sendEmailSpy = vi.fn();
