@@ -246,6 +246,13 @@
       "when": 1791108000001,
       "tag": "0034_referral_notification_markers",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791194400000,
+      "tag": "0035_brand_funnel_daily_budgets",
+      "breakpoints": true
     }
   ]
 }

@@ -494,6 +494,52 @@ export const brandDailyBudgetChanges = pgTable(
   ]
 );
 
+// brand_funnel_daily_budgets: ONE daily spend ceiling per (org, brand, funnel).
+// A brand sells through several SALES FUNNELS (brand-service's vocabulary:
+// reply_meeting, visit_meeting, visit_signup, visit_form) whose economics differ
+// by orders of magnitude, so they must be fundable independently.
+//
+// The brand-level value is DERIVED from these rows (their sum) once any exist —
+// see lib/brand-funnel-budgets.ts. A brand that has never set per-funnel ceilings
+// keeps its brand_daily_budgets row as the authoritative value (no backfill), so
+// every existing consumer of the brand-level read is unaffected.
+//
+// 0 is a legal value ("not funding that funnel right now"), including a set where
+// every funnel is 0 (a brand in pause). The per-funnel product MINIMUM applies
+// only to a funded (> 0) funnel and lives in the service layer, not in a CHECK —
+// the minimums are product figures that move.
+export const brandFunnelDailyBudgets = pgTable(
+  "brand_funnel_daily_budgets",
+  {
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    /** A brand-service sales-funnel key. Validated in the service layer. */
+    funnelKey: text("funnel_key").notNull(),
+    dailyBudgetCents: numeric("daily_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "brand_funnel_daily_budgets_pkey",
+      columns: [table.orgId, table.brandId, table.funnelKey],
+    }),
+    index("brand_funnel_daily_budgets_org_brand_idx").on(
+      table.orgId,
+      table.brandId
+    ),
+  ]
+);
+
+export type BrandFunnelDailyBudget =
+  typeof brandFunnelDailyBudgets.$inferSelect;
+export type NewBrandFunnelDailyBudget =
+  typeof brandFunnelDailyBudgets.$inferInsert;
+
 export type BrandDailyBudgetChange = typeof brandDailyBudgetChanges.$inferSelect;
 export type NewBrandDailyBudgetChange =
   typeof brandDailyBudgetChanges.$inferInsert;
