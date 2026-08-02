@@ -8,6 +8,7 @@ import {
 import {
   billingAccounts,
   brandDailyBudgets,
+  brandFunnelDailyBudgets,
   campaignAuthorizeCosts,
   creditDepletionEpisodes,
   freeCreditPromises,
@@ -86,6 +87,12 @@ async function deleteBillingStateByOrg(
       .where(eq(brandDailyBudgets.orgId, orgId))
       .returning({ brandId: brandDailyBudgets.brandId });
 
+    // Per-funnel ceilings are this org's own pacing config for the same brands.
+    const deletedFunnelBudgets = await tx
+      .delete(brandFunnelDailyBudgets)
+      .where(eq(brandFunnelDailyBudgets.orgId, orgId))
+      .returning({ funnelKey: brandFunnelDailyBudgets.funnelKey });
+
     // This org's OWN promises. A promise held by ANOTHER org that merely REFERENCES
     // this one (an inviter's promise naming this org as the referral that converted)
     // is deliberately left alone: the inviter genuinely earned it, and it stays
@@ -106,6 +113,7 @@ async function deleteBillingStateByOrg(
       creditDepletionEpisodes: deletedDunningEpisodes.length,
       campaignAuthorizeCosts: deletedCampaignCosts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
+      brandFunnelDailyBudgets: deletedFunnelBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
     };

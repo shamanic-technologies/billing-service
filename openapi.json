@@ -422,6 +422,9 @@
           "brandDailyBudgets": {
             "type": "integer"
           },
+          "brandFunnelDailyBudgets": {
+            "type": "integer"
+          },
           "welcomeCreditClaims": {
             "type": "integer"
           },
@@ -435,6 +438,7 @@
           "creditDepletionEpisodes",
           "campaignAuthorizeCosts",
           "brandDailyBudgets",
+          "brandFunnelDailyBudgets",
           "welcomeCreditClaims",
           "freeCreditPromises"
         ]
@@ -810,6 +814,138 @@
         ]
       },
       "SetBrandDailyBudgetRequest": {
+        "type": "object",
+        "properties": {
+          "dailyBudgetCents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dailyBudgetCents"
+        ]
+      },
+      "BrandFunnelKey": {
+        "type": "string",
+        "enum": [
+          "reply_meeting",
+          "visit_meeting",
+          "visit_signup",
+          "visit_form"
+        ]
+      },
+      "BrandFunnelDailyBudget": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "$ref": "#/components/schemas/BrandFunnelKey"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "funnelKey",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
+      "ReadBrandFunnelDailyBudgets": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "funnels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "dailyBudgetCents",
+          "funnels"
+        ]
+      },
+      "BrandFunnelDailyBudgets": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "funnels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "orgId",
+          "dailyBudgetCents",
+          "funnels"
+        ]
+      },
+      "SetBrandFunnelDailyBudgetSetRequest": {
+        "type": "object",
+        "properties": {
+          "funnels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "funnelKey": {
+                  "type": "string"
+                },
+                "dailyBudgetCents": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "funnelKey",
+                "dailyBudgetCents"
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "funnels"
+        ]
+      },
+      "SetBrandFunnelDailyBudgetRequest": {
         "type": "object",
         "properties": {
           "dailyBudgetCents": {
@@ -3216,6 +3352,456 @@
           },
           "400": {
             "description": "Invalid brandId or dailyBudgetCents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This brand is funded per sales funnel, so its daily budget is DERIVED (the sum of the per-funnel ceilings). Write the per-funnel routes instead.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/funnel-budgets": {
+      "get": {
+        "summary": "Read this org's per-funnel daily ceilings for a brand",
+        "description": "Returns the caller org's per-SALES-FUNNEL daily spend ceilings for this brand (brand-service's funnel vocabulary: reply_meeting, visit_meeting, visit_signup, visit_form), plus the brand-level total. Service-to-service read with x-api-key plus x-org-id. A brand that has never set per-funnel ceilings returns funnels: [] and its brand-level value — never a fabricated split. dailyBudgetCents is exactly what GET /internal/brands/{brandId}/daily-budget serves, so no consumer needs to recompose the sum itself.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-funnel ceilings (empty when none set) + brand total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandFunnelDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/funnel-budgets": {
+      "get": {
+        "summary": "Read a brand's per-funnel daily ceilings (user, via the gateway)",
+        "description": "Same view as the internal read, for the user's own org — brand Settings reads its ceilings back. A brand with no per-funnel ceilings returns funnels: [] and its brand-level value.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-funnel ceilings (empty when none set) + brand total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandFunnelDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or missing org headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Set a brand's WHOLE per-funnel ceiling set at once (atomic)",
+        "description": "Writes every per-funnel daily ceiling for this org+brand in ONE transaction — signup checkout uses this. Funnels absent from the body are removed. A rejected set leaves nothing half-applied. A ceiling of 0 means 'not funding that funnel right now' and is accepted, INCLUDING a set where every funnel is 0 (a brand in pause). A FUNDED funnel below its product minimum is refused with a readable reason: $1/day for visit_signup and visit_form, $24/day for reply_meeting and visit_meeting. Once ceilings exist, the brand's daily budget is their SUM and the brand-level write is refused (409).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBrandFunnelDailyBudgetSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored ceilings + the resulting brand-level total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandFunnelDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId, unknown or duplicated funnel key, or a funded funnel below its minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/funnel-budgets/{funnelKey}": {
+      "patch": {
+        "summary": "Set ONE funnel's daily ceiling for a brand",
+        "description": "Sets a single sales funnel's daily spend ceiling — brand Settings changes them one at a time. Untouched funnels keep their ceiling. Same rules as the whole-set write: 0 is legal (not funding that funnel), a funded funnel below its product minimum is refused with a readable reason.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "$ref": "#/components/schemas/BrandFunnelKey"
+            },
+            "required": true,
+            "name": "funnelKey",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBrandFunnelDailyBudgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored ceilings + the resulting brand-level total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandFunnelDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId, unknown funnel key, or a funded funnel below its minimum",
             "content": {
               "application/json": {
                 "schema": {

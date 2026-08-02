@@ -336,6 +336,7 @@ export const InternalAccountTeardownDeletedRowsSchema = z
     creditDepletionEpisodes: z.number().int(),
     campaignAuthorizeCosts: z.number().int(),
     brandDailyBudgets: z.number().int(),
+    brandFunnelDailyBudgets: z.number().int(),
     welcomeCreditClaims: z.number().int(),
     freeCreditPromises: z.number().int(),
   })
@@ -572,6 +573,74 @@ export const ReadBrandDailyBudgetHistorySchema = z
     history: z.array(BrandDailyBudgetChangeSchema),
   })
   .openapi("ReadBrandDailyBudgetHistory");
+
+// --- Per-funnel daily ceilings (the brand budget, split by sales funnel) ---
+
+export const BrandFunnelKeySchema = z
+  .enum(["reply_meeting", "visit_meeting", "visit_signup", "visit_form"])
+  .openapi("BrandFunnelKey");
+
+export const SetBrandFunnelDailyBudgetRequestSchema = z
+  .object({
+    /**
+     * This funnel's per-day spend ceiling, in cents. Non-negative. 0 means "not
+     * funding this funnel right now" and is always accepted; a FUNDED funnel
+     * below its product minimum is refused with a readable reason.
+     */
+    dailyBudgetCents: z.union([z.string(), z.number()]),
+  })
+  .openapi("SetBrandFunnelDailyBudgetRequest");
+
+export const SetBrandFunnelDailyBudgetSetRequestSchema = z
+  .object({
+    /**
+     * The whole set, written atomically. Funnels absent from this list are
+     * removed. A set whose ceilings are ALL zero is accepted (a brand in pause).
+     */
+    funnels: z
+      .array(
+        z.object({
+          funnelKey: z.string(),
+          dailyBudgetCents: z.union([z.string(), z.number()]),
+        })
+      )
+      .min(1, "funnels must contain at least one funnel"),
+  })
+  .openapi("SetBrandFunnelDailyBudgetSetRequest");
+
+export const BrandFunnelDailyBudgetSchema = z
+  .object({
+    funnelKey: BrandFunnelKeySchema,
+    /** This funnel's daily ceiling, decimal string (numeric(16,10)). */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("BrandFunnelDailyBudget");
+
+export const ReadBrandFunnelDailyBudgetsSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /**
+     * The brand-level daily budget — the SUM of the ceilings below when the
+     * brand is funnel-funded, otherwise its brand-level scalar (null when never
+     * set). Byte-identical to what GET /internal/brands/{brandId}/daily-budget
+     * serves, so the two surfaces can never disagree.
+     */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** Per-funnel ceilings; empty when this brand has never set any. */
+    funnels: z.array(BrandFunnelDailyBudgetSchema),
+  })
+  .openapi("ReadBrandFunnelDailyBudgets");
+
+export const BrandFunnelDailyBudgetsSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    /** The brand-level daily budget after this write = the sum of the ceilings. */
+    dailyBudgetCents: CentsStringSchema,
+    funnels: z.array(BrandFunnelDailyBudgetSchema),
+  })
+  .openapi("BrandFunnelDailyBudgets");
 
 // --- Public Stats ---
 
@@ -1398,6 +1467,145 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId or dailyBudgetCents",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description:
+        "This brand is funded per sales funnel, so its daily budget is DERIVED " +
+        "(the sum of the per-funnel ceilings). Write the per-funnel routes instead.",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/funnel-budgets",
+  summary: "Read this org's per-funnel daily ceilings for a brand",
+  description:
+    "Returns the caller org's per-SALES-FUNNEL daily spend ceilings for this brand " +
+    "(brand-service's funnel vocabulary: reply_meeting, visit_meeting, visit_signup, " +
+    "visit_form), plus the brand-level total. Service-to-service read with x-api-key " +
+    "plus x-org-id. A brand that has never set per-funnel ceilings returns funnels: [] " +
+    "and its brand-level value — never a fabricated split. dailyBudgetCents is exactly " +
+    "what GET /internal/brands/{brandId}/daily-budget serves, so no consumer needs to " +
+    "recompose the sum itself.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Per-funnel ceilings (empty when none set) + brand total",
+      content: {
+        "application/json": { schema: ReadBrandFunnelDailyBudgetsSchema },
+      },
+    },
+    400: {
+      description: "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/funnel-budgets",
+  summary: "Read a brand's per-funnel daily ceilings (user, via the gateway)",
+  description:
+    "Same view as the internal read, for the user's own org — brand Settings reads " +
+    "its ceilings back. A brand with no per-funnel ceilings returns funnels: [] and " +
+    "its brand-level value.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Per-funnel ceilings (empty when none set) + brand total",
+      content: {
+        "application/json": { schema: ReadBrandFunnelDailyBudgetsSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId or missing org headers",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/brands/{brandId}/funnel-budgets",
+  summary: "Set a brand's WHOLE per-funnel ceiling set at once (atomic)",
+  description:
+    "Writes every per-funnel daily ceiling for this org+brand in ONE transaction — " +
+    "signup checkout uses this. Funnels absent from the body are removed. A rejected " +
+    "set leaves nothing half-applied. A ceiling of 0 means 'not funding that funnel " +
+    "right now' and is accepted, INCLUDING a set where every funnel is 0 (a brand in " +
+    "pause). A FUNDED funnel below its product minimum is refused with a readable " +
+    "reason: $1/day for visit_signup and visit_form, $24/day for reply_meeting and " +
+    "visit_meeting. Once ceilings exist, the brand's daily budget is their SUM and the " +
+    "brand-level write is refused (409).",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    body: {
+      content: {
+        "application/json": {
+          schema: SetBrandFunnelDailyBudgetSetRequestSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Stored ceilings + the resulting brand-level total",
+      content: {
+        "application/json": { schema: BrandFunnelDailyBudgetsSchema },
+      },
+    },
+    400: {
+      description:
+        "Invalid brandId, unknown or duplicated funnel key, or a funded funnel below its minimum",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/v1/brands/{brandId}/funnel-budgets/{funnelKey}",
+  summary: "Set ONE funnel's daily ceiling for a brand",
+  description:
+    "Sets a single sales funnel's daily spend ceiling — brand Settings changes them " +
+    "one at a time. Untouched funnels keep their ceiling. Same rules as the whole-set " +
+    "write: 0 is legal (not funding that funnel), a funded funnel below its product " +
+    "minimum is refused with a readable reason.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({
+      brandId: z.string().uuid(),
+      funnelKey: BrandFunnelKeySchema,
+    }),
+    body: {
+      content: {
+        "application/json": {
+          schema: SetBrandFunnelDailyBudgetRequestSchema,
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Stored ceilings + the resulting brand-level total",
+      content: {
+        "application/json": { schema: BrandFunnelDailyBudgetsSchema },
+      },
+    },
+    400: {
+      description:
+        "Invalid brandId, unknown funnel key, or a funded funnel below its minimum",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
