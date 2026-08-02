@@ -14,9 +14,14 @@ import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
+  brandFunnelDailyBudgets,
   type BrandDailyBudget,
   type BrandDailyBudgetChange,
 } from "../db/schema.js";
+import {
+  BrandBudgetManagedByFunnelsError,
+  sumFunnelBudgets,
+} from "./brand-funnel-budgets.js";
 
 export interface UpsertBrandDailyBudgetResult {
   row: BrandDailyBudget;
@@ -51,6 +56,26 @@ export async function upsertBrandDailyBudget(
 ): Promise<UpsertBrandDailyBudgetResult> {
   return db.transaction(async (tx) => {
     const changedAt = new Date();
+
+    // A funnel-funded brand derives this value from its per-funnel ceilings
+    // (lib/brand-funnel-budgets.ts). Accepting a brand-level write would leave
+    // two numbers claiming to be the same thing, so refuse it — the caller
+    // surfaces a 409 pointing at the per-funnel routes.
+    const funnelRows = await tx
+      .select({ funnelKey: brandFunnelDailyBudgets.funnelKey })
+      .from(brandFunnelDailyBudgets)
+      .where(
+        and(
+          eq(brandFunnelDailyBudgets.orgId, orgId),
+          eq(brandFunnelDailyBudgets.brandId, brandId)
+        )
+      )
+      .limit(1);
+    if (funnelRows.length > 0) {
+      throw new BrandBudgetManagedByFunnelsError(
+        "This brand's daily budget is set per sales funnel. Change the per-funnel ceilings instead — the brand's daily budget is their total."
+      );
+    }
 
     const [existing] = await tx
       .select()
@@ -119,11 +144,45 @@ export async function getBrandDailyBudgetHistory(
     );
 }
 
-/** Read one org's stored daily budget for a brand, or null if none set. */
+/**
+ * Read one org's current daily budget for a brand, or null if none set.
+ *
+ * SHAPE AND MEANING ARE UNCHANGED for every consumer. Once the brand carries
+ * per-funnel ceilings, this answers their SUM — the one number the launch gate,
+ * the runway warnings, the credit alerts, the Overview tile and campaign-service
+ * all keep reading. No consumer re-composes that sum itself.
+ *
+ * A brand that has never set per-funnel ceilings reads its own brand-level row,
+ * exactly as before (no backfill). The two states are mutually exclusive: the
+ * first per-funnel write drops the brand-level row, and a brand-level write
+ * against a funnel-funded brand is refused.
+ */
 export async function getBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
+  const funnelRows = await db
+    .select()
+    .from(brandFunnelDailyBudgets)
+    .where(
+      and(
+        eq(brandFunnelDailyBudgets.orgId, orgId),
+        eq(brandFunnelDailyBudgets.brandId, brandId)
+      )
+    );
+  if (funnelRows.length > 0) {
+    const updatedAt = funnelRows.reduce(
+      (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
+      funnelRows[0].updatedAt
+    );
+    return {
+      brandId,
+      orgId,
+      dailyBudgetCents: sumFunnelBudgets(funnelRows),
+      updatedAt,
+    };
+  }
+
   const [row] = await db
     .select()
     .from(brandDailyBudgets)
