@@ -26,7 +26,7 @@
  * with no signal.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
@@ -216,13 +216,19 @@ export async function attributeBrandBudgetToSingleFunnel(
       return { applied: false, reason: "no brand-level ceiling to attribute" };
     }
 
-    await tx.insert(brandFunnelDailyBudgets).values({
-      orgId,
-      brandId,
-      funnelKey,
-      dailyBudgetCents: scalar.dailyBudgetCents,
-      updatedAt: scalar.updatedAt,
-    });
+    // INSERT ... SELECT, so the amount and the timestamp are carried by
+    // Postgres and never round-trip through JS. A `timestamptz` holds
+    // MICROseconds and a JS Date holds milliseconds, so re-inserting a value
+    // read into a Date silently truncates it (`…:32.764549+00` came back as
+    // `…:32.764+00` on a live row). Nothing about money depended on those
+    // microseconds, but "the row is copied verbatim" has to be true as written
+    // — the copied timestamp is also the marker of what this sweep touched.
+    await tx.execute(sql`
+      INSERT INTO brand_funnel_daily_budgets (org_id, brand_id, funnel_key, daily_budget_cents, updated_at)
+      SELECT org_id, brand_id, ${funnelKey}, daily_budget_cents, updated_at
+        FROM brand_daily_budgets
+       WHERE org_id = ${orgId} AND brand_id = ${brandId}
+    `);
 
     await tx
       .delete(brandDailyBudgets)
