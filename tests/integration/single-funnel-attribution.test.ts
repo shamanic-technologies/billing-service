@@ -43,6 +43,26 @@ describe("attributing a brand-level ceiling to its single funnel", () => {
     await closeDb();
   });
 
+  it("copies a MICROsecond-precision timestamp exactly, not via a JS Date", async () => {
+    // timestamptz holds microseconds; a JS Date holds milliseconds. Reading the
+    // row into a Date and re-inserting it truncates (a live row went from
+    // …:32.764549+00 to …:32.764+00), so the copy stays inside Postgres.
+    await sql`
+      INSERT INTO brand_daily_budgets (org_id, brand_id, daily_budget_cents, updated_at)
+      VALUES (${orgId}, ${brandId}, '1500.0000000000', '2026-08-05 13:31:32.764549+00')
+    `;
+
+    await attributeBrandBudgetToSingleFunnel(orgId, brandId, "reply_meeting");
+
+    // Rendered in UTC so the assertion does not depend on the server's timezone.
+    const [row] = await sql<{ updated_at: string }[]>`
+      SELECT to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') AS updated_at
+        FROM brand_funnel_daily_budgets
+       WHERE org_id = ${orgId} AND brand_id = ${brandId}
+    `;
+    expect(row.updated_at).toBe("2026-08-05 13:31:32.764549");
+  });
+
   it("leaves the brand-level read byte-identical, timestamp included", async () => {
     const updatedAt = new Date("2026-06-18T04:31:59.721Z");
     await seedScalar("5000.0000000000", updatedAt);
