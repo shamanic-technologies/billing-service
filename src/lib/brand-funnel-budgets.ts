@@ -15,10 +15,13 @@
  * consumer re-composes the sum itself — that is how two surfaces start
  * disagreeing about the same number.
  *
- * NO BACKFILL. A brand that has never set per-funnel ceilings keeps its
- * brand_daily_budgets row as the authoritative value and behaves exactly as it
- * does today. Splitting an existing budget across funnels would invent numbers
- * the customer never stated.
+ * NO BACKFILL for a brand selling through SEVERAL funnels. Splitting an existing
+ * budget across them would invent numbers the customer never stated, so such a
+ * brand keeps its brand_daily_budgets row as the authoritative value and behaves
+ * exactly as it does today. That rule never covered a brand selling through
+ * exactly ONE funnel — there the whole ceiling belongs to that funnel by
+ * construction, and recording it is an attribution rather than a split. See
+ * `single-funnel-attribution.ts`.
  *
  * The two states are mutually exclusive by construction: the first per-funnel
  * write DELETES the superseded brand-level row (in the same transaction), and
