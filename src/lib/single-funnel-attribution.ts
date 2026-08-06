@@ -33,50 +33,38 @@ import {
   brandDailyBudgets,
   brandFunnelDailyBudgets,
 } from "../db/schema.js";
-import { BRAND_FUNNEL_KEYS, type BrandFunnelKey } from "./brand-funnel-budgets.js";
+import {
+  ACCEPTED_FUNNEL_KEYS,
+  toStoredFunnelKey,
+  type BrandFunnelKey,
+} from "./brand-funnel-budgets.js";
 
-/**
- * brand-service renamed its four sales-funnel keys and now EMITS only the
- * canonical spellings; it still accepts the pre-retirement ones on write
- * forever. billing stores, serves and accepts the pre-retirement spellings —
- * `BRAND_FUNNEL_KEYS` — and the dashboard collapses both spellings onto them,
- * so those are what an attribution must write for the screen to render it.
- *
- * This map is therefore a READ-side translation of what brand-service answers,
- * not a change to billing's own vocabulary. (billing's write surface accepting
- * the canonical spellings too is a separate, unrelated gap.)
- */
-export const CANONICAL_FUNNEL_KEY_TO_BILLING: Record<string, BrandFunnelKey> = {
-  sales_meetings_from_conversation: "reply_meeting",
-  sales_meetings_from_website: "visit_meeting",
-  website_purchases: "visit_signup",
-  form_magnet: "visit_form",
-};
-
-/** A funnel spelling neither vocabulary can name. Aborts the sweep. */
+/** A funnel spelling billing cannot name. Aborts the sweep. */
 export class UnknownDeclaredFunnelError extends Error {
   constructor(funnelKey: string, brandId: string) {
     super(
       `brand ${brandId} declares sales funnel "${funnelKey}", which billing cannot name. ` +
-        `Known: ${[...BRAND_FUNNEL_KEYS, ...Object.keys(CANONICAL_FUNNEL_KEY_TO_BILLING)].join(", ")}.`
+        `Known: ${ACCEPTED_FUNNEL_KEYS.join(", ")}.`
     );
     this.name = "UnknownDeclaredFunnelError";
   }
 }
 
 /**
- * Collapse any spelling brand-service may answer with onto billing's key.
- * Throws on anything else — see the fail-loud note above.
+ * Collapse any spelling brand-service may answer with onto the stored key.
+ *
+ * One vocabulary, resolved in ONE place (`toStoredFunnelKey`): this sweep and
+ * the write routes must agree on which spellings name the same funnel, or the
+ * two could disagree about whether a brand is already funded on it.
+ *
+ * Throws on anything else, rather than skipping — see the fail-loud note above.
  */
 export function toBillingFunnelKey(
   funnelKey: string,
   brandId: string
 ): BrandFunnelKey {
-  if ((BRAND_FUNNEL_KEYS as readonly string[]).includes(funnelKey)) {
-    return funnelKey as BrandFunnelKey;
-  }
-  const mapped = CANONICAL_FUNNEL_KEY_TO_BILLING[funnelKey];
-  if (mapped) return mapped;
+  const resolved = toStoredFunnelKey(funnelKey);
+  if (resolved) return resolved;
   throw new UnknownDeclaredFunnelError(funnelKey, brandId);
 }
 

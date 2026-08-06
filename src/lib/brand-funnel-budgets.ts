@@ -43,7 +43,15 @@ import {
 } from "../db/schema.js";
 import { addCents, parseNonNegativeCents } from "./cents.js";
 
-/** brand-service's sales-funnel keys, verbatim. */
+/**
+ * The sales-funnel keys billing STORES, one row per funnel per org+brand.
+ *
+ * These are brand-service's pre-retirement spellings. brand-service has since
+ * renamed its four keys and now EMITS only the canonical ones, while accepting
+ * these forever; the dashboard reads both and collapses them onto these. So
+ * these stay the stored form — a ceiling is only useful if the screen that
+ * renders it and the store agree on which funnel it belongs to.
+ */
 export const BRAND_FUNNEL_KEYS = [
   "reply_meeting",
   "visit_meeting",
@@ -56,6 +64,49 @@ export type BrandFunnelKey = (typeof BRAND_FUNNEL_KEYS)[number];
 export function isBrandFunnelKey(value: string): value is BrandFunnelKey {
   return (BRAND_FUNNEL_KEYS as readonly string[]).includes(value);
 }
+
+/**
+ * Every OTHER spelling a caller may send for the same funnel: brand-service's
+ * canonical four.
+ *
+ * ACCEPTED ON WRITE, resolved to the stored key. Never emitted — every read
+ * still answers with the stored spelling, so no consumer changes.
+ *
+ * Two reasons this is not cosmetic:
+ *
+ *   - a caller sending the canonical word today gets a 400 "Unknown sales
+ *     funnel". The dashboard sends the stored spellings, so nothing breaks
+ *     right now — but it already READS both, ahead of its own catalogue
+ *     flipping, and the day it writes what it reads every ceiling write on this
+ *     service starts failing. Accepting both is what made the rename safe on
+ *     brand-service's side, for exactly the same reason;
+ *   - more sharply, the two spellings name ONE funnel while the primary key
+ *     treats them as two. Without resolution, `form_magnet` and `visit_form`
+ *     could both be stored for one brand and the brand-level read — which
+ *     answers the SUM of the ceilings — would silently DOUBLE. Resolving on
+ *     write makes that unrepresentable.
+ */
+export const ACCEPTED_FUNNEL_KEY_ALIASES: Record<string, BrandFunnelKey> = {
+  sales_meetings_from_conversation: "reply_meeting",
+  sales_meetings_from_website: "visit_meeting",
+  website_purchases: "visit_signup",
+  form_magnet: "visit_form",
+};
+
+/**
+ * Resolve any accepted spelling onto the stored key, or null if it names no
+ * funnel we know. Callers turn the null into a 400 quoting every accepted word.
+ */
+export function toStoredFunnelKey(value: string): BrandFunnelKey | null {
+  if (isBrandFunnelKey(value)) return value;
+  return ACCEPTED_FUNNEL_KEY_ALIASES[value] ?? null;
+}
+
+/** Every spelling accepted on write, for error messages. */
+export const ACCEPTED_FUNNEL_KEYS: readonly string[] = [
+  ...BRAND_FUNNEL_KEYS,
+  ...Object.keys(ACCEPTED_FUNNEL_KEY_ALIASES),
+];
 
 /** Customer-facing funnel names, for error messages a person can read. */
 export const BRAND_FUNNEL_LABELS: Record<BrandFunnelKey, string> = {
@@ -141,31 +192,38 @@ export function parseFunnelBudgetSet(
   const parsed: ParsedFunnelBudget[] = [];
 
   for (const entry of entries) {
-    if (typeof entry?.funnelKey !== "string" || !isBrandFunnelKey(entry.funnelKey)) {
+    const funnelKey =
+      typeof entry?.funnelKey === "string"
+        ? toStoredFunnelKey(entry.funnelKey)
+        : null;
+    if (!funnelKey) {
       throw new InvalidFunnelSetError(
-        `Unknown sales funnel "${String(entry?.funnelKey)}". Valid funnels: ${BRAND_FUNNEL_KEYS.join(", ")}.`
+        `Unknown sales funnel "${String(entry?.funnelKey)}". Valid funnels: ${ACCEPTED_FUNNEL_KEYS.join(", ")}.`
       );
     }
-    if (seen.has(entry.funnelKey)) {
+    // Deduped on the RESOLVED key, so the two spellings of one funnel are one
+    // funnel here too — otherwise a set carrying both would store two rows and
+    // double the brand-level total.
+    if (seen.has(funnelKey)) {
       throw new InvalidFunnelSetError(
-        `Sales funnel "${entry.funnelKey}" appears twice in the same set.`
+        `Sales funnel "${funnelKey}" appears twice in the same set.`
       );
     }
-    seen.add(entry.funnelKey);
+    seen.add(funnelKey);
 
     let dailyBudgetCents: string;
     try {
       dailyBudgetCents = parseNonNegativeCents(entry.dailyBudgetCents);
     } catch (err) {
       throw new InvalidFunnelSetError(
-        `${BRAND_FUNNEL_LABELS[entry.funnelKey]}: ${
+        `${BRAND_FUNNEL_LABELS[funnelKey]}: ${
           err instanceof Error ? err.message : "invalid dailyBudgetCents"
         }`
       );
     }
 
-    assertFundedFunnelMeetsMinimum(entry.funnelKey, dailyBudgetCents);
-    parsed.push({ funnelKey: entry.funnelKey, dailyBudgetCents });
+    assertFundedFunnelMeetsMinimum(funnelKey, dailyBudgetCents);
+    parsed.push({ funnelKey, dailyBudgetCents });
   }
 
   return parsed;
