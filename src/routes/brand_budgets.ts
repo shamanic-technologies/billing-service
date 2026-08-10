@@ -102,6 +102,11 @@ function respondToFunnelWriteError(err: unknown, res: Response): void {
  * that total is the number the rest of the fleet reads — a per-funnel change
  * that moved the brand's spend must not show staff a figure no other surface
  * serves. Strictly fire-and-forget, as on the brand-level write.
+ *
+ * The funded-minimum check runs INSIDE that write (it needs each funnel's own
+ * stored ceiling under the write lock, because a sub-minimum ceiling predating
+ * the minimum may be kept or raised), so its refusal surfaces here as the same
+ * readable 400 the shape validation gives.
  */
 async function applyFunnelWrite(
   req: Request,
@@ -111,8 +116,15 @@ async function applyFunnelWrite(
   entries: ParsedFunnelBudget[],
   mode: "replace" | "merge"
 ): Promise<void> {
+  let written;
+  try {
+    written = await setBrandFunnelDailyBudgets(orgId, brandId, entries, mode);
+  } catch (err) {
+    respondToFunnelWriteError(err, res);
+    return;
+  }
   const { funnels, previousBrandDailyBudgetCents, brandDailyBudgetCents } =
-    await setBrandFunnelDailyBudgets(orgId, brandId, entries, mode);
+    written;
 
   console.log(
     `[billing-service] brand funnel budgets ${mode}: brand=${brandId} org=${orgId} total=${brandDailyBudgetCents} funnels=${entries
@@ -356,7 +368,10 @@ router.get(
 // the body are removed, so the stored set is exactly what was sent. A ceiling of
 // 0 means "not funding that funnel right now" and is accepted — including a set
 // where EVERY funnel is 0 (a brand in pause). A FUNDED funnel below its product
-// minimum is refused with a readable reason (400).
+// minimum is refused with a readable reason (400), UNLESS that funnel's own
+// stored ceiling already sits below the minimum and the write keeps or raises it
+// (a ceiling predating the minimum is grandfathered — see
+// lib/brand-funnel-budgets.ts). Each funnel is judged against its own ceiling.
 router.put(
   "/v1/brands/:brandId/funnel-budgets",
   requireOrgHeaders,
@@ -391,8 +406,8 @@ router.put(
 // PATCH /v1/brands/:brandId/funnel-budgets/:funnelKey — set ONE funnel's ceiling
 // (brand Settings). Auth: org headers. Body: { dailyBudgetCents }.
 //
-// Untouched funnels keep their ceiling. Same 0-is-legal and funded-minimum rules
-// as the whole-set write.
+// Untouched funnels keep their ceiling. Same 0-is-legal, funded-minimum and
+// grandfathered-ceiling rules as the whole-set write.
 router.patch(
   "/v1/brands/:brandId/funnel-budgets/:funnelKey",
   requireOrgHeaders,

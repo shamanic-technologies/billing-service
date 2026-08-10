@@ -15,10 +15,13 @@
  * consumer re-composes the sum itself — that is how two surfaces start
  * disagreeing about the same number.
  *
- * NO BACKFILL. A brand that has never set per-funnel ceilings keeps its
- * brand_daily_budgets row as the authoritative value and behaves exactly as it
- * does today. Splitting an existing budget across funnels would invent numbers
- * the customer never stated.
+ * NO BACKFILL for a brand selling through SEVERAL funnels. Splitting an existing
+ * budget across them would invent numbers the customer never stated, so such a
+ * brand keeps its brand_daily_budgets row as the authoritative value and behaves
+ * exactly as it does today. That rule never covered a brand selling through
+ * exactly ONE funnel — there the whole ceiling belongs to that funnel by
+ * construction, and recording it is an attribution rather than a split. See
+ * `single-funnel-attribution.ts`.
  *
  * The two states are mutually exclusive by construction: the first per-funnel
  * write DELETES the superseded brand-level row (in the same transaction), and
@@ -40,7 +43,15 @@ import {
 } from "../db/schema.js";
 import { addCents, parseNonNegativeCents } from "./cents.js";
 
-/** brand-service's sales-funnel keys, verbatim. */
+/**
+ * The sales-funnel keys billing STORES, one row per funnel per org+brand.
+ *
+ * These are brand-service's pre-retirement spellings. brand-service has since
+ * renamed its four keys and now EMITS only the canonical ones, while accepting
+ * these forever; the dashboard reads both and collapses them onto these. So
+ * these stay the stored form — a ceiling is only useful if the screen that
+ * renders it and the store agree on which funnel it belongs to.
+ */
 export const BRAND_FUNNEL_KEYS = [
   "reply_meeting",
   "visit_meeting",
@@ -53,6 +64,49 @@ export type BrandFunnelKey = (typeof BRAND_FUNNEL_KEYS)[number];
 export function isBrandFunnelKey(value: string): value is BrandFunnelKey {
   return (BRAND_FUNNEL_KEYS as readonly string[]).includes(value);
 }
+
+/**
+ * Every OTHER spelling a caller may send for the same funnel: brand-service's
+ * canonical four.
+ *
+ * ACCEPTED ON WRITE, resolved to the stored key. Never emitted — every read
+ * still answers with the stored spelling, so no consumer changes.
+ *
+ * Two reasons this is not cosmetic:
+ *
+ *   - a caller sending the canonical word today gets a 400 "Unknown sales
+ *     funnel". The dashboard sends the stored spellings, so nothing breaks
+ *     right now — but it already READS both, ahead of its own catalogue
+ *     flipping, and the day it writes what it reads every ceiling write on this
+ *     service starts failing. Accepting both is what made the rename safe on
+ *     brand-service's side, for exactly the same reason;
+ *   - more sharply, the two spellings name ONE funnel while the primary key
+ *     treats them as two. Without resolution, `form_magnet` and `visit_form`
+ *     could both be stored for one brand and the brand-level read — which
+ *     answers the SUM of the ceilings — would silently DOUBLE. Resolving on
+ *     write makes that unrepresentable.
+ */
+export const ACCEPTED_FUNNEL_KEY_ALIASES: Record<string, BrandFunnelKey> = {
+  sales_meetings_from_conversation: "reply_meeting",
+  sales_meetings_from_website: "visit_meeting",
+  website_purchases: "visit_signup",
+  form_magnet: "visit_form",
+};
+
+/**
+ * Resolve any accepted spelling onto the stored key, or null if it names no
+ * funnel we know. Callers turn the null into a 400 quoting every accepted word.
+ */
+export function toStoredFunnelKey(value: string): BrandFunnelKey | null {
+  if (isBrandFunnelKey(value)) return value;
+  return ACCEPTED_FUNNEL_KEY_ALIASES[value] ?? null;
+}
+
+/** Every spelling accepted on write, for error messages. */
+export const ACCEPTED_FUNNEL_KEYS: readonly string[] = [
+  ...BRAND_FUNNEL_KEYS,
+  ...Object.keys(ACCEPTED_FUNNEL_KEY_ALIASES),
+];
 
 /** Customer-facing funnel names, for error messages a person can read. */
 export const BRAND_FUNNEL_LABELS: Record<BrandFunnelKey, string> = {
@@ -68,6 +122,9 @@ export const BRAND_FUNNEL_LABELS: Record<BrandFunnelKey, string> = {
  * EVERY funnel is 0 is a brand in pause, not an error. ("At least one funded
  * funnel" belongs to the checkout that spends money, not to storage: enforcing
  * it here would make it impossible to pause everything from settings.)
+ *
+ * The minimum governs what a customer may NEWLY STATE, not what one has already
+ * been running — see `assertFundedFunnelMeetsMinimum`.
  */
 export const BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS: Record<
   BrandFunnelKey,
@@ -127,9 +184,17 @@ export interface ParsedFunnelBudget {
 }
 
 /**
- * Validate one whole set BEFORE anything is written. Throws on the first
- * problem, so a rejected set leaves nothing half-applied (the caller has not
- * opened a transaction yet).
+ * Parse one whole set BEFORE anything is written: resolve every spelling onto
+ * its stored key, refuse a duplicate funnel, and read each amount as
+ * non-negative cents. Throws on the first problem, so a rejected set leaves
+ * nothing half-applied (the caller has not opened a transaction yet).
+ *
+ * The product MINIMUM is deliberately NOT checked here. Whether a sub-minimum
+ * value is legal depends on the funnel's own STORED ceiling (grandfathering),
+ * which is only trustworthy under the write lock — so that check runs inside the
+ * write transaction, in `setBrandFunnelDailyBudgets`. It throws the same error
+ * type, and a throw there rolls the transaction back, so a refused write still
+ * leaves nothing half-applied.
  */
 export function parseFunnelBudgetSet(
   entries: FunnelBudgetInput[]
@@ -138,31 +203,37 @@ export function parseFunnelBudgetSet(
   const parsed: ParsedFunnelBudget[] = [];
 
   for (const entry of entries) {
-    if (typeof entry?.funnelKey !== "string" || !isBrandFunnelKey(entry.funnelKey)) {
+    const funnelKey =
+      typeof entry?.funnelKey === "string"
+        ? toStoredFunnelKey(entry.funnelKey)
+        : null;
+    if (!funnelKey) {
       throw new InvalidFunnelSetError(
-        `Unknown sales funnel "${String(entry?.funnelKey)}". Valid funnels: ${BRAND_FUNNEL_KEYS.join(", ")}.`
+        `Unknown sales funnel "${String(entry?.funnelKey)}". Valid funnels: ${ACCEPTED_FUNNEL_KEYS.join(", ")}.`
       );
     }
-    if (seen.has(entry.funnelKey)) {
+    // Deduped on the RESOLVED key, so the two spellings of one funnel are one
+    // funnel here too — otherwise a set carrying both would store two rows and
+    // double the brand-level total.
+    if (seen.has(funnelKey)) {
       throw new InvalidFunnelSetError(
-        `Sales funnel "${entry.funnelKey}" appears twice in the same set.`
+        `Sales funnel "${funnelKey}" appears twice in the same set.`
       );
     }
-    seen.add(entry.funnelKey);
+    seen.add(funnelKey);
 
     let dailyBudgetCents: string;
     try {
       dailyBudgetCents = parseNonNegativeCents(entry.dailyBudgetCents);
     } catch (err) {
       throw new InvalidFunnelSetError(
-        `${BRAND_FUNNEL_LABELS[entry.funnelKey]}: ${
+        `${BRAND_FUNNEL_LABELS[funnelKey]}: ${
           err instanceof Error ? err.message : "invalid dailyBudgetCents"
         }`
       );
     }
 
-    assertFundedFunnelMeetsMinimum(entry.funnelKey, dailyBudgetCents);
-    parsed.push({ funnelKey: entry.funnelKey, dailyBudgetCents });
+    parsed.push({ funnelKey, dailyBudgetCents });
   }
 
   return parsed;
@@ -171,16 +242,53 @@ export function parseFunnelBudgetSet(
 /**
  * A funnel that IS funded has a product minimum. Zero is exempt — it means "not
  * funding that funnel right now", which is an ordinary state.
+ *
+ * GRANDFATHERING. The minimum polices what a customer may NEWLY STATE, not what
+ * one has already been running. Ceilings predating the minimum were carried over
+ * verbatim by the single-funnel attribution sweep — deliberately, because they
+ * are the money the brand is actually spending — so live brands sit below their
+ * funnel's floor today. Refusing every write of such a ceiling leaves its owner
+ * only two moves: leave it exactly alone, or defund it to zero. Raising it
+ * TOWARDS the floor would be refused, which is the wrong direction to block.
+ *
+ * So a funnel whose STORED ceiling is above zero and below its minimum may be
+ * re-stated or RAISED to any higher value, including one still below the
+ * minimum. It may not be LOWERED to another funded sub-minimum value: that is a
+ * new statement below the floor, which is exactly what the minimum exists to
+ * refuse. Zero is always accepted (defunding is never blocked).
+ *
+ * The grandfather is spent the moment the ceiling reaches its minimum — that
+ * falls out of the ordinary check below rather than needing its own branch,
+ * since a stored value at or above the minimum never enters the grandfather
+ * clause. It is derived from the stored ceiling and nothing else: no flag, no
+ * column, no per-org override.
+ *
+ * `storedDailyBudgetCents` is this funnel's OWN current ceiling (null when it has
+ * none), read under the write lock. Each funnel is judged against its own, so one
+ * grandfathered funnel in a set never licenses a sub-minimum value on another.
  */
 export function assertFundedFunnelMeetsMinimum(
   funnelKey: BrandFunnelKey,
-  dailyBudgetCents: string
+  dailyBudgetCents: string,
+  storedDailyBudgetCents: string | null = null
 ): void {
   const value = new Decimal(dailyBudgetCents);
   if (value.isZero()) return;
 
   const minimum = BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS[funnelKey];
   if (value.greaterThanOrEqualTo(minimum)) return;
+
+  const stored =
+    storedDailyBudgetCents === null ? null : new Decimal(storedDailyBudgetCents);
+  const grandfathered =
+    stored !== null && stored.greaterThan(0) && stored.lessThan(minimum);
+
+  if (grandfathered) {
+    if (value.greaterThanOrEqualTo(stored)) return;
+    throw new FunnelBudgetBelowMinimumError(
+      `${BRAND_FUNNEL_LABELS[funnelKey]} is funded at ${dollarsPerDay(stored.toString())}, below the ${dollarsPerDay(minimum)} this funnel now needs to run. You can keep it at ${dollarsPerDay(stored.toString())}, raise it, or set it to 0 to stop funding it — you set ${dollarsPerDay(dailyBudgetCents)}.`
+    );
+  }
 
   throw new FunnelBudgetBelowMinimumError(
     `${BRAND_FUNNEL_LABELS[funnelKey]} needs at least ${dollarsPerDay(minimum)} to run — you set ${dollarsPerDay(dailyBudgetCents)}. Set it to 0 if you do not want to fund this funnel right now.`
@@ -249,9 +357,15 @@ export interface SetFunnelBudgetsResult {
  *   - `"merge"` — one funnel at a time (brand Settings). Untouched funnels keep
  *     their ceiling.
  *
- * Everything is validated by the CALLER (parseFunnelBudgetSet) before the
- * transaction opens, so a rejected set leaves nothing half-applied. Inside the
- * transaction we also:
+ * Shape and amounts are validated by the CALLER (parseFunnelBudgetSet) before
+ * the transaction opens. The product MINIMUM is checked HERE instead, per
+ * funnel, against that funnel's own currently-stored ceiling read under the same
+ * lock — a sub-minimum ceiling that predates the minimum may be kept or raised
+ * (see `assertFundedFunnelMeetsMinimum`), and that decision is only sound
+ * against a locked read. A refusal throws before anything is written and rolls
+ * the transaction back, so a rejected set still leaves nothing half-applied.
+ *
+ * Inside the transaction we also:
  *   - DELETE the superseded brand_daily_budgets row, so the brand-level scalar
  *     and the ceilings can never both exist and disagree;
  *   - append ONE brand_daily_budget_changes row carrying the NEW brand-level
@@ -294,6 +408,20 @@ export async function setBrandFunnelDailyBudgets(
       )
       .limit(1)
       .for("update");
+
+    // Each funnel is judged against ITS OWN stored ceiling, so one
+    // grandfathered funnel in a set never licenses a sub-minimum value on
+    // another. A funnel with no stored ceiling gets the plain minimum.
+    const storedByFunnel = new Map<string, string>(
+      existingFunnels.map((row) => [row.funnelKey, row.dailyBudgetCents])
+    );
+    for (const entry of entries) {
+      assertFundedFunnelMeetsMinimum(
+        entry.funnelKey,
+        entry.dailyBudgetCents,
+        storedByFunnel.get(entry.funnelKey) ?? null
+      );
+    }
 
     const previousBrandDailyBudgetCents =
       existingFunnels.length > 0
