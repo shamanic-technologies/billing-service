@@ -108,6 +108,7 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
     orgId,
     brandId,
     funnelKey: "visit_form",
+    featureSlug: "sales-cold-email-outreach",
     dailyBudgetCents: "100.0000000000",
   });
 }

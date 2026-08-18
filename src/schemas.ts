@@ -588,6 +588,13 @@ export const SetBrandFunnelDailyBudgetRequestSchema = z
      * below its product minimum is refused with a readable reason.
      */
     dailyBudgetCents: z.union([z.string(), z.number()]),
+    /**
+     * The ACQUISITION CHANNEL being funded, as a features-service feature slug.
+     * Optional: omitted, the write addresses the funnel as a whole — its single
+     * channel when it funds one, the default channel when it funds none, and a
+     * 409 when it is split across several.
+     */
+    featureSlug: z.string().min(1).optional(),
   })
   .openapi("SetBrandFunnelDailyBudgetRequest");
 
@@ -601,6 +608,8 @@ export const SetBrandFunnelDailyBudgetSetRequestSchema = z
       .array(
         z.object({
           funnelKey: z.string(),
+          /** The acquisition-channel feature slug — optional, see the PATCH. */
+          featureSlug: z.string().min(1).optional(),
           dailyBudgetCents: z.union([z.string(), z.number()]),
         })
       )
@@ -611,11 +620,29 @@ export const SetBrandFunnelDailyBudgetSetRequestSchema = z
 export const BrandFunnelDailyBudgetSchema = z
   .object({
     funnelKey: BrandFunnelKeySchema,
-    /** This funnel's daily ceiling, decimal string (numeric(16,10)). */
+    /**
+     * This funnel's daily ceiling — the SUM of the acquisition channels funding
+     * it. Decimal string (numeric(16,10)). Unchanged in meaning for every
+     * consumer: a brand that has never split a funnel renders exactly as before.
+     */
     dailyBudgetCents: CentsStringSchema,
     updatedAt: z.string(),
   })
   .openapi("BrandFunnelDailyBudget");
+
+export const BrandFunnelChannelDailyBudgetSchema = z
+  .object({
+    funnelKey: BrandFunnelKeySchema,
+    /**
+     * The ACQUISITION CHANNEL this ceiling funds, as a features-service feature
+     * slug. A channel IS a feature slug — there is no separate channel concept.
+     */
+    featureSlug: z.string(),
+    /** This (funnel, channel) pair's own daily ceiling. */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("BrandFunnelChannelDailyBudget");
 
 export const ReadBrandFunnelDailyBudgetsSchema = z
   .object({
@@ -629,6 +656,12 @@ export const ReadBrandFunnelDailyBudgetsSchema = z
     dailyBudgetCents: CentsStringSchema.nullable(),
     /** Per-funnel ceilings; empty when this brand has never set any. */
     funnels: z.array(BrandFunnelDailyBudgetSchema),
+    /**
+     * ADDITIVE, finer grain: one entry per (funnel, acquisition-channel feature).
+     * `funnels` above is its per-funnel sum, so a consumer that wants the funnel
+     * figure never has to add these up. Empty when this brand has never set any.
+     */
+    channels: z.array(BrandFunnelChannelDailyBudgetSchema),
   })
   .openapi("ReadBrandFunnelDailyBudgets");
 
@@ -639,6 +672,8 @@ export const BrandFunnelDailyBudgetsSchema = z
     /** The brand-level daily budget after this write = the sum of the ceilings. */
     dailyBudgetCents: CentsStringSchema,
     funnels: z.array(BrandFunnelDailyBudgetSchema),
+    /** ADDITIVE: one entry per (funnel, acquisition-channel feature). */
+    channels: z.array(BrandFunnelChannelDailyBudgetSchema),
   })
   .openapi("BrandFunnelDailyBudgets");
 
@@ -1570,6 +1605,11 @@ registry.registerPath({
         "Invalid brandId, unknown or duplicated funnel key, or a funded funnel below its minimum",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    409: {
+      description:
+        "An entry named no acquisition channel for a funnel that is funded through several",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
 
@@ -1606,6 +1646,11 @@ registry.registerPath({
     400: {
       description:
         "Invalid brandId, unknown funnel key, or a funded funnel below its minimum",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description:
+        "No acquisition channel named for a funnel that is funded through several",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

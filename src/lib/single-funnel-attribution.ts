@@ -35,6 +35,7 @@ import {
 } from "../db/schema.js";
 import {
   ACCEPTED_FUNNEL_KEYS,
+  DEFAULT_ACQUISITION_CHANNEL_FEATURE_SLUG,
   toStoredFunnelKey,
   type BrandFunnelKey,
 } from "./brand-funnel-budgets.js";
@@ -211,9 +212,13 @@ export async function attributeBrandBudgetToSingleFunnel(
     // `…:32.764+00` on a live row). Nothing about money depended on those
     // microseconds, but "the row is copied verbatim" has to be true as written
     // — the copied timestamp is also the marker of what this sweep touched.
+    // The ceiling lands on the platform's default acquisition channel: a
+    // brand-level scalar predates channels entirely, so there is no second
+    // channel it could belong to (a brand running one is exactly why this sweep
+    // exists), and migration 0036 already recorded the fleet's one exception.
     await tx.execute(sql`
-      INSERT INTO brand_funnel_daily_budgets (org_id, brand_id, funnel_key, daily_budget_cents, updated_at)
-      SELECT org_id, brand_id, ${funnelKey}, daily_budget_cents, updated_at
+      INSERT INTO brand_funnel_daily_budgets (org_id, brand_id, funnel_key, feature_slug, daily_budget_cents, updated_at)
+      SELECT org_id, brand_id, ${funnelKey}, ${DEFAULT_ACQUISITION_CHANNEL_FEATURE_SLUG}, daily_budget_cents, updated_at
         FROM brand_daily_budgets
        WHERE org_id = ${orgId} AND brand_id = ${brandId}
     `);
