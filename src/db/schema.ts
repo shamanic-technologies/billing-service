@@ -515,6 +515,15 @@ export const brandFunnelDailyBudgets = pgTable(
     brandId: uuid("brand_id").notNull(),
     /** A brand-service sales-funnel key. Validated in the service layer. */
     funnelKey: text("funnel_key").notNull(),
+    /**
+     * The ACQUISITION CHANNEL this ceiling funds, as a features-service feature
+     * slug (migration 0036). A channel IS a feature slug — there is no separate
+     * channel vocabulary — so the same funnel worked through two offers holds
+     * two rows, each paced and priced on its own money. Deliberately NOT
+     * validated against a list of slugs: which feature may be sold through which
+     * funnel is features-service's statement, not this service's.
+     */
+    featureSlug: text("feature_slug").notNull(),
     dailyBudgetCents: numeric("daily_budget_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
@@ -526,11 +535,16 @@ export const brandFunnelDailyBudgets = pgTable(
   (table) => [
     primaryKey({
       name: "brand_funnel_daily_budgets_pkey",
-      columns: [table.orgId, table.brandId, table.funnelKey],
+      columns: [table.orgId, table.brandId, table.funnelKey, table.featureSlug],
     }),
     index("brand_funnel_daily_budgets_org_brand_idx").on(
       table.orgId,
       table.brandId
+    ),
+    index("brand_funnel_daily_budgets_org_brand_funnel_idx").on(
+      table.orgId,
+      table.brandId,
+      table.funnelKey
     ),
   ]
 );

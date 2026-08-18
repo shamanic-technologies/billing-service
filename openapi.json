@@ -859,6 +859,29 @@
           "updatedAt"
         ]
       },
+      "BrandFunnelChannelDailyBudget": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "$ref": "#/components/schemas/BrandFunnelKey"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "funnelKey",
+          "featureSlug",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
       "ReadBrandFunnelDailyBudgets": {
         "type": "object",
         "properties": {
@@ -875,12 +898,19 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelDailyBudget"
             }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
+            }
           }
         },
         "required": [
           "brandId",
           "dailyBudgetCents",
-          "funnels"
+          "funnels",
+          "channels"
         ]
       },
       "BrandFunnelDailyBudgets": {
@@ -902,13 +932,20 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelDailyBudget"
             }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
+            }
           }
         },
         "required": [
           "brandId",
           "orgId",
           "dailyBudgetCents",
-          "funnels"
+          "funnels",
+          "channels"
         ]
       },
       "SetBrandFunnelDailyBudgetSetRequest": {
@@ -921,6 +958,10 @@
               "properties": {
                 "funnelKey": {
                   "type": "string"
+                },
+                "featureSlug": {
+                  "type": "string",
+                  "minLength": 1
                 },
                 "dailyBudgetCents": {
                   "anyOf": [
@@ -957,6 +998,10 @@
                 "type": "number"
               }
             ]
+          },
+          "featureSlug": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -3672,6 +3717,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "An entry named no acquisition channel for a funnel that is funded through several",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3802,6 +3857,16 @@
           },
           "400": {
             "description": "Invalid brandId, unknown funnel key, or a funded funnel below its minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No acquisition channel named for a funnel that is funded through several",
             "content": {
               "application/json": {
                 "schema": {
