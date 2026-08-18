@@ -253,6 +253,13 @@
       "when": 1791194400000,
       "tag": "0035_brand_funnel_daily_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791280800000,
+      "tag": "0036_brand_funnel_channel_budgets",
+      "breakpoints": true
     }
   ]
 }

@@ -15,11 +15,14 @@ import {
 import {
   BrandBudgetManagedByFunnelsError,
   FunnelBudgetBelowMinimumError,
+  FunnelSplitAcrossChannelsError,
   InvalidFunnelSetError,
+  aggregateFunnelTotals,
   getBrandFunnelDailyBudgets,
   parseFunnelBudgetSet,
   setBrandFunnelDailyBudgets,
   sumFunnelBudgets,
+  type FunnelBudgetTotal,
   type ParsedFunnelBudget,
 } from "../lib/brand-funnel-budgets.js";
 import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
@@ -53,9 +56,29 @@ function requireInternalOrgId(req: Request, res: Response): string | null {
   return orgId;
 }
 
-function renderFunnels(rows: BrandFunnelDailyBudget[]) {
+/**
+ * The per-FUNNEL figures — unchanged in shape and meaning for every consumer
+ * that reads them today. Each is the SUM of the acquisition channels funding
+ * that funnel, so a brand that has never split anything renders byte-identically
+ * to what this service served before migration 0036.
+ */
+function renderFunnels(totals: FunnelBudgetTotal[]) {
+  return totals.map((total) => ({
+    funnelKey: total.funnelKey,
+    dailyBudgetCents: total.dailyBudgetCents,
+    updatedAt: total.updatedAt.toISOString(),
+  }));
+}
+
+/**
+ * The finer grain, ADDITIVE: one entry per (funnel, acquisition-channel feature
+ * slug). The dashboard and campaign-service move onto it on their own schedule —
+ * nothing they read today needs it.
+ */
+function renderChannels(rows: BrandFunnelDailyBudget[]) {
   return rows.map((row) => ({
     funnelKey: row.funnelKey,
+    featureSlug: row.featureSlug,
     dailyBudgetCents: row.dailyBudgetCents,
     updatedAt: row.updatedAt.toISOString(),
   }));
@@ -69,27 +92,36 @@ function renderFunnels(rows: BrandFunnelDailyBudget[]) {
  * GET /internal/brands/:brandId/daily-budget.
  */
 async function composeFunnelBudgetsView(orgId: string, brandId: string) {
-  const funnels = await getBrandFunnelDailyBudgets(orgId, brandId);
-  if (funnels.length > 0) {
+  const channels = await getBrandFunnelDailyBudgets(orgId, brandId);
+  if (channels.length > 0) {
     return {
-      dailyBudgetCents: sumFunnelBudgets(funnels),
-      funnels: renderFunnels(funnels),
+      dailyBudgetCents: sumFunnelBudgets(channels),
+      funnels: renderFunnels(aggregateFunnelTotals(channels)),
+      channels: renderChannels(channels),
     };
   }
   const brandLevel = await getBrandDailyBudget(orgId, brandId);
   return {
     dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
     funnels: [],
+    channels: [],
   };
 }
 
-/** Map a funnel-set validation failure onto its 400. Rethrows anything else. */
+/** Map a funnel-set validation failure onto its status. Rethrows anything else. */
 function respondToFunnelWriteError(err: unknown, res: Response): void {
   if (
     err instanceof FunnelBudgetBelowMinimumError ||
     err instanceof InvalidFunnelSetError
   ) {
     res.status(400).json({ error: err.message });
+    return;
+  }
+  // A funnel-grain write against a funnel split across channels: same shape of
+  // refusal as a brand-grain write against a funnel-funded brand — the figure
+  // the caller is addressing is derived one level down.
+  if (err instanceof FunnelSplitAcrossChannelsError) {
+    res.status(409).json({ error: err.message });
     return;
   }
   throw err;
@@ -123,12 +155,19 @@ async function applyFunnelWrite(
     respondToFunnelWriteError(err, res);
     return;
   }
-  const { funnels, previousBrandDailyBudgetCents, brandDailyBudgetCents } =
-    written;
+  const {
+    channels,
+    funnels,
+    previousBrandDailyBudgetCents,
+    brandDailyBudgetCents,
+  } = written;
 
   console.log(
     `[billing-service] brand funnel budgets ${mode}: brand=${brandId} org=${orgId} total=${brandDailyBudgetCents} funnels=${entries
-      .map((e) => `${e.funnelKey}=${e.dailyBudgetCents}`)
+      .map(
+        (e) =>
+          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}=${e.dailyBudgetCents}`
+      )
       .join(",")}`
   );
 
@@ -147,6 +186,7 @@ async function applyFunnelWrite(
     orgId,
     dailyBudgetCents: brandDailyBudgetCents,
     funnels: renderFunnels(funnels),
+    channels: renderChannels(channels),
   });
 }
 
@@ -361,10 +401,14 @@ router.get(
 );
 
 // PUT /v1/brands/:brandId/funnel-budgets — write the WHOLE set at once (signup
-// checkout). Auth: org headers. Body: { funnels: [{ funnelKey, dailyBudgetCents }] }.
+// checkout). Auth: org headers.
+// Body: { funnels: [{ funnelKey, featureSlug?, dailyBudgetCents }] }.
+//
+// Each entry is one (funnel, acquisition-channel feature) pair; `featureSlug` is
+// optional and resolves exactly as on the PATCH above.
 //
 // ATOMIC: the whole set is validated before the transaction opens and written
-// inside it, so a rejected set leaves nothing half-applied. Funnels absent from
+// inside it, so a rejected set leaves nothing half-applied. Pairs absent from
 // the body are removed, so the stored set is exactly what was sent. A ceiling of
 // 0 means "not funding that funnel right now" and is accepted — including a set
 // where EVERY funnel is 0 (a brand in pause). A FUNDED funnel below its product
@@ -403,11 +447,18 @@ router.put(
   }
 );
 
-// PATCH /v1/brands/:brandId/funnel-budgets/:funnelKey — set ONE funnel's ceiling
-// (brand Settings). Auth: org headers. Body: { dailyBudgetCents }.
+// PATCH /v1/brands/:brandId/funnel-budgets/:funnelKey — set ONE ceiling (brand
+// Settings). Auth: org headers. Body: { dailyBudgetCents, featureSlug? }.
 //
-// Untouched funnels keep their ceiling. Same 0-is-legal, funded-minimum and
-// grandfathered-ceiling rules as the whole-set write.
+// `featureSlug` names the ACQUISITION CHANNEL being funded, so one pair can be
+// stated without disturbing its siblings. Omitted (every caller before migration
+// 0036), it addresses the funnel as a whole: its single channel when it funds
+// one, the default channel when it funds none, and a 409 when it is split across
+// two — there is no honest way to guess which campaign the money is for.
+//
+// Untouched pairs keep their ceiling. Same 0-is-legal, funded-minimum and
+// grandfathered-ceiling rules as the whole-set write, all judged on the FUNNEL
+// TOTAL rather than on one channel.
 router.patch(
   "/v1/brands/:brandId/funnel-budgets/:funnelKey",
   requireOrgHeaders,
@@ -429,7 +480,11 @@ router.patch(
     let entries: ParsedFunnelBudget[];
     try {
       entries = parseFunnelBudgetSet([
-        { funnelKey, dailyBudgetCents: parsedBody.data.dailyBudgetCents },
+        {
+          funnelKey,
+          featureSlug: parsedBody.data.featureSlug,
+          dailyBudgetCents: parsedBody.data.dailyBudgetCents,
+        },
       ]);
     } catch (err) {
       respondToFunnelWriteError(err, res);

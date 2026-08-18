@@ -64,6 +64,7 @@ describe("per-funnel daily budgets", () => {
       brandId,
       dailyBudgetCents: "2500.0000000000",
       funnels: [],
+      channels: [],
     });
   });
 
@@ -76,6 +77,7 @@ describe("per-funnel daily budgets", () => {
       brandId: otherBrandId,
       dailyBudgetCents: null,
       funnels: [],
+      channels: [],
     });
 
     const brandRead = await request(app)
@@ -462,6 +464,17 @@ describe("per-funnel daily budgets", () => {
       funnels: [
         {
           funnelKey: "visit_form",
+          dailyBudgetCents: "100.0000000000",
+          updatedAt: expect.any(String),
+        },
+      ],
+      // ADDITIVE: the finer (funnel, acquisition-channel) grain. A brand that
+      // has never split a funnel carries exactly one channel per funnel, so the
+      // funnel figure above is unchanged.
+      channels: [
+        {
+          funnelKey: "visit_form",
+          featureSlug: "sales-cold-email-outreach",
           dailyBudgetCents: "100.0000000000",
           updatedAt: expect.any(String),
         },
