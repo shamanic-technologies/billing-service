@@ -595,6 +595,14 @@ export const SetBrandFunnelDailyBudgetRequestSchema = z
      * 409 when it is split across several.
      */
     featureSlug: z.string().min(1).optional(),
+    /**
+     * The OFFER being funded, a brand-service offer UUID. Optional: omitted, the
+     * write addresses the (funnel, channel) pair as a whole - its single offer
+     * when it funds one (the UNSCOPED ceiling, for everything written before
+     * offers existed), an unscoped ceiling when it funds none, and a 409 when it
+     * is split across several.
+     */
+    offerId: z.string().uuid().optional(),
   })
   .openapi("SetBrandFunnelDailyBudgetRequest");
 
@@ -610,6 +618,8 @@ export const SetBrandFunnelDailyBudgetSetRequestSchema = z
           funnelKey: z.string(),
           /** The acquisition-channel feature slug — optional, see the PATCH. */
           featureSlug: z.string().min(1).optional(),
+          /** The offer UUID - optional, see the PATCH. */
+          offerId: z.string().uuid().optional(),
           dailyBudgetCents: z.union([z.string(), z.number()]),
         })
       )
@@ -644,6 +654,22 @@ export const BrandFunnelChannelDailyBudgetSchema = z
   })
   .openapi("BrandFunnelChannelDailyBudget");
 
+export const BrandFunnelOfferDailyBudgetSchema = z
+  .object({
+    funnelKey: BrandFunnelKeySchema,
+    featureSlug: z.string(),
+    /**
+     * The OFFER this ceiling funds, a brand-service offer UUID. `null` means the
+     * ceiling is not scoped to an offer - every ceiling written before offers
+     * existed carries it, and it is a permanent value rather than a placeholder.
+     */
+    offerId: z.string().uuid().nullable(),
+    /** This (funnel, channel, offer) ceiling, i.e. this campaign's own. */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("BrandFunnelOfferDailyBudget");
+
 export const ReadBrandFunnelDailyBudgetsSchema = z
   .object({
     brandId: z.string().uuid(),
@@ -662,6 +688,13 @@ export const ReadBrandFunnelDailyBudgetsSchema = z
      * figure never has to add these up. Empty when this brand has never set any.
      */
     channels: z.array(BrandFunnelChannelDailyBudgetSchema),
+    /**
+     * ADDITIVE, the STORED grain: one entry per (funnel, acquisition-channel
+     * feature, offer), i.e. one per campaign. `channels` above is its per-pair
+     * sum, so a consumer that wants the channel figure never has to add these
+     * up. Empty when this brand has never set any.
+     */
+    offers: z.array(BrandFunnelOfferDailyBudgetSchema),
   })
   .openapi("ReadBrandFunnelDailyBudgets");
 
@@ -674,6 +707,13 @@ export const BrandFunnelDailyBudgetsSchema = z
     funnels: z.array(BrandFunnelDailyBudgetSchema),
     /** ADDITIVE: one entry per (funnel, acquisition-channel feature). */
     channels: z.array(BrandFunnelChannelDailyBudgetSchema),
+    /**
+     * ADDITIVE, the STORED grain: one entry per (funnel, acquisition-channel
+     * feature, offer), i.e. one per campaign. `channels` above is its per-pair
+     * sum, so a consumer that wants the channel figure never has to add these
+     * up. Empty when this brand has never set any.
+     */
+    offers: z.array(BrandFunnelOfferDailyBudgetSchema),
   })
   .openapi("BrandFunnelDailyBudgets");
 

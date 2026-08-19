@@ -46,9 +46,11 @@ async function toCurrentShape(): Promise<void> {
       "brand_id" uuid NOT NULL,
       "funnel_key" text NOT NULL,
       "feature_slug" text NOT NULL,
+      "offer_id" uuid,
       "daily_budget_cents" numeric(16,10) NOT NULL,
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-      PRIMARY KEY ("org_id", "brand_id", "funnel_key", "feature_slug")
+      CONSTRAINT "brand_funnel_daily_budgets_offer_key"
+        UNIQUE NULLS NOT DISTINCT ("org_id", "brand_id", "funnel_key", "feature_slug", "offer_id")
     )
   `);
 }

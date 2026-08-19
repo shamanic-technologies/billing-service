@@ -159,9 +159,11 @@ beforeAll(async () => {
       "brand_id" uuid NOT NULL,
       "funnel_key" text NOT NULL,
       "feature_slug" text NOT NULL,
+      "offer_id" uuid,
       "daily_budget_cents" numeric(16,10) NOT NULL,
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-      PRIMARY KEY ("org_id", "brand_id", "funnel_key", "feature_slug")
+      CONSTRAINT "brand_funnel_daily_budgets_offer_key"
+        UNIQUE NULLS NOT DISTINCT ("org_id", "brand_id", "funnel_key", "feature_slug", "offer_id")
     )
   `;
   await sql`
@@ -171,6 +173,10 @@ beforeAll(async () => {
   await sql`
     CREATE INDEX IF NOT EXISTS "brand_funnel_daily_budgets_org_brand_funnel_idx"
       ON "brand_funnel_daily_budgets" ("org_id", "brand_id", "funnel_key")
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS "brand_funnel_daily_budgets_org_brand_funnel_channel_idx"
+      ON "brand_funnel_daily_budgets" ("org_id", "brand_id", "funnel_key", "feature_slug")
   `;
 
   // brand_daily_budget_changes (append-only daily-budget history, migration 0027).
