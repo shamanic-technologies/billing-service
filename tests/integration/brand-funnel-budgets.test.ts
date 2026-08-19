@@ -65,6 +65,7 @@ describe("per-funnel daily budgets", () => {
       dailyBudgetCents: "2500.0000000000",
       funnels: [],
       channels: [],
+      offers: [],
     });
   });
 
@@ -78,6 +79,7 @@ describe("per-funnel daily budgets", () => {
       dailyBudgetCents: null,
       funnels: [],
       channels: [],
+      offers: [],
     });
 
     const brandRead = await request(app)
@@ -475,6 +477,18 @@ describe("per-funnel daily budgets", () => {
         {
           funnelKey: "visit_form",
           featureSlug: "sales-cold-email-outreach",
+          dailyBudgetCents: "100.0000000000",
+          updatedAt: expect.any(String),
+        },
+      ],
+      // ADDITIVE again, one level down: the STORED grain, one entry per
+      // (funnel, channel, offer). A brand that has never funded an offer holds
+      // one unscoped ceiling per pair, so the channel figure above is unchanged.
+      offers: [
+        {
+          funnelKey: "visit_form",
+          featureSlug: "sales-cold-email-outreach",
+          offerId: null,
           dailyBudgetCents: "100.0000000000",
           updatedAt: expect.any(String),
         },

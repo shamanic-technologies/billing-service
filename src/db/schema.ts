@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   index,
   primaryKey,
+  unique,
   bigserial,
   boolean,
 } from "drizzle-orm/pg-core";
@@ -524,6 +525,22 @@ export const brandFunnelDailyBudgets = pgTable(
      * funnel is features-service's statement, not this service's.
      */
     featureSlug: text("feature_slug").notNull(),
+    /**
+     * The OFFER this ceiling funds — one distinct thing the brand sells
+     * (migration 0037). brand-service owns the entity and exposes it as a UUID;
+     * billing defines none of its semantics and, exactly as with the channel
+     * slug, never validates it against another service.
+     *
+     * NULLABLE, and the NULL is a first-class permanent value: "this ceiling is
+     * not scoped to an offer". Every ceiling written before 0037 carries it and
+     * there is no backfill — only brand-service knows which offer a live ceiling
+     * belongs to, and guessing would move real money onto the wrong campaign.
+     * That is why the key below is a UNIQUE ... NULLS NOT DISTINCT constraint
+     * rather than a primary key: a primary key cannot hold a nullable column,
+     * and NULLS NOT DISTINCT still makes two unscoped ceilings for one
+     * (funnel, channel) pair unrepresentable.
+     */
+    offerId: uuid("offer_id"),
     dailyBudgetCents: numeric("daily_budget_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
@@ -533,10 +550,15 @@ export const brandFunnelDailyBudgets = pgTable(
       .defaultNow(),
   },
   (table) => [
-    primaryKey({
-      name: "brand_funnel_daily_budgets_pkey",
-      columns: [table.orgId, table.brandId, table.funnelKey, table.featureSlug],
-    }),
+    unique("brand_funnel_daily_budgets_offer_key")
+      .on(
+        table.orgId,
+        table.brandId,
+        table.funnelKey,
+        table.featureSlug,
+        table.offerId
+      )
+      .nullsNotDistinct(),
     index("brand_funnel_daily_budgets_org_brand_idx").on(
       table.orgId,
       table.brandId
@@ -545,6 +567,12 @@ export const brandFunnelDailyBudgets = pgTable(
       table.orgId,
       table.brandId,
       table.funnelKey
+    ),
+    index("brand_funnel_daily_budgets_org_brand_funnel_channel_idx").on(
+      table.orgId,
+      table.brandId,
+      table.funnelKey,
+      table.featureSlug
     ),
   ]
 );

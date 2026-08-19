@@ -260,6 +260,13 @@
       "when": 1791280800000,
       "tag": "0036_brand_funnel_channel_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791367200000,
+      "tag": "0037_brand_funnel_offer_budgets",
+      "breakpoints": true
     }
   ]
 }

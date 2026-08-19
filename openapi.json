@@ -882,6 +882,35 @@
           "updatedAt"
         ]
       },
+      "BrandFunnelOfferDailyBudget": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "$ref": "#/components/schemas/BrandFunnelKey"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "funnelKey",
+          "featureSlug",
+          "offerId",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
       "ReadBrandFunnelDailyBudgets": {
         "type": "object",
         "properties": {
@@ -904,13 +933,20 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
             }
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
+            }
           }
         },
         "required": [
           "brandId",
           "dailyBudgetCents",
           "funnels",
-          "channels"
+          "channels",
+          "offers"
         ]
       },
       "BrandFunnelDailyBudgets": {
@@ -938,6 +974,12 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
             }
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
+            }
           }
         },
         "required": [
@@ -945,7 +987,8 @@
           "orgId",
           "dailyBudgetCents",
           "funnels",
-          "channels"
+          "channels",
+          "offers"
         ]
       },
       "SetBrandFunnelDailyBudgetSetRequest": {
@@ -962,6 +1005,10 @@
                 "featureSlug": {
                   "type": "string",
                   "minLength": 1
+                },
+                "offerId": {
+                  "type": "string",
+                  "format": "uuid"
                 },
                 "dailyBudgetCents": {
                   "anyOf": [
@@ -1002,6 +1049,10 @@
           "featureSlug": {
             "type": "string",
             "minLength": 1
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
