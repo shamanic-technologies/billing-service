@@ -49,7 +49,7 @@
  * Fail-loud: any DB error propagates.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
@@ -183,6 +183,19 @@ export class FunnelSplitAcrossChannelsError extends Error {
 }
 
 /**
+ * A (funnel, channel)-grain write against a pair that is funded for SEVERAL
+ * offers. Surfaced as a 409, the same posture as the two refusals above: the
+ * figure the caller addressed is derived one level down, and picking one of two
+ * offers would move the money onto the wrong campaign.
+ */
+export class ChannelSplitAcrossOffersError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ChannelSplitAcrossOffersError";
+  }
+}
+
+/**
  * A brand-level daily-budget write against a brand that is funded per funnel.
  * Surfaced as a 409 — the brand-level value is DERIVED there, so accepting the
  * write would leave two numbers claiming to be the same thing.
@@ -226,6 +239,12 @@ export interface FunnelBudgetInput {
    * funnel's existing channel is used.
    */
   featureSlug?: unknown;
+  /**
+   * The OFFER this ceiling funds, a brand-service offer UUID (migration 0037).
+   * OPTIONAL: a caller that speaks per (funnel, channel) only (every caller
+   * before 0037) omits it and the pair's existing offer is used.
+   */
+  offerId?: unknown;
   dailyBudgetCents: unknown;
 }
 
@@ -233,8 +252,24 @@ export interface ParsedFunnelBudget {
   funnelKey: BrandFunnelKey;
   /** null = "whatever channel this funnel already funds", resolved under the lock. */
   featureSlug: string | null;
+  /**
+   * The offer the caller named, or `undefined` when it named none — resolved
+   * under the write lock against what the pair already funds.
+   *
+   * `undefined` and `null` are DIFFERENT here, which is why this is an optional
+   * property rather than a nullable one: `undefined` means "the caller said
+   * nothing about offers", while `null` is a stored value meaning "this ceiling
+   * is not scoped to an offer" (every ceiling written before 0037).
+   */
+  offerId?: string;
   dailyBudgetCents: string;
 }
+
+/** A stored ceiling's offer after resolution: an offer UUID, or unscoped. */
+export type ResolvedOfferId = string | null;
+
+const OFFER_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Parse one whole set BEFORE anything is written: resolve every spelling onto
@@ -252,7 +287,6 @@ export interface ParsedFunnelBudget {
 export function parseFunnelBudgetSet(
   entries: FunnelBudgetInput[]
 ): ParsedFunnelBudget[] {
-  const seen = new Set<string>();
   const parsed: ParsedFunnelBudget[] = [];
 
   for (const entry of entries) {
@@ -276,33 +310,61 @@ export function parseFunnelBudgetSet(
       featureSlug = entry.featureSlug.trim();
     }
 
-    // Deduped on the RESOLVED funnel + channel, so the two spellings of one
-    // funnel are one funnel here too — otherwise a set carrying both would store
-    // two rows for the same pair and double the brand-level total. A slug-less
-    // entry addresses one funnel as a whole, so it can appear only once for that
-    // funnel and never beside a channel-named entry for it.
-    const dedupKey = `${funnelKey} ${featureSlug ?? ""}`;
-    if (seen.has(dedupKey)) {
+    // The OFFER, when the caller named one. Format-checked only: brand-service
+    // owns the entity, and billing validates the offer against it no more than
+    // it validates the channel slug against features-service.
+    let offerId: string | undefined;
+    if (entry.offerId !== undefined && entry.offerId !== null) {
+      if (
+        typeof entry.offerId !== "string" ||
+        !OFFER_UUID_RE.test(entry.offerId.trim())
+      ) {
+        throw new InvalidFunnelSetError(
+          `${BRAND_FUNNEL_LABELS[funnelKey]}: offerId must be a valid offer UUID.`
+        );
+      }
+      offerId = entry.offerId.trim().toLowerCase();
+    }
+
+    // Deduped on the RESOLVED funnel + channel + offer, so the two spellings of
+    // one funnel are one funnel here too - otherwise a set carrying both would
+    // store two rows for the same pair and double the brand-level total.
+    //
+    // A slug-less entry addresses one funnel AS A WHOLE, so it can appear only
+    // once for that funnel and never beside a channel-named entry for it. An
+    // offer-less entry addresses one (funnel, channel) pair as a whole, and the
+    // same rule applies one level down: a set stating a pair both with and
+    // without an offer is asking for two ceilings whose grains overlap.
+    const sameFunnel = parsed.filter((p) => p.funnelKey === funnelKey);
+    if (
+      sameFunnel.some(
+        (p) => p.featureSlug === featureSlug && p.offerId === offerId
+      )
+    ) {
       throw new InvalidFunnelSetError(
         featureSlug
-          ? `Sales funnel "${funnelKey}" appears twice for channel "${featureSlug}" in the same set.`
+          ? `Sales funnel "${funnelKey}" appears twice for channel "${featureSlug}"${offerId ? ` and offer "${offerId}"` : ""} in the same set.`
           : `Sales funnel "${funnelKey}" appears twice in the same set.`
       );
     }
-    if (featureSlug && seen.has(`${funnelKey} `)) {
-      throw new InvalidFunnelSetError(
-        `Sales funnel "${funnelKey}" is set both with and without an acquisition channel in the same set.`
-      );
-    }
     if (
-      !featureSlug &&
-      [...seen].some((key) => key.startsWith(`${funnelKey} `))
+      sameFunnel.some((p) => (p.featureSlug === null) !== (featureSlug === null))
     ) {
       throw new InvalidFunnelSetError(
         `Sales funnel "${funnelKey}" is set both with and without an acquisition channel in the same set.`
       );
     }
-    seen.add(dedupKey);
+    if (
+      sameFunnel.some(
+        (p) =>
+          p.featureSlug === featureSlug &&
+          (p.offerId === undefined) !== (offerId === undefined)
+      )
+    ) {
+      throw new InvalidFunnelSetError(
+        `Sales funnel "${funnelKey}" on acquisition channel "${featureSlug}" is set both with and without an offer in the same set.`
+      );
+    }
 
     let dailyBudgetCents: string;
     try {
@@ -315,7 +377,14 @@ export function parseFunnelBudgetSet(
       );
     }
 
-    parsed.push({ funnelKey, featureSlug, dailyBudgetCents });
+    // `offerId` is spread rather than assigned so an unstated offer leaves the
+    // property ABSENT, which is what distinguishes it from a stored null.
+    parsed.push({
+      funnelKey,
+      featureSlug,
+      dailyBudgetCents,
+      ...(offerId === undefined ? {} : { offerId }),
+    });
   }
 
   return parsed;
@@ -440,6 +509,50 @@ export function aggregateFunnelTotals(
   return sortByFunnelOrderOf([...byFunnel.values()], (t) => t.funnelKey);
 }
 
+/** One (funnel, channel) pair's figure: the SUM of every offer funding it. */
+export interface ChannelBudgetTotal {
+  funnelKey: string;
+  featureSlug: string;
+  dailyBudgetCents: string;
+  updatedAt: Date;
+}
+
+/**
+ * Collapse per-OFFER rows onto the per-CHANNEL figure migration 0036's consumers
+ * ask for. Same rule as `aggregateFunnelTotals` one level down, and the ONLY
+ * place that sum is composed: a brand that has never funded an offer holds one
+ * row per pair, so this is byte-identical to what shipped before 0037.
+ */
+export function aggregateChannelTotals(
+  rows: BrandFunnelDailyBudget[]
+): ChannelBudgetTotal[] {
+  const byPair = new Map<string, ChannelBudgetTotal>();
+  for (const row of rows) {
+    const key = `${row.funnelKey} ${row.featureSlug}`;
+    const current = byPair.get(key);
+    if (!current) {
+      byPair.set(key, {
+        funnelKey: row.funnelKey,
+        featureSlug: row.featureSlug,
+        dailyBudgetCents: row.dailyBudgetCents,
+        updatedAt: row.updatedAt,
+      });
+      continue;
+    }
+    current.dailyBudgetCents = addCents(
+      current.dailyBudgetCents,
+      row.dailyBudgetCents
+    );
+    if (row.updatedAt > current.updatedAt) current.updatedAt = row.updatedAt;
+  }
+  return sortByFunnelOrderOf(
+    [...byPair.values()].sort((a, b) =>
+      a.featureSlug.localeCompare(b.featureSlug)
+    ),
+    (t) => t.funnelKey
+  );
+}
+
 /** One funnel's current total across its channels, "0" when it funds none. */
 export function funnelTotalOf(
   rows: Array<{ funnelKey: string; dailyBudgetCents: string }>,
@@ -480,20 +593,32 @@ function sortByFunnelOrderOf<T>(rows: T[], keyOf: (row: T) => string): T[] {
   );
 }
 
-/** Funnel order first, then channel slug, so a split funnel renders stably. */
+/**
+ * Funnel order first, then channel slug, then offer (the unscoped ceiling first,
+ * since it is the one that predates offers), so a split renders stably.
+ */
 function sortByFunnelOrder(
   rows: BrandFunnelDailyBudget[]
 ): BrandFunnelDailyBudget[] {
   return sortByFunnelOrderOf(
-    [...rows].sort((a, b) => a.featureSlug.localeCompare(b.featureSlug)),
+    [...rows].sort(
+      (a, b) =>
+        a.featureSlug.localeCompare(b.featureSlug) ||
+        (a.offerId ?? "").localeCompare(b.offerId ?? "")
+    ),
     (row) => row.funnelKey
   );
 }
 
 export interface SetFunnelBudgetsResult {
-  /** Every stored pair after the write, one per (funnel, acquisition channel). */
-  channels: BrandFunnelDailyBudget[];
-  /** The per-FUNNEL figures — each the sum of its channels. */
+  /**
+   * Every STORED ceiling after the write, one per
+   * (funnel, acquisition channel, offer) - i.e. one per campaign.
+   */
+  offers: BrandFunnelDailyBudget[];
+  /** The per-CHANNEL figures, each the sum of the offers funding that pair. */
+  channels: ChannelBudgetTotal[];
+  /** The per-FUNNEL figures, each the sum of its channels. */
   funnels: FunnelBudgetTotal[];
   /**
    * The brand-level daily budget BEFORE this write — the funnel sum if this
@@ -572,10 +697,18 @@ export async function setBrandFunnelDailyBudgets(
     // A slug-less entry (every caller before 0036 speaks per funnel only) is
     // resolved against what the funnel already funds, so a legacy write can
     // never open a SECOND channel beside the one carrying the brand's money.
-    const resolved = entries.map((entry) => ({
-      ...entry,
-      featureSlug: resolveEntryFeatureSlug(entry, existingFunnels),
-    }));
+    const resolved = entries.map((entry) => {
+      const featureSlug = resolveEntryFeatureSlug(entry, existingFunnels);
+      return {
+        ...entry,
+        featureSlug,
+        // An offer-less entry (every caller before 0037 speaks per funnel and
+        // channel only) is resolved against what the PAIR already funds, so a
+        // legacy write can neither invent an offer nor silently move money onto
+        // one of two campaigns.
+        offerId: resolveEntryOfferId(entry, featureSlug, existingFunnels),
+      };
+    });
 
     // The minimum binds the FUNNEL TOTAL, so it is judged on what each touched
     // funnel will sum to after this write, against what it sums to now.
@@ -601,13 +734,12 @@ export async function setBrandFunnelDailyBudgets(
           : null;
 
     if (mode === "replace") {
-      // The stored set is exactly what was sent, so any pair absent from the
-      // body goes — including a channel of a funnel that IS in the body.
-      const keep = new Set(
-        resolved.map((e) => `${e.funnelKey} ${e.featureSlug}`)
-      );
+      // The stored set is exactly what was sent, so any ceiling absent from the
+      // body goes - including an offer of a (funnel, channel) pair that IS in
+      // the body, and a channel of a funnel that is.
+      const keep = new Set(resolved.map((e) => rowIdentity(e)));
       const toDelete = existingFunnels.filter(
-        (row) => !keep.has(`${row.funnelKey} ${row.featureSlug}`)
+        (row) => !keep.has(rowIdentity(row))
       );
       for (const row of toDelete) {
         await tx
@@ -617,7 +749,8 @@ export async function setBrandFunnelDailyBudgets(
               eq(brandFunnelDailyBudgets.orgId, orgId),
               eq(brandFunnelDailyBudgets.brandId, brandId),
               eq(brandFunnelDailyBudgets.funnelKey, row.funnelKey),
-              eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug)
+              eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug),
+              offerMatches(row.offerId)
             )
           );
       }
@@ -631,15 +764,20 @@ export async function setBrandFunnelDailyBudgets(
           brandId,
           funnelKey: entry.funnelKey,
           featureSlug: entry.featureSlug,
+          offerId: entry.offerId,
           dailyBudgetCents: entry.dailyBudgetCents,
           updatedAt: changedAt,
         })
+        // Inference resolves to the NULLS NOT DISTINCT unique constraint of
+        // migration 0037, so an unscoped ceiling (offer_id IS NULL) upserts in
+        // place exactly as it did when the four columns were the primary key.
         .onConflictDoUpdate({
           target: [
             brandFunnelDailyBudgets.orgId,
             brandFunnelDailyBudgets.brandId,
             brandFunnelDailyBudgets.funnelKey,
             brandFunnelDailyBudgets.featureSlug,
+            brandFunnelDailyBudgets.offerId,
           ],
           set: {
             dailyBudgetCents: entry.dailyBudgetCents,
@@ -648,7 +786,7 @@ export async function setBrandFunnelDailyBudgets(
         });
     }
 
-    const channels = sortByFunnelOrder(
+    const offers = sortByFunnelOrder(
       await tx
         .select()
         .from(brandFunnelDailyBudgets)
@@ -659,9 +797,10 @@ export async function setBrandFunnelDailyBudgets(
           )
         )
     );
-    const funnels = aggregateFunnelTotals(channels);
+    const channels = aggregateChannelTotals(offers);
+    const funnels = aggregateFunnelTotals(offers);
 
-    const brandDailyBudgetCents = sumFunnelBudgets(channels);
+    const brandDailyBudgetCents = sumFunnelBudgets(offers);
 
     // The brand-level scalar is now DERIVED. Drop the superseded row so it can
     // never be served instead of the sum.
@@ -684,6 +823,7 @@ export async function setBrandFunnelDailyBudgets(
     });
 
     return {
+      offers,
       channels,
       funnels,
       previousBrandDailyBudgetCents,
@@ -714,47 +854,120 @@ function resolveEntryFeatureSlug(
 ): string {
   if (entry.featureSlug) return entry.featureSlug;
 
-  const channels = [
-    ...new Set(
-      existing
-        .filter((row) => row.funnelKey === entry.funnelKey)
-        .map((row) => row.featureSlug)
-    ),
-  ];
+  // When the caller DID name an offer, the funnel's channels are read for that
+  // offer first: a brand running two channels under one funnel, one per offer,
+  // has exactly one honest answer there, and refusing it would be an
+  // over-refusal rather than a guess. With no rows for that offer we fall back
+  // to the funnel's channels as a whole, which is the pre-0037 rule verbatim -
+  // so a caller that names no offer follows exactly the path it always did.
+  const forOffer = entry.offerId
+    ? existing.filter(
+        (row) =>
+          row.funnelKey === entry.funnelKey && row.offerId === entry.offerId
+      )
+    : [];
+  const scope =
+    forOffer.length > 0
+      ? forOffer
+      : existing.filter((row) => row.funnelKey === entry.funnelKey);
+
+  const channels = [...new Set(scope.map((row) => row.featureSlug))];
   if (channels.length === 0) return DEFAULT_ACQUISITION_CHANNEL_FEATURE_SLUG;
   if (channels.length === 1) return channels[0];
 
   throw new FunnelSplitAcrossChannelsError(
     `${BRAND_FUNNEL_LABELS[entry.funnelKey]} is funded through ${channels.length} acquisition channels (${channels.join(", ")}). ` +
-      `Name the one you are funding — setting the funnel as a whole would have to guess which campaign the money is for.`
+      `Name the one you are funding - setting the funnel as a whole would have to guess which campaign the money is for.`
   );
 }
 
 /**
- * What the stored rows will look like after this write — computed BEFORE
+ * Which OFFER does this entry fund?
+ *
+ * A caller that named one is taken at its word: brand-service owns the offer
+ * entity, so billing no more asks whether that offer exists than it asks whether
+ * a feature may be sold through a funnel.
+ *
+ * A caller that named none means "this (funnel, channel) pair", the finest grain
+ * that existed before 0037. It resolves to:
+ *   - the pair's single offer, when it funds exactly one - and for every ceiling
+ *     written before 0037 that is the UNSCOPED one (`null`), so brand Settings,
+ *     the signup checkout and the gateway keep behaving exactly as they do now;
+ *   - `null` (unscoped), when the pair funds nothing yet. There is deliberately
+ *     no default offer to fall back to, the way there is a default channel: an
+ *     offer id is brand-service's to state and inventing one would attach money
+ *     to a campaign nobody named;
+ *   - a refusal, when the pair is SPLIT across offers - the same posture the
+ *     channel resolution takes one level up, because picking one of two offers
+ *     moves real money onto the wrong campaign.
+ */
+function resolveEntryOfferId(
+  entry: ParsedFunnelBudget,
+  featureSlug: string,
+  existing: BrandFunnelDailyBudget[]
+): ResolvedOfferId {
+  if (entry.offerId !== undefined) return entry.offerId;
+
+  const offers = [
+    ...new Set(
+      existing
+        .filter(
+          (row) =>
+            row.funnelKey === entry.funnelKey && row.featureSlug === featureSlug
+        )
+        .map((row) => row.offerId)
+    ),
+  ];
+  if (offers.length === 0) return null;
+  if (offers.length === 1) return offers[0];
+
+  throw new ChannelSplitAcrossOffersError(
+    `${BRAND_FUNNEL_LABELS[entry.funnelKey]} on acquisition channel "${featureSlug}" is funded for ${offers.length} offers ` +
+      `(${offers.map((id) => id ?? "no offer").join(", ")}). ` +
+      `Name the offer you are funding - setting the channel as a whole would have to guess which campaign the money is for.`
+  );
+}
+
+/** A stored ceiling's identity: one (funnel, channel, offer) = one campaign. */
+function rowIdentity(row: {
+  funnelKey: string;
+  featureSlug: string;
+  offerId: ResolvedOfferId;
+}): string {
+  return `${row.funnelKey}\u0000${row.featureSlug}\u0000${row.offerId ?? ""}`;
+}
+
+/**
+ * Match one ceiling's offer in a WHERE clause. An unscoped ceiling needs
+ * `IS NULL` - `= NULL` matches nothing, which would silently leave the row that
+ * a replace-mode write is supposed to delete.
+ */
+function offerMatches(offerId: ResolvedOfferId) {
+  return offerId === null
+    ? isNull(brandFunnelDailyBudgets.offerId)
+    : eq(brandFunnelDailyBudgets.offerId, offerId);
+}
+
+/**
+ * What the stored rows will look like after this write - computed BEFORE
  * anything is written, so the funnel-total minimum is judged on the outcome
- * rather than on one pair in isolation.
+ * rather than on one ceiling in isolation.
  */
 function projectFunnelRows(
   existing: BrandFunnelDailyBudget[],
   resolved: Array<{
     funnelKey: BrandFunnelKey;
     featureSlug: string;
+    offerId: ResolvedOfferId;
     dailyBudgetCents: string;
   }>,
   mode: "replace" | "merge"
 ): Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }> {
+  const written = new Set(resolved.map((entry) => rowIdentity(entry)));
   const kept =
     mode === "replace"
       ? []
-      : existing.filter(
-          (row) =>
-            !resolved.some(
-              (entry) =>
-                entry.funnelKey === row.funnelKey &&
-                entry.featureSlug === row.featureSlug
-            )
-        );
+      : existing.filter((row) => !written.has(rowIdentity(row)));
   return [
     ...kept.map((row) => ({
       funnelKey: row.funnelKey,

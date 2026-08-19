@@ -14,14 +14,17 @@ import {
 } from "../lib/brand-budgets.js";
 import {
   BrandBudgetManagedByFunnelsError,
+  ChannelSplitAcrossOffersError,
   FunnelBudgetBelowMinimumError,
   FunnelSplitAcrossChannelsError,
   InvalidFunnelSetError,
+  aggregateChannelTotals,
   aggregateFunnelTotals,
   getBrandFunnelDailyBudgets,
   parseFunnelBudgetSet,
   setBrandFunnelDailyBudgets,
   sumFunnelBudgets,
+  type ChannelBudgetTotal,
   type FunnelBudgetTotal,
   type ParsedFunnelBudget,
 } from "../lib/brand-funnel-budgets.js";
@@ -75,10 +78,26 @@ function renderFunnels(totals: FunnelBudgetTotal[]) {
  * slug). The dashboard and campaign-service move onto it on their own schedule —
  * nothing they read today needs it.
  */
-function renderChannels(rows: BrandFunnelDailyBudget[]) {
+function renderChannels(totals: ChannelBudgetTotal[]) {
+  return totals.map((total) => ({
+    funnelKey: total.funnelKey,
+    featureSlug: total.featureSlug,
+    dailyBudgetCents: total.dailyBudgetCents,
+    updatedAt: total.updatedAt.toISOString(),
+  }));
+}
+
+/**
+ * The STORED grain, ADDITIVE: one entry per (funnel, acquisition-channel
+ * feature, offer) - i.e. one per campaign. `channels` above is its per-pair sum
+ * and `funnels` the per-funnel one, so a consumer that wants either figure never
+ * has to add these up.
+ */
+function renderOffers(rows: BrandFunnelDailyBudget[]) {
   return rows.map((row) => ({
     funnelKey: row.funnelKey,
     featureSlug: row.featureSlug,
+    offerId: row.offerId,
     dailyBudgetCents: row.dailyBudgetCents,
     updatedAt: row.updatedAt.toISOString(),
   }));
@@ -92,12 +111,13 @@ function renderChannels(rows: BrandFunnelDailyBudget[]) {
  * GET /internal/brands/:brandId/daily-budget.
  */
 async function composeFunnelBudgetsView(orgId: string, brandId: string) {
-  const channels = await getBrandFunnelDailyBudgets(orgId, brandId);
-  if (channels.length > 0) {
+  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
+  if (stored.length > 0) {
     return {
-      dailyBudgetCents: sumFunnelBudgets(channels),
-      funnels: renderFunnels(aggregateFunnelTotals(channels)),
-      channels: renderChannels(channels),
+      dailyBudgetCents: sumFunnelBudgets(stored),
+      funnels: renderFunnels(aggregateFunnelTotals(stored)),
+      channels: renderChannels(aggregateChannelTotals(stored)),
+      offers: renderOffers(stored),
     };
   }
   const brandLevel = await getBrandDailyBudget(orgId, brandId);
@@ -105,6 +125,7 @@ async function composeFunnelBudgetsView(orgId: string, brandId: string) {
     dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
     funnels: [],
     channels: [],
+    offers: [],
   };
 }
 
@@ -120,7 +141,10 @@ function respondToFunnelWriteError(err: unknown, res: Response): void {
   // A funnel-grain write against a funnel split across channels: same shape of
   // refusal as a brand-grain write against a funnel-funded brand — the figure
   // the caller is addressing is derived one level down.
-  if (err instanceof FunnelSplitAcrossChannelsError) {
+  if (
+    err instanceof FunnelSplitAcrossChannelsError ||
+    err instanceof ChannelSplitAcrossOffersError
+  ) {
     res.status(409).json({ error: err.message });
     return;
   }
@@ -156,6 +180,7 @@ async function applyFunnelWrite(
     return;
   }
   const {
+    offers,
     channels,
     funnels,
     previousBrandDailyBudgetCents,
@@ -166,7 +191,7 @@ async function applyFunnelWrite(
     `[billing-service] brand funnel budgets ${mode}: brand=${brandId} org=${orgId} total=${brandDailyBudgetCents} funnels=${entries
       .map(
         (e) =>
-          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}=${e.dailyBudgetCents}`
+          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}${e.offerId ? `/${e.offerId}` : ""}=${e.dailyBudgetCents}`
       )
       .join(",")}`
   );
@@ -187,6 +212,7 @@ async function applyFunnelWrite(
     dailyBudgetCents: brandDailyBudgetCents,
     funnels: renderFunnels(funnels),
     channels: renderChannels(channels),
+    offers: renderOffers(offers),
   });
 }
 
@@ -483,6 +509,7 @@ router.patch(
         {
           funnelKey,
           featureSlug: parsedBody.data.featureSlug,
+          offerId: parsedBody.data.offerId,
           dailyBudgetCents: parsedBody.data.dailyBudgetCents,
         },
       ]);
