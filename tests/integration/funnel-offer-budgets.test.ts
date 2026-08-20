@@ -364,14 +364,16 @@ describe("per-offer daily ceilings", () => {
   it("refuses an offer-less write when an unscoped ceiling sits beside an offer-scoped one", async () => {
     // An UNSCOPED ceiling is one of the two candidates, not a tie-break: which
     // of the two the money is for is exactly the question that has no answer.
-    // Seeded, because ONE set may not state a pair both with and without an
-    // offer; the state is reached by writing the unscoped ceiling first and
-    // opening an offer beside it later.
+    //
+    // BOTH rows are seeded, because no write can produce this state any more: a
+    // named offer landing on a pair whose only ceiling is unscoped ADOPTS it
+    // rather than sitting beside it (see funnel-offer-adoption.test.ts), and one
+    // set may not state a pair both with and without an offer. Migration 0038
+    // removed the single live pair that had reached it before the adoption
+    // shipped. The refusal stays covered because the state remains
+    // representable, and guessing an owner would move real money.
     await seedCeiling("visit_form", COLD, null, "600.0000000000");
-    await request(app)
-      .patch(funnelOnePath("visit_form"))
-      .set(authHeaders)
-      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 400 });
+    await seedCeiling("visit_form", COLD, OFFER_A, "400.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("visit_form"))
@@ -454,11 +456,14 @@ describe("per-offer daily ceilings", () => {
         funnels: [{ funnelKey: "reply_meeting", featureSlug: COLD, dailyBudgetCents: 2400 }],
       });
 
-    // Opening an offer beside it RAISES the total, which is fine.
+    // Funding a SECOND channel under an offer RAISES the total, which is fine.
+    // (A named offer on the SAME channel would adopt the unscoped ceiling
+    // instead of adding to it — that is the one-campaign-one-row rule, covered
+    // in funnel-offer-adoption.test.ts.)
     const raised = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 800 });
+      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 800 });
     expect(raised.status).toBe(200);
 
     // The stored total is $32, so nothing is grandfathered: a whole-set write
@@ -469,7 +474,7 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "reply_meeting", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 100 },
+          { funnelKey: "reply_meeting", featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 100 },
         ],
       });
     expect(lowered.status).toBe(400);
@@ -486,11 +491,11 @@ describe("per-offer daily ceilings", () => {
     await seedCeiling("reply_meeting", COLD, null, "800.0000000000");
     expect((await read()).funnels).toEqual([["reply_meeting", "800.0000000000"]]);
 
-    // Adding an offer-scoped ceiling RAISES the funnel total: accepted.
+    // Funding a second channel under an offer RAISES the funnel total: accepted.
     const raised = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 200 });
+      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 200 });
     expect(raised.status).toBe(200);
     expect((await read()).funnels).toEqual([["reply_meeting", "1000.0000000000"]]);
 
@@ -500,7 +505,7 @@ describe("per-offer daily ceilings", () => {
     const lowered = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 0 });
+      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 0 });
     expect(lowered.status).toBe(400);
     expect((await read()).funnels).toEqual([["reply_meeting", "1000.0000000000"]]);
   });

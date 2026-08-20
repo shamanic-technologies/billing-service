@@ -267,6 +267,13 @@
       "when": 1791367200000,
       "tag": "0037_brand_funnel_offer_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791453600000,
+      "tag": "0038_drop_superseded_unscoped_ceilings",
+      "breakpoints": true
     }
   ]
 }
