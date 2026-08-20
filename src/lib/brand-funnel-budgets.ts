@@ -40,6 +40,14 @@
  * construction, and recording it is an attribution rather than a split. See
  * `single-funnel-attribution.ts`.
  *
+ * ONE CAMPAIGN, ONE ROW. A ceiling that names an offer, written onto a pair
+ * whose only stored ceiling is the pre-offer unscoped one, REPLACES it: the
+ * customer stated one ceiling for that campaign, and the per-funnel figure is a
+ * SUM, so two rows for it would count their money twice. See
+ * `supersededUnscopedRows` - the mirror of `resolveEntryOfferId`, which already
+ * reads that unscoped ceiling as the pair's only offer when the caller names
+ * none.
+ *
  * The two states are mutually exclusive by construction: the first per-funnel
  * write DELETES the superseded brand-level row (in the same transaction), and
  * PATCH /v1/brands/:brandId/daily-budget refuses (409) to write a brand that is
@@ -710,9 +718,19 @@ export async function setBrandFunnelDailyBudgets(
       };
     });
 
+    // A ceiling that NAMES an offer, written onto a pair whose only stored
+    // ceiling is the pre-offer unscoped one, ADOPTS that ceiling rather than
+    // sitting beside it - see `supersededUnscopedRows`.
+    const superseded = supersededUnscopedRows(existingFunnels, resolved);
+
     // The minimum binds the FUNNEL TOTAL, so it is judged on what each touched
     // funnel will sum to after this write, against what it sums to now.
-    const projected = projectFunnelRows(existingFunnels, resolved, mode);
+    const projected = projectFunnelRows(
+      existingFunnels,
+      resolved,
+      mode,
+      superseded
+    );
     for (const funnelKey of new Set(resolved.map((e) => e.funnelKey))) {
       const storedTotal = existingFunnels.some(
         (row) => row.funnelKey === funnelKey
@@ -733,27 +751,27 @@ export async function setBrandFunnelDailyBudgets(
           ? existingBrandRow.dailyBudgetCents
           : null;
 
-    if (mode === "replace") {
-      // The stored set is exactly what was sent, so any ceiling absent from the
-      // body goes - including an offer of a (funnel, channel) pair that IS in
-      // the body, and a channel of a funnel that is.
-      const keep = new Set(resolved.map((e) => rowIdentity(e)));
-      const toDelete = existingFunnels.filter(
-        (row) => !keep.has(rowIdentity(row))
-      );
-      for (const row of toDelete) {
-        await tx
-          .delete(brandFunnelDailyBudgets)
-          .where(
-            and(
-              eq(brandFunnelDailyBudgets.orgId, orgId),
-              eq(brandFunnelDailyBudgets.brandId, brandId),
-              eq(brandFunnelDailyBudgets.funnelKey, row.funnelKey),
-              eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug),
-              offerMatches(row.offerId)
-            )
-          );
-      }
+    // In "replace" the stored set is exactly what was sent, so any ceiling
+    // absent from the body goes - including an offer of a (funnel, channel)
+    // pair that IS in the body, and a channel of a funnel that is. That already
+    // removes an adopted unscoped ceiling, so only "merge" has to delete it.
+    const keep = new Set(resolved.map((e) => rowIdentity(e)));
+    const toDelete =
+      mode === "replace"
+        ? existingFunnels.filter((row) => !keep.has(rowIdentity(row)))
+        : superseded;
+    for (const row of toDelete) {
+      await tx
+        .delete(brandFunnelDailyBudgets)
+        .where(
+          and(
+            eq(brandFunnelDailyBudgets.orgId, orgId),
+            eq(brandFunnelDailyBudgets.brandId, brandId),
+            eq(brandFunnelDailyBudgets.funnelKey, row.funnelKey),
+            eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug),
+            offerMatches(row.offerId)
+          )
+        );
     }
 
     for (const entry of resolved) {
@@ -928,6 +946,55 @@ function resolveEntryOfferId(
   );
 }
 
+/**
+ * The stored UNSCOPED ceilings this write ADOPTS - the mirror of
+ * `resolveEntryOfferId`, and the rule that keeps one campaign to one row.
+ *
+ * That resolution already reads an unscoped ceiling as the money of the pair's
+ * only offer: a caller naming no offer updates it in place rather than opening a
+ * second row. The mirror had to hold too. A ceiling written before 0037 is the
+ * whole of what that (funnel, channel) pair is funded at, and the pair funds one
+ * campaign, so when the offer-scoped settings page names the offer that campaign
+ * belongs to, it is RE-STATING that same ceiling - not adding a second one
+ * beside it. Without this the pair holds both, and the per-funnel figure (a SUM)
+ * counts the customer's money twice: exactly what put one live brand at $90/day
+ * on $50 of funding, with its two settings fields each showing the right amount.
+ *
+ * ONLY when the unscoped row is the pair's SOLE ceiling. A pair already split
+ * across named offers has no unambiguous owner for an unscoped remainder, and
+ * guessing one would move real money onto the wrong campaign - the same reason
+ * `resolveEntryOfferId` refuses there rather than picking.
+ *
+ * The offer-LESS path is untouched: an entry that names no offer resolves to the
+ * unscoped row and updates it, so no caller predating 0037 changes behaviour.
+ */
+function supersededUnscopedRows(
+  existing: BrandFunnelDailyBudget[],
+  resolved: Array<{
+    funnelKey: BrandFunnelKey;
+    featureSlug: string;
+    offerId: ResolvedOfferId;
+  }>
+): BrandFunnelDailyBudget[] {
+  return existing.filter((row) => {
+    if (row.offerId !== null) return false;
+
+    const pair = existing.filter(
+      (other) =>
+        other.funnelKey === row.funnelKey &&
+        other.featureSlug === row.featureSlug
+    );
+    if (pair.length !== 1) return false;
+
+    return resolved.some(
+      (entry) =>
+        entry.offerId !== null &&
+        entry.funnelKey === row.funnelKey &&
+        entry.featureSlug === row.featureSlug
+    );
+  });
+}
+
 /** A stored ceiling's identity: one (funnel, channel, offer) = one campaign. */
 function rowIdentity(row: {
   funnelKey: string;
@@ -952,6 +1019,10 @@ function offerMatches(offerId: ResolvedOfferId) {
  * What the stored rows will look like after this write - computed BEFORE
  * anything is written, so the funnel-total minimum is judged on the outcome
  * rather than on one ceiling in isolation.
+ *
+ * An ADOPTED unscoped ceiling is gone after this write, so it is not projected:
+ * counting it would judge the minimum against a total this write is precisely
+ * removing, and read $40 replaced by $40 as $80.
  */
 function projectFunnelRows(
   existing: BrandFunnelDailyBudget[],
@@ -961,13 +1032,18 @@ function projectFunnelRows(
     offerId: ResolvedOfferId;
     dailyBudgetCents: string;
   }>,
-  mode: "replace" | "merge"
+  mode: "replace" | "merge",
+  superseded: BrandFunnelDailyBudget[] = []
 ): Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }> {
   const written = new Set(resolved.map((entry) => rowIdentity(entry)));
+  const dropped = new Set(superseded.map((row) => rowIdentity(row)));
   const kept =
     mode === "replace"
       ? []
-      : existing.filter((row) => !written.has(rowIdentity(row)));
+      : existing.filter(
+          (row) =>
+            !written.has(rowIdentity(row)) && !dropped.has(rowIdentity(row))
+        );
   return [
     ...kept.map((row) => ({
       funnelKey: row.funnelKey,
