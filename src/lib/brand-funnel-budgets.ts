@@ -40,6 +40,11 @@
  * construction, and recording it is an attribution rather than a split. See
  * `single-funnel-attribution.ts`.
  *
+ * AND THE OFFER GRAIN IS SERVED TOO, on its own read. An offer-scoped screen
+ * paces one proposition against the money funding it, which is neither one
+ * campaign's ceiling nor the brand's the moment a brand states a second offer —
+ * see `aggregateOfferBudget`.
+ *
  * ONE CAMPAIGN, ONE ROW. A ceiling that names an offer, written onto a pair
  * whose only stored ceiling is the pre-offer unscoped one, REPLACES it: the
  * customer stated one ceiling for that campaign, and the per-funnel figure is a
@@ -559,6 +564,98 @@ export function aggregateChannelTotals(
     ),
     (t) => t.funnelKey
   );
+}
+
+/**
+ * One OFFER's daily ceiling: what the customer has funded that one proposition
+ * at, across every funnel and channel it is sold through.
+ *
+ * The grain exists because an offer-scoped screen shows a fraction — that
+ * offer's spend today over the ceiling it is paced against — and the only
+ * denominator this service used to serve was the BRAND's. The two halves are
+ * then about different things the moment a brand states a second proposition.
+ * It reads correctly today only because every live brand names one offer.
+ */
+export interface OfferBudgetView {
+  offerId: string;
+  /** The SUM of the ceilings funding this offer. */
+  dailyBudgetCents: string;
+  /** The latest of those ceilings, so it moves whenever the offer's money does. */
+  updatedAt: Date;
+  /** This offer's per-funnel figures — the same sums, restricted to it. */
+  funnels: FunnelBudgetTotal[];
+  /** This offer's per-(funnel, channel) figures — the same sums, restricted to it. */
+  channels: ChannelBudgetTotal[];
+}
+
+/** Every offer this brand names, in stable order. Unscoped ceilings name none. */
+export function namedOffersOf(
+  rows: Array<{ offerId: ResolvedOfferId }>
+): string[] {
+  return [
+    ...new Set(
+      rows
+        .map((row) => row.offerId)
+        .filter((offerId): offerId is string => offerId !== null)
+    ),
+  ];
+}
+
+/**
+ * The stored ceilings that fund one offer.
+ *
+ * A ceiling that NAMES the offer always counts. An UNSCOPED ceiling
+ * (`offer_id IS NULL`, every ceiling written before offers existed) counts only
+ * when this offer is the brand's SOLE named one — then the brand's money has
+ * exactly one campaign-owner and the offer's total is the brand's, which is what
+ * keeps every live brand's screen on the number it shows today. With two named
+ * offers there is no honest owner for an unscoped remainder, so it belongs to
+ * neither: the same posture `resolveEntryOfferId` and `supersededUnscopedRows`
+ * take one grain down, where an unscoped ceiling is read as an offer's money
+ * only while it is the pair's only one.
+ *
+ * An offer that names nothing here has NO ceiling — which is a different answer
+ * from a ceiling of zero, and neither is invented from the other.
+ */
+export function offerBudgetRows(
+  rows: BrandFunnelDailyBudget[],
+  offerId: string
+): BrandFunnelDailyBudget[] {
+  const named = namedOffersOf(rows);
+  const owned = rows.filter((row) => row.offerId === offerId);
+  if (owned.length === 0) return [];
+
+  const soleNamedOffer = named.length === 1 && named[0] === offerId;
+  if (!soleNamedOffer) return owned;
+  return rows.filter((row) => row.offerId === offerId || row.offerId === null);
+}
+
+/**
+ * One offer's ceiling and its breakdown, or null when the offer has none.
+ *
+ * The ONE place the per-offer sum is composed — a consumer that adds the stored
+ * ceilings up itself is a consumer that will one day disagree with this service,
+ * which is why every other grain is served here too.
+ */
+export function aggregateOfferBudget(
+  rows: BrandFunnelDailyBudget[],
+  offerId: string
+): OfferBudgetView | null {
+  const owned = offerBudgetRows(rows, offerId);
+  if (owned.length === 0) return null;
+
+  let updatedAt = owned[0].updatedAt;
+  for (const row of owned) {
+    if (row.updatedAt > updatedAt) updatedAt = row.updatedAt;
+  }
+
+  return {
+    offerId,
+    dailyBudgetCents: sumFunnelBudgets(owned),
+    updatedAt,
+    funnels: aggregateFunnelTotals(owned),
+    channels: aggregateChannelTotals(owned),
+  };
 }
 
 /** One funnel's current total across its channels, "0" when it funds none. */

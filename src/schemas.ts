@@ -698,6 +698,28 @@ export const ReadBrandFunnelDailyBudgetsSchema = z
   })
   .openapi("ReadBrandFunnelDailyBudgets");
 
+export const ReadBrandOfferDailyBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /** Present on the user-facing read only. */
+    orgId: z.string().uuid().optional(),
+    offerId: z.string().uuid(),
+    /**
+     * This OFFER's daily ceiling — the SUM of the ceilings funding it, across
+     * every funnel and acquisition channel it is sold through. `null` when this
+     * offer has NO ceiling, which is a different answer from a ceiling of 0
+     * (funded at nothing) and is never derived from it.
+     */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** The latest of the ceilings funding this offer; null when it has none. */
+    updatedAt: z.string().nullable(),
+    /** This offer's per-funnel figures — the sums above, restricted to it. */
+    funnels: z.array(BrandFunnelDailyBudgetSchema),
+    /** This offer's per-(funnel, channel) figures, same restriction. */
+    channels: z.array(BrandFunnelChannelDailyBudgetSchema),
+  })
+  .openapi("ReadBrandOfferDailyBudget");
+
 export const BrandFunnelDailyBudgetsSchema = z
   .object({
     brandId: z.string().uuid(),
@@ -1604,6 +1626,74 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId or missing org headers",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/offers/{offerId}/daily-budget",
+  summary: "Read ONE offer's daily ceiling for a brand",
+  description:
+    "Returns what the caller org has funded ONE offer at — the SUM of the ceilings " +
+    "covering it across every sales funnel and acquisition channel it is sold " +
+    "through — plus that offer's own per-funnel and per-(funnel, channel) figures, " +
+    "so a caller never enumerates the offer's channels nor adds anything up. " +
+    "An offer-scoped screen paces spend against THIS number: the brand-wide total " +
+    "is about a different thing the moment a brand states a second offer. " +
+    "A ceiling written before offers existed (offerId null) counts towards this " +
+    "offer only while it is the brand's SOLE named one, which is why an offer that " +
+    "is a brand's only one answers exactly the brand-wide total. " +
+    "An offer with NO ceiling returns dailyBudgetCents: null — a different answer " +
+    "from a ceiling of 0, and never derived from it. Service-to-service read with " +
+    "x-api-key plus x-org-id.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({
+      brandId: z.string().uuid(),
+      offerId: z.string().uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "This offer's ceiling (null when it has none) + its breakdown",
+      content: {
+        "application/json": { schema: ReadBrandOfferDailyBudgetSchema },
+      },
+    },
+    400: {
+      description:
+        "brandId, offerId or x-org-id is not a valid UUID, or x-org-id is missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/offers/{offerId}/daily-budget",
+  summary: "Read one offer's daily ceiling (user, via the gateway)",
+  description:
+    "Same answer as the internal read, for the user's own org — an offer screen " +
+    "reads the ceiling it paces its spend against. An offer with no ceiling " +
+    "returns dailyBudgetCents: null.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({
+      brandId: z.string().uuid(),
+      offerId: z.string().uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "This offer's ceiling (null when it has none) + its breakdown",
+      content: {
+        "application/json": { schema: ReadBrandOfferDailyBudgetSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId or offerId, or missing org headers",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
