@@ -20,6 +20,7 @@ import {
   InvalidFunnelSetError,
   aggregateChannelTotals,
   aggregateFunnelTotals,
+  aggregateOfferBudget,
   getBrandFunnelDailyBudgets,
   parseFunnelBudgetSet,
   setBrandFunnelDailyBudgets,
@@ -126,6 +127,38 @@ async function composeFunnelBudgetsView(orgId: string, brandId: string) {
     funnels: [],
     channels: [],
     offers: [],
+  };
+}
+
+/**
+ * One OFFER's ceiling, for a screen that paces that one proposition: the SUM of
+ * the ceilings funding it, plus the same per-funnel and per-(funnel, channel)
+ * figures this service already serves, restricted to it. An offer with no
+ * ceiling answers null — nothing stated is not a ceiling of zero, and neither is
+ * ever derived from the other.
+ */
+async function composeOfferBudgetView(
+  orgId: string,
+  brandId: string,
+  offerId: string
+) {
+  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
+  const offer = aggregateOfferBudget(stored, offerId);
+  if (!offer) {
+    return {
+      offerId,
+      dailyBudgetCents: null,
+      updatedAt: null,
+      funnels: [],
+      channels: [],
+    };
+  }
+  return {
+    offerId,
+    dailyBudgetCents: offer.dailyBudgetCents,
+    updatedAt: offer.updatedAt.toISOString(),
+    funnels: renderFunnels(offer.funnels),
+    channels: renderChannels(offer.channels),
   };
 }
 
@@ -422,6 +455,81 @@ router.get(
 
     const orgId = req.headers["x-org-id"] as string;
     const view = await composeFunnelBudgetsView(orgId, brandId);
+    res.json({ brandId, orgId, ...view });
+  }
+);
+
+// --- One offer's daily ceiling ------------------------------------------
+//
+// An offer-scoped screen shows a fraction: that offer's spend today over the
+// ceiling it is paced against. The numerator is that offer's, so the denominator
+// has to be too — the brand-wide total is about a different thing the moment a
+// brand states a second proposition. It reads correctly today only because every
+// live brand names one offer, which is a property of the data rather than of the
+// design.
+//
+// This is its own answer, not a widening of the brand-wide read: that read's
+// meaning is what several consumers pace and gate real spend on (including this
+// service's own affordability checks), and it is untouched here.
+
+// GET /internal/brands/:brandId/offers/:offerId/daily-budget — service-to-service
+// read of ONE offer's daily ceiling for a brand.
+//
+// Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
+// Resp: { brandId, offerId, dailyBudgetCents, updatedAt, funnels, channels }.
+// `dailyBudgetCents` is the SUM of the ceilings funding this offer; `funnels` and
+// `channels` are the figures this service already serves, restricted to it — so a
+// caller never enumerates the offer's channels nor adds anything up.
+// An offer with NO ceiling answers dailyBudgetCents: null (nothing stated), which
+// is a different answer from a ceiling of 0 (funded at nothing). 400 on a
+// non-UUID brandId or offerId.
+router.get(
+  "/internal/brands/:brandId/offers/:offerId/daily-budget",
+  async (req, res) => {
+    const { brandId, offerId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    if (!UUID_RE.test(offerId)) {
+      res.status(400).json({ error: "offerId must be a valid UUID" });
+      return;
+    }
+
+    const orgId = requireInternalOrgId(req, res);
+    if (!orgId) return;
+
+    const view = await composeOfferBudgetView(
+      orgId,
+      brandId,
+      offerId.toLowerCase()
+    );
+    res.json({ brandId, ...view });
+  }
+);
+
+// GET /v1/brands/:brandId/offers/:offerId/daily-budget — the same answer for the
+// user, via the gateway (an offer screen reads its own ceiling). Auth: org headers.
+router.get(
+  "/v1/brands/:brandId/offers/:offerId/daily-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId, offerId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    if (!UUID_RE.test(offerId)) {
+      res.status(400).json({ error: "offerId must be a valid UUID" });
+      return;
+    }
+
+    const orgId = req.headers["x-org-id"] as string;
+    const view = await composeOfferBudgetView(
+      orgId,
+      brandId,
+      offerId.toLowerCase()
+    );
     res.json({ brandId, orgId, ...view });
   }
 );
