@@ -949,6 +949,51 @@
           "offers"
         ]
       },
+      "ReadBrandOfferDailyBudget": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "funnels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "offerId",
+          "dailyBudgetCents",
+          "updatedAt",
+          "funnels",
+          "channels"
+        ]
+      },
       "BrandFunnelDailyBudgets": {
         "type": "object",
         "properties": {
@@ -3771,6 +3816,200 @@
           },
           "409": {
             "description": "An entry named no acquisition channel for a funnel that is funded through several",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/offers/{offerId}/daily-budget": {
+      "get": {
+        "summary": "Read ONE offer's daily ceiling for a brand",
+        "description": "Returns what the caller org has funded ONE offer at — the SUM of the ceilings covering it across every sales funnel and acquisition channel it is sold through — plus that offer's own per-funnel and per-(funnel, channel) figures, so a caller never enumerates the offer's channels nor adds anything up. An offer-scoped screen paces spend against THIS number: the brand-wide total is about a different thing the moment a brand states a second offer. A ceiling written before offers existed (offerId null) counts towards this offer only while it is the brand's SOLE named one, which is why an offer that is a brand's only one answers exactly the brand-wide total. An offer with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This offer's ceiling (null when it has none) + its breakdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandOfferDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId, offerId or x-org-id is not a valid UUID, or x-org-id is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/offers/{offerId}/daily-budget": {
+      "get": {
+        "summary": "Read one offer's daily ceiling (user, via the gateway)",
+        "description": "Same answer as the internal read, for the user's own org — an offer screen reads the ceiling it paces its spend against. An offer with no ceiling returns dailyBudgetCents: null.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This offer's ceiling (null when it has none) + its breakdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandOfferDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or offerId, or missing org headers",
             "content": {
               "application/json": {
                 "schema": {
