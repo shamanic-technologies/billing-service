@@ -18,7 +18,7 @@ const brandId = "00000000-0000-0000-0000-0000000ccb01";
 
 const COLD = "sales-cold-email-outreach";
 const CRM = "sales-crm-email-outreach";
-const FEEDBACK = "sales-feedback-request-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
 const brandReadPath = `/internal/brands/${brandId}/daily-budget`;
@@ -83,8 +83,8 @@ describe("per-acquisition-channel daily ceilings", () => {
     const stored = await read();
     expect(stored.funnels).toEqual([["reply_meeting", "5000.0000000000"]]);
     expect(stored.channels).toEqual([
-      ["reply_meeting", COLD, "3000.0000000000"],
       ["reply_meeting", FEEDBACK, "2000.0000000000"],
+      ["reply_meeting", COLD, "3000.0000000000"],
     ]);
 
     // The brand-wide read every consumer already uses is the same total.
@@ -153,8 +153,8 @@ describe("per-acquisition-channel daily ceilings", () => {
 
     const stored = await read();
     expect(stored.channels).toEqual([
-      ["reply_meeting", COLD, "3000.0000000000"],
       ["reply_meeting", FEEDBACK, "500.0000000000"],
+      ["reply_meeting", COLD, "3000.0000000000"],
     ]);
     expect(stored.funnels).toEqual([["reply_meeting", "3500.0000000000"]]);
   });

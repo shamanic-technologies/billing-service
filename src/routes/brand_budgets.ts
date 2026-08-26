@@ -16,6 +16,7 @@ import {
   BrandBudgetManagedByFunnelsError,
   ChannelSplitAcrossOffersError,
   FunnelBudgetBelowMinimumError,
+  UnknownAcquisitionChannelError,
   FunnelSplitAcrossChannelsError,
   InvalidFunnelSetError,
   aggregateChannelTotals,
@@ -166,6 +167,7 @@ async function composeOfferBudgetView(
 function respondToFunnelWriteError(err: unknown, res: Response): void {
   if (
     err instanceof FunnelBudgetBelowMinimumError ||
+    err instanceof UnknownAcquisitionChannelError ||
     err instanceof InvalidFunnelSetError
   ) {
     res.status(400).json({ error: err.message });

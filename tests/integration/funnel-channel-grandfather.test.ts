@@ -22,7 +22,7 @@ const runId = "00000000-0000-0000-0000-00000000cebb";
 const brandId = "00000000-0000-0000-0000-0000000ceb01";
 
 const COLD = "sales-cold-email-outreach";
-const FEEDBACK = "sales-feedback-request-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
 const funnelReadPath = `/internal/brands/${brandId}/funnel-budgets`;

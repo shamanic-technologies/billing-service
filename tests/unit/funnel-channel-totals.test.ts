@@ -9,7 +9,8 @@ import {
   aggregateFunnelTotals,
   funnelTotalOf,
   sumFunnelBudgets,
-  assertFundedFunnelMeetsMinimum,
+  assertFundedChannelMeetsMinimum,
+  channelTotalOf,
   FunnelBudgetBelowMinimumError,
 } from "../../src/lib/brand-funnel-budgets.js";
 import type { BrandFunnelDailyBudget } from "../../src/db/schema.js";
@@ -32,7 +33,7 @@ describe("per-funnel totals over acquisition channels", () => {
   it("sums a funnel's channels and takes the latest timestamp", () => {
     const totals = aggregateFunnelTotals([
       row("reply_meeting", "sales-cold-email-outreach", "3000.0000000000", "2026-08-01T00:00:00Z"),
-      row("reply_meeting", "sales-feedback-request-outreach", "2000.0000000000", "2026-08-05T00:00:00Z"),
+      row("reply_meeting", "feedback-request-cold-email-outreach", "2000.0000000000", "2026-08-05T00:00:00Z"),
       row("visit_form", "sales-cold-email-outreach", "100.0000000000", "2026-07-01T00:00:00Z"),
     ]);
 
@@ -62,20 +63,51 @@ describe("per-funnel totals over acquisition channels", () => {
     expect(funnelTotalOf(rows, "visit_form")).toBe("0.0000000000");
   });
 
-  it("judges the minimum on the total, not on a single channel", () => {
-    // $12 + $12 = the $24/day floor: the split is accepted as a whole.
+  it("judges the minimum on the CHANNEL total, not on a single offer", () => {
+    // $12 + $12 of two offers on ONE channel = the $24/day floor: accepted.
+    const COLD = "sales-cold-email-outreach";
     expect(() =>
-      assertFundedFunnelMeetsMinimum("reply_meeting", "2400.0000000000", null)
+      assertFundedChannelMeetsMinimum(
+        "reply_meeting",
+        COLD,
+        "2400.0000000000",
+        null
+      )
     ).not.toThrow();
     expect(() =>
-      assertFundedFunnelMeetsMinimum("reply_meeting", "1200.0000000000", null)
+      assertFundedChannelMeetsMinimum(
+        "reply_meeting",
+        COLD,
+        "1200.0000000000",
+        null
+      )
     ).toThrow(FunnelBudgetBelowMinimumError);
   });
 
-  it("does not grandfather a funnel whose stored total already cleared the floor", () => {
+  it("sums one (funnel, channel) pair's offers and nothing else", () => {
+    const rows = [
+      row("reply_meeting", "sales-cold-email-outreach", "1200.0000000000", "2026-08-01T00:00:00Z"),
+      row("reply_meeting", "sales-cold-email-outreach", "1200.0000000000", "2026-08-01T00:00:00Z"),
+      row("reply_meeting", "google-ads", "500.0000000000", "2026-08-01T00:00:00Z"),
+    ];
+    // Two rows for one pair only differ by offer in the stored table; the pair's
+    // total is what the floor binds.
+    expect(
+      channelTotalOf(rows, "reply_meeting", "sales-cold-email-outreach")
+    ).toBe("2400.0000000000");
+    expect(channelTotalOf(rows, "reply_meeting", "google-ads")).toBe(
+      "500.0000000000"
+    );
+    expect(channelTotalOf(rows, "visit_form", "google-ads")).toBe(
+      "0.0000000000"
+    );
+  });
+
+  it("does not grandfather a channel whose stored total already cleared the floor", () => {
     expect(() =>
-      assertFundedFunnelMeetsMinimum(
+      assertFundedChannelMeetsMinimum(
         "reply_meeting",
+        "sales-cold-email-outreach",
         "1200.0000000000",
         "2400.0000000000"
       )

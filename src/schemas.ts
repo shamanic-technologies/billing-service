@@ -594,8 +594,11 @@ export const SetBrandFunnelDailyBudgetRequestSchema = z
   .object({
     /**
      * This funnel's per-day spend ceiling, in cents. Non-negative. 0 means "not
-     * funding this funnel right now" and is always accepted; a FUNDED funnel
-     * below its product minimum is refused with a readable reason.
+     * funding this funnel right now" and is always accepted; a FUNDED ceiling
+     * below its product minimum is refused with a readable reason. That minimum
+     * is a property of the funnel AND the acquisition channel: a channel that
+     * states a floor of its own (Google Ads, $5/day) is judged on its own, and
+     * every channel that states none is judged against the funnel's floor.
      */
     dailyBudgetCents: z.union([z.string(), z.number()]),
     /**
@@ -1718,7 +1721,7 @@ registry.registerPath({
     "signup checkout uses this. Funnels absent from the body are removed. A rejected " +
     "set leaves nothing half-applied. A ceiling of 0 means 'not funding that funnel " +
     "right now' and is accepted, INCLUDING a set where every funnel is 0 (a brand in " +
-    "pause). A FUNDED funnel below its product minimum is refused with a readable " +
+    "pause). A FUNDED ceiling below its product minimum — the channel's own floor when it states one, else the funnel's — is refused with a readable " +
     "reason: $1/day for visit_signup and visit_form, $24/day for reply_meeting and " +
     "visit_meeting. Once ceilings exist, the brand's daily budget is their SUM and the " +
     "brand-level write is refused (409).",
@@ -1742,7 +1745,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Invalid brandId, unknown or duplicated funnel key, or a funded funnel below its minimum",
+        "Invalid brandId, unknown or duplicated funnel key, unknown acquisition channel, or a funded ceiling below its minimum",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     409: {
@@ -1760,7 +1763,7 @@ registry.registerPath({
   description:
     "Sets a single sales funnel's daily spend ceiling — brand Settings changes them " +
     "one at a time. Untouched funnels keep their ceiling. Same rules as the whole-set " +
-    "write: 0 is legal (not funding that funnel), a funded funnel below its product " +
+    "write: 0 is legal (not funding that funnel), a funded ceiling below its product " +
     "minimum is refused with a readable reason.",
   request: {
     headers: protectedHeaders,
@@ -1785,7 +1788,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Invalid brandId, unknown funnel key, or a funded funnel below its minimum",
+        "Invalid brandId, unknown funnel key, unknown acquisition channel, or a funded ceiling below its minimum",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     409: {
