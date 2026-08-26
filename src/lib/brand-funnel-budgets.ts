@@ -147,14 +147,17 @@ export const BRAND_FUNNEL_LABELS: Record<BrandFunnelKey, string> = {
 };
 
 /**
- * Product minimum per funded funnel, in cents/day. A funnel at 0 is NOT funded
+ * DEFAULT product minimum per funded funnel, in cents/day — what a ceiling must
+ * clear when the acquisition channel funding it states no floor of its own. The
+ * floor that actually binds a write is `minDailyBudgetCentsFor(funnel, channel)`
+ * (a channel whose economics differ, e.g. Google Ads, overrides this). A funnel at 0 is NOT funded
  * and is always accepted — that is how a customer pauses one, and a set where
  * EVERY funnel is 0 is a brand in pause, not an error. ("At least one funded
  * funnel" belongs to the checkout that spends money, not to storage: enforcing
  * it here would make it impossible to pause everything from settings.)
  *
  * The minimum governs what a customer may NEWLY STATE, not what one has already
- * been running — see `assertFundedFunnelMeetsMinimum`.
+ * been running — see `assertFundedChannelMeetsMinimum`.
  */
 export const BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS: Record<
   BrandFunnelKey,
@@ -165,6 +168,130 @@ export const BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS: Record<
   reply_meeting: 2400, // $24/day
   visit_meeting: 2400, // $24/day
 };
+
+/**
+ * Every acquisition channel this service will price, and the daily floor that
+ * channel states of its OWN — `null` when it states none, so the funnel's floor
+ * above governs it.
+ *
+ * THE VIABLE FLOOR IS A PROPERTY OF THE FUNNEL **AND** THE CHANNEL, not of the
+ * funnel alone. A cold-email funnel and a paid-ads funnel do not become viable
+ * at the same daily number: one buys sending capacity, the other buys auction
+ * placement. So Google Ads runs from $5/day on every funnel it sells, including
+ * the visit-to-meeting funnel whose cold-email floor is $24/day — that is not
+ * this funnel getting cheaper, it is a different channel with its own economics.
+ * No other channel's floor moves.
+ *
+ * THIS IS NOT THE PRODUCT TAXONOMY, AND IT IS NOT A SECOND COPY OF IT. billing
+ * still never asks whether a feature may be SOLD through a funnel — that stays
+ * features-service's statement, and nothing here validates the pair. What each
+ * entry states is billing's own business: the money a campaign on that channel
+ * needs before it can run.
+ *
+ * A slug that is absent FAILS LOUDLY (`UnknownAcquisitionChannelError` → 400)
+ * rather than quietly taking the funnel's floor. A channel whose economics
+ * differ would otherwise be funded at a number nobody chose for it, which is
+ * exactly the bug this table exists to make impossible; a 400 naming the slug is
+ * a deploy away from fixed, a silently wrong floor is money already spent. The
+ * cost is real and accepted: a channel features-service publishes before billing
+ * prices it cannot be funded until an entry lands here.
+ */
+export const ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS: Record<
+  string,
+  number | null
+> = {
+  // Paid reach — bought placement. Google Ads is the one channel that states a
+  // floor of its own today ($5/day, every funnel it sells).
+  "google-ads": 500,
+  "bing-ads": null,
+  "linkedin-ads": null,
+  "meta-ads": null,
+  "quora-ads": null,
+  "reddit-ads": null,
+  "tiktok-ads": null,
+  "x-ads": null,
+  "youtube-ads": null,
+  "creator-sponsorships": null,
+  "newsletter-sponsorships": null,
+  "podcast-sponsorships": null,
+  "paid-directory-listings": null,
+  // Outbound, one to one.
+  "sales-cold-email-outreach": null,
+  "sales-crm-email-outreach": null,
+  "feedback-request-cold-email-outreach": null,
+  "cold-call-outreach": null,
+  "cold-instagram-outreach": null,
+  "cold-linkedin-outreach": null,
+  "cold-reddit-outreach": null,
+  "cold-sms-outreach": null,
+  "cold-whatsapp-outreach": null,
+  "cold-x-outreach": null,
+  // Earned.
+  "affiliate-programme": null,
+  "organic-linkedin-publishing": null,
+  "organic-reddit-publishing": null,
+  "organic-x-publishing": null,
+  "organic-youtube-publishing": null,
+  "podcast-guesting": null,
+  "pr-cold-email-outreach": null,
+  "pr-expert-quote-opportunities": null,
+  "pr-expert-quote-outreach": null,
+  "press-placements": null,
+  "seo-content": null,
+};
+
+/** An acquisition channel this service states no floor for. Surfaced as a 400. */
+export class UnknownAcquisitionChannelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnknownAcquisitionChannelError";
+  }
+}
+
+/** True when this service prices that acquisition channel. */
+export function isKnownAcquisitionChannel(featureSlug: string): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS,
+    featureSlug
+  );
+}
+
+/**
+ * The daily floor a funded ceiling on this (funnel, channel) pair must clear:
+ * the channel's own floor when it states one, else the funnel's.
+ *
+ * Throws on a channel this service does not price, rather than resolving to the
+ * funnel's floor — see the table above.
+ */
+export function minDailyBudgetCentsFor(
+  funnelKey: BrandFunnelKey,
+  featureSlug: string
+): number {
+  if (!isKnownAcquisitionChannel(featureSlug)) {
+    throw new UnknownAcquisitionChannelError(
+      `Unknown acquisition channel "${featureSlug}" — this service states no daily minimum for it, ` +
+        `so it cannot say what funding it needs to run. Valid channels: ${Object.keys(ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS).sort().join(", ")}.`
+    );
+  }
+  return (
+    ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS[featureSlug] ??
+    BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS[funnelKey]
+  );
+}
+
+/**
+ * The floor this channel states of its OWN, or null when it states none (so its
+ * funnel's floor governs it). Throws on a channel this service does not price.
+ */
+export function statedChannelMinimum(featureSlug: string): number | null {
+  if (!isKnownAcquisitionChannel(featureSlug)) {
+    throw new UnknownAcquisitionChannelError(
+      `Unknown acquisition channel "${featureSlug}" — this service states no daily minimum for it, ` +
+        `so it cannot say what funding it needs to run. Valid channels: ${Object.keys(ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS).sort().join(", ")}.`
+    );
+  }
+  return ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS[featureSlug];
+}
 
 /** A ceiling below its funnel's product minimum. Surfaced as a 400. */
 export class FunnelBudgetBelowMinimumError extends Error {
@@ -321,6 +448,15 @@ export function parseFunnelBudgetSet(
         );
       }
       featureSlug = entry.featureSlug.trim();
+      // A channel this service prices no floor for is refused HERE, before any
+      // lock is taken and whatever the amount. No silent fallback onto the
+      // funnel's floor — see ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS.
+      if (!isKnownAcquisitionChannel(featureSlug)) {
+        throw new UnknownAcquisitionChannelError(
+          `${BRAND_FUNNEL_LABELS[funnelKey]}: unknown acquisition channel "${featureSlug}" — this service states no daily minimum for it, ` +
+            `so it cannot say what funding it needs to run. Valid channels: ${Object.keys(ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS).sort().join(", ")}.`
+        );
+      }
     }
 
     // The OFFER, when the caller named one. Format-checked only: brand-service
@@ -404,55 +540,94 @@ export function parseFunnelBudgetSet(
 }
 
 /**
- * A funnel that IS funded has a product minimum, and the minimum binds the
- * FUNNEL TOTAL — the sum of every acquisition channel funding it — never a
- * single pair. A customer splitting one funded funnel across two channels
- * ($30 + $20 on a $24/day funnel) must not be refused because each half is under
- * a floor the whole clears; that split changes nothing about what the funnel
- * spends per day, which is the only thing the minimum is about.
+ * WHICH CEILINGS ARE JUDGED TOGETHER against one floor.
  *
- * Zero is exempt — a funnel whose channels all sit at 0 is "not funding that
- * funnel right now", which is an ordinary state.
+ * A channel that states a floor of its OWN is judged ALONE, on the sum of the
+ * offers funding it: its economics are its own, so neither its siblings' money
+ * nor their floor has anything to say about whether it can run. Google Ads at
+ * $5/day on a funnel whose cold-email floor is $24 is the whole point.
  *
- * GRANDFATHERING. The minimum polices what a customer may NEWLY STATE, not what
- * one has already been running. Ceilings predating the minimum were carried over
- * verbatim by the single-funnel attribution sweep — deliberately, because they
- * are the money the brand is actually spending — so live brands sit below their
- * funnel's floor today. Refusing every write of such a ceiling leaves its owner
- * only two moves: leave it exactly alone, or defund it to zero. Raising it
- * TOWARDS the floor would be refused, which is the wrong direction to block.
+ * Every channel that states NO floor of its own is judged with its siblings that
+ * also state none, against the FUNNEL's floor — exactly as before Google Ads
+ * arrived. Splitting one funded funnel across two such channels ($12 + $12 on a
+ * $24/day funnel) stays accepted: neither channel's floor moved, and that split
+ * changes nothing about what the funnel spends per day.
  *
- * So a funnel whose STORED ceiling is above zero and below its minimum may be
+ * The two groups do not pool. A channel with its own floor cannot lift its
+ * siblings over theirs, and their money cannot excuse it from its own — which is
+ * what stops "add a dollar of Google Ads" from becoming a way to fund anything
+ * below the floor it was refused at.
+ */
+export function minimumGroupOf(
+  funnelKey: BrandFunnelKey,
+  featureSlug: string
+): string {
+  const channelMinimum = statedChannelMinimum(featureSlug);
+  // The empty slug is unrepresentable (parse rejects it), so it cannot collide
+  // with a real channel's group.
+  return channelMinimum === null ? `${funnelKey}\u0000` : `${funnelKey}\u0000${featureSlug}`;
+}
+
+/**
+ * A funded group must clear its floor, and the floor binds the group's TOTAL —
+ * the sum of every ceiling in it — never one ceiling in isolation. A customer
+ * splitting a funded funnel across two channels that state no floor of their
+ * own, or one channel across two offers, must not be refused because each part
+ * is under a floor the whole clears.
+ *
+ * Zero is exempt — a group whose ceilings all sit at 0 is "not funding that
+ * right now", which is an ordinary state, and a brand whose every ceiling is 0
+ * is a brand in pause, not an error.
+ *
+ * GRANDFATHERING, UNCHANGED. The minimum polices what a customer may NEWLY
+ * STATE, not what one has already been running. Ceilings predating the minimum
+ * were carried over verbatim by the single-funnel attribution sweep —
+ * deliberately, because they are the money the brand is actually spending — so
+ * live brands sit below their floor today. Refusing every write of such a
+ * ceiling leaves its owner only two moves: leave it exactly alone, or defund it
+ * to zero. Raising it TOWARDS the floor would be refused, which is the wrong
+ * direction to block.
+ *
+ * So a group whose STORED total is above zero and below its minimum may be
  * re-stated or RAISED to any higher value, including one still below the
  * minimum. It may not be LOWERED to another funded sub-minimum value: that is a
  * new statement below the floor, which is exactly what the minimum exists to
  * refuse. Zero is always accepted (defunding is never blocked).
  *
- * The grandfather is spent the moment the ceiling reaches its minimum — that
- * falls out of the ordinary check below rather than needing its own branch,
- * since a stored value at or above the minimum never enters the grandfather
- * clause. It is derived from the stored ceiling and nothing else: no flag, no
- * column, no per-org override.
+ * The grandfather is spent the moment the total reaches its minimum — that falls
+ * out of the ordinary check below rather than needing its own branch, since a
+ * stored value at or above the minimum never enters the grandfather clause. It
+ * is derived from the stored ceiling and nothing else: no flag, no column, no
+ * per-org override.
  *
- * The grandfather cannot silently re-open: it is read off the STORED TOTAL, so a
- * funnel already at or above its floor never enters the clause, whatever the
- * split underneath looks like.
- *
- * `storedDailyBudgetCents` is this funnel's OWN current TOTAL across its channels
- * (null when it funds none), read under the write lock. Each funnel is judged
- * against its own, so one grandfathered funnel in a set never licenses a
- * sub-minimum value on another.
+ * `storedDailyBudgetCents` is this GROUP's own current total (null when it funds
+ * none), read under the write lock. Each group is judged against its own, so one
+ * grandfathered funnel in a set never licenses a sub-minimum value elsewhere.
  */
-export function assertFundedFunnelMeetsMinimum(
+export function assertFundedChannelMeetsMinimum(
   funnelKey: BrandFunnelKey,
+  featureSlug: string,
   dailyBudgetCents: string,
   storedDailyBudgetCents: string | null = null
 ): void {
+  // The channel is resolved BEFORE the zero shortcut: a slug this service does
+  // not price is refused whatever the amount, so an unknown channel can never be
+  // stored and then re-stated at a floor nobody chose for it.
+  const minimum = minDailyBudgetCentsFor(funnelKey, featureSlug);
+
   const value = new Decimal(dailyBudgetCents);
   if (value.isZero()) return;
 
-  const minimum = BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS[funnelKey];
   if (value.greaterThanOrEqualTo(minimum)) return;
+
+  // The channel is named only when the floor is ITS OWN. Where the funnel's
+  // floor governs, the funnel is what the customer is being told about — the
+  // same sentence this service has always sent.
+  const where =
+    statedChannelMinimum(featureSlug) === null
+      ? BRAND_FUNNEL_LABELS[funnelKey]
+      : `${BRAND_FUNNEL_LABELS[funnelKey]} on ${featureSlug}`;
+  const what = statedChannelMinimum(featureSlug) === null ? "funnel" : "channel";
 
   const stored =
     storedDailyBudgetCents === null ? null : new Decimal(storedDailyBudgetCents);
@@ -462,12 +637,12 @@ export function assertFundedFunnelMeetsMinimum(
   if (grandfathered) {
     if (value.greaterThanOrEqualTo(stored)) return;
     throw new FunnelBudgetBelowMinimumError(
-      `${BRAND_FUNNEL_LABELS[funnelKey]} is funded at ${dollarsPerDay(stored.toString())}, below the ${dollarsPerDay(minimum)} this funnel now needs to run. You can keep it at ${dollarsPerDay(stored.toString())}, raise it, or set it to 0 to stop funding it — you set ${dollarsPerDay(dailyBudgetCents)}.`
+      `${where} is funded at ${dollarsPerDay(stored.toString())}, below the ${dollarsPerDay(minimum)} this ${what} now needs to run. You can keep it at ${dollarsPerDay(stored.toString())}, raise it, or set it to 0 to stop funding it — you set ${dollarsPerDay(dailyBudgetCents)}.`
     );
   }
 
   throw new FunnelBudgetBelowMinimumError(
-    `${BRAND_FUNNEL_LABELS[funnelKey]} needs at least ${dollarsPerDay(minimum)} to run — you set ${dollarsPerDay(dailyBudgetCents)}. Set it to 0 if you do not want to fund this funnel right now.`
+    `${where} needs at least ${dollarsPerDay(minimum)} to run — you set ${dollarsPerDay(dailyBudgetCents)}. Set it to 0 if you do not want to fund this ${what} right now.`
   );
 }
 
@@ -667,6 +842,27 @@ export function funnelTotalOf(
 }
 
 /**
+ * One (funnel, channel) pair's current total across its offers, "0" when it
+ * funds none. The grain the product minimum binds — see
+ * `assertFundedChannelMeetsMinimum`.
+ */
+export function channelTotalOf(
+  rows: Array<{
+    funnelKey: string;
+    featureSlug: string;
+    dailyBudgetCents: string;
+  }>,
+  funnelKey: string,
+  featureSlug: string
+): string {
+  return sumFunnelBudgets(
+    rows.filter(
+      (row) => row.funnelKey === funnelKey && row.featureSlug === featureSlug
+    )
+  );
+}
+
+/**
  * Read one org's per-channel ceilings for a brand, one row per
  * (funnel, acquisition-channel feature). Empty when never set.
  */
@@ -820,24 +1016,33 @@ export async function setBrandFunnelDailyBudgets(
     // sitting beside it - see `supersededUnscopedRows`.
     const superseded = supersededUnscopedRows(existingFunnels, resolved);
 
-    // The minimum binds the FUNNEL TOTAL, so it is judged on what each touched
-    // funnel will sum to after this write, against what it sums to now.
+    // The minimum binds a GROUP TOTAL, and which ceilings share a group is
+    // `minimumGroupOf`: a channel that states its own floor is judged alone, and
+    // every channel that states none is judged with its funnel's siblings, as
+    // before Google Ads arrived. Each touched group is judged on what it will
+    // sum to after this write, against what it sums to now (its grandfather).
     const projected = projectFunnelRows(
       existingFunnels,
       resolved,
       mode,
       superseded
     );
-    for (const funnelKey of new Set(resolved.map((e) => e.funnelKey))) {
-      const storedTotal = existingFunnels.some(
-        (row) => row.funnelKey === funnelKey
-      )
-        ? funnelTotalOf(existingFunnels, funnelKey)
-        : null;
-      assertFundedFunnelMeetsMinimum(
+    const touchedGroups = new Map(
+      resolved.map((e) => [
+        minimumGroupOf(e.funnelKey, e.featureSlug),
+        { funnelKey: e.funnelKey, featureSlug: e.featureSlug },
+      ])
+    );
+    for (const [group, { funnelKey, featureSlug }] of touchedGroups) {
+      const inGroup = (row: { funnelKey: string; featureSlug: string }) =>
+        row.funnelKey === funnelKey &&
+        minimumGroupOf(funnelKey, row.featureSlug) === group;
+      const storedRows = existingFunnels.filter(inGroup);
+      assertFundedChannelMeetsMinimum(
         funnelKey,
-        funnelTotalOf(projected, funnelKey),
-        storedTotal
+        featureSlug,
+        sumFunnelBudgets(projected.filter(inGroup)),
+        storedRows.length > 0 ? sumFunnelBudgets(storedRows) : null
       );
     }
 

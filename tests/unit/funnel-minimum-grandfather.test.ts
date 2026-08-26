@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  assertFundedFunnelMeetsMinimum,
+  assertFundedChannelMeetsMinimum,
   FunnelBudgetBelowMinimumError,
   BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS,
 } from "../../src/lib/brand-funnel-budgets.js";
@@ -14,9 +14,12 @@ import {
 describe("funded-funnel minimum, grandfathered by the stored ceiling", () => {
   const min = BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS.reply_meeting; // 2400
 
+  const COLD_EMAIL = "sales-cold-email-outreach";
+
   const assert = (value: number, stored: number | null) =>
-    assertFundedFunnelMeetsMinimum(
+    assertFundedChannelMeetsMinimum(
       "reply_meeting",
+      COLD_EMAIL,
       String(value),
       stored === null ? null : String(stored)
     );
@@ -69,7 +72,12 @@ describe("funded-funnel minimum, grandfathered by the stored ceiling", () => {
 
   it("refuses lowering by a fraction of a cent", () => {
     expect(() =>
-      assertFundedFunnelMeetsMinimum("reply_meeting", "799.9999999999", "800")
+      assertFundedChannelMeetsMinimum(
+        "reply_meeting",
+        COLD_EMAIL,
+        "799.9999999999",
+        "800"
+      )
     ).toThrow(FunnelBudgetBelowMinimumError);
   });
 
@@ -105,10 +113,10 @@ describe("funded-funnel minimum, grandfathered by the stored ceiling", () => {
 
   it("applies the Website Purchase minimum to that funnel", () => {
     expect(() =>
-      assertFundedFunnelMeetsMinimum("visit_signup", "50", null)
+      assertFundedChannelMeetsMinimum("visit_signup", COLD_EMAIL, "50", null)
     ).toThrow(/\$1\/day/);
     expect(() =>
-      assertFundedFunnelMeetsMinimum("visit_signup", "60", "50")
+      assertFundedChannelMeetsMinimum("visit_signup", COLD_EMAIL, "60", "50")
     ).not.toThrow();
   });
 });
