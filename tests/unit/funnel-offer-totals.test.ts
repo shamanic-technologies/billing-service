@@ -15,7 +15,7 @@ import {
 import type { BrandFunnelDailyBudget } from "../../src/db/schema.js";
 
 const COLD = "sales-cold-email-outreach";
-const FEEDBACK = "sales-feedback-request-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 const OFFER_A = "11111111-1111-4111-8111-111111111111";
 const OFFER_B = "22222222-2222-4222-8222-222222222222";
 
@@ -46,10 +46,10 @@ describe("per-channel and per-funnel totals over offers", () => {
     expect(
       channels.map((c) => [c.funnelKey, c.featureSlug, c.dailyBudgetCents])
     ).toEqual([
-      ["reply_meeting", COLD, "5000.0000000000"],
       ["reply_meeting", FEEDBACK, "1000.0000000000"],
+      ["reply_meeting", COLD, "5000.0000000000"],
     ]);
-    expect(channels[0].updatedAt.toISOString()).toBe("2026-08-05T00:00:00.000Z");
+    expect(channels[1].updatedAt.toISOString()).toBe("2026-08-05T00:00:00.000Z");
   });
 
   it("is byte-identical to the stored row when a channel funds one offer", () => {

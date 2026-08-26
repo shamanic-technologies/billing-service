@@ -24,7 +24,7 @@ const runId = "00000000-0000-0000-0000-00000000cfbb";
 const brandId = "00000000-0000-0000-0000-0000000cfb01";
 
 const COLD = "sales-cold-email-outreach";
-const FEEDBACK = "sales-feedback-request-outreach";
+const FEEDBACK = "feedback-request-cold-email-outreach";
 const OFFER_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 const OFFER_B = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
 
@@ -176,13 +176,13 @@ describe("per-offer daily ceilings", () => {
 
     const view = await read();
     expect(view.offers).toEqual([
+      ["visit_form", FEEDBACK, OFFER_A, "300.0000000000"],
       ["visit_form", COLD, OFFER_A, "600.0000000000"],
       ["visit_form", COLD, OFFER_B, "100.0000000000"],
-      ["visit_form", FEEDBACK, OFFER_A, "300.0000000000"],
     ]);
     expect(view.channels).toEqual([
-      ["visit_form", COLD, "700.0000000000"],
       ["visit_form", FEEDBACK, "300.0000000000"],
+      ["visit_form", COLD, "700.0000000000"],
     ]);
     expect(view.brandTotal).toBe("1000.0000000000");
   });
