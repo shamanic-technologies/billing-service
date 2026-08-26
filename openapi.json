@@ -1318,6 +1318,9 @@
           "paid_topups_cents": {
             "type": "string"
           },
+          "outstanding_total_cents": {
+            "type": "string"
+          },
           "promises": {
             "type": "array",
             "items": {
@@ -1328,6 +1331,7 @@
         "required": [
           "org_id",
           "paid_topups_cents",
+          "outstanding_total_cents",
           "promises"
         ]
       }

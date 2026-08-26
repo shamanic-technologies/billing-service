@@ -386,6 +386,58 @@ describe("stacked free-credit promises (referral offer)", () => {
     expect(res.body.promises[0].progress_pct).toBe(25);
   });
 
+  // --- The headline total ---
+
+  it("answers the TOTAL still outstanding, reconciling with the promise rows beside it", async () => {
+    await newSignup(invitee);
+    await claimReferral(invitee, inviter);
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(invitee));
+
+    expect(res.status).toBe(200);
+    // $395 welcome remainder + $500 referral: the sidebar headline.
+    expect(res.body.outstanding_total_cents).toBe(cents(89500));
+    // Same figure the rows add up to — the two can never disagree.
+    const summed = res.body.promises.reduce(
+      (acc: number, p: { amount_cents: string }) => acc + Number(p.amount_cents),
+      0
+    );
+    expect(Number(res.body.outstanding_total_cents)).toBe(summed);
+  });
+
+  it("an org with nothing outstanding gets a canonical zero, not null and not an absent field", async () => {
+    // Ineligible for the welcome completion and never referred: no promise at all.
+    await insertTestAccount({ orgId: invitee });
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(invitee));
+
+    expect(res.status).toBe(200);
+    expect(res.body.promises).toEqual([]);
+    expect(res.body.outstanding_total_cents).toBe(cents(0));
+  });
+
+  it("a promise the org has already earned leaves the total at zero once it lands", async () => {
+    await newSignup(inviter);
+    await claimReferral(invitee, inviter);
+    await settle(invitee, 90000);
+    // The inviter has paid past BOTH bars, so this read grants everything.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(200000));
+
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(inviter));
+
+    expect(res.status).toBe(200);
+    expect(res.body.promises).toEqual([]);
+    expect(res.body.outstanding_total_cents).toBe(cents(0));
+  });
+
   // --- The unconditional server-side driver ---
 
   it("the sweep settles a referral for an org with no request traffic at all", async () => {

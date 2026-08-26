@@ -82,7 +82,7 @@ import {
   REFERRAL_REWARD_CODE,
   type FreeCreditPromise,
 } from "../db/schema.js";
-import { gte, subCents } from "./cents.js";
+import { addCents, gte, subCents } from "./cents.js";
 import { sumEntitlementGrantsForOrg } from "./promos.js";
 import {
   resolveOrgDisplayIdentity,
@@ -674,4 +674,32 @@ export async function attachReferredOrgIdentities(
       referred_org_domain: identity?.domain ?? null,
     };
   });
+}
+
+/**
+ * The TOTAL free credit this org is still waiting on, across every promise it
+ * carries — the headline the dashboard sidebar states ("$X in free credits
+ * coming").
+ *
+ * Computed from the SAME view rows the response returns, not from a second query:
+ * the total and the rows underneath it can therefore never disagree about one
+ * number, which is the whole reason the consumer is forbidden from summing money
+ * in the browser. So it inherits every rule those rows already obey — the welcome
+ * remainder net of what was already gifted, a promise worth nothing dropped, a
+ * granted promise absent entirely.
+ *
+ * An org with no outstanding promises answers a canonical "0.0000000000", never
+ * null and never an absent field: "nothing coming" is an unambiguous answer, and
+ * a consumer rendering it has nothing to branch on.
+ *
+ * This is NOT money the org can spend. It never enters balance, credited or
+ * spendable — a promise is deliberately not funds, and that separation is what
+ * stops the billing page counting it twice.
+ */
+export function sumOutstandingPromiseAmounts(
+  promises: FreeCreditPromiseView[]
+): string {
+  let total = ZERO;
+  for (const promise of promises) total = addCents(total, promise.amount_cents);
+  return total;
 }

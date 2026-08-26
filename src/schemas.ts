@@ -447,6 +447,16 @@ export const FreeCreditPromisesResponseSchema = z
     /** Cumulative succeeded payments, net of refunds + lost disputes. */
     paid_topups_cents: CentsStringSchema,
     /**
+     * TOTAL free credit still outstanding across every promise below — the
+     * headline the dashboard sidebar states. Summed from those very rows, in the
+     * same units and on the same basis, so the two can never disagree; a consumer
+     * never adds money up itself. "0.0000000000" when nothing is outstanding.
+     *
+     * Still NOT spendable money: it enters neither credited, balance nor
+     * spendable, exactly like the rows it sums.
+     */
+    outstanding_total_cents: CentsStringSchema,
+    /**
      * Promises still outstanding, cheapest bar first. An outstanding promise is a
      * promise, not money: it is NOT part of credited / balance / spendable anywhere.
      */
