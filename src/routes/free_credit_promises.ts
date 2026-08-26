@@ -15,6 +15,7 @@ import {
   attachReferredOrgIdentities,
   claimReferral,
   listOutstandingPromises,
+  sumOutstandingPromiseAmounts,
   ReferralAlreadyClaimedError,
   ReferralRewardCodeMissingError,
   SelfReferralError,
@@ -136,7 +137,17 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    res.json({ org_id: orgId, paid_topups_cents: paidTopupsCents, promises });
+    // outstanding_total_cents is ADDITIVE: a consumer that does not know about it
+    // keeps working unchanged. It is summed from the very rows returned alongside
+    // it, in the same money units and on the same basis, so the headline and the
+    // list can never state different figures — and it is not spendable money (see
+    // sumOutstandingPromiseAmounts).
+    res.json({
+      org_id: orgId,
+      paid_topups_cents: paidTopupsCents,
+      outstanding_total_cents: sumOutstandingPromiseAmounts(promises),
+      promises,
+    });
   } catch (err) {
     console.error("[billing-service] Error listing free-credit promises:", err);
     res.status(500).json({ error: "Internal server error" });
