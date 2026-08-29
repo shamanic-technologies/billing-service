@@ -118,26 +118,6 @@ export function welcomeCompletionCheckoutNotice(offer: FreeCreditOffer): string 
   return `You get ${dollars(offer.entitlementCents)} in free credits. $5 now, the rest once your payments reach ${dollars(offer.paidTriggerCents)}.`;
 }
 
-/**
- * Smallest FIRST checkout that may carry the gift as an up-front visible discount.
- *
- * Not arbitrary, and the ONE invariant that keeps the discount honest: the discount
- * advances the whole entitlement, so the post-discount charge must still reach the
- * payment trigger that EARNS the gift. Hence `entitlement + trigger` — at the
- * grandfathered $25/$25 that is exactly today's $50 floor, where the buyer pays $25,
- * satisfies the trigger, and the credit that lands is (payment) + (welcome) +
- * (completion) = the $50 configured. It also keeps the charge away from $0.
- *
- * DERIVED, never a constant: a re-price must move this floor in lockstep or the
- * discount would hand over credit nobody paid for. At the $400/$400 offer the floor is
- * $800, well above any realistic first checkout (onboarding charges roughly one day of
- * budget), so the discount branch is effectively unreachable for new signups and they
- * fall to the notice path instead. That is expected: do NOT relax the floor to keep
- * the branch alive.
- */
-export function minDiscountedCheckoutCents(offer: FreeCreditOffer): number {
-  return offer.entitlementCents + offer.paidTriggerCents;
-}
 
 export class WelcomeCompletionPromoCodeMissingError extends Error {
   constructor() {
@@ -160,14 +140,6 @@ async function findWelcomeCompletionCode() {
   return row ?? null;
 }
 
-/**
- * True when the `welcome_completion` ledger key exists, i.e. when a completion
- * grant is possible at all. The checkout discount gates on this so a discount can
- * never land without the matching credit grant.
- */
-export async function welcomeCompletionCodeExists(): Promise<boolean> {
-  return (await findWelcomeCompletionCode()) !== null;
-}
 
 export type SettleReason =
   | "granted"
@@ -299,50 +271,27 @@ export async function settleWelcomeCompletion(
   return NOT_GRANTED("already_granted");
 }
 
-export interface CheckoutWelcomeOffer {
-  /** Apply a visible up-front discount to THIS checkout. */
-  applyDiscount: boolean;
-  /** Stripe coupon id to attach (only set when applyDiscount). */
-  couponId: string | null;
-  /**
-   * "Gift is coming" copy for the checkout page, quoting THIS org's own offer;
-   * null when no notice should be shown. Built here rather than in the route so
-   * the figures can never drift from the account the decision was made against.
-   */
-  noticeMessage: string | null;
-}
-
-const NO_OFFER: CheckoutWelcomeOffer = {
-  applyDiscount: false,
-  couponId: null,
-  noticeMessage: null,
-};
-
 /**
- * Decide what the checkout page should say / apply for this org's payment-mode
- * checkout.
+ * The "gift is coming" copy for this org's payment-mode checkout page, quoting
+ * THIS org's own offer — or null when no notice should be shown. Built here
+ * rather than in the route so the figures can never drift from the account the
+ * decision was made against.
  *
- * Discount rules, all of which must hold:
- *   - the org has NEVER paid before (`paidTopupsCents` is 0) — otherwise every
- *     later top-up would silently get $25 off forever;
- *   - the org still has free-credit entitlement left to advance;
- *   - the checkout is for at least `minDiscountedCheckoutCents` of THIS org's offer,
- *     so the post-discount charge still reaches the payment trigger that EARNS the
- *     gift (this is what makes it impossible to discount without the matching grant,
- *     and what keeps the charge away from $0);
- *   - a completion grant is actually possible (ledger key seeded) and a coupon is
- *     configured.
+ * Shown only to an org that genuinely still has free credit coming. Telling an
+ * org with its full entitlement already gifted (or one that is not eligible at
+ * all) that "the rest" is on its way would be a lie.
  *
- * When no discount applies, the notice is shown instead — but only to an org that
- * genuinely still has free credit coming. Telling an org with its full $25 already
- * gifted (or an org that is not eligible at all) that "the rest" is on its way
- * would be a lie.
+ * There is deliberately NO up-front discount path. Advancing the entitlement as
+ * a pre-applied Stripe coupon was removed: it required a floor of
+ * (entitlement + trigger) to keep the post-discount charge above the trigger
+ * that EARNS the gift, and at the current $400 offer that floor is $800 — far
+ * above any real first checkout, so the branch had been unreachable for new
+ * signups long before it was deleted. The gift is granted after the fact by
+ * `settleWelcomeCompletion`, which is the path onboarding actually uses. Do NOT
+ * reintroduce a checkout-time discount: it is the one place a buyer can be
+ * handed credit before the payment that earns it has cleared.
  */
-export async function decideCheckoutWelcomeOffer(
-  orgId: string,
-  paidTopupsCents: string,
-  checkoutAmountCents: number
-): Promise<CheckoutWelcomeOffer> {
+export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string | null> {
   const [account] = await db
     .select({
       eligible: billingAccounts.welcomeCompletionEligible,
@@ -352,32 +301,20 @@ export async function decideCheckoutWelcomeOffer(
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
-  if (!account || !account.eligible) return NO_OFFER;
+  if (!account || !account.eligible) return null;
 
   const offer: FreeCreditOffer = {
     entitlementCents: account.entitlementCents,
     paidTriggerCents: account.paidTriggerCents,
   };
 
-  // Same exclusion as settleWelcomeCompletion — the discount advances the WELCOME
+  // Same exclusion as settleWelcomeCompletion — the notice describes the WELCOME
   // entitlement, so referral rewards must not count against what is left of it.
   const giftedCents = await sumEntitlementGrantsForOrg(orgId);
   const remainingCents = subCents(toCents(offer.entitlementCents), giftedCents);
-  if (cmpCents(remainingCents, ZERO) <= 0) return NO_OFFER;
+  if (cmpCents(remainingCents, ZERO) <= 0) return null;
 
-  const neverPaid = cmpCents(paidTopupsCents, ZERO) <= 0;
-  const meetsFloor = checkoutAmountCents >= minDiscountedCheckoutCents(offer);
-  const couponId = process.env.WELCOME_DISCOUNT_COUPON_ID?.trim() || null;
-  const grantable = couponId !== null && (await welcomeCompletionCodeExists());
-
-  if (neverPaid && meetsFloor && grantable) {
-    return { applyDiscount: true, couponId, noticeMessage: null };
-  }
-  return {
-    applyDiscount: false,
-    couponId: null,
-    noticeMessage: welcomeCompletionCheckoutNotice(offer),
-  };
+  return welcomeCompletionCheckoutNotice(offer);
 }
 
 /**

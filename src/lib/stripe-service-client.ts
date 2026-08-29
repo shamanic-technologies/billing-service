@@ -481,20 +481,13 @@ export interface CheckoutSessionBody {
    */
   invoice_creation?: { enabled: boolean };
   /**
-   * Payment-mode only: pre-applied discounts, shown on the Checkout page as a
-   * discount line so the buyer sees what they are getting before paying. Stripe
-   * accepts at most one entry. Used to advance the welcome-completion gift as a
-   * visible $25 off the org's FIRST checkout (see lib/welcome-completion).
-   *
-   * Mutually exclusive with user-entered promotion codes — billing deliberately
-   * does NOT set `allow_promotion_codes` anywhere (removed with the journalist comp
-   * it was added for), so there is no conflict to resolve.
-   */
-  discounts?: Array<{ coupon: string }>;
-  /**
    * Payment-mode only: copy rendered on the Checkout page alongside the pay button
    * (Stripe caps `message` at 1200 chars). Used to tell a buyer the free credits are
-   * coming when no up-front discount applies.
+   * coming.
+   *
+   * Note there is deliberately no `discounts` field: billing applies no pre-applied
+   * coupon to a checkout, and sets `allow_promotion_codes` nowhere either (removed
+   * with the journalist comp it was added for). Nothing here discounts a charge.
    */
   custom_text?: { submit: { message: string } };
 }
