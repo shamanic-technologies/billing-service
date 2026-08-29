@@ -90,10 +90,7 @@ router.get("/public/stats/billing", async (_req, res) => {
 
     let ssStats;
     try {
-      ssStats = await ssGetStats({
-        "x-org-id": "00000000-0000-0000-0000-000000000000",
-        "x-user-id": "00000000-0000-0000-0000-000000000000",
-      });
+      ssStats = await ssGetStats();
     } catch (err) {
       console.error("[billing-service] stripe-service getStats failed:", err);
       res.status(502).json({ error: "Failed to fetch stats from stripe-service" });
