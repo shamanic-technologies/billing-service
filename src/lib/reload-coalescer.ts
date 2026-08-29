@@ -80,6 +80,19 @@ function recordSuccess(orgId: string): void {
 }
 
 /**
+ * How many times in a row this org's reload has failed, 0 once one succeeds.
+ *
+ * Read right after a reload throws, it answers "is this the FIRST failure of a
+ * streak, or another one we have already reacted to" — which is what decides
+ * whether the customer is told again. A declined off_session charge arrives as
+ * a throw, so the caller has no outcome object to read `backoffSkipped` from
+ * and needs this instead.
+ */
+export function consecutiveReloadFailures(orgId: string): number {
+  return failures.get(orgId)?.consecutiveFailures ?? 0;
+}
+
+/**
  * Milliseconds until this org may be charged again, or 0 when it may be
  * charged now. Exported so callers can log/trace WHY a reload was skipped.
  */

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   coalesceReload,
   reloadBlockedForMs,
+  consecutiveReloadFailures,
   _resetCoalescer,
   type ReloadOutcome,
 } from "../../src/lib/reload-coalescer.js";
@@ -130,5 +131,52 @@ describe("reload backoff", () => {
   it("marks a real outcome without the backoff flag, so callers still notify", async () => {
     const outcome = await coalesceReload(ORG, async () => succeeded);
     expect(outcome.backoffSkipped).toBeUndefined();
+  });
+});
+
+/**
+ * The failure-notification loop (prod 2026-08-29). Sending "your reload failed"
+ * authorizes credit on the very org it is about, so an unguarded send re-enters
+ * authorize, fails again, and sends again — 2,939 authorizations in 71 minutes,
+ * 2,938 of them attributed to that email. Billing cannot fix the org-billing of
+ * a platform notification (that belongs to the email path), but it can refuse to
+ * be the thing that drives the loop.
+ */
+describe("reload failure streak", () => {
+  beforeEach(() => {
+    _resetCoalescer();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-29T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetCoalescer();
+  });
+
+  it("counts 0 for an org that has never failed", () => {
+    expect(consecutiveReloadFailures(ORG)).toBe(0);
+  });
+
+  it("reaches 1 on the first failure, so that one notifies", async () => {
+    await expect(coalesceReload(ORG, declined)).rejects.toThrow();
+    expect(consecutiveReloadFailures(ORG)).toBe(1);
+  });
+
+  it("goes above 1 on the next real failure, so that one stays silent", async () => {
+    await expect(coalesceReload(ORG, declined)).rejects.toThrow();
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await expect(coalesceReload(ORG, declined)).rejects.toThrow();
+    expect(consecutiveReloadFailures(ORG)).toBe(2);
+  });
+
+  it("resets to 0 on success, so a later failure notifies again", async () => {
+    await expect(coalesceReload(ORG, declined)).rejects.toThrow();
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    await coalesceReload(ORG, async () => succeeded);
+    expect(consecutiveReloadFailures(ORG)).toBe(0);
+
+    await expect(coalesceReload(ORG, declined)).rejects.toThrow();
+    expect(consecutiveReloadFailures(ORG)).toBe(1);
   });
 });

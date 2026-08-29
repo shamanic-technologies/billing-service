@@ -13,7 +13,7 @@ import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-t
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadViaInvoice } from "../lib/reload.js";
-import { coalesceReload } from "../lib/reload-coalescer.js";
+import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
 
 const router = Router();
 
@@ -236,7 +236,22 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     } catch (err) {
       console.error("[billing-service] reload via PaymentIntent failed:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(err) }, req.headers);
-      sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
+      // Tell the customer on the FIRST failure of a streak only. A declined
+      // off_session charge arrives here as a THROW (stripe-service answers 402),
+      // so there is no outcome object to read `backoffSkipped` from — the streak
+      // counter is what distinguishes "this is news" from "we already said so".
+      //
+      // This is not merely about duplicate mail. Sending this notification
+      // AUTHORIZES CREDIT on the very org it is about (the email path is
+      // org-billed), so an unguarded send re-enters this handler, fails again,
+      // and sends again. Prod 2026-08-29: 2,939 authorizations in 71 minutes,
+      // 2,938 of them attributed to this exact email, zero to product traffic —
+      // the notification was feeding itself. The org-billing of a platform
+      // lifecycle notification is the root cause and belongs to the email path,
+      // not here; this guard is what stops billing from driving the loop.
+      if (consecutiveReloadFailures(orgId) <= 1) {
+        sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
+      }
       res.status(502).json({ error: "Reload via stripe-service failed" });
       return;
     }
