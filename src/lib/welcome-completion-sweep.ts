@@ -26,11 +26,7 @@
  * unreachable org never blocks the rest (same shape as runDunningTick).
  */
 
-import {
-  sumSucceededTopupsForOrg,
-  sumSucceededTopupsForOrgBefore,
-} from "./stripe-service-client.js";
-import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
+import { sumSucceededTopupsForOrg } from "./stripe-service-client.js";
 import { listWelcomeCompletionCandidates } from "./welcome-completion.js";
 import { listPromiseSweepCandidates } from "./free-credit-promises.js";
 import { settleFreeCreditPromises } from "./free-credit-settlement.js";
@@ -55,9 +51,7 @@ export async function runWelcomeCompletionSweep(): Promise<WelcomeCompletionSwee
       // User-less org-keyed read (X-API-Key + org only) — there is no end user on
       // this path, so no identity is invented. Net of refunds + lost disputes.
       const paidTopups = await sumSucceededTopupsForOrg(orgId);
-      const outcome = await settleFreeCreditPromises(orgId, paidTopups, () =>
-        sumSucceededTopupsForOrgBefore(orgId, WELCOME_COMPLETION_LAUNCH_AT_UNIX)
-      );
+      const outcome = await settleFreeCreditPromises(orgId, paidTopups);
       if (outcome.welcome.granted) {
         granted += 1;
         console.log(

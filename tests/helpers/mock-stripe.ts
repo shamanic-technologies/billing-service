@@ -14,13 +14,14 @@ export interface StripeServiceMocks {
   getOrgCardCountry: ReturnType<typeof vi.fn>;
   getOrgCardDisplay: ReturnType<typeof vi.fn>;
   sumSucceededTopupsForCustomer: ReturnType<typeof vi.fn>;
-  // Paid topups as of the welcome-completion launch instant (grandfather check).
-  // Defaults to 0 = the org had paid nothing before launch, so it is eligible.
-  sumSucceededTopupsForCustomerBefore: ReturnType<typeof vi.fn>;
+  // Paid topups as of the welcome-completion launch instant, asked of stripe-service
+  // (the grandfather check). Defaults to 0 = the org had paid nothing before launch,
+  // so it is eligible. ONE mock for every caller — the three request paths and the
+  // hourly sweep all reach the same read.
+  sumPaidTopupsForOrgAsOf: ReturnType<typeof vi.fn>;
   // User-less org-keyed reads (balance path — computeBalance).
   fetchOrgCustomer: ReturnType<typeof vi.fn>;
   sumSucceededTopupsForOrg: ReturnType<typeof vi.fn>;
-  sumSucceededTopupsForOrgBefore: ReturnType<typeof vi.fn>;
   hasChargeablePmForOrg: ReturnType<typeof vi.fn>;
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
   listCustomersByMetadata: ReturnType<typeof vi.fn>;
@@ -116,10 +117,9 @@ export function setupStripeMocks(): StripeServiceMocks {
     // expMonth: 8, expYear: 2027 }).
     getOrgCardDisplay: vi.fn().mockResolvedValue(null),
     sumSucceededTopupsForCustomer: vi.fn().mockResolvedValue("0.0000000000"),
-    sumSucceededTopupsForCustomerBefore: vi.fn().mockResolvedValue("0.0000000000"),
+    sumPaidTopupsForOrgAsOf: vi.fn().mockResolvedValue("0.0000000000"),
     fetchOrgCustomer: vi.fn().mockResolvedValue(buildMockCustomer()),
     sumSucceededTopupsForOrg: vi.fn().mockResolvedValue("0.0000000000"),
-    sumSucceededTopupsForOrgBefore: vi.fn().mockResolvedValue("0.0000000000"),
     hasChargeablePmForOrg: vi.fn().mockResolvedValue(true),
     getOrgCardCountryByOrg: vi.fn().mockResolvedValue(null),
     createCheckoutSession: vi.fn().mockResolvedValue({
@@ -164,15 +164,12 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "sumSucceededTopupsForCustomer").mockImplementation(
     mocks.sumSucceededTopupsForCustomer
   );
-  vi.spyOn(ssClient, "sumSucceededTopupsForCustomerBefore").mockImplementation(
-    mocks.sumSucceededTopupsForCustomerBefore
+  vi.spyOn(ssClient, "sumPaidTopupsForOrgAsOf").mockImplementation(
+    mocks.sumPaidTopupsForOrgAsOf
   );
   vi.spyOn(ssClient, "fetchOrgCustomer").mockImplementation(mocks.fetchOrgCustomer);
   vi.spyOn(ssClient, "sumSucceededTopupsForOrg").mockImplementation(
     mocks.sumSucceededTopupsForOrg
-  );
-  vi.spyOn(ssClient, "sumSucceededTopupsForOrgBefore").mockImplementation(
-    mocks.sumSucceededTopupsForOrgBefore
   );
   vi.spyOn(ssClient, "hasChargeablePmForOrg").mockImplementation(mocks.hasChargeablePmForOrg);
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);

@@ -39,10 +39,11 @@
  * time is ineligible forever", which excluded 78 of 88 orgs wrongly and left the
  * founder hand-granting the remainder one at a time. Migration 0030 corrects it.)
  *
- * Billing does not store cumulative payments — it reads them. So the check is
- * DERIVED from Stripe's own history via `fetchPaidTopupsBeforeLaunchCents` (the same
- * netted sum, as of launch), then FROZEN on the account so it costs at most one extra
- * read per org, ever. Reading immutable history means it returns the same answer
+ * Billing does not store cumulative payments — it reads them, and it does not derive
+ * the as-of-launch figure either: stripe-service answers it directly
+ * (`sumPaidTopupsForOrgAsOf`), bounding payments AND returns to what Stripe had
+ * created before that second. The answer is then FROZEN on the account, so it costs
+ * at most one extra read per org, ever. Reading immutable history means it returns the same answer
  * every time it is computed; and an org created after launch has no pre-launch
  * payments by construction, so it can never be demoted.
  *
@@ -80,10 +81,12 @@ import {
   localPromos,
   WELCOME_COMPLETION_CODE,
   WELCOME_COMPLETION_LAUNCH_AT_MS,
+  WELCOME_COMPLETION_LAUNCH_AT_UNIX,
 } from "../db/schema.js";
 import { cmpCents, gte, subCents } from "./cents.js";
 import { sumEntitlementGrantsForOrg } from "./promos.js";
 import { markWelcomePromiseGranted } from "./free-credit-promises.js";
+import { sumPaidTopupsForOrgAsOf } from "./stripe-service-client.js";
 import { Decimal } from "decimal.js";
 
 // System sentinel — the completion has no human user (it is platform-issued).
@@ -172,19 +175,18 @@ const NOT_GRANTED = (reason: SettleReason): WelcomeCompletionOutcome => ({
  * sumSucceededTopupsFor{Customer,Org}. Money that was given back does not earn the
  * gift.
  *
- * `fetchPaidTopupsBeforeLaunchCents` returns the SAME sum as of
- * WELCOME_COMPLETION_LAUNCH_AT_ISO — the grandfather check (see the module doc).
- * It is a callback, not a value, for two reasons: it costs a stripe-service read
- * that almost no call ever needs, and the real-user and user-less surfaces read
- * different stripe-service routes (`/v1/*` vs `/internal/*by-org`), which must not
- * be collapsed. Required, so no caller can silently skip the check.
+ * The grandfather check reads the SAME sum as of WELCOME_COMPLETION_LAUNCH_AT_ISO
+ * (see the module doc) from stripe-service. It is asked HERE, lazily, inside the
+ * one branch that needs it: it costs a stripe-service read that almost no call ever
+ * makes, and asking it in one place is what makes every caller — the three request
+ * paths and the hourly sweep — get the same answer for the same org by construction.
+ * No caller can skip it, and none can supply its own version of it.
  *
  * Idempotent and safe to call on every request. Fails loud.
  */
 export async function settleWelcomeCompletion(
   orgId: string,
-  paidTopupsCents: string,
-  fetchPaidTopupsBeforeLaunchCents: () => Promise<string>
+  paidTopupsCents: string
 ): Promise<WelcomeCompletionOutcome> {
   const [account] = await db
     .select({
@@ -226,7 +228,10 @@ export async function settleWelcomeCompletion(
   // read happens at most once per org. A post-launch org skips it entirely: it has
   // no pre-launch payments by construction, so asking would always answer zero.
   if (account.createdAt.getTime() < WELCOME_COMPLETION_LAUNCH_AT_MS) {
-    const paidBeforeLaunchCents = await fetchPaidTopupsBeforeLaunchCents();
+    const paidBeforeLaunchCents = await sumPaidTopupsForOrgAsOf(
+      orgId,
+      WELCOME_COMPLETION_LAUNCH_AT_UNIX
+    );
     if (gte(paidBeforeLaunchCents, toCents(account.paidTriggerCents))) {
       // Freeze the answer: it is derived from immutable payment history, so
       // re-deriving it can only ever return the same thing.

@@ -5,10 +5,8 @@ import {
   createCheckoutSession,
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
-  sumSucceededTopupsForCustomerBefore,
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
-import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
@@ -84,13 +82,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // loud (the catch below → 502): a buyer must never get a discount without
         // the matching credit grant.
         const paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
-        await settleFreeCreditPromises(orgId, paidTopupsCents, () =>
-          sumSucceededTopupsForCustomerBefore(
-            identity,
-            customer.id,
-            WELCOME_COMPLETION_LAUNCH_AT_UNIX
-          )
-        );
+        await settleFreeCreditPromises(orgId, paidTopupsCents);
         const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
 
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
