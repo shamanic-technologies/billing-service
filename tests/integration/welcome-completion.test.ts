@@ -18,9 +18,7 @@ import {
   localPromos,
   WELCOME_COMPLETION_CODE,
   WELCOME_COMPLETION_LAUNCH_AT_MS,
-  WELCOME_COMPLETION_LAUNCH_AT_UNIX,
 } from "../../src/db/schema.js";
-import { sumSucceededTopupsForOrgBefore } from "../../src/lib/stripe-service-client.js";
 import {
   settleWelcomeCompletion,
   WelcomeCompletionPromoCodeMissingError,
@@ -76,8 +74,7 @@ async function preLaunchOrg(
   await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
   ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
   ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
-  ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue(paidBeforeLaunchCents);
-  ssMocks.sumSucceededTopupsForOrgBefore.mockResolvedValue(paidBeforeLaunchCents);
+  ssMocks.sumPaidTopupsForOrgAsOf.mockResolvedValue(paidBeforeLaunchCents);
 }
 
 async function isEligible(org: string): Promise<boolean> {
@@ -87,10 +84,6 @@ async function isEligible(org: string): Promise<boolean> {
     .where(eq(billingAccounts.orgId, org));
   return row.eligible;
 }
-
-/** The grandfather-check fetcher, exactly as the sweep wires it. */
-const paidBeforeLaunch = (org: string) => () =>
-  sumSucceededTopupsForOrgBefore(org, WELCOME_COMPLETION_LAUNCH_AT_UNIX);
 
 // Every fixture here is a GRANDFATHERED account (insertTestAccount defaults to the
 // $25/$25 offer), so this suite is also the regression guard that the re-price left
@@ -384,9 +377,9 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     await newPayingOrg("2500.0000000000", ssMocks);
 
     const outcomes = await Promise.all([
-      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
-      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
-      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId)),
+      settleWelcomeCompletion(orgId, "2500.0000000000"),
+      settleWelcomeCompletion(orgId, "2500.0000000000"),
+      settleWelcomeCompletion(orgId, "2500.0000000000"),
     ]);
 
     expect(outcomes.filter((o) => o.granted)).toHaveLength(1);
@@ -472,8 +465,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     // Two settles = the resolution applied twice, as a re-applied migration would.
     const first = await settleWelcomeCompletion(
       orgId,
-      "100000.0000000000",
-      paidBeforeLaunch(orgId)
+      "100000.0000000000"
     );
     // Simulate migration 0030 being re-applied: eligibility handed back.
     await db
@@ -482,8 +474,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
       .where(eq(billingAccounts.orgId, orgId));
     const second = await settleWelcomeCompletion(
       orgId,
-      "100000.0000000000",
-      paidBeforeLaunch(orgId)
+      "100000.0000000000"
     );
 
     expect(first.reason).toBe("trigger_crossed_before_launch");
@@ -500,14 +491,14 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     });
     await insertTestPromoGrant({ orgId, userId, amountCents: 2500, promoCode: "invite_welcome" });
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("9000.0000000000");
-    ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue("0.0000000000");
+    ssMocks.sumPaidTopupsForOrgAsOf.mockResolvedValue("0.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
     expect(await completionRows(orgId)).toHaveLength(0);
     expect(res.body.credited_gifted_cents).toBe("2500.0000000000");
     // The entitlement ceiling stops it before the grandfather check is even asked.
-    expect(ssMocks.sumSucceededTopupsForCustomerBefore).not.toHaveBeenCalled();
+    expect(ssMocks.sumPaidTopupsForOrgAsOf).not.toHaveBeenCalled();
   });
 
   it("an account created AFTER launch is never demoted and never pays for the extra read", async () => {
@@ -515,14 +506,13 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     // grandfather check must be skipped entirely — even if the pre-launch read
     // would have answered "over the trigger".
     await newPayingOrg("2500.0000000000", ssMocks);
-    ssMocks.sumSucceededTopupsForCustomerBefore.mockResolvedValue("100000.0000000000");
-    ssMocks.sumSucceededTopupsForOrgBefore.mockResolvedValue("100000.0000000000");
+    ssMocks.sumPaidTopupsForOrgAsOf.mockResolvedValue("100000.0000000000");
 
     await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
     expect((await completionRows(orgId))[0].amountCents).toBe("2000.0000000000");
     expect(await isEligible(orgId)).toBe(true);
-    expect(ssMocks.sumSucceededTopupsForCustomerBefore).not.toHaveBeenCalled();
+    expect(ssMocks.sumPaidTopupsForOrgAsOf).not.toHaveBeenCalled();
   });
 
   // --- The server-side driver ---
@@ -563,7 +553,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     await removeWelcomeCompletionCode();
 
     await expect(
-      settleWelcomeCompletion(orgId, "2500.0000000000", paidBeforeLaunch(orgId))
+      settleWelcomeCompletion(orgId, "2500.0000000000")
     ).rejects.toThrow(WelcomeCompletionPromoCodeMissingError);
   });
 

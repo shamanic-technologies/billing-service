@@ -67,14 +67,39 @@ export interface StripePaymentIntent {
   amount_refunded: number;
   amount_disputed_lost: number;
   amount_returned: number;
+}
+
+/**
+ * `GET /internal/payment_summary/by-org/{orgId}` (stripe-service v0.33.0) — the org's
+ * Stripe money movement, per currency, optionally bounded to a past instant.
+ *
+ * Billing reads it for ONE question: what had this org paid, net of what had come
+ * back, as of the free-credit launch. Every other paid-topups read stays on the
+ * PaymentIntent surfaces.
+ */
+export interface StripePaymentSummaryTotal {
+  currency: string;
+  amount_received: number;
+  amount_refunded: number;
+  amount_disputed_lost: number;
+  amount_returned: number;
+  /** amount_received − amount_returned, in the currency's minor unit. */
+  amount_net: number;
+}
+
+export interface StripePaymentSummary {
+  object: "payment_summary";
+  org_id: string;
+  customer: string | null;
   /**
-   * When Stripe created the payment, in unix SECONDS. Always present on a Stripe
-   * PaymentIntent, and stripe-service returns the mirrored object verbatim (its
-   * `rawJson` spread with the returned-money fields), so it is on every read
-   * surface. Used to tell payments made BEFORE a cutoff from later ones — see
-   * `sumSucceededTopupsForCustomerBefore`.
+   * Echo of the requested bound in unix seconds (null for an unbounded read).
+   * Echoed precisely so a caller can tell a stripe-service that APPLIED the bound
+   * from one that predates it — without this the two replies are identical and the
+   * older one silently over-counts.
    */
-  created: number;
+  as_of: number | null;
+  /** One entry per currency with activity. Empty when the org has no payments. */
+  totals: StripePaymentSummaryTotal[];
 }
 
 export interface StripePaymentIntentList {
@@ -338,40 +363,15 @@ function netReceivedCents(pi: StripePaymentIntent): Decimal {
 }
 
 /**
- * True when this payment was made strictly before `createdBeforeUnix`.
- *
- * Fail-loud on a missing `created`: silently treating an undated payment as
- * "after the cutoff" would hand a retroactive gift to an org that had already
- * crossed the trigger, and treating it as "before" would withhold a gift that was
- * genuinely earned. Neither guess is acceptable.
- */
-function createdBefore(
-  pi: StripePaymentIntent,
-  createdBeforeUnix: number
-): boolean {
-  if (typeof pi.created !== "number") {
-    throw new Error(
-      `stripe-service payment_intent ${pi.id} is missing created — payments made before a cutoff cannot be identified`
-    );
-  }
-  return pi.created < createdBeforeUnix;
-}
-
-/**
  * Paginate every payment_intent for `customerId` and sum each succeeded row's
  * `amount_received` NET of what was given back.
- *
- * `createdBeforeUnix` (when given) restricts the sum to payments Stripe created
- * strictly before that instant — i.e. an as-of-then snapshot of what the org had
- * paid in.
  *
  * Throws if pagination loops past TOPUP_PAGE_CAP pages or if stripe-service
  * reports `has_more=true` with an empty page (broken contract).
  */
 async function paginateCustomerTopups(
   identity: IdentityHeaders,
-  customerId: string,
-  createdBeforeUnix?: number
+  customerId: string
 ): Promise<string> {
   let total = new Decimal(0);
   let startingAfter: string | undefined;
@@ -382,12 +382,6 @@ async function paginateCustomerTopups(
       starting_after: startingAfter,
     });
     for (const pi of page.data) {
-      if (
-        createdBeforeUnix !== undefined &&
-        !createdBefore(pi, createdBeforeUnix)
-      ) {
-        continue;
-      }
       total = total.plus(netReceivedCents(pi));
     }
     if (!page.has_more) {
@@ -418,22 +412,6 @@ export async function sumSucceededTopupsForCustomer(
   customerId: string
 ): Promise<string> {
   return paginateCustomerTopups(identity, customerId);
-}
-
-/**
- * Same sum as `sumSucceededTopupsForCustomer`, restricted to payments Stripe
- * created BEFORE `createdBeforeUnix` — "what had this org paid in as of then".
- *
- * Used by the welcome-completion grandfather check: an org whose payments had
- * already crossed the trigger before the automation launched is owed nothing.
- * Reads immutable history, so it returns the same answer every time it is called.
- */
-export async function sumSucceededTopupsForCustomerBefore(
-  identity: IdentityHeaders,
-  customerId: string,
-  createdBeforeUnix: number
-): Promise<string> {
-  return paginateCustomerTopups(identity, customerId, createdBeforeUnix);
 }
 
 // --- Checkout / Portal ---
@@ -703,22 +681,7 @@ export async function sumSucceededTopupsForOrg(orgId: string): Promise<string> {
   return sumOrgTopups(orgId);
 }
 
-/**
- * User-less twin of `sumSucceededTopupsForCustomerBefore` — the org's paid topups
- * restricted to payments Stripe created BEFORE `createdBeforeUnix`. Used by the
- * welcome-completion sweep, which has no end user in context.
- */
-export async function sumSucceededTopupsForOrgBefore(
-  orgId: string,
-  createdBeforeUnix: number
-): Promise<string> {
-  return sumOrgTopups(orgId, createdBeforeUnix);
-}
-
-async function sumOrgTopups(
-  orgId: string,
-  createdBeforeUnix?: number
-): Promise<string> {
+async function sumOrgTopups(orgId: string): Promise<string> {
   const list = await call<StripePaymentIntentList>(
     "GET",
     `/internal/payment_intents/by-org/${encodeURIComponent(orgId)}`,
@@ -726,13 +689,58 @@ async function sumOrgTopups(
   );
   let total = new Decimal(0);
   for (const pi of list.data) {
-    if (
-      createdBeforeUnix !== undefined &&
-      !createdBefore(pi, createdBeforeUnix)
-    ) {
-      continue;
-    }
     total = total.plus(netReceivedCents(pi));
+  }
+  return total.toFixed(10);
+}
+
+/**
+ * What the org had paid in, NET of what had come back, AS OF `asOfUnix`.
+ *
+ * Asked of stripe-service rather than derived here: `GET /internal/payment_summary/
+ * by-org/{orgId}?as_of=` (stripe-service v0.33.0) answers it directly from its own
+ * mirrors. Billing used to list the org's PaymentIntents and filter each one on its
+ * `created` timestamp — vendor-object knowledge that has no place on this side, and
+ * the last of it on the money path.
+ *
+ * BOTH sides of the subtraction are bounded: payments AND returns Stripe created
+ * strictly before that second. That is the point. A verdict about a past instant
+ * must not be rewritten by later events — a refund issued today does not change what
+ * the org had paid at launch, and letting it would turn a grandfather into a rolling
+ * re-computation that wobbles for as long as the org stays a sweep candidate.
+ *
+ * Summed across every currency with activity, matching the currency-agnostic sum the
+ * unbounded paths already use, so the two can never disagree on an org with no
+ * returns. `totals: []` (no mirrored payments) is a genuine zero.
+ *
+ * Fail-loud on a stripe-service older than v0.33.0: it ignores `as_of` and answers
+ * the ALL-TIME figure, which would silently grandfather orgs out of a gift they are
+ * owed. The echoed `as_of` is what distinguishes the two, so a mismatch throws.
+ */
+export async function sumPaidTopupsForOrgAsOf(
+  orgId: string,
+  asOfUnix: number
+): Promise<string> {
+  const summary = await call<StripePaymentSummary>(
+    "GET",
+    `/internal/payment_summary/by-org/${encodeURIComponent(orgId)}?as_of=${asOfUnix}`,
+    {}
+  );
+  if (summary.as_of !== asOfUnix) {
+    throw new Error(
+      `stripe-service /internal/payment_summary/by-org echoed as_of=${String(
+        summary.as_of
+      )} for as_of=${asOfUnix} — the bound was not applied, so payments made after it cannot be excluded`
+    );
+  }
+  let total = new Decimal(0);
+  for (const row of summary.totals) {
+    if (typeof row.amount_net !== "number") {
+      throw new Error(
+        `stripe-service payment summary for org ${orgId} is missing amount_net`
+      );
+    }
+    total = total.plus(row.amount_net);
   }
   return total.toFixed(10);
 }

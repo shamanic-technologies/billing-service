@@ -5,11 +5,9 @@ import {
   forwardWorkflowHeaders,
 } from "../middleware/auth.js";
 import { ReferralClaimRequestSchema } from "../schemas.js";
-import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForCustomer,
-  sumSucceededTopupsForCustomerBefore,
 } from "../lib/stripe-service-client.js";
 import {
   attachReferredOrgIdentities,
@@ -121,13 +119,7 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
     try {
       const customer = await getCustomerByOrg(identity);
       paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
-      await settleFreeCreditPromises(orgId, paidTopupsCents, () =>
-        sumSucceededTopupsForCustomerBefore(
-          identity,
-          customer.id,
-          WELCOME_COMPLETION_LAUNCH_AT_UNIX
-        )
-      );
+      await settleFreeCreditPromises(orgId, paidTopupsCents);
       promises = await attachReferredOrgIdentities(
         await listOutstandingPromises(orgId, paidTopupsCents)
       );
