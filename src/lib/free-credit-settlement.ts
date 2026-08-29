@@ -42,16 +42,11 @@ export interface FreeCreditSettleResult {
 
 export async function settleFreeCreditPromises(
   orgId: string,
-  paidTopupsCents: string,
-  fetchPaidTopupsBeforeLaunchCents: () => Promise<string>
+  paidTopupsCents: string
 ): Promise<FreeCreditSettleResult> {
   await ensureWelcomePromise(orgId);
 
-  const welcome = await settleWelcomeCompletion(
-    orgId,
-    paidTopupsCents,
-    fetchPaidTopupsBeforeLaunchCents
-  );
+  const welcome = await settleWelcomeCompletion(orgId, paidTopupsCents);
   const referrals = await settleReferralPromises(orgId, paidTopupsCents);
 
   const grantedCents = new Decimal(welcome.amountCents)
