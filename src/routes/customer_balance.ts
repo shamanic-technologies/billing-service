@@ -243,7 +243,16 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
 
     if (reloadResult.status !== "succeeded") {
       console.warn(`[billing-service] reload status=${reloadResult.status} for org ${orgId}: ${reloadResult.failure_reason ?? ""}`);
-      sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
+      // A backoff-skipped reload attempted no charge and learned nothing new: the
+      // customer was already mailed when the real failure happened, and the
+      // depletion episode opened then too. Re-sending on every subsequent
+      // authorize is the duplicate-email bug the episode state exists to prevent
+      // (prod 2026-08-29: 61 declines in six hours would have been 61 mails).
+      // Everything else below is unchanged — the episode call is idempotent and
+      // must still run, so an org whose FIRST failure predates this stays covered.
+      if (!reloadResult.backoffSkipped) {
+        sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
+      }
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
