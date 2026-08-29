@@ -10,7 +10,7 @@ import {
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { WELCOME_COMPLETION_LAUNCH_AT_UNIX } from "../db/schema.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { decideCheckoutWelcomeOffer } from "../lib/welcome-completion.js";
+import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -91,11 +91,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
             WELCOME_COMPLETION_LAUNCH_AT_UNIX
           )
         );
-        const offer = await decideCheckoutWelcomeOffer(
-          orgId,
-          paidTopupsCents,
-          topup_amount_cents!
-        );
+        const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
 
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
         // by the 400 guard above (non-setup + undefined already returned). The `!`
@@ -124,18 +120,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           // PaymentIntents and are NOT invoiced by this — separate future work.
           invoice_creation: { enabled: true },
         };
-        if (offer.applyDiscount) {
-          // Advance the whole free-credit entitlement as a visible discount. Gated on
-          // a checkout of at least (entitlement + trigger), so the buyer still pays at
-          // least the trigger that EARNS the completion and the charge can never reach
-          // $0. The credit that lands is (payment) + (welcome) + (completion) =
-          // exactly the amount configured.
-          body.discounts = [{ coupon: offer.couponId! }];
-        } else if (offer.noticeMessage) {
-          // No discount on this checkout: tell the buyer the gift is still coming,
-          // so the promise is visible at the moment of payment. The figures quoted
-          // are this org's own offer.
-          body.custom_text = { submit: { message: offer.noticeMessage } };
+        if (welcomeNotice) {
+          // Tell the buyer the gift is still coming, so the promise is visible at
+          // the moment of payment. The figures quoted are this org's own offer.
+          body.custom_text = { submit: { message: welcomeNotice } };
         }
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —

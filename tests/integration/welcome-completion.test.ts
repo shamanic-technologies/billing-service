@@ -27,8 +27,6 @@ import {
 } from "../../src/lib/welcome-completion.js";
 import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-sweep.js";
 
-const COUPON_ID = "coupon_welcome25";
-
 /**
  * The notice a GRANDFATHERED ($25/$25) org sees — byte-equal to the string this
  * service shipped before the offer became per-account. `insertTestAccount` defaults
@@ -106,7 +104,6 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
     await cleanTestData();
-    process.env.WELCOME_DISCOUNT_COUPON_ID = COUPON_ID;
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockResolvedValue({
       spent_cents: "0.0000000000",
     } as never);
@@ -116,17 +113,20 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   });
 
   afterAll(async () => {
-    delete process.env.WELCOME_DISCOUNT_COUPON_ID;
     await cleanTestData();
     await closeDb();
   });
 
   // --- AC1 / AC2: the gift lands, derived from what the org was actually gifted ---
 
-  it("AC1: $50 first checkout is discounted $25, the buyer pays $25, credit lands at $50", async () => {
+  // REMOVED SURFACE: the up-front checkout discount. A first checkout at the old
+  // floor (entitlement + trigger = $50 here) used to carry a pre-applied coupon.
+  // It now carries the notice like every other checkout, and the gift is granted
+  // after the fact. Setting the coupon env var must not resurrect it.
+  it("removed: a first checkout at the old discount floor carries no discount", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
-    // Never paid yet at checkout-create time.
+    // Never paid yet — the condition the discount used to require.
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
@@ -143,21 +143,19 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
       });
 
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
-    // Visible $25 off, and no notice (Stripe renders the discount line itself).
-    expect(body.discounts).toEqual([{ coupon: COUPON_ID }]);
-    expect(body).not.toHaveProperty("custom_text");
-    // Full $50 is still the line item — Stripe applies the discount at pay time.
+    expect(body).not.toHaveProperty("discounts");
+    // The notice takes its place, and the buyer is charged the full amount.
+    expect(body.custom_text.submit.message).toContain("free credits");
     expect(body.line_items[0].price_data.unit_amount).toBe(5000);
 
-    // Buyer pays the discounted $25 → the completion is earned.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    // Paying the full $50 earns the completion; credit is payment + the gift.
+    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("5000.0000000000");
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
     expect(res.status).toBe(200);
-    expect(res.body.credited_paid_cents).toBe("2500.0000000000");
+    expect(res.body.credited_paid_cents).toBe("5000.0000000000");
     expect(res.body.credited_gifted_cents).toBe("2500.0000000000");
-    expect(res.body.credited_cents).toBe("5000.0000000000");
-    expect(res.body.balance_cents).toBe("5000.0000000000");
+    expect(res.body.credited_cents).toBe("7500.0000000000");
   });
 
   it("AC2: $32 first checkout gets no discount and $57 of credit (gift on top)", async () => {
@@ -324,7 +322,6 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   });
 
   it("the discount is withheld when no coupon is configured", async () => {
-    delete process.env.WELCOME_DISCOUNT_COUPON_ID;
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({

@@ -38,7 +38,6 @@ import {
 } from "../../src/db/schema.js";
 import {
   settleWelcomeCompletion,
-  minDiscountedCheckoutCents,
   welcomeCompletionCheckoutNotice,
 } from "../../src/lib/welcome-completion.js";
 
@@ -89,7 +88,6 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
     await cleanTestData();
-    process.env.WELCOME_DISCOUNT_COUPON_ID = COUPON_ID;
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockResolvedValue({
       spent_cents: "0.0000000000",
     } as never);
@@ -99,7 +97,6 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
   });
 
   afterAll(async () => {
-    delete process.env.WELCOME_DISCOUNT_COUPON_ID;
     await cleanTestData();
     await closeDb();
   });
@@ -239,24 +236,9 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     expect(await completionRows(oldOrgId)).toHaveLength(1);
   });
 
-  // --- AC: the discount-vs-trigger invariant survives the new figure ---
+  // --- REMOVED SURFACE: the up-front checkout discount ---
 
-  it("the discount floor is entitlement + trigger for both cohorts", () => {
-    expect(
-      minDiscountedCheckoutCents({
-        entitlementCents: GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
-        paidTriggerCents: GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
-      })
-    ).toBe(5000);
-    expect(
-      minDiscountedCheckoutCents({
-        entitlementCents: CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS,
-        paidTriggerCents: CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS,
-      })
-    ).toBe(80000);
-  });
-
-  it("new cohort: a $500 first checkout gets the notice, NOT a discount (floor is $800)", async () => {
+  it("new cohort: a $500 first checkout gets the notice, NOT a discount", async () => {
     await insertSignupAccount(newOrgId);
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
 
@@ -281,7 +263,10 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     });
   });
 
-  it("new cohort: an $800 first checkout does carry the discount", async () => {
+  // An $800 first checkout — the old floor for this cohort — used to be the ONE
+  // amount that carried a discount. No amount does any more, and the coupon env
+  // var being set must not bring it back.
+  it("removed: an $800 first checkout carries no discount either", async () => {
     await insertSignupAccount(newOrgId);
     ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
 
@@ -295,8 +280,8 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
       });
 
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
-    expect(body.discounts).toEqual([{ coupon: COUPON_ID }]);
-    expect(body).not.toHaveProperty("custom_text");
+    expect(body).not.toHaveProperty("discounts");
+    expect(body.custom_text.submit.message).toContain("$400 in free credits");
   });
 
   it("the notice quotes the org's own offer, and the $25 wording is byte-identical to today", () => {
