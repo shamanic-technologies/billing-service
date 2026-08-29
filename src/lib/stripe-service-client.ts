@@ -486,8 +486,16 @@ export async function createPortalSession(
 
 // --- Public Stats ---
 
-export async function getStats(identity: IdentityHeaders): Promise<StripeBillingStatsResult> {
-  return call("GET", "/public/stats/billing", identity);
+/**
+ * Platform-wide billing stats. stripe-service serves this on a PUBLIC route with
+ * no service auth and no identity middleware — it is a cross-org aggregate, so it
+ * reads neither `x-org-id` nor `x-user-id`. This call therefore sends no identity:
+ * there is no org and no user behind it, and inventing an all-zeros pair to get
+ * past a gate that does not exist only puts a plausible-looking uuid in an audit
+ * log. Do NOT add an identity argument back.
+ */
+export async function getStats(): Promise<StripeBillingStatsResult> {
+  return call("GET", "/public/stats/billing", {});
 }
 
 // --- Customer list-by-metadata + update ---
