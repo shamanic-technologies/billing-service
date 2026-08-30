@@ -498,35 +498,58 @@ export async function getStats(): Promise<StripeBillingStatsResult> {
   return call("GET", "/public/stats/billing", {});
 }
 
-// --- Customer list-by-metadata + update ---
+// --- Customer list + metadata rewrite (user-less, brand-transfer path) ---
+//
+// Both routes are X-API-Key ONLY — no x-org-id, no x-user-id, no sentinel. The
+// org / customer is named in the path. They replaced the `/v1/customers*` twins
+// this path used to call: those are identity-guarded, so a machine caller with
+// no end user could not reach them (400 "Missing required header: x-org-id"),
+// and the transfer never got past its first call.
 
 /**
- * List customers whose Stripe metadata matches every key/value pair in `metadata`.
- * stripe-service AND's multiple metadata keys server-side. Values must be strings.
+ * EVERY Stripe customer mirrored for the org, via the user-less
+ * `GET /internal/customers/by-org/{orgId}/all` route (stripe-service v0.34.0).
+ *
+ * Resolved from stripe-service's own `org_id` column, not from a metadata
+ * filter, and returned in ONE list — the whole set, no pagination. That
+ * completeness is load-bearing for the brand transfer: orgs predating the
+ * idempotent `POST /v1/customers` hold more than one customer, and a transfer
+ * that only saw the newest would silently strand the others on the source org.
+ *
+ * An org with no customers gets an empty list, not a 404. Fail-loud: any other
+ * stripe-service error propagates.
  */
-export async function listCustomersByMetadata(
-  identity: IdentityHeaders,
-  query: {
-    metadata: Record<string, string>;
-    limit?: number;
-    starting_after?: string;
-  }
-): Promise<StripeCustomerList> {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(query.metadata)) {
-    params.set(`metadata[${k}]`, v);
-  }
-  if (query.limit !== undefined) params.set("limit", String(query.limit));
-  if (query.starting_after) params.set("starting_after", query.starting_after);
-  return call("GET", `/v1/customers?${params.toString()}`, identity);
+export async function listAllCustomersForOrg(orgId: string): Promise<StripeCustomer[]> {
+  const list = await call<StripeCustomerList>(
+    "GET",
+    `/internal/customers/by-org/${encodeURIComponent(orgId)}/all`,
+    {}
+  );
+  return list.data;
 }
 
-export async function updateCustomer(
+/**
+ * Rewrite a Stripe customer's metadata via the user-less
+ * `POST /internal/customers/{id}/metadata` route (stripe-service v0.34.0).
+ *
+ * `metadata` is forwarded verbatim, so Stripe's own semantics apply: keys are
+ * MERGED into the customer's existing metadata and a key set to the empty
+ * string is deleted. Send the FINAL shape you want, not a patch.
+ *
+ * stripe-service re-mirrors immediately and resolves the org from the UPDATED
+ * object, so an `org_id` rewrite lands the mirror row on the new owner in this
+ * same request. Fail-loud: unknown customer -> 404, any Stripe error propagates.
+ */
+export async function setCustomerMetadata(
   customerId: string,
-  identity: IdentityHeaders,
-  body: { metadata: Record<string, string> }
+  metadata: Record<string, string>
 ): Promise<StripeCustomer> {
-  return call("POST", `/v1/customers/${customerId}`, identity, body);
+  return call<StripeCustomer>(
+    "POST",
+    `/internal/customers/${encodeURIComponent(customerId)}/metadata`,
+    {},
+    { metadata }
+  );
 }
 
 // --- Derivations from Stripe customer ---
