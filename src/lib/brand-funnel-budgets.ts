@@ -45,6 +45,24 @@
  * campaign's ceiling nor the brand's the moment a brand states a second offer —
  * see `aggregateOfferBudget`.
  *
+ * AND THE LEG IS THE GRAIN A CAMPAIGN IS BOUGHT AT. A sales funnel is a chain of
+ * steps and the thing a customer BUYS is one of its LEGS: the leg that takes a
+ * lead sitting at one step and moves it to the next. A campaign has been
+ * redefined as (brand, offer, acquisition channel, LEG), and one leg belongs to
+ * SEVERAL funnels at once — so the funnel is becoming a way of READING legs
+ * rather than the unit anything is keyed on. Migration 0039 puts the leg in the
+ * key for exactly that reason, and this is the ADDITIVE half: the funnel STAYS
+ * in the key, every existing read answers what it answers today, and a later
+ * ship removes the funnel once every consumer has moved.
+ *
+ * THE LEG IDENTIFIER IS features-service's, AND IT IS OPAQUE. It mints the value
+ * (`lib/funnel-legs.ts`, published on `GET /public/channels` as `legs[].legKey`)
+ * and campaign-service carries the same one on the campaign row. billing stores
+ * whatever the customer funds and never validates it, exactly as for the channel
+ * slug and the offer id — and never PARSES it: the two steps a leg connects ride
+ * BESIDE the identifier on that catalogue, so a consumer that wants them reads
+ * them there. Splitting the string is how a second, drifting vocabulary starts.
+ *
  * ONE CAMPAIGN, ONE ROW. A ceiling that names an offer, written onto a pair
  * whose only stored ceiling is the pre-offer unscoped one, REPLACES it: the
  * customer stated one ceiling for that campaign, and the per-funnel figure is a
@@ -336,6 +354,19 @@ export class ChannelSplitAcrossOffersError extends Error {
 }
 
 /**
+ * A (funnel, channel, offer)-grain write against a triple that is funded for
+ * SEVERAL legs. Surfaced as a 409, the same posture as the refusals above and
+ * for the same reason one grain down: a campaign is bought for ONE leg, so
+ * picking one of two legs would move the money onto the wrong campaign.
+ */
+export class OfferSplitAcrossLegsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OfferSplitAcrossLegsError";
+  }
+}
+
+/**
  * A brand-level daily-budget write against a brand that is funded per funnel.
  * Surfaced as a 409 — the brand-level value is DERIVED there, so accepting the
  * write would leave two numbers claiming to be the same thing.
@@ -385,6 +416,13 @@ export interface FunnelBudgetInput {
    * before 0037) omits it and the pair's existing offer is used.
    */
   offerId?: unknown;
+  /**
+   * The funnel LEG this ceiling funds, as features-service's canonical leg id
+   * (migration 0039). OPTIONAL: a caller that speaks per (funnel, channel,
+   * offer) only (every caller before 0039) omits it and the triple's existing
+   * leg is used.
+   */
+  legKey?: unknown;
   dailyBudgetCents: unknown;
 }
 
@@ -402,11 +440,24 @@ export interface ParsedFunnelBudget {
    * is not scoped to an offer" (every ceiling written before 0037).
    */
   offerId?: string;
+  /**
+   * The leg the caller named, or `undefined` when it named none — resolved
+   * under the write lock against what the (funnel, channel, offer) triple
+   * already funds.
+   *
+   * `undefined` and `null` differ here for the same reason they do on `offerId`
+   * one grain up: `undefined` is "the caller said nothing about legs", `null` is
+   * a stored value meaning "this ceiling is not scoped to a leg".
+   */
+  legKey?: string;
   dailyBudgetCents: string;
 }
 
 /** A stored ceiling's offer after resolution: an offer UUID, or unscoped. */
 export type ResolvedOfferId = string | null;
+
+/** A stored ceiling's leg after resolution: a features-service leg id, or unscoped. */
+export type ResolvedLegKey = string | null;
 
 const OFFER_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -475,6 +526,20 @@ export function parseFunnelBudgetSet(
       offerId = entry.offerId.trim().toLowerCase();
     }
 
+    // The LEG, when the caller named one. features-service mints the value and
+    // owns the vocabulary, so this checks the SHAPE only — a non-empty string —
+    // and never against a list, never by parsing it into the steps it connects.
+    // A leg billing does not know is a leg billing stores.
+    let legKey: string | undefined;
+    if (entry.legKey !== undefined && entry.legKey !== null) {
+      if (typeof entry.legKey !== "string" || !entry.legKey.trim()) {
+        throw new InvalidFunnelSetError(
+          `${BRAND_FUNNEL_LABELS[funnelKey]}: legKey must be a non-empty funnel leg id.`
+        );
+      }
+      legKey = entry.legKey.trim();
+    }
+
     // Deduped on the RESOLVED funnel + channel + offer, so the two spellings of
     // one funnel are one funnel here too - otherwise a set carrying both would
     // store two rows for the same pair and double the brand-level total.
@@ -487,12 +552,15 @@ export function parseFunnelBudgetSet(
     const sameFunnel = parsed.filter((p) => p.funnelKey === funnelKey);
     if (
       sameFunnel.some(
-        (p) => p.featureSlug === featureSlug && p.offerId === offerId
+        (p) =>
+          p.featureSlug === featureSlug &&
+          p.offerId === offerId &&
+          p.legKey === legKey
       )
     ) {
       throw new InvalidFunnelSetError(
         featureSlug
-          ? `Sales funnel "${funnelKey}" appears twice for channel "${featureSlug}"${offerId ? ` and offer "${offerId}"` : ""} in the same set.`
+          ? `Sales funnel "${funnelKey}" appears twice for channel "${featureSlug}"${offerId ? ` and offer "${offerId}"` : ""}${legKey ? ` and leg "${legKey}"` : ""} in the same set.`
           : `Sales funnel "${funnelKey}" appears twice in the same set.`
       );
     }
@@ -514,6 +582,22 @@ export function parseFunnelBudgetSet(
         `Sales funnel "${funnelKey}" on acquisition channel "${featureSlug}" is set both with and without an offer in the same set.`
       );
     }
+    // And the same rule one grain further down: a set stating a
+    // (funnel, channel, offer) triple both with and without a leg is asking for
+    // two ceilings whose grains overlap, so it does not say which one the
+    // leg-less figure is.
+    if (
+      sameFunnel.some(
+        (p) =>
+          p.featureSlug === featureSlug &&
+          p.offerId === offerId &&
+          (p.legKey === undefined) !== (legKey === undefined)
+      )
+    ) {
+      throw new InvalidFunnelSetError(
+        `Sales funnel "${funnelKey}" on acquisition channel "${featureSlug}"${offerId ? ` for offer "${offerId}"` : ""} is set both with and without a funnel leg in the same set.`
+      );
+    }
 
     let dailyBudgetCents: string;
     try {
@@ -526,13 +610,15 @@ export function parseFunnelBudgetSet(
       );
     }
 
-    // `offerId` is spread rather than assigned so an unstated offer leaves the
-    // property ABSENT, which is what distinguishes it from a stored null.
+    // `offerId` and `legKey` are spread rather than assigned so an unstated one
+    // leaves the property ABSENT, which is what distinguishes it from a stored
+    // null.
     parsed.push({
       funnelKey,
       featureSlug,
       dailyBudgetCents,
       ...(offerId === undefined ? {} : { offerId }),
+      ...(legKey === undefined ? {} : { legKey }),
     });
   }
 
@@ -741,6 +827,54 @@ export function aggregateChannelTotals(
   );
 }
 
+/** One (funnel, channel, offer) triple's figure: the SUM of every leg funding it. */
+export interface OfferBudgetTotal {
+  funnelKey: string;
+  featureSlug: string;
+  offerId: ResolvedOfferId;
+  dailyBudgetCents: string;
+  updatedAt: Date;
+}
+
+/**
+ * Collapse per-LEG rows onto the per-OFFER figure migration 0037's consumers
+ * ask for. Same rule as `aggregateChannelTotals` one level down, and the ONLY
+ * place that sum is composed: a brand that has never funded a leg holds one row
+ * per triple, so this is byte-identical to what shipped before 0039.
+ */
+export function aggregateOfferTotals(
+  rows: BrandFunnelDailyBudget[]
+): OfferBudgetTotal[] {
+  const byTriple = new Map<string, OfferBudgetTotal>();
+  for (const row of rows) {
+    const key = `${row.funnelKey} ${row.featureSlug} ${row.offerId ?? ""}`;
+    const current = byTriple.get(key);
+    if (!current) {
+      byTriple.set(key, {
+        funnelKey: row.funnelKey,
+        featureSlug: row.featureSlug,
+        offerId: row.offerId,
+        dailyBudgetCents: row.dailyBudgetCents,
+        updatedAt: row.updatedAt,
+      });
+      continue;
+    }
+    current.dailyBudgetCents = addCents(
+      current.dailyBudgetCents,
+      row.dailyBudgetCents
+    );
+    if (row.updatedAt > current.updatedAt) current.updatedAt = row.updatedAt;
+  }
+  return sortByFunnelOrderOf(
+    [...byTriple.values()].sort(
+      (a, b) =>
+        a.featureSlug.localeCompare(b.featureSlug) ||
+        (a.offerId ?? "").localeCompare(b.offerId ?? "")
+    ),
+    (t) => t.funnelKey
+  );
+}
+
 /**
  * One OFFER's daily ceiling: what the customer has funded that one proposition
  * at, across every funnel and channel it is sold through.
@@ -761,6 +895,13 @@ export interface OfferBudgetView {
   funnels: FunnelBudgetTotal[];
   /** This offer's per-(funnel, channel) figures — the same sums, restricted to it. */
   channels: ChannelBudgetTotal[];
+  /**
+   * ADDITIVE: this offer's per-(funnel, channel, offer) figures — the grain a
+   * campaign was bought at before legs existed, restricted to it.
+   */
+  offers: OfferBudgetTotal[];
+  /** ADDITIVE: this offer's STORED ceilings, one per campaign (leg included). */
+  legs: BrandFunnelDailyBudget[];
 }
 
 /** Every offer this brand names, in stable order. Unscoped ceilings name none. */
@@ -830,6 +971,94 @@ export function aggregateOfferBudget(
     updatedAt,
     funnels: aggregateFunnelTotals(owned),
     channels: aggregateChannelTotals(owned),
+    offers: aggregateOfferTotals(owned),
+    legs: owned,
+  };
+}
+
+/** Every leg this brand names, in stable order. Leg-less ceilings name none. */
+export function namedLegsOf(rows: Array<{ legKey: ResolvedLegKey }>): string[] {
+  return [
+    ...new Set(
+      rows
+        .map((row) => row.legKey)
+        .filter((legKey): legKey is string => legKey !== null)
+    ),
+  ];
+}
+
+/**
+ * The stored ceilings that fund one LEG.
+ *
+ * Exactly the rule `offerBudgetRows` holds one grain up, and for the same
+ * reason. A ceiling that NAMES the leg always counts. A LEG-LESS ceiling
+ * (`leg_key IS NULL`, every ceiling written before legs existed) counts only
+ * when this leg is the brand's SOLE named one — then the brand's money has
+ * exactly one campaign-owner and the leg's total is the brand's, which keeps
+ * every live brand's screen on the number it shows today. With two named legs
+ * there is no honest owner for a leg-less remainder, so it belongs to neither.
+ *
+ * A leg that names nothing here has NO ceiling — a different answer from a
+ * ceiling of zero, and neither is invented from the other.
+ */
+export function legBudgetRows(
+  rows: BrandFunnelDailyBudget[],
+  legKey: string
+): BrandFunnelDailyBudget[] {
+  const named = namedLegsOf(rows);
+  const owned = rows.filter((row) => row.legKey === legKey);
+  if (owned.length === 0) return [];
+
+  const soleNamedLeg = named.length === 1 && named[0] === legKey;
+  if (!soleNamedLeg) return owned;
+  return rows.filter((row) => row.legKey === legKey || row.legKey === null);
+}
+
+/**
+ * One LEG's ceiling and its breakdown, or null when the leg has none.
+ *
+ * The grain a CAMPAIGN is bought at: a campaign is (brand, offer, acquisition
+ * channel, leg), so this is the money that paces one campaign, read on the same
+ * key the campaign itself is keyed on. The ONE place the per-leg sum is
+ * composed — every other grain is served beside it so no consumer adds anything
+ * up.
+ */
+export interface LegBudgetView {
+  legKey: string;
+  /** The SUM of the ceilings funding this leg. */
+  dailyBudgetCents: string;
+  /** The latest of those ceilings, so it moves whenever the leg's money does. */
+  updatedAt: Date;
+  /** This leg's per-funnel figures — the same sums, restricted to it. */
+  funnels: FunnelBudgetTotal[];
+  /** This leg's per-(funnel, channel) figures, same restriction. */
+  channels: ChannelBudgetTotal[];
+  /** This leg's per-(funnel, channel, offer) figures, same restriction. */
+  offers: OfferBudgetTotal[];
+  /** This leg's STORED ceilings. */
+  legs: BrandFunnelDailyBudget[];
+}
+
+export function aggregateLegBudget(
+  rows: BrandFunnelDailyBudget[],
+  legKey: string
+): LegBudgetView | null {
+  const owned = legBudgetRows(rows, legKey);
+  if (owned.length === 0) return null;
+
+  let updatedAt = owned[0].updatedAt;
+  for (const row of owned) {
+    if (row.updatedAt > updatedAt) updatedAt = row.updatedAt;
+  }
+
+  return {
+    legKey,
+    dailyBudgetCents: sumFunnelBudgets(owned),
+    updatedAt,
+    funnels: aggregateFunnelTotals(owned),
+    channels: aggregateChannelTotals(owned),
+    offers: aggregateOfferTotals(owned),
+    legs: owned,
   };
 }
 
@@ -895,8 +1124,9 @@ function sortByFunnelOrderOf<T>(rows: T[], keyOf: (row: T) => string): T[] {
 }
 
 /**
- * Funnel order first, then channel slug, then offer (the unscoped ceiling first,
- * since it is the one that predates offers), so a split renders stably.
+ * Funnel order first, then channel slug, then offer, then leg (the unscoped
+ * ceiling first at each grain, since it is the one that predates it), so a split
+ * renders stably.
  */
 function sortByFunnelOrder(
   rows: BrandFunnelDailyBudget[]
@@ -905,7 +1135,8 @@ function sortByFunnelOrder(
     [...rows].sort(
       (a, b) =>
         a.featureSlug.localeCompare(b.featureSlug) ||
-        (a.offerId ?? "").localeCompare(b.offerId ?? "")
+        (a.offerId ?? "").localeCompare(b.offerId ?? "") ||
+        (a.legKey ?? "").localeCompare(b.legKey ?? "")
     ),
     (row) => row.funnelKey
   );
@@ -914,16 +1145,18 @@ function sortByFunnelOrder(
 export interface SetFunnelBudgetsResult {
   /**
    * Every STORED ceiling after the write, one per
-   * (funnel, acquisition channel, offer) - i.e. one per campaign.
+   * (funnel, acquisition channel, offer, LEG) - i.e. one per campaign.
    */
-  offers: BrandFunnelDailyBudget[];
+  legs: BrandFunnelDailyBudget[];
   /**
    * Every STORED ceiling BEFORE this write, read under the same lock. The staff
    * notification needs the previous value of each individual ceiling to state
    * the RUNNING figure on the before side (see lib/brand-running-budget.ts) —
    * the brand-level scalar cannot express which campaign's money moved.
    */
-  previousOffers: BrandFunnelDailyBudget[];
+  previousLegs: BrandFunnelDailyBudget[];
+  /** The per-OFFER figures, each the sum of the legs funding that triple. */
+  offers: OfferBudgetTotal[];
   /** The per-CHANNEL figures, each the sum of the offers funding that pair. */
   channels: ChannelBudgetTotal[];
   /** The per-FUNNEL figures, each the sum of its channels. */
@@ -1007,21 +1240,30 @@ export async function setBrandFunnelDailyBudgets(
     // never open a SECOND channel beside the one carrying the brand's money.
     const resolved = entries.map((entry) => {
       const featureSlug = resolveEntryFeatureSlug(entry, existingFunnels);
+      // An offer-less entry (every caller before 0037 speaks per funnel and
+      // channel only) is resolved against what the PAIR already funds, so a
+      // legacy write can neither invent an offer nor silently move money onto
+      // one of two campaigns.
+      const offerId = resolveEntryOfferId(entry, featureSlug, existingFunnels);
       return {
         ...entry,
         featureSlug,
-        // An offer-less entry (every caller before 0037 speaks per funnel and
-        // channel only) is resolved against what the PAIR already funds, so a
-        // legacy write can neither invent an offer nor silently move money onto
-        // one of two campaigns.
-        offerId: resolveEntryOfferId(entry, featureSlug, existingFunnels),
+        offerId,
+        // And a leg-less entry (every caller before 0039) is resolved against
+        // what the TRIPLE already funds, one grain further down and by exactly
+        // the same rule.
+        legKey: resolveEntryLegKey(entry, featureSlug, offerId, existingFunnels),
       };
     });
 
     // A ceiling that NAMES an offer, written onto a pair whose only stored
     // ceiling is the pre-offer unscoped one, ADOPTS that ceiling rather than
-    // sitting beside it - see `supersededUnscopedRows`.
-    const superseded = supersededUnscopedRows(existingFunnels, resolved);
+    // sitting beside it - see `supersededUnscopedRows`. A ceiling that names a
+    // LEG does the same to the pre-leg one, one grain down.
+    const superseded = [
+      ...supersededUnscopedRows(existingFunnels, resolved),
+      ...supersededLegLessRows(existingFunnels, resolved),
+    ];
 
     // The minimum binds a GROUP TOTAL, and which ceilings share a group is
     // `minimumGroupOf`: a channel that states its own floor is judged alone, and
@@ -1078,7 +1320,8 @@ export async function setBrandFunnelDailyBudgets(
             eq(brandFunnelDailyBudgets.brandId, brandId),
             eq(brandFunnelDailyBudgets.funnelKey, row.funnelKey),
             eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug),
-            offerMatches(row.offerId)
+            offerMatches(row.offerId),
+            legMatches(row.legKey)
           )
         );
     }
@@ -1092,12 +1335,14 @@ export async function setBrandFunnelDailyBudgets(
           funnelKey: entry.funnelKey,
           featureSlug: entry.featureSlug,
           offerId: entry.offerId,
+          legKey: entry.legKey,
           dailyBudgetCents: entry.dailyBudgetCents,
           updatedAt: changedAt,
         })
         // Inference resolves to the NULLS NOT DISTINCT unique constraint of
-        // migration 0037, so an unscoped ceiling (offer_id IS NULL) upserts in
-        // place exactly as it did when the four columns were the primary key.
+        // migration 0039, so an unscoped ceiling (offer_id / leg_key IS NULL)
+        // upserts in place exactly as it did when the four columns were the
+        // primary key.
         .onConflictDoUpdate({
           target: [
             brandFunnelDailyBudgets.orgId,
@@ -1105,6 +1350,7 @@ export async function setBrandFunnelDailyBudgets(
             brandFunnelDailyBudgets.funnelKey,
             brandFunnelDailyBudgets.featureSlug,
             brandFunnelDailyBudgets.offerId,
+            brandFunnelDailyBudgets.legKey,
           ],
           set: {
             dailyBudgetCents: entry.dailyBudgetCents,
@@ -1113,7 +1359,7 @@ export async function setBrandFunnelDailyBudgets(
         });
     }
 
-    const offers = sortByFunnelOrder(
+    const legs = sortByFunnelOrder(
       await tx
         .select()
         .from(brandFunnelDailyBudgets)
@@ -1124,10 +1370,11 @@ export async function setBrandFunnelDailyBudgets(
           )
         )
     );
-    const channels = aggregateChannelTotals(offers);
-    const funnels = aggregateFunnelTotals(offers);
+    const offers = aggregateOfferTotals(legs);
+    const channels = aggregateChannelTotals(legs);
+    const funnels = aggregateFunnelTotals(legs);
 
-    const brandDailyBudgetCents = sumFunnelBudgets(offers);
+    const brandDailyBudgetCents = sumFunnelBudgets(legs);
 
     // The brand-level scalar is now DERIVED. Drop the superseded row so it can
     // never be served instead of the sum.
@@ -1150,8 +1397,9 @@ export async function setBrandFunnelDailyBudgets(
     });
 
     return {
+      legs,
       offers,
-      previousOffers: existingFunnels,
+      previousLegs: existingFunnels,
       channels,
       funnels,
       previousBrandDailyBudgetCents,
@@ -1257,6 +1505,116 @@ function resolveEntryOfferId(
 }
 
 /**
+ * Which LEG does this entry fund?
+ *
+ * A campaign is (brand, offer, acquisition channel, LEG), so this is the grain
+ * the ceiling and the campaign are keyed on together. The rule is
+ * `resolveEntryOfferId`'s, one grain down.
+ *
+ * A caller that named one is taken at its word: features-service owns the leg
+ * vocabulary and mints the identifier, so billing no more asks whether that leg
+ * exists than it asks whether an offer does or whether a feature may be sold
+ * through a funnel. The value is stored opaque and never parsed.
+ *
+ * A caller that named none means "this (funnel, channel, offer) triple", the
+ * finest grain that existed before 0039. It resolves to:
+ *   - the triple's single leg, when it funds exactly one - and for every ceiling
+ *     written before 0039 that is the LEG-LESS one (`null`), so brand Settings,
+ *     the signup checkout and the gateway keep behaving exactly as they do now;
+ *   - `null` (leg-less), when the triple funds nothing yet. There is
+ *     deliberately no default leg to fall back to, the way there is a default
+ *     channel: a funnel has several legs and a leg belongs to several funnels,
+ *     so nothing here can pick one without attaching money to a campaign nobody
+ *     named;
+ *   - a refusal, when the triple is SPLIT across legs - the same posture the
+ *     offer resolution takes one level up, because picking one of two legs moves
+ *     real money onto the wrong campaign.
+ */
+function resolveEntryLegKey(
+  entry: ParsedFunnelBudget,
+  featureSlug: string,
+  offerId: ResolvedOfferId,
+  existing: BrandFunnelDailyBudget[]
+): ResolvedLegKey {
+  if (entry.legKey !== undefined) return entry.legKey;
+
+  const legs = [
+    ...new Set(
+      existing
+        .filter(
+          (row) =>
+            row.funnelKey === entry.funnelKey &&
+            row.featureSlug === featureSlug &&
+            row.offerId === offerId
+        )
+        .map((row) => row.legKey)
+    ),
+  ];
+  if (legs.length === 0) return null;
+  if (legs.length === 1) return legs[0];
+
+  throw new OfferSplitAcrossLegsError(
+    `${BRAND_FUNNEL_LABELS[entry.funnelKey]} on acquisition channel "${featureSlug}"${offerId ? ` for offer "${offerId}"` : ""} is funded for ${legs.length} funnel legs ` +
+      `(${legs.map((key) => key ?? "no leg").join(", ")}). ` +
+      `Name the leg you are funding - setting the offer as a whole would have to guess which campaign the money is for.`
+  );
+}
+
+/**
+ * The stored LEG-LESS ceilings this write ADOPTS — the mirror of
+ * `resolveEntryLegKey`, and THE STATED PRECEDENCE between a leg-keyed ceiling
+ * and a leg-less one describing the same money: THE LEG-KEYED CEILING REPLACES
+ * IT. They are never summed and never both stored.
+ *
+ * `resolveEntryLegKey` already reads a leg-less ceiling as the money of the
+ * triple's only leg, so a caller naming no leg updates it in place rather than
+ * opening a second row. The mirror has to hold too: a ceiling written before
+ * 0039 is the whole of what that (funnel, channel, offer) triple is funded at,
+ * and that triple funds one campaign, so when a leg-aware caller names the leg
+ * that campaign is bought for it is RE-STATING that same ceiling, not adding a
+ * second one beside it. Without this the triple holds both and every figure
+ * above it (a SUM) counts the customer's money twice — exactly the incoherence
+ * migration 0038 had to repair one grain up.
+ *
+ * ONLY when the leg-less row is the triple's SOLE ceiling. A triple already
+ * split across named legs has no unambiguous owner for a leg-less remainder, and
+ * guessing one would move real money onto the wrong campaign — the same reason
+ * `resolveEntryLegKey` refuses there rather than picking.
+ *
+ * The leg-LESS path is untouched: an entry that names no leg resolves to the
+ * leg-less row and updates it, so no caller predating 0039 changes behaviour.
+ */
+function supersededLegLessRows(
+  existing: BrandFunnelDailyBudget[],
+  resolved: Array<{
+    funnelKey: BrandFunnelKey;
+    featureSlug: string;
+    offerId: ResolvedOfferId;
+    legKey: ResolvedLegKey;
+  }>
+): BrandFunnelDailyBudget[] {
+  return existing.filter((row) => {
+    if (row.legKey !== null) return false;
+
+    const triple = existing.filter(
+      (other) =>
+        other.funnelKey === row.funnelKey &&
+        other.featureSlug === row.featureSlug &&
+        other.offerId === row.offerId
+    );
+    if (triple.length !== 1) return false;
+
+    return resolved.some(
+      (entry) =>
+        entry.legKey !== null &&
+        entry.funnelKey === row.funnelKey &&
+        entry.featureSlug === row.featureSlug &&
+        entry.offerId === row.offerId
+    );
+  });
+}
+
+/**
  * The stored UNSCOPED ceilings this write ADOPTS - the mirror of
  * `resolveEntryOfferId`, and the rule that keeps one campaign to one row.
  *
@@ -1305,13 +1663,14 @@ function supersededUnscopedRows(
   });
 }
 
-/** A stored ceiling's identity: one (funnel, channel, offer) = one campaign. */
+/** A stored ceiling's identity: one (funnel, channel, offer, leg) = one campaign. */
 function rowIdentity(row: {
   funnelKey: string;
   featureSlug: string;
   offerId: ResolvedOfferId;
+  legKey: ResolvedLegKey;
 }): string {
-  return `${row.funnelKey}\u0000${row.featureSlug}\u0000${row.offerId ?? ""}`;
+  return `${row.funnelKey}\u0000${row.featureSlug}\u0000${row.offerId ?? ""}\u0000${row.legKey ?? ""}`;
 }
 
 /**
@@ -1323,6 +1682,17 @@ function offerMatches(offerId: ResolvedOfferId) {
   return offerId === null
     ? isNull(brandFunnelDailyBudgets.offerId)
     : eq(brandFunnelDailyBudgets.offerId, offerId);
+}
+
+/**
+ * Match one ceiling's LEG in a WHERE clause. Same `IS NULL` requirement as
+ * `offerMatches` one grain up — `= NULL` matches nothing, which would silently
+ * leave the row a replace-mode write is supposed to delete.
+ */
+function legMatches(legKey: ResolvedLegKey) {
+  return legKey === null
+    ? isNull(brandFunnelDailyBudgets.legKey)
+    : eq(brandFunnelDailyBudgets.legKey, legKey);
 }
 
 /**
@@ -1340,6 +1710,7 @@ function projectFunnelRows(
     funnelKey: BrandFunnelKey;
     featureSlug: string;
     offerId: ResolvedOfferId;
+    legKey: ResolvedLegKey;
     dailyBudgetCents: string;
   }>,
   mode: "replace" | "merge",

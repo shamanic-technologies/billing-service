@@ -15,6 +15,7 @@ import {
 import {
   BrandBudgetManagedByFunnelsError,
   ChannelSplitAcrossOffersError,
+  OfferSplitAcrossLegsError,
   FunnelBudgetBelowMinimumError,
   UnknownAcquisitionChannelError,
   FunnelSplitAcrossChannelsError,
@@ -22,12 +23,15 @@ import {
   aggregateChannelTotals,
   aggregateFunnelTotals,
   aggregateOfferBudget,
+  aggregateLegBudget,
+  aggregateOfferTotals,
   getBrandFunnelDailyBudgets,
   parseFunnelBudgetSet,
   setBrandFunnelDailyBudgets,
   sumFunnelBudgets,
   type ChannelBudgetTotal,
   type FunnelBudgetTotal,
+  type OfferBudgetTotal,
   type ParsedFunnelBudget,
 } from "../lib/brand-funnel-budgets.js";
 import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
@@ -94,16 +98,38 @@ function renderChannels(totals: ChannelBudgetTotal[]) {
 }
 
 /**
- * The STORED grain, ADDITIVE: one entry per (funnel, acquisition-channel
- * feature, offer) - i.e. one per campaign. `channels` above is its per-pair sum
- * and `funnels` the per-funnel one, so a consumer that wants either figure never
- * has to add these up.
+ * The per-OFFER grain, ADDITIVE: one entry per (funnel, acquisition-channel
+ * feature, offer). Each is the SUM of the funnel LEGS funding that triple, so a
+ * brand that has never stated a leg renders byte-identically to what this
+ * service served before migration 0039 - when this WAS the stored grain.
  */
-function renderOffers(rows: BrandFunnelDailyBudget[]) {
+function renderOffers(totals: OfferBudgetTotal[]) {
+  return totals.map((total) => ({
+    funnelKey: total.funnelKey,
+    featureSlug: total.featureSlug,
+    offerId: total.offerId,
+    dailyBudgetCents: total.dailyBudgetCents,
+    updatedAt: total.updatedAt.toISOString(),
+  }));
+}
+
+/**
+ * The STORED grain, ADDITIVE: one entry per (funnel, acquisition-channel
+ * feature, offer, LEG) - i.e. one per campaign, since a campaign is
+ * (brand, offer, acquisition channel, leg). `offers` above is its per-triple
+ * sum, `channels` the per-pair one and `funnels` the per-funnel one, so a
+ * consumer that wants any of those figures never has to add these up.
+ *
+ * `legKey` is features-service's canonical leg id, carried opaque. `null` means
+ * the ceiling is not scoped to a leg - every ceiling written before legs existed
+ * carries it, and it is a permanent value rather than a placeholder.
+ */
+function renderLegs(rows: BrandFunnelDailyBudget[]) {
   return rows.map((row) => ({
     funnelKey: row.funnelKey,
     featureSlug: row.featureSlug,
     offerId: row.offerId,
+    legKey: row.legKey,
     dailyBudgetCents: row.dailyBudgetCents,
     updatedAt: row.updatedAt.toISOString(),
   }));
@@ -123,7 +149,8 @@ async function composeFunnelBudgetsView(orgId: string, brandId: string) {
       dailyBudgetCents: sumFunnelBudgets(stored),
       funnels: renderFunnels(aggregateFunnelTotals(stored)),
       channels: renderChannels(aggregateChannelTotals(stored)),
-      offers: renderOffers(stored),
+      offers: renderOffers(aggregateOfferTotals(stored)),
+      legs: renderLegs(stored),
     };
   }
   const brandLevel = await getBrandDailyBudget(orgId, brandId);
@@ -132,6 +159,7 @@ async function composeFunnelBudgetsView(orgId: string, brandId: string) {
     funnels: [],
     channels: [],
     offers: [],
+    legs: [],
   };
 }
 
@@ -156,6 +184,8 @@ async function composeOfferBudgetView(
       updatedAt: null,
       funnels: [],
       channels: [],
+      offers: [],
+      legs: [],
     };
   }
   return {
@@ -164,6 +194,46 @@ async function composeOfferBudgetView(
     updatedAt: offer.updatedAt.toISOString(),
     funnels: renderFunnels(offer.funnels),
     channels: renderChannels(offer.channels),
+    offers: renderOffers(offer.offers),
+    legs: renderLegs(offer.legs),
+  };
+}
+
+/**
+ * One LEG's ceiling, for the money that paces one campaign: a campaign is
+ * (brand, offer, acquisition channel, leg), so this reads the ceiling on the
+ * same key the campaign itself is keyed on. The SUM of the ceilings funding it,
+ * plus every finer figure this service already serves restricted to it, so a
+ * caller never enumerates anything nor adds anything up. A leg with no ceiling
+ * answers null - nothing stated is not a ceiling of zero, and neither is ever
+ * derived from the other.
+ */
+async function composeLegBudgetView(
+  orgId: string,
+  brandId: string,
+  legKey: string
+) {
+  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
+  const leg = aggregateLegBudget(stored, legKey);
+  if (!leg) {
+    return {
+      legKey,
+      dailyBudgetCents: null,
+      updatedAt: null,
+      funnels: [],
+      channels: [],
+      offers: [],
+      legs: [],
+    };
+  }
+  return {
+    legKey,
+    dailyBudgetCents: leg.dailyBudgetCents,
+    updatedAt: leg.updatedAt.toISOString(),
+    funnels: renderFunnels(leg.funnels),
+    channels: renderChannels(leg.channels),
+    offers: renderOffers(leg.offers),
+    legs: renderLegs(leg.legs),
   };
 }
 
@@ -182,7 +252,8 @@ function respondToFunnelWriteError(err: unknown, res: Response): void {
   // the caller is addressing is derived one level down.
   if (
     err instanceof FunnelSplitAcrossChannelsError ||
-    err instanceof ChannelSplitAcrossOffersError
+    err instanceof ChannelSplitAcrossOffersError ||
+    err instanceof OfferSplitAcrossLegsError
   ) {
     res.status(409).json({ error: err.message });
     return;
@@ -219,8 +290,9 @@ async function applyFunnelWrite(
     return;
   }
   const {
+    legs,
     offers,
-    previousOffers,
+    previousLegs,
     channels,
     funnels,
     previousBrandDailyBudgetCents,
@@ -231,7 +303,7 @@ async function applyFunnelWrite(
     `[billing-service] brand funnel budgets ${mode}: brand=${brandId} org=${orgId} total=${brandDailyBudgetCents} funnels=${entries
       .map(
         (e) =>
-          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}${e.offerId ? `/${e.offerId}` : ""}=${e.dailyBudgetCents}`
+          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}${e.offerId ? `/${e.offerId}` : ""}${e.legKey ? `/${e.legKey}` : ""}=${e.dailyBudgetCents}`
       )
       .join(",")}`
   );
@@ -240,8 +312,8 @@ async function applyFunnelWrite(
   // on both sides. A brand's FIRST per-funnel write also retires its brand-grain
   // scalar (deleted in the same transaction), which no stored ceiling can
   // express — it enters the diff as that grain going to zero.
-  const changes = ceilingChangesBetween(previousOffers, offers);
-  if (previousOffers.length === 0 && previousBrandDailyBudgetCents !== null) {
+  const changes = ceilingChangesBetween(previousLegs, legs);
+  if (previousLegs.length === 0 && previousBrandDailyBudgetCents !== null) {
     changes.push(...brandGrainChange(previousBrandDailyBudgetCents, "0"));
   }
 
@@ -263,6 +335,7 @@ async function applyFunnelWrite(
     funnels: renderFunnels(funnels),
     channels: renderChannels(channels),
     offers: renderOffers(offers),
+    legs: renderLegs(legs),
   });
 }
 
@@ -555,6 +628,78 @@ router.get(
   }
 );
 
+// --- One funnel LEG's daily ceiling --------------------------------------
+//
+// A campaign is (brand, offer, acquisition channel, LEG) — the leg is the thing
+// the customer buys, and the sales funnel is becoming a way of READING legs
+// rather than the unit anything is keyed on (one leg belongs to several
+// funnels). So this is the money that paces one campaign, read on the same key
+// the campaign is keyed on.
+//
+// `:legKey` is features-service's canonical leg id (it mints the vocabulary and
+// publishes it on GET /public/channels as legs[].legKey; campaign-service
+// carries the same value on the campaign row). It is carried OPAQUE here and
+// never parsed — the two steps a leg connects ride beside it on that catalogue.
+//
+// This is its own answer, not a widening of any existing read: the brand-wide,
+// per-funnel, per-channel and per-offer figures are what several consumers pace
+// and gate real spend on, and every one of them is untouched.
+
+// GET /internal/brands/:brandId/legs/:legKey/daily-budget — service-to-service
+// read of ONE leg's daily ceiling for a brand.
+//
+// Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
+// Resp: { brandId, legKey, dailyBudgetCents, updatedAt, funnels, channels,
+// offers, legs }. `dailyBudgetCents` is the SUM of the ceilings funding this
+// leg; the arrays are the figures this service already serves, restricted to it,
+// so a caller never enumerates anything nor adds anything up.
+// A leg with NO ceiling answers dailyBudgetCents: null (nothing stated), which
+// is a different answer from a ceiling of 0 (funded at nothing). 400 on a
+// non-UUID brandId or an empty legKey.
+router.get(
+  "/internal/brands/:brandId/legs/:legKey/daily-budget",
+  async (req, res) => {
+    const { brandId, legKey } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    if (!legKey.trim()) {
+      res.status(400).json({ error: "legKey must be a non-empty funnel leg id" });
+      return;
+    }
+
+    const orgId = requireInternalOrgId(req, res);
+    if (!orgId) return;
+
+    const view = await composeLegBudgetView(orgId, brandId, legKey.trim());
+    res.json({ brandId, ...view });
+  }
+);
+
+// GET /v1/brands/:brandId/legs/:legKey/daily-budget — the same answer for the
+// user, via the gateway (a campaign screen reads its own ceiling). Auth: org
+// headers.
+router.get(
+  "/v1/brands/:brandId/legs/:legKey/daily-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId, legKey } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    if (!legKey.trim()) {
+      res.status(400).json({ error: "legKey must be a non-empty funnel leg id" });
+      return;
+    }
+
+    const orgId = req.headers["x-org-id"] as string;
+    const view = await composeLegBudgetView(orgId, brandId, legKey.trim());
+    res.json({ brandId, orgId, ...view });
+  }
+);
+
 // PUT /v1/brands/:brandId/funnel-budgets — write the WHOLE set at once (signup
 // checkout). Auth: org headers.
 // Body: { funnels: [{ funnelKey, featureSlug?, dailyBudgetCents }] }.
@@ -639,6 +784,7 @@ router.patch(
           funnelKey,
           featureSlug: parsedBody.data.featureSlug,
           offerId: parsedBody.data.offerId,
+          legKey: parsedBody.data.legKey,
           dailyBudgetCents: parsedBody.data.dailyBudgetCents,
         },
       ]);

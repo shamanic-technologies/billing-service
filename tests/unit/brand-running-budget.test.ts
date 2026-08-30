@@ -251,6 +251,39 @@ describe("ceilingChangesBetween", () => {
     ).toEqual([]);
   });
 
+  it("diffs two LEGS of one triple apart, and both count against its verdict", () => {
+    // Billing stores one ceiling per leg (migration 0039); campaign-service
+    // answers at the (funnel, channel, offer) triple. Two legs must not collapse
+    // into one change, and both deltas apply to that triple's running verdict.
+    const leg = (legKey: string, cents: string) => ({
+      ...RUNNING,
+      funnelKey: "reply_meeting",
+      legKey,
+      dailyBudgetCents: cents,
+    });
+
+    const changes = ceilingChangesBetween(
+      [leg("first_touch", "12000"), leg("follow_up", "8000")],
+      [leg("first_touch", "13000"), leg("follow_up", "8000")]
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({
+      funnelKey: "reply_meeting",
+      featureSlug: RUNNING.featureSlug,
+      offerId: null,
+      previousDailyBudgetCents: "12000",
+      newDailyBudgetCents: "13000",
+    });
+
+    const both = ceilingChangesBetween(
+      [leg("first_touch", "12000"), leg("follow_up", "8000")],
+      [leg("first_touch", "13000"), leg("follow_up", "9000")]
+    );
+    expect(both).toHaveLength(2);
+    const after = spendable([row(RUNNING, 22000, true)]);
+    expect(dollars(runningTotalsFor(after, both).runningBeforeCents)).toBe(200);
+  });
+
   it("distinguishes an offer-scoped ceiling from the unscoped one", () => {
     const offerId = "d5ecba00-0000-4000-8000-000000000001";
     const changes = ceilingChangesBetween(
