@@ -34,15 +34,6 @@ describe("POST /internal/transfer-brand", () => {
     };
   }
 
-  function listResponse(customers: StripeCustomer[]) {
-    return {
-      object: "list" as const,
-      url: "/v1/customers",
-      data: customers,
-      has_more: false,
-    };
-  }
-
   async function insertPromoGrantWithBrand(brandIds: string[] | null) {
     await insertTestPromoCode({ code: `p-${Math.random()}`, amountCents: 100 });
     const [codeRow] = await db.select().from(localPromoCodes).limit(1);
@@ -74,10 +65,10 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("patches solo-brand SS customers + transfers solo-brand local_promos rows", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_solo_match", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ])
+      ]
     );
     await insertPromoGrantWithBrand([sourceBrandId]);
 
@@ -91,27 +82,22 @@ describe("POST /internal/transfer-brand", () => {
       { tableName: "local_promos", count: 1 },
       { tableName: "stripe_service_customers", count: 1 },
     ]);
-    expect(ssMocks.listCustomersByMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ "x-user-id": expect.any(String) }),
-      expect.objectContaining({
-        metadata: { org_id: sourceOrgId },
-        limit: 100,
-      })
-    );
-    expect(ssMocks.updateCustomer).toHaveBeenCalledWith(
+    // The org is named in the path and nothing else is sent: no fabricated
+    // x-org-id, no zero-uuid x-user-id. One argument, and it is the org id.
+    expect(ssMocks.listAllCustomersForOrg).toHaveBeenCalledWith(sourceOrgId);
+    expect(ssMocks.listAllCustomersForOrg.mock.calls[0]).toHaveLength(1);
+    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledWith(
       "cus_solo_match",
-      expect.any(Object),
-      expect.objectContaining({
-        metadata: expect.objectContaining({ org_id: targetOrgId }),
-      })
+      expect.objectContaining({ org_id: targetOrgId })
     );
+    expect(ssMocks.setCustomerMetadata.mock.calls[0]).toHaveLength(2);
   });
 
   it("patches brand_id when targetBrandId provided", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_solo_rename", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ])
+      ]
     );
     const row = await insertPromoGrantWithBrand([sourceBrandId]);
 
@@ -121,14 +107,11 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
 
     expect(res.status).toBe(200);
-    expect(ssMocks.updateCustomer).toHaveBeenCalledWith(
+    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledWith(
       "cus_solo_rename",
-      expect.any(Object),
       expect.objectContaining({
-        metadata: expect.objectContaining({
-          org_id: targetOrgId,
-          brand_id: targetBrandId,
-        }),
+        org_id: targetOrgId,
+        brand_id: targetBrandId,
       })
     );
 
@@ -138,13 +121,13 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("skips multi-brand customers (CSV brand_id with multiple entries)", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_multi", {
           org_id: sourceOrgId,
           brand_id: `${sourceBrandId},${otherBrandId}`,
         }),
-      ])
+      ]
     );
 
     const res = await request(app)
@@ -157,14 +140,14 @@ describe("POST /internal/transfer-brand", () => {
       tableName: "stripe_service_customers",
       count: 0,
     });
-    expect(ssMocks.updateCustomer).not.toHaveBeenCalled();
+    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
   });
 
   it("skips customers with non-matching brand_id", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_other", { org_id: sourceOrgId, brand_id: otherBrandId }),
-      ])
+      ]
     );
 
     const res = await request(app)
@@ -177,12 +160,12 @@ describe("POST /internal/transfer-brand", () => {
       tableName: "stripe_service_customers",
       count: 0,
     });
-    expect(ssMocks.updateCustomer).not.toHaveBeenCalled();
+    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
   });
 
   it("skips customers with no brand_id metadata", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([makeCustomer("cus_no_brand", { org_id: sourceOrgId })])
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [makeCustomer("cus_no_brand", { org_id: sourceOrgId })]
     );
 
     const res = await request(app)
@@ -195,14 +178,14 @@ describe("POST /internal/transfer-brand", () => {
       tableName: "stripe_service_customers",
       count: 0,
     });
-    expect(ssMocks.updateCustomer).not.toHaveBeenCalled();
+    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
   });
 
   it("trims whitespace inside CSV brand_id", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_ws", { org_id: sourceOrgId, brand_id: ` ${sourceBrandId} ` }),
-      ])
+      ]
     );
 
     const res = await request(app)
@@ -211,23 +194,16 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
 
     expect(res.status).toBe(200);
-    expect(ssMocks.updateCustomer).toHaveBeenCalledTimes(1);
+    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledTimes(1);
   });
 
-  it("paginates through multiple customer pages", async () => {
-    ssMocks.listCustomersByMetadata
-      .mockResolvedValueOnce({
-        object: "list",
-        url: "/v1/customers",
-        data: [makeCustomer("cus_p1", { org_id: sourceOrgId, brand_id: sourceBrandId })],
-        has_more: true,
-      })
-      .mockResolvedValueOnce({
-        object: "list",
-        url: "/v1/customers",
-        data: [makeCustomer("cus_p2", { org_id: sourceOrgId, brand_id: sourceBrandId })],
-        has_more: false,
-      });
+  it("considers EVERY customer the org holds, not just the newest", async () => {
+    // 4 prod orgs hold more than one Stripe customer. The read returns the whole
+    // set in one call, so a transfer can never strand the ones it never listed.
+    ssMocks.listAllCustomersForOrg.mockResolvedValue([
+      makeCustomer("cus_first", { org_id: sourceOrgId, brand_id: sourceBrandId }),
+      makeCustomer("cus_second", { org_id: sourceOrgId, brand_id: sourceBrandId }),
+    ]);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
@@ -235,11 +211,12 @@ describe("POST /internal/transfer-brand", () => {
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
 
     expect(res.status).toBe(200);
-    expect(ssMocks.listCustomersByMetadata).toHaveBeenCalledTimes(2);
-    expect(ssMocks.listCustomersByMetadata.mock.calls[1]?.[1]).toMatchObject({
-      starting_after: "cus_p1",
+    expect(ssMocks.listAllCustomersForOrg).toHaveBeenCalledTimes(1);
+    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledTimes(2);
+    expect(res.body.updatedTables).toContainEqual({
+      tableName: "stripe_service_customers",
+      count: 2,
     });
-    expect(ssMocks.updateCustomer).toHaveBeenCalledTimes(2);
   });
 
   it("skips co-branding local_promos rows", async () => {
@@ -255,7 +232,7 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("returns 502 when stripe-service list fails", async () => {
-    ssMocks.listCustomersByMetadata.mockRejectedValue(new Error("SS down"));
+    ssMocks.listAllCustomersForOrg.mockRejectedValue(new Error("SS down"));
     await insertPromoGrantWithBrand([sourceBrandId]);
 
     const res = await request(app)
@@ -267,13 +244,13 @@ describe("POST /internal/transfer-brand", () => {
   });
 
   it("returns 502 with partial counts when an update fails mid-loop", async () => {
-    ssMocks.listCustomersByMetadata.mockResolvedValue(
-      listResponse([
+    ssMocks.listAllCustomersForOrg.mockResolvedValue(
+      [
         makeCustomer("cus_ok", { org_id: sourceOrgId, brand_id: sourceBrandId }),
         makeCustomer("cus_fail", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ])
+      ]
     );
-    ssMocks.updateCustomer.mockImplementation((id: string) => {
+    ssMocks.setCustomerMetadata.mockImplementation((id: string) => {
       if (id === "cus_fail") return Promise.reject(new Error("SS update failed"));
       return Promise.resolve(makeCustomer(id, {}));
     });

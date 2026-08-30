@@ -24,8 +24,8 @@ export interface StripeServiceMocks {
   sumSucceededTopupsForOrg: ReturnType<typeof vi.fn>;
   hasChargeablePmForOrg: ReturnType<typeof vi.fn>;
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
-  listCustomersByMetadata: ReturnType<typeof vi.fn>;
-  updateCustomer: ReturnType<typeof vi.fn>;
+  listAllCustomersForOrg: ReturnType<typeof vi.fn>;
+  setCustomerMetadata: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
@@ -129,13 +129,8 @@ export function setupStripeMocks(): StripeServiceMocks {
     createPortalSession: vi.fn().mockResolvedValue({
       url: "https://billing.stripe.com/p/session/test_portal",
     }),
-    listCustomersByMetadata: vi.fn().mockResolvedValue({
-      object: "list",
-      url: "/v1/customers",
-      data: [],
-      has_more: false,
-    }),
-    updateCustomer: vi.fn().mockImplementation((id: string) =>
+    listAllCustomersForOrg: vi.fn().mockResolvedValue([]),
+    setCustomerMetadata: vi.fn().mockImplementation((id: string) =>
       Promise.resolve(buildMockCustomer({ id }))
     ),
     getStats: vi.fn().mockResolvedValue({
@@ -175,8 +170,8 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
-  vi.spyOn(ssClient, "listCustomersByMetadata").mockImplementation(mocks.listCustomersByMetadata);
-  vi.spyOn(ssClient, "updateCustomer").mockImplementation(mocks.updateCustomer);
+  vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
+  vi.spyOn(ssClient, "setCustomerMetadata").mockImplementation(mocks.setCustomerMetadata);
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
   vi.spyOn(reload, "reloadViaInvoice").mockImplementation(mocks.reloadViaInvoice);
 
