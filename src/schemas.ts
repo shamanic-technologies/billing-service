@@ -186,6 +186,8 @@ export const CheckoutResponseSchema = z
 export const CreatePortalSessionRequestSchema = z
   .object({
     return_url: z.string().url(),
+    amount: z.number().int().positive().optional(),
+    currency: z.string().min(3).optional(),
   })
   .openapi("CreatePortalSessionRequest");
 
@@ -616,6 +618,23 @@ export const SetBrandFunnelDailyBudgetRequestSchema = z
      * is split across several.
      */
     offerId: z.string().uuid().optional(),
+    /**
+     * The funnel LEG being funded, as features-service's canonical leg id (it
+     * mints the vocabulary and publishes it on GET /public/channels as
+     * legs[].legKey; campaign-service carries the same value on the campaign
+     * row). Carried OPAQUE - billing never validates it against a list and never
+     * parses it into the steps it connects.
+     *
+     * Optional: omitted, the write addresses the (funnel, channel, offer) triple
+     * as a whole - its single leg when it funds one (the LEG-LESS ceiling, for
+     * everything written before legs existed), a leg-less ceiling when it funds
+     * none, and a 409 when it is split across several.
+     *
+     * When it IS named and the triple's sole stored ceiling is the leg-less one,
+     * the leg-keyed ceiling REPLACES it rather than sitting beside it - the two
+     * are never summed. See lib/brand-funnel-budgets.ts.
+     */
+    legKey: z.string().min(1).optional(),
   })
   .openapi("SetBrandFunnelDailyBudgetRequest");
 
@@ -633,6 +652,8 @@ export const SetBrandFunnelDailyBudgetSetRequestSchema = z
           featureSlug: z.string().min(1).optional(),
           /** The offer UUID - optional, see the PATCH. */
           offerId: z.string().uuid().optional(),
+          /** The features-service funnel leg id - optional, see the PATCH. */
+          legKey: z.string().min(1).optional(),
           dailyBudgetCents: z.union([z.string(), z.number()]),
         })
       )
@@ -677,11 +698,35 @@ export const BrandFunnelOfferDailyBudgetSchema = z
      * existed carries it, and it is a permanent value rather than a placeholder.
      */
     offerId: z.string().uuid().nullable(),
-    /** This (funnel, channel, offer) ceiling, i.e. this campaign's own. */
+    /**
+     * This (funnel, channel, offer) figure - the SUM of the funnel LEGS funding
+     * it. Unchanged in meaning for every consumer reading it today: a brand that
+     * has never stated a leg holds one row per triple, so this is byte-identical
+     * to the stored ceiling it used to be.
+     */
     dailyBudgetCents: CentsStringSchema,
     updatedAt: z.string(),
   })
   .openapi("BrandFunnelOfferDailyBudget");
+
+export const BrandFunnelLegDailyBudgetSchema = z
+  .object({
+    funnelKey: BrandFunnelKeySchema,
+    featureSlug: z.string(),
+    offerId: z.string().uuid().nullable(),
+    /**
+     * The funnel LEG this ceiling funds - features-service's canonical leg id,
+     * carried OPAQUE (never parsed; the two steps a leg connects ride beside it
+     * on that service's own catalogue). `null` means the ceiling is not scoped
+     * to a leg - every ceiling written before legs existed carries it, and it is
+     * a permanent value rather than a placeholder.
+     */
+    legKey: z.string().nullable(),
+    /** This (funnel, channel, offer, leg) ceiling, i.e. this campaign's own. */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("BrandFunnelLegDailyBudget");
 
 export const ReadBrandFunnelDailyBudgetsSchema = z
   .object({
@@ -708,6 +753,14 @@ export const ReadBrandFunnelDailyBudgetsSchema = z
      * up. Empty when this brand has never set any.
      */
     offers: z.array(BrandFunnelOfferDailyBudgetSchema),
+    /**
+     * ADDITIVE, the STORED grain: one entry per (funnel, acquisition-channel
+     * feature, offer, LEG), i.e. one per campaign - a campaign is
+     * (brand, offer, acquisition channel, leg). `offers` above is its per-triple
+     * sum, so a consumer that wants the offer figure never has to add these up.
+     * Empty when this brand has never set any.
+     */
+    legs: z.array(BrandFunnelLegDailyBudgetSchema),
   })
   .openapi("ReadBrandFunnelDailyBudgets");
 
@@ -730,8 +783,39 @@ export const ReadBrandOfferDailyBudgetSchema = z
     funnels: z.array(BrandFunnelDailyBudgetSchema),
     /** This offer's per-(funnel, channel) figures, same restriction. */
     channels: z.array(BrandFunnelChannelDailyBudgetSchema),
+    /** ADDITIVE: this offer's per-(funnel, channel, offer) figures. */
+    offers: z.array(BrandFunnelOfferDailyBudgetSchema),
+    /** ADDITIVE: this offer's STORED ceilings, one per campaign. */
+    legs: z.array(BrandFunnelLegDailyBudgetSchema),
   })
   .openapi("ReadBrandOfferDailyBudget");
+
+export const ReadBrandLegDailyBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /** Present on the user-facing read only. */
+    orgId: z.string().uuid().optional(),
+    /** features-service's canonical leg id, echoed back verbatim. */
+    legKey: z.string(),
+    /**
+     * This LEG's daily ceiling - the SUM of the ceilings funding it, across
+     * every funnel, acquisition channel and offer it is sold through. `null`
+     * when this leg has NO ceiling, which is a different answer from a ceiling
+     * of 0 (funded at nothing) and is never derived from it.
+     */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** The latest of the ceilings funding this leg; null when it has none. */
+    updatedAt: z.string().nullable(),
+    /** This leg's per-funnel figures - the sums above, restricted to it. */
+    funnels: z.array(BrandFunnelDailyBudgetSchema),
+    /** This leg's per-(funnel, channel) figures, same restriction. */
+    channels: z.array(BrandFunnelChannelDailyBudgetSchema),
+    /** This leg's per-(funnel, channel, offer) figures, same restriction. */
+    offers: z.array(BrandFunnelOfferDailyBudgetSchema),
+    /** This leg's STORED ceilings. */
+    legs: z.array(BrandFunnelLegDailyBudgetSchema),
+  })
+  .openapi("ReadBrandLegDailyBudget");
 
 export const BrandFunnelDailyBudgetsSchema = z
   .object({
@@ -749,6 +833,12 @@ export const BrandFunnelDailyBudgetsSchema = z
      * up. Empty when this brand has never set any.
      */
     offers: z.array(BrandFunnelOfferDailyBudgetSchema),
+    /**
+     * ADDITIVE, the STORED grain: one entry per (funnel, acquisition-channel
+     * feature, offer, LEG), i.e. one per campaign. `offers` above is its
+     * per-triple sum.
+     */
+    legs: z.array(BrandFunnelLegDailyBudgetSchema),
   })
   .openapi("BrandFunnelDailyBudgets");
 
@@ -1707,6 +1797,76 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId or offerId, or missing org headers",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/legs/{legKey}/daily-budget",
+  summary: "Read ONE funnel leg's daily ceiling for a brand",
+  description:
+    "Returns what the caller org has funded ONE funnel LEG at — the SUM of the " +
+    "ceilings covering it across every sales funnel, acquisition channel and offer " +
+    "it is sold through — plus that leg's own per-funnel, per-(funnel, channel) and " +
+    "per-(funnel, channel, offer) figures, so a caller never enumerates anything nor " +
+    "adds anything up. A campaign is (brand, offer, acquisition channel, LEG), so " +
+    "this is the money that paces one campaign, read on the same key the campaign " +
+    "is keyed on. `legKey` is features-service's canonical leg id (published on its " +
+    "GET /public/channels as legs[].legKey) and is carried OPAQUE — billing never " +
+    "validates or parses it. A ceiling written before legs existed (legKey null) " +
+    "counts towards this leg only while it is the brand's SOLE named one, which is " +
+    "why a leg that is a brand's only one answers exactly the brand-wide total. " +
+    "A leg with NO ceiling returns dailyBudgetCents: null — a different answer from " +
+    "a ceiling of 0, and never derived from it. Service-to-service read with " +
+    "x-api-key plus x-org-id.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({
+      brandId: z.string().uuid(),
+      legKey: z.string().min(1),
+    }),
+  },
+  responses: {
+    200: {
+      description: "This leg's ceiling (null when it has none) + its breakdown",
+      content: {
+        "application/json": { schema: ReadBrandLegDailyBudgetSchema },
+      },
+    },
+    400: {
+      description:
+        "brandId or x-org-id is not a valid UUID, x-org-id is missing, or legKey is empty",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/legs/{legKey}/daily-budget",
+  summary: "Read one funnel leg's daily ceiling (user, via the gateway)",
+  description:
+    "Same answer as the internal read, for the user's own org — a campaign screen " +
+    "reads the ceiling it paces its spend against. A leg with no ceiling returns " +
+    "dailyBudgetCents: null.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({
+      brandId: z.string().uuid(),
+      legKey: z.string().min(1),
+    }),
+  },
+  responses: {
+    200: {
+      description: "This leg's ceiling (null when it has none) + its breakdown",
+      content: {
+        "application/json": { schema: ReadBrandLegDailyBudgetSchema },
+      },
+    },
+    400: {
+      description: "Invalid brandId, empty legKey, or missing org headers",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

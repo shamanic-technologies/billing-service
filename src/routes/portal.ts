@@ -4,24 +4,31 @@ import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreatePortalSessionRequestSchema } from "../schemas.js";
-import { createPortalSession, getCustomerByOrg } from "../lib/stripe-service-client.js";
+import { getCardSetup } from "../lib/stripe-service-client.js";
 
 const router = Router();
 
-// POST /v1/portal-sessions — Stripe Customer Portal session via stripe-service.
+// POST /v1/portal-sessions — how this org's customer adds a card.
+//
+// The name is historical: it no longer always produces a "portal session",
+// because not every acquirer has a portal. stripe-service resolves which
+// acquirer holds the org's card and describes the mechanism — a hosted redirect
+// for one, an embedded widget for another. This repo passes that through
+// without interpreting it and without naming a vendor.
+//
+// Backwards compatible on purpose: the hosted case still carries `url` exactly
+// where it always was, so a client that only reads `url` keeps working and can
+// adopt `mode` whenever it likes.
 router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
-    const userId = req.headers["x-user-id"] as string;
-    const runId = req.headers["x-run-id"] as string;
-    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
     const parsed = CreatePortalSessionRequestSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const { return_url } = parsed.data;
+    const { return_url, amount, currency } = parsed.data;
 
     const [account] = await db
       .select()
@@ -34,29 +41,12 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    const identity = {
-      "x-org-id": orgId,
-      "x-user-id": userId,
-      "x-run-id": runId,
-      ...wfHeaders,
-    };
-
-    let session;
-    try {
-      // Stripe portal sessions cannot be created without a customer id. Resolve the
-      // org's Stripe customer (org-implicit, server-side from x-org-id) and forward it.
-      const customer = await getCustomerByOrg(identity);
-      session = await createPortalSession(identity, { customer: customer.id, return_url });
-    } catch (err) {
-      console.error("[billing-service] stripe-service createPortalSession failed:", err);
-      res.status(502).json({ error: "Failed to create portal session via stripe-service" });
-      return;
-    }
-
-    res.json({ url: session.url });
+    const setup = await getCardSetup(orgId, return_url, amount, currency);
+    res.json(setup);
   } catch (err) {
-    console.error("[billing-service] Error creating portal session:", err);
-    res.status(500).json({ error: "Internal server error" });
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[billing-service] card setup failed:", message);
+    res.status(502).json({ error: "Failed to start card setup" });
   }
 });
 

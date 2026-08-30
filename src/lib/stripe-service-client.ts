@@ -717,7 +717,30 @@ export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
  * the cents helpers.
  */
 export async function sumSucceededTopupsForOrg(orgId: string): Promise<string> {
-  return sumOrgTopups(orgId);
+  // Asked of stripe-service as a SUMMARY rather than summed from a payment list
+  // here. The summary spans every acquirer that has taken money for this org;
+  // the payment list is one acquirer's objects. Summing the list means an org
+  // whose payments moved to another acquirer pays and its balance does not
+  // move — which is exactly what happened in production before this changed.
+  //
+  // Behaviour is identical for an org on the original acquirer: the summary's
+  // `amount_net` is `amount_received - amount_returned`, the same per-payment
+  // netting the list sum applied.
+  const summary = await call<StripePaymentSummary>(
+    "GET",
+    `/internal/payment_summary/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+  let total = new Decimal(0);
+  for (const row of summary.totals) {
+    if (typeof row.amount_net !== "number") {
+      throw new Error(
+        `stripe-service payment summary for org ${orgId} is missing amount_net`
+      );
+    }
+    total = total.plus(row.amount_net);
+  }
+  return total.toFixed(10);
 }
 
 async function sumOrgTopups(orgId: string): Promise<string> {
@@ -851,5 +874,28 @@ export async function chargeOrgOffSession(
     {},
     body,
     { "Idempotency-Key": idempotencyKey }
+  );
+}
+
+/**
+ * How this org's customer adds a card, as stripe-service describes it.
+ *
+ * Not a URL, because the acquirers do not all do this the same way: one hosts a
+ * portal we redirect to, another has no portal at all and saves a card only
+ * through a browser widget the page mounts itself. stripe-service names the
+ * mechanism and hands over what it needs; this repo passes that through without
+ * interpreting it. Nothing here names an acquirer.
+ */
+export async function getCardSetup(
+  orgId: string,
+  returnUrl: string,
+  amount?: number,
+  currency?: string
+): Promise<Record<string, unknown>> {
+  return call<Record<string, unknown>>(
+    "POST",
+    `/internal/card_setup/by-org/${encodeURIComponent(orgId)}`,
+    {},
+    { return_url: returnUrl, ...(amount ? { amount, currency } : {}) }
   );
 }
