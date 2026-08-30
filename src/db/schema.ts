@@ -541,6 +541,35 @@ export const brandFunnelDailyBudgets = pgTable(
      * (funnel, channel) pair unrepresentable.
      */
     offerId: uuid("offer_id"),
+    /**
+     * The funnel LEG this ceiling funds — features-service's canonical leg id
+     * (migration 0039).
+     *
+     * A sales funnel is a chain of steps and the thing a customer BUYS is one of
+     * its LEGS: the leg that takes a lead sitting at one step and moves it to
+     * the next. A campaign is (brand, offer, acquisition channel, leg), so this
+     * is the grain the money that paces a campaign is keyed on.
+     *
+     * features-service OWNS the vocabulary and MINTS the identifier (its
+     * `lib/funnel-legs.ts`, published on `GET /public/channels` as
+     * `legs[].legKey`); campaign-service carries the same value on the campaign
+     * row. This column carries it and nothing else — no leg vocabulary, enum or
+     * list exists here and none is to be introduced, exactly as for the channel
+     * slug and the offer id. OPAQUE, and never PARSED: the two steps a leg
+     * connects ride BESIDE the identifier on that catalogue (`fromStep` /
+     * `toStep`), so a consumer that wants them reads them there. `text`, because
+     * that is the shape features-service mints.
+     *
+     * NULLABLE, and the NULL is a first-class permanent value: "this ceiling is
+     * not scoped to a leg". Every ceiling written before 0039 carries it and
+     * there is no backfill — a funnel has several legs and a leg belongs to
+     * several funnels, so nothing here can derive one, and guessing would move
+     * real money onto the wrong campaign.
+     *
+     * The FUNNEL stays in the key beside it: this is the additive half, and a
+     * later ship removes the funnel once every consumer has moved.
+     */
+    legKey: text("leg_key"),
     dailyBudgetCents: numeric("daily_budget_cents", {
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
@@ -550,13 +579,14 @@ export const brandFunnelDailyBudgets = pgTable(
       .defaultNow(),
   },
   (table) => [
-    unique("brand_funnel_daily_budgets_offer_key")
+    unique("brand_funnel_daily_budgets_leg_key")
       .on(
         table.orgId,
         table.brandId,
         table.funnelKey,
         table.featureSlug,
-        table.offerId
+        table.offerId,
+        table.legKey
       )
       .nullsNotDistinct(),
     index("brand_funnel_daily_budgets_org_brand_idx").on(
@@ -573,6 +603,13 @@ export const brandFunnelDailyBudgets = pgTable(
       table.brandId,
       table.funnelKey,
       table.featureSlug
+    ),
+    index("brand_funnel_daily_budgets_org_brand_funnel_channel_offer_idx").on(
+      table.orgId,
+      table.brandId,
+      table.funnelKey,
+      table.featureSlug,
+      table.offerId
     ),
   ]
 );

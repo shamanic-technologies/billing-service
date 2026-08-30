@@ -219,7 +219,9 @@ export async function attributeBrandBudgetToSingleFunnel(
     // It lands UNSCOPED by offer (offer_id stays NULL), for the same reason:
     // brand-service owns the offer entity, a brand-level scalar predates offers
     // entirely, and inventing an id would attach the money to a campaign nobody
-    // named.
+    // named. Same again for the funnel LEG (leg_key stays NULL): a funnel has
+    // several legs and a leg belongs to several funnels, so nothing here can
+    // derive the one this money is for.
     await tx.execute(sql`
       INSERT INTO brand_funnel_daily_budgets (org_id, brand_id, funnel_key, feature_slug, daily_budget_cents, updated_at)
       SELECT org_id, brand_id, ${funnelKey}, ${DEFAULT_ACQUISITION_CHANNEL_FEATURE_SLUG}, daily_budget_cents, updated_at

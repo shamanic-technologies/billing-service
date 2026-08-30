@@ -66,6 +66,7 @@ describe("per-funnel daily budgets", () => {
       funnels: [],
       channels: [],
       offers: [],
+      legs: [],
     });
   });
 
@@ -80,6 +81,7 @@ describe("per-funnel daily budgets", () => {
       funnels: [],
       channels: [],
       offers: [],
+      legs: [],
     });
 
     const brandRead = await request(app)
@@ -489,6 +491,20 @@ describe("per-funnel daily budgets", () => {
           funnelKey: "visit_form",
           featureSlug: "sales-cold-email-outreach",
           offerId: null,
+          dailyBudgetCents: "100.0000000000",
+          updatedAt: expect.any(String),
+        },
+      ],
+      // ADDITIVE again, one level further down: the STORED grain, one entry per
+      // (funnel, channel, offer, LEG) — one per campaign. A brand that has never
+      // stated a leg holds one leg-less ceiling per triple, so the offer figure
+      // above is unchanged.
+      legs: [
+        {
+          funnelKey: "visit_form",
+          featureSlug: "sales-cold-email-outreach",
+          offerId: null,
+          legKey: null,
           dailyBudgetCents: "100.0000000000",
           updatedAt: expect.any(String),
         },

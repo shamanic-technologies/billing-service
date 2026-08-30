@@ -238,6 +238,15 @@
           "return_url": {
             "type": "string",
             "format": "uri"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3
           }
         },
         "required": [
@@ -911,6 +920,40 @@
           "updatedAt"
         ]
       },
+      "BrandFunnelLegDailyBudget": {
+        "type": "object",
+        "properties": {
+          "funnelKey": {
+            "$ref": "#/components/schemas/BrandFunnelKey"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "funnelKey",
+          "featureSlug",
+          "offerId",
+          "legKey",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
       "ReadBrandFunnelDailyBudgets": {
         "type": "object",
         "properties": {
@@ -939,6 +982,12 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
             }
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+            }
           }
         },
         "required": [
@@ -946,7 +995,8 @@
           "dailyBudgetCents",
           "funnels",
           "channels",
-          "offers"
+          "offers",
+          "legs"
         ]
       },
       "ReadBrandOfferDailyBudget": {
@@ -983,6 +1033,18 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
             }
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
+            }
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+            }
           }
         },
         "required": [
@@ -991,7 +1053,67 @@
           "dailyBudgetCents",
           "updatedAt",
           "funnels",
-          "channels"
+          "channels",
+          "offers",
+          "legs"
+        ]
+      },
+      "ReadBrandLegDailyBudget": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "funnels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
+            }
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
+            }
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "legKey",
+          "dailyBudgetCents",
+          "updatedAt",
+          "funnels",
+          "channels",
+          "offers",
+          "legs"
         ]
       },
       "BrandFunnelDailyBudgets": {
@@ -1025,6 +1147,12 @@
             "items": {
               "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
             }
+          },
+          "legs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+            }
           }
         },
         "required": [
@@ -1033,7 +1161,8 @@
           "dailyBudgetCents",
           "funnels",
           "channels",
-          "offers"
+          "offers",
+          "legs"
         ]
       },
       "SetBrandFunnelDailyBudgetSetRequest": {
@@ -1054,6 +1183,10 @@
                 "offerId": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "legKey": {
+                  "type": "string",
+                  "minLength": 1
                 },
                 "dailyBudgetCents": {
                   "anyOf": [
@@ -1098,6 +1231,10 @@
           "offerId": {
             "type": "string",
             "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -4014,6 +4151,200 @@
           },
           "400": {
             "description": "Invalid brandId or offerId, or missing org headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/legs/{legKey}/daily-budget": {
+      "get": {
+        "summary": "Read ONE funnel leg's daily ceiling for a brand",
+        "description": "Returns what the caller org has funded ONE funnel LEG at — the SUM of the ceilings covering it across every sales funnel, acquisition channel and offer it is sold through — plus that leg's own per-funnel, per-(funnel, channel) and per-(funnel, channel, offer) figures, so a caller never enumerates anything nor adds anything up. A campaign is (brand, offer, acquisition channel, LEG), so this is the money that paces one campaign, read on the same key the campaign is keyed on. `legKey` is features-service's canonical leg id (published on its GET /public/channels as legs[].legKey) and is carried OPAQUE — billing never validates or parses it. A ceiling written before legs existed (legKey null) counts towards this leg only while it is the brand's SOLE named one, which is why a leg that is a brand's only one answers exactly the brand-wide total. A leg with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "legKey",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This leg's ceiling (null when it has none) + its breakdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandLegDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId or x-org-id is not a valid UUID, x-org-id is missing, or legKey is empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/legs/{legKey}/daily-budget": {
+      "get": {
+        "summary": "Read one funnel leg's daily ceiling (user, via the gateway)",
+        "description": "Same answer as the internal read, for the user's own org — a campaign screen reads the ceiling it paces its spend against. A leg with no ceiling returns dailyBudgetCents: null.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "legKey",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This leg's ceiling (null when it has none) + its breakdown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandLegDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId, empty legKey, or missing org headers",
             "content": {
               "application/json": {
                 "schema": {
