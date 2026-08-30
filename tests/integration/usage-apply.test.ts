@@ -62,7 +62,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("no reload while the negative balance is within the credit line (postpaid)", async () => {
@@ -87,7 +87,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("triggers reload when NET balance crosses the floor; charges the TIER amount not the stored daily", async () => {
@@ -112,9 +112,9 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
     // Charge is the tier amount (5000), NOT the stored daily topup_amount (1000).
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
   });
 
   it("the GROSS body spent_total_cents does NOT gate the reload — only the NET balance does (bug #285)", async () => {
@@ -141,7 +141,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("does not topup when no chargeable card attached", async () => {
@@ -165,7 +165,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("does not topup for an India-issued card (off_session mandate unsupported)", async () => {
@@ -190,7 +190,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("does not topup when no topup config", async () => {
@@ -203,7 +203,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
 
     expect(res.status).toBe(202);
     expect(res.body.topup_triggered).toBe(false);
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("topup_triggered=false when reload returns failed", async () => {
@@ -219,7 +219,7 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
       spent_cents: "5001.0000000000",
       as_of: "x",
     });
-    ssMocks.reloadViaInvoice.mockResolvedValue({
+    ssMocks.reloadOffSession.mockResolvedValue({
       status: "failed",
       failure_reason: "decline",
     });

@@ -10,7 +10,7 @@ import {
 const ORG = "11111111-1111-1111-1111-111111111111";
 const OTHER_ORG = "22222222-2222-2222-2222-222222222222";
 
-const succeeded: ReloadOutcome = { status: "succeeded", payment_intent_id: "pi_ok" };
+const succeeded: ReloadOutcome = { status: "succeeded", reference: "pi_ok" };
 
 /** A declined off_session charge reaches billing as a THROW (stripe-service 4xx). */
 function declined(): Promise<ReloadOutcome> {

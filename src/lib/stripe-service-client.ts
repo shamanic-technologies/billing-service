@@ -110,27 +110,35 @@ export interface StripePaymentIntentList {
 }
 
 /**
- * Subset of the Stripe Invoice object billing-service reads back from the
- * off-session invoiced-charge endpoint. stripe-service returns the paid Invoice
- * verbatim; only these fields are consumed to flatten the reload outcome.
+ * The vendor-neutral result of taking money from an org, returned by
+ * `POST /internal/charges/by-org/{orgId}`.
  *
- * `payment_intent` is the invoice's underlying PaymentIntent (string id, or the
- * expanded object). stripe-service snapshots that PI into its mirror synchronously
- * on pay, so the billing-side `sumSucceededTopups*` sum reflects this top-up
- * immediately — the invoiced reload counts as a paid topup identically to the
- * former bare-PI reload (no double-count, no under-count).
+ * stripe-service resolves which acquirer holds the org's card and answers in
+ * this one shape whatever it resolved, so billing never learns that more than
+ * one exists. `acquirer` is diagnostic only — nothing here branches on it.
+ *
+ * `hosted_document_url` is where a hosted document for this charge lives when
+ * the acquirer produces one, and null when it does not. Null means "this
+ * acquirer has no such thing", NEVER "the charge failed" — success is read from
+ * `status` alone, so an org on an acquirer with no invoice object is not
+ * mistaken for a decline and no document is ever fabricated.
+ *
+ * A succeeded charge is mirrored by stripe-service on the same request, so the
+ * billing-side paid-topup sums reflect it immediately.
  */
-export interface StripeInvoice {
-  id: string;
-  object: "invoice";
-  /** "paid" on a successful off-session charge. */
-  status: string | null;
-  paid?: boolean;
-  amount_paid?: number;
-  currency?: string;
-  payment_intent?: string | { id: string } | null;
-  hosted_invoice_url?: string | null;
-  metadata?: Record<string, string>;
+export interface ChargeResult {
+  object: "charge_result";
+  org_id: string;
+  /** Which acquirer took the money. Diagnostic only — do not branch on it. */
+  acquirer: string;
+  /** The acquirer's own id for this charge, for support and reconciliation. */
+  reference: string;
+  /** `succeeded` only when the money actually moved. */
+  status: "succeeded" | "failed";
+  amount: number;
+  currency: string;
+  /** Hosted document for this charge, or null when the acquirer produces none. */
+  hosted_document_url: string | null;
 }
 
 export interface StripePaymentMethod {
@@ -809,40 +817,37 @@ export async function getOrgCardCountryByOrg(orgId: string): Promise<string | nu
 }
 
 /**
- * Create + pay a finalized OFF-SESSION Stripe invoice for the org's customer via
- * the user-less `POST /internal/invoices/by-org/{orgId}` route (stripe-service#89).
- * X-API-Key only — orgId is in the path, NO x-user-id / x-org-id / sentinel.
+ * Take `amount` from the org off-session via the vendor-neutral
+ * `POST /internal/charges/by-org/{orgId}` route. X-API-Key only — the org is in
+ * the path, NO x-user-id / x-org-id / sentinel, because there is no end user
+ * behind an automatic reload and none is invented.
  *
- * stripe-service drives Stripe end-to-end (draft invoice → line item → finalize →
- * pay off_session) and returns the paid Invoice verbatim (hosted invoice + PDF,
- * visible in the customer's billing portal invoice list). This replaces the bare
- * off_session PaymentIntent reload so EVERY auto-topup produces an invoice document.
+ * stripe-service resolves which acquirer holds the org's card, charges it, and
+ * returns the same neutral result either way. Billing states an amount and a
+ * reason and never names an acquirer: that is what lets an org be moved onto a
+ * different one with no change here. Which saved payment method to charge is
+ * resolved by the acquirer that holds it, so no payment-method id is passed.
  *
- * `Idempotency-Key` is REQUIRED: stripe-service derives a per-Stripe-step key from
- * it, so a retry for the same logical top-up never double-charges or duplicates the
- * invoice. Pass the SAME key billing already computes per reload (reloadIdempotencyKey
- * / sweepIdempotencyKey / initialLoadIdempotencyKey).
+ * `Idempotency-Key` is REQUIRED: a retry for the same logical top-up collapses
+ * onto the first charge rather than taking money twice. Pass the SAME key
+ * billing already computes per reload (reloadIdempotencyKey / sweepIdempotencyKey).
  *
- * Prefer passing an explicit card `payment_method` — the customer's Stripe default
- * may be a Link/wallet PM Stripe refuses to charge off_session.
- *
- * Fail-loud: a declined off_session charge (or any Stripe error) propagates as a
- * non-2xx → `call` throws. 404 when the org has no Stripe customer.
+ * Fail-loud: a declined charge (or any acquirer error) propagates as a non-2xx
+ * → `call` throws. 404/409 when the org has no customer or no chargeable card.
  */
-export async function createOffSessionInvoiceForOrg(
+export async function chargeOrgOffSession(
   orgId: string,
   body: {
     amount: number;
     currency: string;
     description: string;
-    payment_method?: string;
     metadata?: Record<string, string>;
   },
   idempotencyKey: string
-): Promise<StripeInvoice> {
-  return call<StripeInvoice>(
+): Promise<ChargeResult> {
+  return call<ChargeResult>(
     "POST",
-    `/internal/invoices/by-org/${encodeURIComponent(orgId)}`,
+    `/internal/charges/by-org/${encodeURIComponent(orgId)}`,
     {},
     body,
     { "Idempotency-Key": idempotencyKey }
