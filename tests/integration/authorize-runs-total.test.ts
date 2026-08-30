@@ -70,7 +70,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     // available = 0 + 100 − 40 = 60
     expect(res.body.balance_cents).toBe("60.0000000000");
     expect(res.body.required_cents).toBe("10.0000000000");
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("insufficient + no topup config → returns sufficient:false without reload", async () => {
@@ -84,7 +84,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("negative balance still within the credit line → sufficient:true, NO reload (postpaid)", async () => {
@@ -107,7 +107,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
     expect(res.body.balance_cents).toBe("-4000.0000000000");
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("crossing the floor → reloads the TIER amount (not the stored daily amount) and re-evaluates", async () => {
@@ -132,8 +132,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
   });
 
   it("tier scales with cumulative paid: $200-tier org crossing floor reloads $200", async () => {
@@ -157,8 +157,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(20000);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(20000);
   });
 
   it("crossing the floor + card attached but no default PM → fires reload (regression)", async () => {
@@ -183,8 +183,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
   });
 
   it("insufficient + topup + no card attached → graceful sufficient:false, no reload", async () => {
@@ -199,7 +199,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("insufficient + topup + India card → sufficient:false, no reload attempted", async () => {
@@ -217,7 +217,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("PM lookup errors (stripe-service down) → 502, never silent no-PM", async () => {
@@ -231,7 +231,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       .send(authorizeBody);
 
     expect(res.status).toBe(502);
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("reload status=failed (past the floor) → sufficient:false", async () => {
@@ -243,7 +243,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       spent_cents: "5000.0000000000",
       as_of: "x",
     });
-    ssMocks.reloadViaInvoice.mockResolvedValue({
+    ssMocks.reloadOffSession.mockResolvedValue({
       status: "failed",
       failure_reason: "card_declined",
     });
@@ -266,7 +266,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       spent_cents: "5000.0000000000",
       as_of: "x",
     });
-    ssMocks.reloadViaInvoice.mockRejectedValue(new Error("SS down"));
+    ssMocks.reloadOffSession.mockRejectedValue(new Error("SS down"));
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -286,10 +286,10 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       as_of: "x",
     });
 
-    ssMocks.reloadViaInvoice.mockImplementation(
+    ssMocks.reloadOffSession.mockImplementation(
       () =>
-        new Promise<{ status: "succeeded"; payment_intent_id: string }>((resolve) => {
-          setTimeout(() => resolve({ status: "succeeded", payment_intent_id: "pi_x" }), 100);
+        new Promise<{ status: "succeeded"; reference: string }>((resolve) => {
+          setTimeout(() => resolve({ status: "succeeded", reference: "pi_x" }), 100);
         })
     );
 
@@ -306,7 +306,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     for (const r of results) {
       expect(r.status).toBe(200);
     }
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
   });
 
   it("usage discount nets the required estimate → no early reload (gross required would over-reserve)", async () => {
@@ -336,7 +336,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
     expect(res.body.sufficient).toBe(true);
     expect(res.body.balance_cents).toBe("-2500.0000000000");
     expect(res.body.required_cents).toBe("2500.0000000000");
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
   it("usage discount: still reloads when the NET balance is genuinely past the floor", async () => {
@@ -363,8 +363,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadViaInvoice.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
     expect(res.body.required_cents).toBe("2500.0000000000");
   });
 

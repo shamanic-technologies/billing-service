@@ -1,129 +1,86 @@
 /**
- * Off-session auto-topup reload: charge the org's stored card so it produces a
- * FINALIZED, PAID Stripe INVOICE (hosted invoice + PDF in the customer's billing
- * portal), not a bare uninvoiced PaymentIntent.
+ * Off-session auto-topup reload: take `amountCents` from the org, whichever
+ * acquirer holds its card, and report whether the money moved.
  *
- * Interactive Checkout top-ups already invoice (checkout.ts invoice_creation).
- * This closes the gap for the AUTOMATIC path: stripe-service exposes
- * `POST /internal/invoices/by-org/{orgId}` (stripe-service#89) which drives Stripe
- * draft-invoice → line-item → finalize → pay-off_session and returns the paid
- * Invoice. billing flattens Stripe's invoice status into the {succeeded|failed}
- * ReloadOutcome that authorize / usage_apply / month-end-sweep / wallet_setup
- * consume — the SAME contract the former `createPaymentIntent` reload returned, so
- * no caller changes shape.
+ * That sentence is the whole contract, and it is deliberately the only thing
+ * this module knows. Which vendor charges an org is stripe-service's business:
+ * it resolves the acquirer itself on `POST /internal/charges/by-org/{orgId}`
+ * and answers in ONE shape whatever it resolved. Nothing here names a vendor,
+ * branches on one, or carries an acquirer-shaped field — an org can be moved to
+ * a different acquirer with no change on this side.
  *
- * Payment method: an explicit `card` PM is resolved billing-side (first card, then
- * a `link` fallback) and passed to stripe-service, mirroring the former reload's
- * pick order. Both are chargeable off_session — Stripe documents charging a saved
- * `type:link` PM with `off_session:true` exactly like a card
- * (https://docs.stripe.com/payments/link/save-and-reuse). Passing an explicit id
- * avoids the customer-default PM, which may be a Link/wallet PM Stripe refuses to
- * charge off_session.
+ * This replaces the older invoiced charge, whose whole purpose was producing a
+ * finalized Stripe invoice document. That is a Stripe capability, and an
+ * acquirer with no invoice object cannot serve an org through it. What this
+ * call site actually wants is not a document: it is "take this much money,
+ * off-session, and tell me whether it worked".
  *
- * Accounting: the invoice's underlying PaymentIntent is snapshotted into
- * stripe-service's mirror on pay, so billing's `sumSucceededTopups*` counts this
- * top-up as a paid topup identically to the former bare-PI reload — no double- or
- * under-count of credited/balance.
+ * The hosted document is NOT lost for an acquirer that produces one — the
+ * neutral result reports where it lives, and reports its absence when the
+ * acquirer has none. Absence means "this acquirer has no such thing", never
+ * "the charge failed", which is exactly why this module reads the result's own
+ * `status` and nothing else.
+ *
+ * Idempotency is unchanged: the caller's key is forwarded as `Idempotency-Key`,
+ * so a retried top-up collapses onto the first charge rather than taking money
+ * twice.
+ *
+ * Accounting: a succeeded charge is mirrored by stripe-service on the same
+ * request, so billing's paid-topup sums count this top-up immediately — the
+ * same as they did for the invoiced charge, whichever acquirer ran.
  */
 
-import {
-  createOffSessionInvoiceForOrg,
-  getCustomerByOrg,
-  listPaymentMethods,
-  type IdentityHeaders,
-  type StripeInvoice,
-} from "./stripe-service-client.js";
+import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
 
 const RELOAD_CURRENCY = "usd";
-/** Invoice line-item + invoice description (min length 1 required by stripe-service). */
+/** Charge description (min length 1 required by stripe-service). */
 const RELOAD_DESCRIPTION = "Distribute credit top-up";
 
-function flattenInvoiceStatus(invoice: StripeInvoice): ReloadOutcome {
-  const paymentIntentId =
-    typeof invoice.payment_intent === "string"
-      ? invoice.payment_intent
-      : invoice.payment_intent?.id;
-  // stripe-service answers this route with an INVOICE where the org's acquirer
-  // produces one, and with a plain charge result where it does not — some
-  // acquirers have no invoice object at all. Both say the same thing about
-  // whether the money moved; only the vocabulary differs, and reading just the
-  // invoice one would report a successful charge as a failed reload.
-  //
-  // This is not vendor knowledge: nothing here names an acquirer, and nothing
-  // branches on which one was used. It reads "did it work" from both shapes.
-  const succeeded =
-    invoice.status === "paid" ||
-    invoice.paid === true ||
-    (invoice as { status?: string }).status === "succeeded";
-  if (succeeded) {
-    return { status: "succeeded", payment_intent_id: paymentIntentId };
-  }
-  // stripe-service throws (non-2xx) on a declined off_session charge, so this
-  // branch is defensive — a 200 with a non-paid status is still a failed reload.
-  return {
-    status: "failed",
-    payment_intent_id: paymentIntentId,
-    failure_reason: `invoice.status=${invoice.status ?? "unknown"}`,
-  };
-}
-
 /**
- * Charge `amountCents` off_session against the org's first chargeable PM (card,
- * then link) via the stripe-service off-session INVOICE endpoint, producing a
- * finalized paid invoice. Synchronous: stripe-service finalizes + pays inline and
- * returns the paid Invoice.
+ * Charge `amountCents` off_session against the org's saved card via the
+ * vendor-neutral charge surface. Synchronous: stripe-service takes the money
+ * inline and returns the settled result.
  *
- * `identity` must carry `x-org-id` (the org whose customer is charged) and, for the
- * PM lookup, `x-user-id` (the `/v1/payment_methods` read requires it — real user,
- * or the sweep/internal sentinel). The invoice charge itself is user-less (orgId is
- * in the path).
+ * `orgId` is the whole identity this needs — the route is service-authenticated
+ * with the org in its path, so there is no end user to name and none is
+ * invented. Which payment method to charge is resolved by the acquirer that
+ * holds it, not here.
  *
- * Caller MUST pass an idempotency key so retries collapse (stripe-service derives
- * per-Stripe-step keys from it — no duplicate invoice, no double charge).
+ * Caller MUST pass an idempotency key so retries collapse (no double charge).
  *
- * Throws if the customer has NO chargeable PM (no card and no link), or if the
- * off_session charge is declined / stripe-service errors (fail-loud). Caller's
- * try/catch surfaces this as topup_triggered=false / a 502.
+ * Throws if the org has no chargeable saved card, or if the charge is declined /
+ * stripe-service errors (fail-loud). Caller's try/catch surfaces this as
+ * topup_triggered=false / a 502.
  */
-export async function reloadViaInvoice(
-  identity: IdentityHeaders,
+export async function reloadOffSession(
+  orgId: string,
   amountCents: number,
   idempotencyKey: string,
   metadata?: Record<string, string>
 ): Promise<ReloadOutcome> {
-  const orgId = identity["x-org-id"];
   if (!orgId) {
-    throw new Error("reloadViaInvoice: identity is missing x-org-id");
+    throw new Error("reloadOffSession: orgId is required");
   }
-  const customer = await getCustomerByOrg(identity);
-  const cards = await listPaymentMethods(identity, {
-    customer: customer.id,
-    type: "card",
-  });
-  let pm = cards.data[0];
-  if (!pm) {
-    const links = await listPaymentMethods(identity, {
-      customer: customer.id,
-      type: "link",
-    });
-    pm = links.data[0];
-  }
-  if (!pm) {
-    throw new Error(
-      "customer has no chargeable payment_method (card or link) attached for off_session reload"
-    );
-  }
-  const invoice = await createOffSessionInvoiceForOrg(
+  const charge = await chargeOrgOffSession(
     orgId,
     {
       amount: amountCents,
       currency: RELOAD_CURRENCY,
       description: RELOAD_DESCRIPTION,
-      payment_method: pm.id,
       metadata,
     },
     idempotencyKey
   );
-  return flattenInvoiceStatus(invoice);
+  if (charge.status === "succeeded") {
+    return { status: "succeeded", reference: charge.reference };
+  }
+  // stripe-service throws (non-2xx) on a declined off_session charge, so this
+  // branch is defensive — a 200 carrying a non-succeeded status is still a
+  // failed reload.
+  return {
+    status: "failed",
+    reference: charge.reference,
+    failure_reason: `charge.status=${charge.status ?? "unknown"}`,
+  };
 }

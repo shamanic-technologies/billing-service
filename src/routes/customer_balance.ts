@@ -12,7 +12,7 @@ import { computeBalance } from "../lib/balance.js";
 import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
-import { reloadViaInvoice } from "../lib/reload.js";
+import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
 
 const router = Router();
@@ -230,11 +230,11 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       reloadResult = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaInvoice(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
+          reloadOffSession(orgId, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
     } catch (err) {
-      console.error("[billing-service] reload via PaymentIntent failed:", err);
+      console.error("[billing-service] off-session reload failed:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(err) }, req.headers);
       // Tell the customer on the FIRST failure of a streak only. A declined
       // off_session charge arrives here as a THROW (stripe-service answers 402),
@@ -407,7 +407,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
       const result = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaInvoice(identity, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
+          reloadOffSession(orgId, chargeAmount, reloadIdempotencyKey(orgId, chargeAmount))
         )
       );
       topupTriggered = result.status === "succeeded";
