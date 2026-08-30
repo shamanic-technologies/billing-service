@@ -1148,6 +1148,13 @@ export interface SetFunnelBudgetsResult {
    * (funnel, acquisition channel, offer, LEG) - i.e. one per campaign.
    */
   legs: BrandFunnelDailyBudget[];
+  /**
+   * Every STORED ceiling BEFORE this write, read under the same lock. The staff
+   * notification needs the previous value of each individual ceiling to state
+   * the RUNNING figure on the before side (see lib/brand-running-budget.ts) —
+   * the brand-level scalar cannot express which campaign's money moved.
+   */
+  previousLegs: BrandFunnelDailyBudget[];
   /** The per-OFFER figures, each the sum of the legs funding that triple. */
   offers: OfferBudgetTotal[];
   /** The per-CHANNEL figures, each the sum of the offers funding that pair. */
@@ -1392,6 +1399,7 @@ export async function setBrandFunnelDailyBudgets(
     return {
       legs,
       offers,
+      previousLegs: existingFunnels,
       channels,
       funnels,
       previousBrandDailyBudgetCents,

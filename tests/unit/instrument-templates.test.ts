@@ -210,6 +210,46 @@ describe("boot-time email template registration", () => {
     }
   });
 
+  it("headlines the RUNNING budget and supplies every variable it prints", async () => {
+    await deployEmailTemplates();
+    const t = lastBody(fetchMock).templates.find(
+      (x) => x.name === BRAND_DAILY_BUDGET_CHANGED_EVENT,
+    )!;
+    const vars = new Set(
+      [
+        ...`${t.subject} ${t.htmlBody} ${t.textBody}`.matchAll(/\{\{(\w+)\}\}/g),
+      ].map((m) => m[1]),
+    );
+
+    // The headline is the running figure; the configured total is stated too, so
+    // the paused money is visible rather than silently dropped.
+    expect(t.subject).toContain("{{previousRunningBudget}}");
+    expect(t.subject).toContain("{{newRunningBudget}}");
+    expect(vars).toEqual(
+      new Set([
+        "email",
+        "previousRunningBudget",
+        "newRunningBudget",
+        "previousBudget",
+        "newBudget",
+        "brandId",
+        "orgId",
+        "runningNote",
+      ]),
+    );
+
+    // `email` is the one the email service enriches when billing sends none;
+    // every other variable is written by the sender on every send.
+    const sender = readFileSync(
+      resolve(HERE, "../../src/lib/brand-budget-notification.ts"),
+      "utf-8",
+    );
+    for (const v of vars) {
+      if (v === "email") continue;
+      expect(sender).toMatch(new RegExp(`\\b${v}\\s*[,:]`));
+    }
+  });
+
   it("uses no em-dash in customer-facing referral copy", async () => {
     await deployEmailTemplates();
     for (const t of lastBody(fetchMock).templates) {
