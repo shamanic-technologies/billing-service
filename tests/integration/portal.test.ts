@@ -35,7 +35,9 @@ describe("POST /v1/portal-sessions", () => {
     expect(res.body.mode).toBe("hosted_redirect");
     expect(ssMocks.getCardSetup).toHaveBeenCalledWith(
       orgId,
-      "https://example.com/return"
+      "https://example.com/return",
+      undefined,
+      undefined
     );
   });
 
@@ -64,6 +66,41 @@ describe("POST /v1/portal-sessions", () => {
       token: "tok_1",
       save_payment_method_for: "merchant",
     });
+  });
+
+  it("passes a top-up amount through, for a provider that saves a card only with a payment", async () => {
+    await insertTestAccount({ orgId });
+
+    await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({
+        return_url: "https://example.com/return",
+        amount: 50000,
+        currency: "USD",
+      });
+
+    expect(ssMocks.getCardSetup).toHaveBeenCalledWith(
+      orgId,
+      "https://example.com/return",
+      50000,
+      "USD"
+    );
+  });
+
+  it("tells the client to collect an amount rather than failing opaquely", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.getCardSetup.mockRejectedValue(
+      new Error('stripe-service POST /internal/card_setup failed: 409 {"code":"card_setup_requires_payment"}')
+    );
+
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("card_setup_requires_payment");
   });
 
   it("returns 404 when billing account doesn't exist", async () => {

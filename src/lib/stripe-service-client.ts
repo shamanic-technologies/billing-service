@@ -865,12 +865,14 @@ export async function chargeOrgOffSession(
  */
 export async function getCardSetup(
   orgId: string,
-  returnUrl: string
+  returnUrl: string,
+  amount?: number,
+  currency?: string
 ): Promise<Record<string, unknown>> {
   return call<Record<string, unknown>>(
     "POST",
     `/internal/card_setup/by-org/${encodeURIComponent(orgId)}`,
     {},
-    { return_url: returnUrl }
+    { return_url: returnUrl, ...(amount ? { amount, currency } : {}) }
   );
 }
