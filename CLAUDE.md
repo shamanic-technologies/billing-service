@@ -359,6 +359,16 @@ It used to ask for an **invoiced** charge, whose whole purpose was producing a f
 - **Accounting is unchanged**: stripe-service mirrors a succeeded charge on the same request, so the paid-topup sums count the top-up immediately, whichever acquirer ran.
 - **Interactive checkout is untouched** — only the automatic, off-session charge moved.
 
+### "This org has no payment method" can mean the CARD MOVED ACQUIRER, not that nobody added one
+
+`hasAttachedCardPm` / `hasChargeablePmForOrg` ask stripe-service about the ORG, and stripe-service answers from whichever acquirer that org is pinned to. A card is saved with ONE acquirer and cannot move between them, so an org repinned onto another acquirer reads as having no chargeable method while its card sits, perfectly chargeable, on the one it left. Nothing errors: every service answers honestly about the state it was put in.
+
+That answer is load-bearing for money here, which is why it is worth knowing. No chargeable method means `resolvePostpaidTier` grants **no credit line** and the floor drops to `"0"` — the strictly-prepaid gate — so the org is judged depleted at any balance at or below zero rather than at its real negative floor, `has_auto_topup` goes false, auto-reload stops firing, and a depletion episode opens and mails the customer that their campaigns stopped. Prod 2026-08-30: one org pinned to a second acquirer at 12:56 UTC was mailed "you're out of credit" at 18:16 with a valid Mastercard on file and a balance of **$0.09**.
+
+So when diagnosing a depletion email, an auto-reload that never fires, or `has_auto_topup: false` on an org you believe has a card, **check the acquirer pin before anything else** — `GET /internal/acquirer/by-org/:orgId` on stripe-service, or `SELECT * FROM org_acquirers WHERE org_id = …` (absent row = the default acquirer, which is the normal state for nearly every org).
+
+**Billing is not the place to fix it, and must not special-case it.** Reading "the other acquirer has one" here would be a consumer-side workaround for a producer gap, and it would mean billing knowing acquirers exist — the one thing the section above forbids. The pin is stripe-service's to refuse (it now does: a pin that would strand a chargeable method is rejected in both directions, and `DELETE /internal/acquirer/by-org/:orgId` returns an org to the default — stripe-service v0.45.1, issue #155).
+
 ### The failure notification fed the loop it was reporting (prod 2026-08-29)
 
 **Sending `credits-reload-failed` AUTHORIZES CREDIT on the very org it is about.** The email path is org-billed, so the notification re-enters `POST /v1/customer_balance/authorize`, which finds the org below its floor, attempts another reload, gets another decline, and sends another notification. Measured over 71 minutes on one org: **2,939 authorizations, 2,938 of them attributed to `transactional-email-service / email-credits-reload-failed`, and ZERO to product traffic.** The seed was a single customer budget change (whose own notification is also org-billed); after that the loop needed no external traffic at all. The smoke alarm was wired to the fuse it had just blown.
