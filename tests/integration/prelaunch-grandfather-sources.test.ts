@@ -41,7 +41,7 @@ async function preLaunchOrgOverTrigger(ssMocks: ReturnType<typeof setupStripeMoc
     createdAt: BEFORE_LAUNCH,
   });
   await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
-  ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("20000.0000000000");
+  ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("20000.0000000000");
   ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("20000.0000000000");
 }
 

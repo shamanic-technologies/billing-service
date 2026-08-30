@@ -13,7 +13,6 @@ export interface StripeServiceMocks {
   hasAttachedCardPm: ReturnType<typeof vi.fn>;
   getOrgCardCountry: ReturnType<typeof vi.fn>;
   getOrgCardDisplay: ReturnType<typeof vi.fn>;
-  sumSucceededTopupsForCustomer: ReturnType<typeof vi.fn>;
   // Paid topups as of the welcome-completion launch instant, asked of stripe-service
   // (the grandfather check). Defaults to 0 = the org had paid nothing before launch,
   // so it is eligible. ONE mock for every caller — the three request paths and the
@@ -117,7 +116,6 @@ export function setupStripeMocks(): StripeServiceMocks {
     // exercise a saved card (e.g. { country: "US", brand: "visa", last4: "4242",
     // expMonth: 8, expYear: 2027 }).
     getOrgCardDisplay: vi.fn().mockResolvedValue(null),
-    sumSucceededTopupsForCustomer: vi.fn().mockResolvedValue("0.0000000000"),
     sumPaidTopupsForOrgAsOf: vi.fn().mockResolvedValue("0.0000000000"),
     fetchOrgCustomer: vi.fn().mockResolvedValue(buildMockCustomer()),
     sumSucceededTopupsForOrg: vi.fn().mockResolvedValue("0.0000000000"),
@@ -162,9 +160,6 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "hasAttachedCardPm").mockImplementation(mocks.hasAttachedCardPm);
   vi.spyOn(ssClient, "getOrgCardCountry").mockImplementation(mocks.getOrgCardCountry);
   vi.spyOn(ssClient, "getOrgCardDisplay").mockImplementation(mocks.getOrgCardDisplay);
-  vi.spyOn(ssClient, "sumSucceededTopupsForCustomer").mockImplementation(
-    mocks.sumSucceededTopupsForCustomer
-  );
   vi.spyOn(ssClient, "sumPaidTopupsForOrgAsOf").mockImplementation(
     mocks.sumPaidTopupsForOrgAsOf
   );

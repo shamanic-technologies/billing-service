@@ -251,7 +251,7 @@ describe("POST /internal/credits/grant", () => {
   });
 
   it("composes balance with paid topups and usage", async () => {
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("10000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("10000.0000000000");
     fetchRunsOrgUsageTotalSpy.mockResolvedValue({
       org_id: orgId,
       spent_cents: "1234.5000000000",

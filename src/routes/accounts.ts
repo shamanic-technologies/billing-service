@@ -13,7 +13,7 @@ import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
   getCustomerByOrg,
-  sumSucceededTopupsForCustomer,
+  sumSucceededTopupsForOrg,
   hasAttachedCardPm,
   getOrgCardCountry,
   getOrgCardDisplay,
@@ -59,7 +59,7 @@ async function composeAccountFunds(
   const customer = await getCustomerByOrg(identity);
   const [paidTopups, localCreditsBeforeSettle, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
     await Promise.all([
-      sumSucceededTopupsForCustomer(identity, customer.id),
+      sumSucceededTopupsForOrg(orgId),
       sumLocalPromoCreditsForOrg(orgId),
       fetchRunsOrgUsageTotal(orgId, identity),
       fetchRunsOrgActualUsageTotal(orgId, identity),
