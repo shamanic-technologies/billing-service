@@ -39,10 +39,14 @@ import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
 import { reloadViaInvoice } from "./reload.js";
 
-// INTERNAL_IDENTITY sentinel — there is no end user on the sweep path. The /v1
-// reload primitives (getCustomerByOrg / listPaymentMethods / createPaymentIntent)
-// still require x-user-id even though they key on x-org-id, so we pass the
-// sentinel exactly like the transfer-brand admin op.
+// All-zeros x-user-id — there is no end user on the sweep path, and the platform
+// is the actor on this charge. The /v1 reload primitives (getCustomerByOrg /
+// listPaymentMethods / createPaymentIntent) still require x-user-id even though
+// they key on x-org-id.
+//
+// This is NOT the read-gate workaround transfer-brand used to carry (that one is
+// gone — it reads the user-less /internal customer surface now). Here the sentinel
+// names the actor on a write this service genuinely performs.
 const SWEEP_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 // A hung stripe-service call must not stall the whole sweep loop.

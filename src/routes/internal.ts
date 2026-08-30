@@ -15,8 +15,8 @@ import {
   localPromos,
 } from "../db/schema.js";
 import {
-  listCustomersByMetadata,
-  updateCustomer,
+  listAllCustomersForOrg,
+  setCustomerMetadata,
   type StripeCustomer,
 } from "../lib/stripe-service-client.js";
 import { runDunningTick } from "../lib/dunning.js";
@@ -28,11 +28,6 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 
 const router = Router();
-
-const SS_LIST_PAGE_LIMIT = 100;
-const INTERNAL_IDENTITY: Record<string, string> = {
-  "x-user-id": "00000000-0000-0000-0000-000000000000",
-};
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -148,24 +143,6 @@ function isSoloBrandMatch(customer: StripeCustomer, sourceBrandId: string): bool
   return brandIds.length === 1 && brandIds[0] === sourceBrandId;
 }
 
-async function listAllOrgCustomers(sourceOrgId: string): Promise<StripeCustomer[]> {
-  const out: StripeCustomer[] = [];
-  let startingAfter: string | undefined;
-  while (true) {
-    const page = await listCustomersByMetadata(INTERNAL_IDENTITY, {
-      metadata: { org_id: sourceOrgId },
-      limit: SS_LIST_PAGE_LIMIT,
-      starting_after: startingAfter,
-    });
-    out.push(...page.data);
-    if (!page.has_more) break;
-    const last = page.data[page.data.length - 1];
-    if (!last) break;
-    startingAfter = last.id;
-  }
-  return out;
-}
-
 // DELETE /internal/accounts/by-org/:orgId — billing-service leg of org teardown.
 //
 // Local-only cleanup: removes billing-owned org rows that can keep active money,
@@ -192,9 +169,13 @@ router.delete("/internal/accounts/by-org/:orgId", async (req, res) => {
 //
 // Two-sided:
 //   - billing-local `local_promos` (per-org promo credits) — UPDATE here
-//   - stripe-service customers — list by metadata.org_id=source, patch
-//     metadata for the subset whose metadata.brand_id is the source brand
-//     (solo-brand only — multi-brand customers stay put).
+//   - stripe-service customers — list EVERY customer mirrored for the source
+//     org (user-less service-auth route, org in the path), patch metadata for
+//     the subset whose metadata.brand_id is the source brand (solo-brand only —
+//     multi-brand customers stay put, moving them would orphan the co-brands).
+//
+// The solo-brand policy is billing's, not stripe-service's: stripe-service hands
+// over the customers and performs the write, this repo decides which ones.
 router.post("/internal/transfer-brand", async (req, res) => {
   const parsed = TransferBrandRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -225,7 +206,7 @@ router.post("/internal/transfer-brand", async (req, res) => {
 
   let candidates: StripeCustomer[];
   try {
-    candidates = await listAllOrgCustomers(sourceOrgId);
+    candidates = await listAllCustomersForOrg(sourceOrgId);
   } catch (err) {
     console.error("[billing-service] stripe-service customer list failed:", err);
     res.status(502).json({ error: "Failed to list customers from stripe-service" });
@@ -255,10 +236,10 @@ router.post("/internal/transfer-brand", async (req, res) => {
       newMetadata.brand_id = targetBrandId;
     }
     try {
-      await updateCustomer(customer.id, INTERNAL_IDENTITY, { metadata: newMetadata });
+      await setCustomerMetadata(customer.id, newMetadata);
       ssCount += 1;
     } catch (err) {
-      console.error(`[billing-service] stripe-service updateCustomer ${customer.id} failed:`, err);
+      console.error(`[billing-service] stripe-service customer-metadata write ${customer.id} failed:`, err);
       res.status(502).json({
         error: "Failed to update customer metadata in stripe-service",
         partial: { stripe_service_customers_patched: ssCount, total_targets: targets.length },
