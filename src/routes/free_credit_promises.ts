@@ -7,7 +7,7 @@ import {
 import { ReferralClaimRequestSchema } from "../schemas.js";
 import {
   getCustomerByOrg,
-  sumSucceededTopupsForCustomer,
+  sumSucceededTopupsForOrg,
 } from "../lib/stripe-service-client.js";
 import {
   attachReferredOrgIdentities,
@@ -118,7 +118,7 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
     let paidTopupsCents: string;
     try {
       const customer = await getCustomerByOrg(identity);
-      paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
+      paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
       await settleFreeCreditPromises(orgId, paidTopupsCents);
       promises = await attachReferredOrgIdentities(
         await listOutstandingPromises(orgId, paidTopupsCents)

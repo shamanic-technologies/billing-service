@@ -218,7 +218,7 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
       promoCode: WELCOME_COMPLETION_CODE,
     });
     // Well past the NEW cohort's $400 trigger, which must not reach this org.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(50000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(50000));
 
     const outcome = await settleWelcomeCompletion(
       oldOrgId,
@@ -240,7 +240,7 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
 
   it("new cohort: a $500 first checkout gets the notice, NOT a discount", async () => {
     await insertSignupAccount(newOrgId);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     await request(app)
       .post("/v1/checkout-sessions")
@@ -268,7 +268,7 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
   // var being set must not bring it back.
   it("removed: an $800 first checkout carries no discount either", async () => {
     await insertSignupAccount(newOrgId);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     await request(app)
       .post("/v1/checkout-sessions")

@@ -370,57 +370,10 @@ function netReceivedCents(pi: StripePaymentIntent): Decimal {
   return new Decimal(pi.amount_received).minus(pi.amount_returned);
 }
 
-/**
- * Paginate every payment_intent for `customerId` and sum each succeeded row's
- * `amount_received` NET of what was given back.
- *
- * Throws if pagination loops past TOPUP_PAGE_CAP pages or if stripe-service
- * reports `has_more=true` with an empty page (broken contract).
- */
-async function paginateCustomerTopups(
-  identity: IdentityHeaders,
-  customerId: string
-): Promise<string> {
-  let total = new Decimal(0);
-  let startingAfter: string | undefined;
-  for (let i = 0; i < TOPUP_PAGE_CAP; i += 1) {
-    const page = await listPaymentIntents(identity, {
-      customer: customerId,
-      limit: TOPUP_PAGE_LIMIT,
-      starting_after: startingAfter,
-    });
-    for (const pi of page.data) {
-      total = total.plus(netReceivedCents(pi));
-    }
-    if (!page.has_more) {
-      return total.toFixed(10);
-    }
-    const last = page.data[page.data.length - 1];
-    if (!last) {
-      throw new Error(
-        "stripe-service /v1/payment_intents returned has_more=true with empty page"
-      );
-    }
-    startingAfter = last.id;
-  }
-  throw new Error(
-    `stripe-service /v1/payment_intents pagination exceeded ${TOPUP_PAGE_CAP} pages for customer ${customerId}`
-  );
-}
-
-/**
- * The money the org has paid in and not been refunded — the paid-topups component
- * of billing-side `credited_cents`.
- *
- * Returns a numeric(16,10)-formatted string for arithmetic-compatibility
- * with addCents/subCents helpers.
- */
-export async function sumSucceededTopupsForCustomer(
-  identity: IdentityHeaders,
-  customerId: string
-): Promise<string> {
-  return paginateCustomerTopups(identity, customerId);
-}
+// The customer-scoped paid-topups sum and its paginator lived here. Every
+// caller now resolves the sum PER ORG, because that is the only scope that
+// spans acquirers: a customer id names one vendor's object, so an org whose
+// payments moved to another acquirer would read as having paid nothing.
 
 // --- Checkout / Portal ---
 
@@ -710,7 +663,7 @@ export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
  * ALL PIs in one list (no limit, no pagination), so there is no page loop.
  *
  * Uses the SAME per-PaymentIntent netting as the real-user
- * `sumSucceededTopupsForCustomer` above, so the two surfaces can never disagree
+ * the org-scoped paid-topups sum, so the two surfaces can never disagree
  * about how much an org has paid in.
  *
  * Returns a numeric(16,10)-formatted string for arithmetic-compatibility with

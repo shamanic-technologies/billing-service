@@ -4,7 +4,7 @@ import { CreateCheckoutRequestSchema } from "../schemas.js";
 import {
   createCheckoutSession,
   getCustomerByOrg,
-  sumSucceededTopupsForCustomer,
+  sumSucceededTopupsForOrg,
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
@@ -81,7 +81,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // already crossed the trigger before launch and is owed nothing. Both fail
         // loud (the catch below → 502): a buyer must never get a discount without
         // the matching credit grant.
-        const paidTopupsCents = await sumSucceededTopupsForCustomer(identity, customer.id);
+        const paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
         await settleFreeCreditPromises(orgId, paidTopupsCents);
         const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
 

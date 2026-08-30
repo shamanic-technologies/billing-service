@@ -81,7 +81,7 @@ describe("referral promises carry the referred org's display identity", () => {
 
   it("names each pending $500 after the referral that earned it, with a domain for the logo", async () => {
     await inviterWithTwoConvertedReferrals();
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(45000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(45000));
     resolveIdentity.mockImplementation(async (orgId: string) =>
       orgId === invitee
         ? { name: "Acme", domain: "acme.com" }
@@ -110,7 +110,7 @@ describe("referral promises carry the referred org's display identity", () => {
 
   it("resolves each distinct org exactly once, whatever the promise count", async () => {
     await inviterWithTwoConvertedReferrals();
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(45000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(45000));
 
     await request(app).get("/v1/free-credit-promises").set(getAuthHeaders(inviter));
 
@@ -124,7 +124,7 @@ describe("referral promises carry the referred org's display identity", () => {
     await newSignup(inviter);
     await claimReferral(invitee, inviter);
     await settle(invitee, 90000);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(45000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(45000));
     resolveIdentity.mockResolvedValue(null);
 
     const res = await request(app)
@@ -145,7 +145,7 @@ describe("referral promises carry the referred org's display identity", () => {
 
   it("a promise with no referral counterpart carries nothing new", async () => {
     await newSignup(invitee);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")
@@ -163,7 +163,7 @@ describe("referral promises carry the referred org's display identity", () => {
   it("leaves the invitee's own referrer bare — they already know who invited them", async () => {
     await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")

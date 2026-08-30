@@ -35,6 +35,10 @@ import {
   type ParsedFunnelBudget,
 } from "../lib/brand-funnel-budgets.js";
 import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
+import {
+  brandGrainChange,
+  ceilingChangesBetween,
+} from "../lib/brand-running-budget.js";
 import type { BrandFunnelDailyBudget } from "../db/schema.js";
 
 const router = Router();
@@ -288,6 +292,7 @@ async function applyFunnelWrite(
   const {
     legs,
     offers,
+    previousLegs,
     channels,
     funnels,
     previousBrandDailyBudgetCents,
@@ -303,13 +308,23 @@ async function applyFunnelWrite(
       .join(",")}`
   );
 
-  notifyBrandDailyBudgetChanged({
+  // Per-ceiling before/after, so the notification can state the RUNNING figure
+  // on both sides. A brand's FIRST per-funnel write also retires its brand-grain
+  // scalar (deleted in the same transaction), which no stored ceiling can
+  // express — it enters the diff as that grain going to zero.
+  const changes = ceilingChangesBetween(previousLegs, legs);
+  if (previousLegs.length === 0 && previousBrandDailyBudgetCents !== null) {
+    changes.push(...brandGrainChange(previousBrandDailyBudgetCents, "0"));
+  }
+
+  void notifyBrandDailyBudgetChanged({
     orgId,
     userId: req.headers["x-user-id"] as string,
     runId: req.headers["x-run-id"] as string,
     brandId,
     previousDailyBudgetCents: previousBrandDailyBudgetCents,
     newDailyBudgetCents: brandDailyBudgetCents,
+    changes,
     actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
   });
 
@@ -468,13 +483,17 @@ router.patch(
       `[billing-service] brand daily budget set: brand=${brandId} org=${orgId} budget=${dailyBudgetCents}`
     );
 
-    notifyBrandDailyBudgetChanged({
+    void notifyBrandDailyBudgetChanged({
       orgId,
       userId: req.headers["x-user-id"] as string,
       runId: req.headers["x-run-id"] as string,
       brandId,
       previousDailyBudgetCents,
       newDailyBudgetCents: row.dailyBudgetCents,
+      changes: brandGrainChange(
+        previousDailyBudgetCents,
+        row.dailyBudgetCents
+      ),
       actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
     });
 
