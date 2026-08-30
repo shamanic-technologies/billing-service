@@ -174,7 +174,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
   it("GET /v1/accounts: exposes usage_discount_pct but balance subtracts runs usage verbatim (no billing-side discount, no net_* fields)", async () => {
     await insertTestAccount({ orgId });
     await insertTestUsageDiscount({ orgId, discountPct: 50 });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
     // runs already served net usage; billing does not touch it.
     setUsage("50.0000000000");
     setActualUsage("40.0000000000");
@@ -195,7 +195,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
   it("GET /v1/accounts: no discount → null pct, balance unchanged", async () => {
     await insertTestAccount({ orgId });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
     setUsage("100.0000000000");
     setActualUsage("100.0000000000");
 
@@ -211,7 +211,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
   it("GET /v1/accounts: a set discount does NOT change balance vs no discount (same runs usage)", async () => {
     await insertTestAccount({ orgId });
     await insertTestUsageDiscount({ orgId, discountPct: 50 });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
     setUsage("100.0000000000");
     setActualUsage("100.0000000000");
 

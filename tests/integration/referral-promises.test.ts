@@ -331,7 +331,7 @@ describe("stacked free-credit promises (referral offer)", () => {
   it("an outstanding promise is absent from credited, gifted and balance", async () => {
     await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(1000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(1000));
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(invitee));
 
@@ -348,7 +348,7 @@ describe("stacked free-credit promises (referral offer)", () => {
     await newSignup(inviter);
     await claimReferral(invitee, inviter);
     await settle(invitee, 90000);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(45000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(45000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")
@@ -373,7 +373,7 @@ describe("stacked free-credit promises (referral offer)", () => {
   it("the welcome promise is reported at what would ACTUALLY land, net of the $5 already gifted", async () => {
     await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")
@@ -391,7 +391,7 @@ describe("stacked free-credit promises (referral offer)", () => {
   it("answers the TOTAL still outstanding, reconciling with the promise rows beside it", async () => {
     await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")
@@ -411,7 +411,7 @@ describe("stacked free-credit promises (referral offer)", () => {
   it("an org with nothing outstanding gets a canonical zero, not null and not an absent field", async () => {
     // Ineligible for the welcome completion and never referred: no promise at all.
     await insertTestAccount({ orgId: invitee });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(10000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")
@@ -427,7 +427,7 @@ describe("stacked free-credit promises (referral offer)", () => {
     await claimReferral(invitee, inviter);
     await settle(invitee, 90000);
     // The inviter has paid past BOTH bars, so this read grants everything.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(cents(200000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(200000));
 
     const res = await request(app)
       .get("/v1/free-credit-promises")

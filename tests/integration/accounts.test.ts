@@ -73,7 +73,7 @@ describe("Accounts endpoints", () => {
 
     it("composes credited = paid topups + local credits, balance = credited − usage", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("1000.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "75.0000000000",
@@ -94,7 +94,7 @@ describe("Accounts endpoints", () => {
 
     it("keeps spendable balance reduced by holds but actual balance actual-only", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("3000.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("3000.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "105.0000000000",
@@ -117,7 +117,7 @@ describe("Accounts endpoints", () => {
 
     it("returns negative balance_cents when usage > credited", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("75.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("75.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "383.0000000000",
@@ -231,7 +231,7 @@ describe("Accounts endpoints", () => {
     it("enabled account surfaces the DERIVED tier scaled to cumulative paid ($1000 → $500 line)", async () => {
       await insertTestAccount({ orgId, topupAmountCents: 1000, topupThresholdCents: 200 });
       // Cumulative paid $1000 → high tier {amount 50000, threshold -50000}.
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -244,7 +244,7 @@ describe("Accounts endpoints", () => {
 
     it("disabled account (no topup config) → topup amount/threshold null", async () => {
       await insertTestAccount({ orgId }); // topupAmountCents null
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -258,7 +258,7 @@ describe("Accounts endpoints", () => {
     it("credited reflects only succeeded payment intents (failed PIs excluded)", async () => {
       await insertTestAccount({ orgId });
       // Helper already filters succeeded — assert by configuring its return.
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("55000.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("55000.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "38289.2958000000",
@@ -298,7 +298,7 @@ describe("Accounts endpoints", () => {
         promoCode: "welcome",
       });
       ssMocks.hasAttachedCardPm.mockResolvedValue(false);
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("6700.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("6700.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "5315.7879745674", // NET (post-discount), NOT gross 6540.03
@@ -358,7 +358,7 @@ describe("Accounts endpoints", () => {
 
     it("returns 502 when payment_intents listing fails", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.sumSucceededTopupsForCustomer.mockRejectedValue(
+      ssMocks.sumSucceededTopupsForOrg.mockRejectedValue(
         new Error("stripe-service /v1/payment_intents 500")
       );
 
@@ -398,7 +398,7 @@ describe("Accounts endpoints", () => {
   describe("GET /v1/accounts/balance", () => {
     it("returns credited minus usage as balance", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("150.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("150.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
         spent_cents: "25.0000000000",
@@ -443,7 +443,7 @@ describe("Accounts endpoints", () => {
       ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
       // Posted daily amount/threshold are now only the enabled flag. Cumulative
       // paid = 0 → start tier {amount 5000, threshold -5000} (negative floor).
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")

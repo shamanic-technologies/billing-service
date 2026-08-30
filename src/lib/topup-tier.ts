@@ -35,7 +35,7 @@ const TIER_MID_MIN = 20000; //   $200 paid  → $200 line
  * Resolve the postpaid tier for an org from its cumulative succeeded topups.
  *
  * @param cumulativePaidCents decimal-cents string (numeric(16,10)) — the paid
- *   topups sum (`sumSucceededTopupsForOrg` / `sumSucceededTopupsForCustomer`).
+ *   topups sum (`sumSucceededTopupsForOrg`), which spans every acquirer.
  */
 export function tierFor(cumulativePaidCents: string): TopupTier {
   const paid = new Decimal(cumulativePaidCents);

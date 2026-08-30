@@ -48,7 +48,7 @@ async function completionRows(org: string) {
 async function newPayingOrg(paidTopupsCents: string, ssMocks: ReturnType<typeof setupStripeMocks>) {
   await insertTestAccount({ orgId, welcomeCompletionEligible: true });
   await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
-  ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
+  ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
   ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
 }
 
@@ -72,7 +72,7 @@ async function preLaunchOrg(
     createdAt: BEFORE_LAUNCH,
   });
   await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
-  ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paidTopupsCents);
+  ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
   ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paidTopupsCents);
   ssMocks.sumPaidTopupsForOrgAsOf.mockResolvedValue(paidBeforeLaunchCents);
 }
@@ -120,7 +120,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
     // Never paid yet — the condition the discount used to require.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -142,7 +142,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     expect(body.line_items[0].price_data.unit_amount).toBe(5000);
 
     // Paying the full $50 earns the completion; credit is payment + the gift.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("5000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("5000.0000000000");
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
     expect(res.status).toBe(200);
@@ -164,7 +164,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("completion amount is DERIVED from grants, not a hardcoded $20 (no welcome row → full $25)", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
@@ -175,7 +175,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   it("a re-priced welcome ($10) leaves a $15 completion — entitlement stays $25", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestPromoGrant({ orgId, userId, amountCents: 1000, promoCode: "welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
 
     await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
@@ -185,7 +185,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   it("an org already gifted its full $25 receives no completion", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestPromoGrant({ orgId, userId, amountCents: 2500, promoCode: "invite_welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("9000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("9000.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
@@ -198,7 +198,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   it("AC3: $8 first checkout gets no discount, no gift; the gift lands once payments reach $25", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -221,13 +221,13 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     });
 
     // $8 paid: $13 of credit, no gift yet.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("800.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("800.0000000000");
     let res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
     expect(res.body.credited_cents).toBe("1300.0000000000");
     expect(await completionRows(orgId)).toHaveLength(0);
 
     // Cumulative payments reach $25 → the completion lands on its own.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
     res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
     expect(res.body.credited_gifted_cents).toBe("2500.0000000000");
     expect(await completionRows(orgId)).toHaveLength(1);
@@ -238,7 +238,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
     expect(await completionRows(orgId)).toHaveLength(0);
 
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
     await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
     expect(await completionRows(orgId)).toHaveLength(1);
   });
@@ -254,7 +254,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
     for (const paid of ["100.0000000000", "5000.0000000000", "100000.0000000000"]) {
       ssMocks.createCheckoutSession.mockClear();
-      ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue(paid);
+      ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(paid);
       await request(app)
         .post("/v1/checkout-sessions")
         .set(getAuthHeaders(orgId))
@@ -270,7 +270,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("a $49.99 first checkout is not discounted (floor would push the charge under $25)", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -294,7 +294,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("the discount is withheld when the completion could not be granted (missing ledger key)", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -316,7 +316,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("the discount is withheld when no coupon is configured", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -340,7 +340,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("an ineligible org sees neither a discount nor the notice (the gift is not coming)", async () => {
     await insertTestAccount({ orgId }); // welcomeCompletionEligible defaults false
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("0.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     ssMocks.createCheckoutSession.mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_x",
       session_id: "cs_x",
@@ -393,7 +393,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   it("AC8: an org already excluded receives nothing, whatever it has paid", async () => {
     await insertTestAccount({ orgId }); // welcomeCompletionEligible defaults false
     await insertTestPromoGrant({ orgId, userId, amountCents: 200, promoCode: "welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("100000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
@@ -417,7 +417,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     expect(res.body.credited_gifted_cents).toBe("500.0000000000");
 
     // It pays $25 AFTER launch → the gift lands on its own, no hand-granting.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
     res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
     expect((await completionRows(orgId))[0].amountCents).toBe("2000.0000000000");
@@ -454,7 +454,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
     expect(sweep.granted).toBe(0);
 
     // Later payments do not resurrect it either.
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("200000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("200000.0000000000");
     await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
     expect(await completionRows(orgId)).toHaveLength(0);
   });
@@ -490,7 +490,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
       createdAt: BEFORE_LAUNCH,
     });
     await insertTestPromoGrant({ orgId, userId, amountCents: 2500, promoCode: "invite_welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("9000.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("9000.0000000000");
     ssMocks.sumPaidTopupsForOrgAsOf.mockResolvedValue("0.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
@@ -559,7 +559,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
 
   it("propagates the missing-ledger-key failure to the account read as a 502", async () => {
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("2500.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("2500.0000000000");
     await removeWelcomeCompletionCode();
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
@@ -572,7 +572,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   it("AC7: credited_cents decomposes exactly into credited_paid_cents + credited_gifted_cents", async () => {
     await insertTestAccount({ orgId });
     await insertTestPromoGrant({ orgId, userId, amountCents: 2500, promoCode: "welcome" });
-    ssMocks.sumSucceededTopupsForCustomer.mockResolvedValue("700.0000000000");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("700.0000000000");
 
     const res = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
 
