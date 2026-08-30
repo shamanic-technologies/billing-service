@@ -88,21 +88,6 @@ describe("POST /v1/portal-sessions", () => {
     );
   });
 
-  it("tells the client to collect an amount rather than failing opaquely", async () => {
-    await insertTestAccount({ orgId });
-    ssMocks.getCardSetup.mockRejectedValue(
-      new Error('stripe-service POST /internal/card_setup failed: 409 {"code":"card_setup_requires_payment"}')
-    );
-
-    const res = await request(app)
-      .post("/v1/portal-sessions")
-      .set(getAuthHeaders(orgId))
-      .send({ return_url: "https://example.com/return" });
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("card_setup_requires_payment");
-  });
-
   it("returns 404 when billing account doesn't exist", async () => {
     const res = await request(app)
       .post("/v1/portal-sessions")

@@ -45,17 +45,6 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     res.json(setup);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // Not every provider can store a card without taking a payment. That is a
-    // legible answer the client must act on — collect an amount and retry — so
-    // it is passed through rather than flattened into a generic failure.
-    if (/card_setup_requires_payment/.test(message)) {
-      res.status(409).json({
-        error:
-          "This account's payment provider saves a card only with a payment. Choose a top-up amount and the card is saved with it.",
-        code: "card_setup_requires_payment",
-      });
-      return;
-    }
     console.error("[billing-service] card setup failed:", message);
     res.status(502).json({ error: "Failed to start card setup" });
   }
