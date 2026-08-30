@@ -186,6 +186,8 @@ export const CheckoutResponseSchema = z
 export const CreatePortalSessionRequestSchema = z
   .object({
     return_url: z.string().url(),
+    amount: z.number().int().positive().optional(),
+    currency: z.string().min(3).optional(),
   })
   .openapi("CreatePortalSessionRequest");
 
