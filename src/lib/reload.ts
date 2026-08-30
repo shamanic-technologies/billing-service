@@ -44,7 +44,19 @@ function flattenInvoiceStatus(invoice: StripeInvoice): ReloadOutcome {
     typeof invoice.payment_intent === "string"
       ? invoice.payment_intent
       : invoice.payment_intent?.id;
-  if (invoice.status === "paid" || invoice.paid === true) {
+  // stripe-service answers this route with an INVOICE where the org's acquirer
+  // produces one, and with a plain charge result where it does not — some
+  // acquirers have no invoice object at all. Both say the same thing about
+  // whether the money moved; only the vocabulary differs, and reading just the
+  // invoice one would report a successful charge as a failed reload.
+  //
+  // This is not vendor knowledge: nothing here names an acquirer, and nothing
+  // branches on which one was used. It reads "did it work" from both shapes.
+  const succeeded =
+    invoice.status === "paid" ||
+    invoice.paid === true ||
+    (invoice as { status?: string }).status === "succeeded";
+  if (succeeded) {
     return { status: "succeeded", payment_intent_id: paymentIntentId };
   }
   // stripe-service throws (non-2xx) on a declined off_session charge, so this
