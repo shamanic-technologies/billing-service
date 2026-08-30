@@ -238,6 +238,15 @@
           "return_url": {
             "type": "string",
             "format": "uri"
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3
           }
         },
         "required": [

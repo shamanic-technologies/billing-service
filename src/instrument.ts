@@ -53,16 +53,23 @@ const TEMPLATES = [
     // with the acting user when billing sends none. The name is imported from
     // the sender rather than retyped, so the template row and the event key
     // cannot drift apart.
+    // The headline is the RUNNING figure — money attached to a campaign that is
+    // ongoing. The configured total is stated underneath so the paused money is
+    // visible rather than silently dropped. Both running variables render
+    // "unavailable" when campaign-service could not be read, and {{runningNote}}
+    // says so: a configured total must never be presented as a running one.
     name: BRAND_DAILY_BUDGET_CHANGED_EVENT,
-    subject: "Daily budget {{previousBudget}} → {{newBudget}}",
+    subject:
+      "Running daily budget {{previousRunningBudget}} → {{newRunningBudget}}",
     htmlBody: `<p>{{email}} changed a brand's daily budget.</p>
 <ul>
-<li>Was: {{previousBudget}}</li>
-<li>Now: {{newBudget}}</li>
+<li>Running: {{previousRunningBudget}} → {{newRunningBudget}}</li>
+<li>Configured: {{previousBudget}} → {{newBudget}}</li>
 <li>Brand: {{brandId}}</li>
 <li>Org: {{orgId}}</li>
-</ul>`,
-    textBody: "{{email}} changed a brand's daily budget. Was: {{previousBudget}}. Now: {{newBudget}}. Brand: {{brandId}}. Org: {{orgId}}.",
+</ul>
+<p>{{runningNote}}</p>`,
+    textBody: "{{email}} changed a brand's daily budget. Running: {{previousRunningBudget}} → {{newRunningBudget}}. Configured: {{previousBudget}} → {{newBudget}}. Brand: {{brandId}}. Org: {{orgId}}. {{runningNote}}",
   },
   {
     // Someone the recipient invited has converted, so a reward just opened for
