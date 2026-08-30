@@ -28,7 +28,13 @@
 
 export interface ReloadOutcome {
   status: "succeeded" | "failed";
-  payment_intent_id?: string;
+  /**
+   * The acquirer's own id for the charge, for support and reconciliation.
+   * Deliberately not named after any one vendor's object — which acquirer ran
+   * is stripe-service's business, and nothing here reads this to decide
+   * anything.
+   */
+  reference?: string;
   failure_reason?: string;
   /**
    * True ONLY on an outcome synthesised by the backoff — no charge was

@@ -37,17 +37,8 @@ import { billingAccounts } from "../db/schema.js";
 import { computeBalance } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
-import { reloadViaInvoice } from "./reload.js";
+import { reloadOffSession } from "./reload.js";
 
-// All-zeros x-user-id — there is no end user on the sweep path, and the platform
-// is the actor on this charge. The /v1 reload primitives (getCustomerByOrg /
-// listPaymentMethods / createPaymentIntent) still require x-user-id even though
-// they key on x-org-id.
-//
-// This is NOT the read-gate workaround transfer-brand used to carry (that one is
-// gone — it reads the user-less /internal customer surface now). Here the sentinel
-// names the actor on a write this service genuinely performs.
-const SWEEP_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 // A hung stripe-service call must not stall the whole sweep loop.
 const RELOAD_TIMEOUT_MS = 30_000;
@@ -281,15 +272,11 @@ export async function runMonthEndSweep(
         continue;
       }
 
-      const identity = {
-        "x-org-id": account.orgId,
-        "x-user-id": SWEEP_USER_ID,
-      };
       const outcome = await coalesceReload(account.orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
-          reloadViaInvoice(
-            identity,
+          reloadOffSession(
+            account.orgId,
             chargeAmount,
             sweepIdempotencyKey(account.orgId, bucket, chargeAmount),
             { reason: "month_end_sweep", month: bucket }

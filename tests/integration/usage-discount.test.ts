@@ -277,7 +277,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
     // GROSS body value below is ignored by the gate.
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage("6000.0000000000");
-    ssMocks.reloadViaInvoice.mockResolvedValue({ status: "succeeded", payment_intent_id: "pi_x" });
+    ssMocks.reloadOffSession.mockResolvedValue({ status: "succeeded", reference: "pi_x" });
 
     const res = await request(app)
       .post("/v1/customer_balance/usage_apply")
@@ -286,7 +286,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
-    expect(ssMocks.reloadViaInvoice).toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).toHaveBeenCalled();
   });
 
   it("usage_apply: a discounted org with a POSITIVE net balance is NOT charged despite a large GROSS body (bug #285)", async () => {
@@ -307,7 +307,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: false });
-    expect(ssMocks.reloadViaInvoice).not.toHaveBeenCalled();
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 });
 

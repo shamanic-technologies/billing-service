@@ -29,7 +29,7 @@ export interface StripeServiceMocks {
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
-  reloadViaInvoice: ReturnType<typeof vi.fn>;
+  reloadOffSession: ReturnType<typeof vi.fn>;
 }
 
 const MOCK_CUSTOMER_ID = "cus_mock_123";
@@ -58,7 +58,7 @@ export function customerWithEmail(
  * defaults. Returns the mock collection so individual tests can assert calls
  * or override return values.
  *
- * `reloadViaInvoice` is mocked at the helper layer (lib/reload.ts) — that
+ * `reloadOffSession` is mocked at the helper layer (lib/reload.ts) — that
  * keeps test ergonomics close to the old `reload` mock.
  */
 export function setupStripeMocks(): StripeServiceMocks {
@@ -141,9 +141,9 @@ export function setupStripeMocks(): StripeServiceMocks {
       monthly_growth: [],
       weekly_growth: [],
     }),
-    reloadViaInvoice: vi.fn().mockResolvedValue({
+    reloadOffSession: vi.fn().mockResolvedValue({
       status: "succeeded",
-      payment_intent_id: "pi_mock",
+      reference: "pi_mock",
     }),
   };
 
@@ -173,7 +173,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
   vi.spyOn(ssClient, "setCustomerMetadata").mockImplementation(mocks.setCustomerMetadata);
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
-  vi.spyOn(reload, "reloadViaInvoice").mockImplementation(mocks.reloadViaInvoice);
+  vi.spyOn(reload, "reloadOffSession").mockImplementation(mocks.reloadOffSession);
 
   return mocks;
 }
