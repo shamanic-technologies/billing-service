@@ -28,6 +28,7 @@ export interface StripeServiceMocks {
   setCustomerMetadata: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
+  getCardSetup: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   reloadOffSession: ReturnType<typeof vi.fn>;
 }
@@ -129,6 +130,11 @@ export function setupStripeMocks(): StripeServiceMocks {
     createPortalSession: vi.fn().mockResolvedValue({
       url: "https://billing.stripe.com/p/session/test_portal",
     }),
+    getCardSetup: vi.fn().mockResolvedValue({
+      object: "card_setup",
+      mode: "hosted_redirect",
+      url: "https://billing.stripe.com/p/session/abc",
+    }),
     listAllCustomersForOrg: vi.fn().mockResolvedValue([]),
     setCustomerMetadata: vi.fn().mockImplementation((id: string) =>
       Promise.resolve(buildMockCustomer({ id }))
@@ -169,6 +175,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "hasChargeablePmForOrg").mockImplementation(mocks.hasChargeablePmForOrg);
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
+  vi.spyOn(ssClient, "getCardSetup").mockImplementation(mocks.getCardSetup as never);
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
   vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
   vi.spyOn(ssClient, "setCustomerMetadata").mockImplementation(mocks.setCustomerMetadata);

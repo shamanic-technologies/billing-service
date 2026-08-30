@@ -853,3 +853,24 @@ export async function chargeOrgOffSession(
     { "Idempotency-Key": idempotencyKey }
   );
 }
+
+/**
+ * How this org's customer adds a card, as stripe-service describes it.
+ *
+ * Not a URL, because the acquirers do not all do this the same way: one hosts a
+ * portal we redirect to, another has no portal at all and saves a card only
+ * through a browser widget the page mounts itself. stripe-service names the
+ * mechanism and hands over what it needs; this repo passes that through without
+ * interpreting it. Nothing here names an acquirer.
+ */
+export async function getCardSetup(
+  orgId: string,
+  returnUrl: string
+): Promise<Record<string, unknown>> {
+  return call<Record<string, unknown>>(
+    "POST",
+    `/internal/card_setup/by-org/${encodeURIComponent(orgId)}`,
+    {},
+    { return_url: returnUrl }
+  );
+}
