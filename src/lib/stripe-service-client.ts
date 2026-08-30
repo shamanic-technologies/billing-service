@@ -717,7 +717,30 @@ export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
  * the cents helpers.
  */
 export async function sumSucceededTopupsForOrg(orgId: string): Promise<string> {
-  return sumOrgTopups(orgId);
+  // Asked of stripe-service as a SUMMARY rather than summed from a payment list
+  // here. The summary spans every acquirer that has taken money for this org;
+  // the payment list is one acquirer's objects. Summing the list means an org
+  // whose payments moved to another acquirer pays and its balance does not
+  // move — which is exactly what happened in production before this changed.
+  //
+  // Behaviour is identical for an org on the original acquirer: the summary's
+  // `amount_net` is `amount_received - amount_returned`, the same per-payment
+  // netting the list sum applied.
+  const summary = await call<StripePaymentSummary>(
+    "GET",
+    `/internal/payment_summary/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+  let total = new Decimal(0);
+  for (const row of summary.totals) {
+    if (typeof row.amount_net !== "number") {
+      throw new Error(
+        `stripe-service payment summary for org ${orgId} is missing amount_net`
+      );
+    }
+    total = total.plus(row.amount_net);
+  }
+  return total.toFixed(10);
 }
 
 async function sumOrgTopups(orgId: string): Promise<string> {
