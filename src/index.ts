@@ -21,6 +21,7 @@ import freeCreditPromisesRoutes from "./routes/free_credit_promises.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 import { deployEmailTemplates } from "./instrument.js";
+import { auditChannelCoverage } from "./lib/channel-coverage.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +80,12 @@ if (process.env.NODE_ENV !== "test") {
         // PUT upserts by template name, so every restart re-registering is
         // harmless (no marker state anywhere).
         void deployEmailTemplates();
+        // Report every published acquisition channel this service prices no
+        // daily floor for. Changes nothing and refuses nothing — it makes the
+        // gap visible on deploy instead of on a customer's screen. Same posture
+        // as the template registration above: after listen, never awaited,
+        // never throws.
+        void auditChannelCoverage();
       });
     })
     .catch((err) => {

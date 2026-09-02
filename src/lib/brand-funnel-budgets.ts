@@ -210,9 +210,23 @@ export const BRAND_FUNNEL_MIN_DAILY_BUDGET_CENTS: Record<
  * rather than quietly taking the funnel's floor. A channel whose economics
  * differ would otherwise be funded at a number nobody chose for it, which is
  * exactly the bug this table exists to make impossible; a 400 naming the slug is
- * a deploy away from fixed, a silently wrong floor is money already spent. The
- * cost is real and accepted: a channel features-service publishes before billing
- * prices it cannot be funded until an entry lands here.
+ * a deploy away from fixed, a silently wrong floor is money already spent.
+ *
+ * THE COST OF THE FAIL-LOUD IS THAT A CUSTOMER MEETS IT FIRST, so the staleness
+ * is now REPORTED instead of merely accepted: `auditChannelCoverage` reads the
+ * published catalogue once per boot and logs every slug this table does not
+ * price. It changes no behaviour and weakens no refusal — it only turns "a
+ * customer cannot fund this" into "we know we have not priced this yet".
+ *
+ * WHAT A FLOOR IS FOR A CHANNEL THAT CONVERTS AN INTERNAL LEG. The conversion
+ * family does not open a funnel, it moves a lead already on one to the next
+ * step, and its floor is read from the SAME figure the catalogue publishes —
+ * `terms.dailyOperatingCostCents`, the money that channel costs to run for a
+ * day. A channel the CUSTOMER operates (`operatedBy: "customer"`) spends none of
+ * the platform's money and states zero, so its floor is 0: funding it buys
+ * nothing and demanding a payment for it would be inventing a price. 0 is a
+ * STATED floor, not an absent one — it keeps the channel judged alone rather
+ * than pooled into a funnel group whose $24/day floor it would fail forever.
  */
 export const ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS: Record<
   string,
@@ -256,6 +270,18 @@ export const ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS: Record<
   "pr-expert-quote-outreach": null,
   "press-placements": null,
   "seo-content": null,
+  // Conversion — these do not open a funnel, they move a lead already on one to
+  // its next step. Each floor is that channel's own published daily operating
+  // cost; the customer-operated ones spend none of our money and state 0.
+  "ai-meeting-booking": 100,
+  "agency-meeting-booking": 0,
+  "agency-meeting-attendance": 6000,
+  "agency-closing-calls": 30000,
+  "agency-signup-conversion": 15000,
+  "your-team-meeting-booking": 0,
+  "your-team-meeting-attendance": 0,
+  "your-team-closing-calls": 0,
+  "your-team-signup-conversion": 0,
 };
 
 /** An acquisition channel this service states no floor for. Surfaced as a 400. */
