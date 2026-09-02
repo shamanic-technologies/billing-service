@@ -23,6 +23,26 @@ const COLD = "sales-cold-email-outreach";
 // The three visit-led funnels Google Ads sells, in this service's spelling.
 const GOOGLE_ADS_FUNNELS = ["visit_meeting", "visit_signup", "visit_form"] as const;
 
+/**
+ * Every acquisition channel the published catalogue puts in the `conversion`
+ * family — the ones that take a lead already on a funnel and move it to the next
+ * step — with the floor this service states for each. Read from that
+ * catalogue's own `terms.dailyOperatingCostCents`: the money the channel costs
+ * to run for a day. The customer-operated ones spend none of the platform's
+ * money and publish zero, so their floor is a stated 0.
+ */
+const INTERNAL_LEG_CHANNEL_FLOORS: Record<string, number> = {
+  "ai-meeting-booking": 100,
+  "agency-meeting-booking": 0,
+  "agency-meeting-attendance": 6000,
+  "agency-closing-calls": 30000,
+  "agency-signup-conversion": 15000,
+  "your-team-meeting-booking": 0,
+  "your-team-meeting-attendance": 0,
+  "your-team-closing-calls": 0,
+  "your-team-signup-conversion": 0,
+};
+
 describe("per-acquisition-channel product minimum", () => {
   it("prices Google Ads at $5/day on every funnel it sells", () => {
     for (const funnelKey of GOOGLE_ADS_FUNNELS) {
@@ -74,11 +94,16 @@ describe("per-acquisition-channel product minimum", () => {
       assertFundedChannelMeetsMinimum("visit_signup", COLD, "100", null)
     ).not.toThrow();
 
-    // Google Ads is the ONLY channel stating a floor of its own today.
+    // Google Ads is the only channel that OPENS a funnel and states a floor of
+    // its own; every other stated floor belongs to the conversion family, which
+    // converts an internal leg rather than opening anything.
     const stated = Object.entries(ACQUISITION_CHANNEL_MIN_DAILY_BUDGET_CENTS)
       .filter(([, min]) => min !== null)
-      .map(([slug]) => slug);
-    expect(stated).toEqual([GOOGLE_ADS]);
+      .map(([slug]) => slug)
+      .sort();
+    expect(stated).toEqual(
+      [GOOGLE_ADS, ...Object.keys(INTERNAL_LEG_CHANNEL_FLOORS)].sort()
+    );
   });
 
   it("accepts zero on every channel, priced floor or not", () => {
@@ -141,6 +166,54 @@ describe("per-acquisition-channel product minimum", () => {
       GOOGLE_ADS,
     ]) {
       expect(isKnownAcquisitionChannel(slug)).toBe(true);
+    }
+  });
+
+  it("prices every channel that converts an INTERNAL funnel leg", () => {
+    for (const [slug, floor] of Object.entries(INTERNAL_LEG_CHANNEL_FLOORS)) {
+      expect(isKnownAcquisitionChannel(slug)).toBe(true);
+      expect(statedChannelMinimum(slug)).toBe(floor);
+      // The floor is the channel's own on EVERY funnel it may be sold through —
+      // it never inherits the funnel's, which is what refused it before.
+      for (const funnelKey of ["reply_meeting", "visit_meeting", "visit_signup", "visit_form"] as const) {
+        expect(minDailyBudgetCentsFor(funnelKey, slug)).toBe(floor);
+      }
+    }
+  });
+
+  it("lets a customer fund the automated meeting booking at $1/day on a reply-to-meeting funnel", () => {
+    // The reported case: the funnel's own floor is $24/day, and this channel's
+    // is $1/day, so $1/day funds it.
+    expect(minDailyBudgetCentsFor("reply_meeting", "ai-meeting-booking")).toBe(100);
+    expect(() =>
+      assertFundedChannelMeetsMinimum("reply_meeting", "ai-meeting-booking", "100", null)
+    ).not.toThrow();
+    expect(() =>
+      assertFundedChannelMeetsMinimum("reply_meeting", "ai-meeting-booking", "99", null)
+    ).toThrow(FunnelBudgetBelowMinimumError);
+    // Judged ALONE, so its funnel siblings' $150/day neither funds it nor is
+    // spent by it.
+    expect(minimumGroupOf("reply_meeting", "ai-meeting-booking")).not.toBe(
+      minimumGroupOf("reply_meeting", COLD)
+    );
+  });
+
+  it("funds a channel the CUSTOMER operates at any amount, including nothing", () => {
+    // It spends none of the platform's money, so there is no number to demand.
+    for (const slug of Object.keys(INTERNAL_LEG_CHANNEL_FLOORS).filter((s) =>
+      s.startsWith("your-team-")
+    )) {
+      expect(statedChannelMinimum(slug)).toBe(0);
+      for (const amount of ["0", "1", "100000"]) {
+        expect(() =>
+          assertFundedChannelMeetsMinimum("reply_meeting", slug, amount, null)
+        ).not.toThrow();
+      }
+      // A stated 0 is NOT an absent floor: it keeps the channel judged alone
+      // rather than pooled into a funnel group whose $24/day it would fail.
+      expect(minimumGroupOf("reply_meeting", slug)).not.toBe(
+        minimumGroupOf("reply_meeting", COLD)
+      );
     }
   });
 
