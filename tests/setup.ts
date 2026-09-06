@@ -12,10 +12,23 @@ process.env.COSTS_SERVICE_URL = "http://localhost:9998";
 process.env.COSTS_SERVICE_API_KEY = "test-costs-service-key";
 process.env.RUNS_SERVICE_URL = "http://localhost:9997";
 process.env.RUNS_SERVICE_API_KEY = "test-runs-service-key";
+process.env.FEATURES_SERVICE_URL = "http://localhost:9995";
 process.env.NODE_ENV = "test";
 
 beforeAll(async () => {
   console.log("Test suite starting...");
+
+  // Every funded ceiling is judged against its acquisition channel's PUBLISHED
+  // daily operating cost, read from features-service. Seed that read with the
+  // catalogue production serves, so the suite exercises the real floors without
+  // reaching a sibling service. A test about an unreadable catalogue resets it.
+  const { __primeChannelMinimums } = await import(
+    "../src/lib/channel-terms.js"
+  );
+  const { publishedChannelMinimums } = await import(
+    "./helpers/channel-catalogue.js"
+  );
+  __primeChannelMinimums(publishedChannelMinimums());
 
   const { sql } = await import("../src/db/index.js");
 
