@@ -13,7 +13,16 @@ import {
   channelTotalOf,
   FunnelBudgetBelowMinimumError,
 } from "../../src/lib/brand-funnel-budgets.js";
+import {
+  channelMinimumsFrom,
+  channelMinimumsOf,
+} from "../../src/lib/channel-terms.js";
+import { publishedChannelsBody } from "../helpers/channel-catalogue.js";
 import type { BrandFunnelDailyBudget } from "../../src/db/schema.js";
+
+const minimums = channelMinimumsOf(
+  channelMinimumsFrom(publishedChannelsBody().channels)
+);
 
 const row = (
   funnelKey: string,
@@ -64,22 +73,24 @@ describe("per-funnel totals over acquisition channels", () => {
   });
 
   it("judges the minimum on the CHANNEL total, not on a single offer", () => {
-    // $12 + $12 of two offers on ONE channel = the $24/day floor: accepted.
+    // $4 + $4 of two offers on ONE channel = cold email's $8/day floor: accepted.
     const COLD = "sales-cold-email-outreach";
     expect(() =>
       assertFundedChannelMeetsMinimum(
         "reply_meeting",
         COLD,
-        "2400.0000000000",
-        null
+        "800.0000000000",
+        null,
+        minimums
       )
     ).not.toThrow();
     expect(() =>
       assertFundedChannelMeetsMinimum(
         "reply_meeting",
         COLD,
-        "1200.0000000000",
-        null
+        "400.0000000000",
+        null,
+        minimums
       )
     ).toThrow(FunnelBudgetBelowMinimumError);
   });
@@ -108,8 +119,9 @@ describe("per-funnel totals over acquisition channels", () => {
       assertFundedChannelMeetsMinimum(
         "reply_meeting",
         "sales-cold-email-outreach",
-        "1200.0000000000",
-        "2400.0000000000"
+        "400.0000000000",
+        "800.0000000000",
+        minimums
       )
     ).toThrow(FunnelBudgetBelowMinimumError);
   });

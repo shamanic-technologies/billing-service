@@ -143,8 +143,8 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 600 },
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 400 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 900 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 900 },
         ],
       });
 
@@ -156,10 +156,10 @@ describe("per-offer daily ceilings", () => {
 
     const view = await read();
     expect(view.offers).toEqual([
-      ["visit_form", COLD, OFFER_A, "600.0000000000"],
+      ["visit_form", COLD, OFFER_A, "900.0000000000"],
       ["visit_form", COLD, OFFER_B, "0.0000000000"],
     ]);
-    expect(view.brandTotal).toBe("600.0000000000");
+    expect(view.brandTotal).toBe("900.0000000000");
   });
 
   it("keeps two offers apart across channels as well as within one", async () => {
@@ -169,22 +169,22 @@ describe("per-offer daily ceilings", () => {
       .send({
         funnels: [
           { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 600 },
-          { funnelKey: "visit_form", featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 300 },
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 100 },
+          { funnelKey: "visit_form", featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 800 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 200 },
         ],
       });
 
     const view = await read();
     expect(view.offers).toEqual([
-      ["visit_form", FEEDBACK, OFFER_A, "300.0000000000"],
+      ["visit_form", FEEDBACK, OFFER_A, "800.0000000000"],
       ["visit_form", COLD, OFFER_A, "600.0000000000"],
-      ["visit_form", COLD, OFFER_B, "100.0000000000"],
+      ["visit_form", COLD, OFFER_B, "200.0000000000"],
     ]);
     expect(view.channels).toEqual([
-      ["visit_form", FEEDBACK, "300.0000000000"],
-      ["visit_form", COLD, "700.0000000000"],
+      ["visit_form", FEEDBACK, "800.0000000000"],
+      ["visit_form", COLD, "800.0000000000"],
     ]);
-    expect(view.brandTotal).toBe("1000.0000000000");
+    expect(view.brandTotal).toBe("1600.0000000000");
   });
 
   // --- A caller that says nothing about offers ---
@@ -193,11 +193,11 @@ describe("per-offer daily ceilings", () => {
     await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 500 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 900 }] });
 
     let view = await read();
     expect(view.offers).toEqual([
-      ["visit_form", COLD, null, "500.0000000000"],
+      ["visit_form", COLD, null, "900.0000000000"],
     ]);
 
     // A second offer-less write updates that same ceiling: it must not open a
@@ -221,7 +221,7 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 500 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 800 },
         ],
       });
 
@@ -243,22 +243,22 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", dailyBudgetCents: 100 },
-          { funnelKey: "visit_signup", dailyBudgetCents: 300 },
+          { funnelKey: "visit_form", dailyBudgetCents: 800 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 900 },
         ],
       });
 
     const res = await request(app).get(funnelReadPath).set(internalHeaders);
-    expect(res.body.dailyBudgetCents).toBe("400.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("1700.0000000000");
     expect(res.body.funnels).toEqual([
       {
         funnelKey: "visit_signup",
-        dailyBudgetCents: "300.0000000000",
+        dailyBudgetCents: "900.0000000000",
         updatedAt: expect.any(String),
       },
       {
         funnelKey: "visit_form",
-        dailyBudgetCents: "100.0000000000",
+        dailyBudgetCents: "800.0000000000",
         updatedAt: expect.any(String),
       },
     ]);
@@ -266,13 +266,13 @@ describe("per-offer daily ceilings", () => {
       {
         funnelKey: "visit_signup",
         featureSlug: COLD,
-        dailyBudgetCents: "300.0000000000",
+        dailyBudgetCents: "900.0000000000",
         updatedAt: expect.any(String),
       },
       {
         funnelKey: "visit_form",
         featureSlug: COLD,
-        dailyBudgetCents: "100.0000000000",
+        dailyBudgetCents: "800.0000000000",
         updatedAt: expect.any(String),
       },
     ]);
@@ -285,8 +285,8 @@ describe("per-offer daily ceilings", () => {
       .send({
         funnels: [
           { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 600 },
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 400 },
-          { funnelKey: "visit_signup", featureSlug: COLD, dailyBudgetCents: 200 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 900 },
+          { funnelKey: "visit_signup", featureSlug: COLD, dailyBudgetCents: 800 },
         ],
       });
 
@@ -295,7 +295,7 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 400 },
+          { funnelKey: "visit_form", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 900 },
         ],
       });
 
@@ -303,9 +303,9 @@ describe("per-offer daily ceilings", () => {
     // The unscoped visit_signup ceiling is deleted too — `= NULL` matches
     // nothing, so a bad WHERE would silently leave it behind.
     expect(view.offers).toEqual([
-      ["visit_form", COLD, OFFER_B, "400.0000000000"],
+      ["visit_form", COLD, OFFER_B, "900.0000000000"],
     ]);
-    expect(view.brandTotal).toBe("400.0000000000");
+    expect(view.brandTotal).toBe("900.0000000000");
   });
 
   // --- An ambiguous write is refused, never guessed ---
@@ -390,8 +390,8 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", featureSlug: COLD, dailyBudgetCents: 600 },
-          { funnelKey: "visit_form", featureSlug: FEEDBACK, dailyBudgetCents: 400 },
+          { funnelKey: "visit_form", featureSlug: COLD, dailyBudgetCents: 900 },
+          { funnelKey: "visit_form", featureSlug: FEEDBACK, dailyBudgetCents: 900 },
         ],
       });
 
@@ -440,12 +440,12 @@ describe("per-offer daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "reply_meeting", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 600 },
-          { funnelKey: "reply_meeting", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 600 },
+          { funnelKey: "reply_meeting", featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 300 },
+          { funnelKey: "reply_meeting", featureSlug: COLD, offerId: OFFER_B, dailyBudgetCents: 300 },
         ],
       });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/needs at least \$24\/day/);
+    expect(res.body.error).toMatch(/needs at least \$8\/day/);
   });
 
   it("does not open the grandfather for a funnel already above its floor", async () => {
@@ -478,40 +478,41 @@ describe("per-offer daily ceilings", () => {
         ],
       });
     expect(lowered.status).toBe(400);
-    expect(lowered.body.error).toMatch(/needs at least \$24\/day/);
+    expect(lowered.body.error).toMatch(/needs at least \$8\/day/);
     expect((await read()).funnels).toEqual([
       ["reply_meeting", "3200.0000000000"],
     ]);
   });
 
   it("lets a grandfathered funnel keep or raise its total while it opens an offer", async () => {
-    // The live production shape: a reply-to-meeting funnel funded at $8/day
-    // against a $24/day floor, because the ceiling predates the minimum and the
-    // attribution sweep carried it over verbatim.
-    await seedCeiling("reply_meeting", COLD, null, "800.0000000000");
-    expect((await read()).funnels).toEqual([["reply_meeting", "800.0000000000"]]);
+    // The live production shape: a reply-to-meeting funnel funded at $5/day
+    // against cold email's $8/day floor, because the ceiling predates the
+    // minimum and the attribution sweep carried it over verbatim.
+    await seedCeiling("reply_meeting", COLD, null, "500.0000000000");
+    expect((await read()).funnels).toEqual([["reply_meeting", "500.0000000000"]]);
 
-    // Funding a second channel under an offer RAISES the funnel total: accepted.
+    // Funding a second channel under an offer, at ITS floor, RAISES the funnel
+    // total: accepted, and the grandfather does not extend to that channel.
     const raised = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 200 });
+      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 800 });
     expect(raised.status).toBe(200);
-    expect((await read()).funnels).toEqual([["reply_meeting", "1000.0000000000"]]);
+    expect((await read()).funnels).toEqual([["reply_meeting", "1300.0000000000"]]);
 
-    // Lowering the total to another funded sub-floor figure is a NEW statement
-    // below the floor, and is refused at the offer grain exactly as it is at
-    // the funnel grain.
+    // Lowering the grandfathered ceiling to another funded sub-floor figure is
+    // a NEW statement below the floor, and is refused at the offer grain
+    // exactly as it is at the funnel grain.
     const lowered = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: FEEDBACK, offerId: OFFER_A, dailyBudgetCents: 0 });
+      .send({ featureSlug: COLD, dailyBudgetCents: 300 });
     expect(lowered.status).toBe(400);
-    expect((await read()).funnels).toEqual([["reply_meeting", "1000.0000000000"]]);
+    expect((await read()).funnels).toEqual([["reply_meeting", "1300.0000000000"]]);
   });
 
   it("still lets a grandfathered funnel be defunded entirely", async () => {
-    await seedCeiling("reply_meeting", COLD, null, "800.0000000000");
+    await seedCeiling("reply_meeting", COLD, null, "500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))

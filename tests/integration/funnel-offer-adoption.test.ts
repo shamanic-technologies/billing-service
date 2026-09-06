@@ -269,22 +269,22 @@ describe("a named offer adopts its campaign's unscoped ceiling", () => {
   // --- The minimum is judged on the ADOPTED outcome, not on both rows ---
 
   it("judges the funnel minimum on what the pair will hold after the write", async () => {
-    // A grandfathered $20/day ceiling on a $24/day funnel: it may be kept or
-    // raised, never lowered. Counting the adopted row as well would read this
-    // $5 write as a $25 total and wave it through.
-    await seedCeiling("reply_meeting", COLD, null, "2000.0000000000");
+    // A grandfathered $5/day ceiling against cold email's $8/day floor: it may
+    // be kept or raised, never lowered. Counting the adopted row as well would
+    // read this $3 write as an $8 total and wave it through.
+    await seedCeiling("reply_meeting", COLD, null, "500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 500 });
+      .send({ featureSlug: COLD, offerId: OFFER_A, dailyBudgetCents: 300 });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("$20/day");
+    expect(res.body.error).toContain("$5/day");
 
     const after = await read();
     expect(after.offers).toEqual([
-      ["reply_meeting", COLD, null, "2000.0000000000"],
+      ["reply_meeting", COLD, null, "500.0000000000"],
     ]);
   });
 

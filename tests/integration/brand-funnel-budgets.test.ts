@@ -98,7 +98,7 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_signup", dailyBudgetCents: 100 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 800 },
           { funnelKey: "reply_meeting", dailyBudgetCents: 2400 },
         ],
       });
@@ -106,12 +106,12 @@ describe("per-funnel daily budgets", () => {
     expect(res.status).toBe(200);
     expect(res.body.brandId).toBe(brandId);
     expect(res.body.orgId).toBe(orgId);
-    expect(res.body.dailyBudgetCents).toBe("2500.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("3200.0000000000");
     expect(
       res.body.funnels.map((f: FunnelRow) => [f.funnelKey, f.dailyBudgetCents])
     ).toEqual([
       ["reply_meeting", "2400.0000000000"],
-      ["visit_signup", "100.0000000000"],
+      ["visit_signup", "800.0000000000"],
     ]);
 
     const brandRead = await request(app)
@@ -120,7 +120,7 @@ describe("per-funnel daily budgets", () => {
     expect(brandRead.status).toBe(200);
     expect(brandRead.body).toEqual({
       brandId,
-      dailyBudgetCents: "2500.0000000000",
+      dailyBudgetCents: "3200.0000000000",
       updatedAt: expect.any(String),
     });
   });
@@ -131,21 +131,21 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_signup", dailyBudgetCents: 500 },
-          { funnelKey: "visit_form", dailyBudgetCents: 300 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 900 },
+          { funnelKey: "visit_form", dailyBudgetCents: 1000 },
         ],
       });
 
     const res = await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 300 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 1000 }] });
 
     expect(res.status).toBe(200);
     expect(res.body.funnels.map((f: FunnelRow) => f.funnelKey)).toEqual([
       "visit_form",
     ]);
-    expect(res.body.dailyBudgetCents).toBe("300.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("1000.0000000000");
   });
 
   it("accepts a set where EVERY funnel is zero (a brand in pause)", async () => {
@@ -176,13 +176,13 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_meeting", dailyBudgetCents: 2400 },
-          { funnelKey: "visit_form", dailyBudgetCents: 100 },
+          { funnelKey: "visit_meeting", dailyBudgetCents: 800 },
+          { funnelKey: "visit_form", dailyBudgetCents: 800 },
         ],
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.dailyBudgetCents).toBe("2500.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("1600.0000000000");
   });
 
   // --- Minimums ---
@@ -192,16 +192,17 @@ describe("per-funnel daily budgets", () => {
       .put(funnelSetPath(brandId))
       .set(authHeaders)
       .send({
-        funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: 1000 }],
+        funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: 500 }],
       });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Sales Meeting (reply)");
-    expect(res.body.error).toContain("$24/day");
-    expect(res.body.error).toContain("$10/day");
+    expect(res.body.error).toContain("sales-cold-email-outreach");
+    expect(res.body.error).toContain("$8/day");
+    expect(res.body.error).toContain("$5/day");
   });
 
-  it("refuses a funded website-purchase funnel below $1/day", async () => {
+  it("refuses a funded website-purchase ceiling below its channel floor", async () => {
     const res = await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
@@ -211,7 +212,7 @@ describe("per-funnel daily budgets", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Website Purchase");
-    expect(res.body.error).toContain("$1/day");
+    expect(res.body.error).toContain("$8/day");
   });
 
   it("a rejected set leaves NOTHING half-applied", async () => {
@@ -238,7 +239,7 @@ describe("per-funnel daily budgets", () => {
       .put(funnelSetPath(brandId))
       .set(authHeaders)
       .send({
-        funnels: [{ funnelKey: "visit_signup", dailyBudgetCents: 500 }],
+        funnels: [{ funnelKey: "visit_signup", dailyBudgetCents: 900 }],
       });
 
     const res = await request(app)
@@ -257,7 +258,7 @@ describe("per-funnel daily budgets", () => {
       .set(internalHeaders(orgId));
     expect(
       read.body.funnels.map((f: FunnelRow) => [f.funnelKey, f.dailyBudgetCents])
-    ).toEqual([["visit_signup", "500.0000000000"]]);
+    ).toEqual([["visit_signup", "900.0000000000"]]);
   });
 
   it("a funnel at zero is accepted where the same funnel below its minimum is not", async () => {
@@ -270,7 +271,7 @@ describe("per-funnel daily budgets", () => {
     const belowMin = await request(app)
       .patch(funnelOnePath(brandId, "reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 2399 });
+      .send({ dailyBudgetCents: 700 });
     expect(belowMin.status).toBe(400);
   });
 
@@ -282,7 +283,7 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_signup", dailyBudgetCents: 100 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 800 },
           { funnelKey: "reply_meeting", dailyBudgetCents: 2400 },
         ],
       });
@@ -311,10 +312,10 @@ describe("per-funnel daily budgets", () => {
     const res = await request(app)
       .patch(funnelOnePath(brandId, "visit_form"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 250 });
+      .send({ dailyBudgetCents: 900 });
 
     expect(res.status).toBe(200);
-    expect(res.body.dailyBudgetCents).toBe("250.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("900.0000000000");
   });
 
   it("rejects an unknown funnel key with 400", async () => {
@@ -338,7 +339,7 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", dailyBudgetCents: 100 },
+          { funnelKey: "visit_form", dailyBudgetCents: 800 },
           { funnelKey: "visit_form", dailyBudgetCents: 200 },
         ],
       });
@@ -369,7 +370,7 @@ describe("per-funnel daily budgets", () => {
     await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
 
     const res = await request(app)
       .patch(brandSetPath(brandId))
@@ -382,7 +383,7 @@ describe("per-funnel daily budgets", () => {
     const brandRead = await request(app)
       .get(brandReadPath(brandId))
       .set(internalHeaders(orgId));
-    expect(brandRead.body.dailyBudgetCents).toBe("100.0000000000");
+    expect(brandRead.body.dailyBudgetCents).toBe("800.0000000000");
   });
 
   it("the first per-funnel write supersedes the brand-level scalar", async () => {
@@ -394,12 +395,12 @@ describe("per-funnel daily budgets", () => {
     await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
 
     const brandRead = await request(app)
       .get(brandReadPath(brandId))
       .set(internalHeaders(orgId));
-    expect(brandRead.body.dailyBudgetCents).toBe("100.0000000000");
+    expect(brandRead.body.dailyBudgetCents).toBe("800.0000000000");
   });
 
   it("the change history records the brand-level TOTAL of each per-funnel write", async () => {
@@ -408,14 +409,14 @@ describe("per-funnel daily budgets", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_signup", dailyBudgetCents: 100 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 800 },
           { funnelKey: "reply_meeting", dailyBudgetCents: 2400 },
         ],
       });
     await request(app)
       .patch(funnelOnePath(brandId, "visit_signup"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 600 });
+      .send({ dailyBudgetCents: 900 });
 
     const res = await request(app)
       .get(brandHistoryPath(brandId))
@@ -424,7 +425,7 @@ describe("per-funnel daily budgets", () => {
     expect(res.status).toBe(200);
     expect(
       res.body.history.map((h: { dailyBudgetCents: string }) => h.dailyBudgetCents)
-    ).toEqual(["2500.0000000000", "3000.0000000000"]);
+    ).toEqual(["3200.0000000000", "3300.0000000000"]);
   });
 
   // --- Tenancy + auth ---
@@ -433,11 +434,11 @@ describe("per-funnel daily budgets", () => {
     await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
     await request(app)
       .put(funnelSetPath(brandId))
       .set(getAuthHeaders(otherOrgId, userId, runId))
-      .send({ funnels: [{ funnelKey: "visit_signup", dailyBudgetCents: 700 }] });
+      .send({ funnels: [{ funnelKey: "visit_signup", dailyBudgetCents: 900 }] });
 
     const orgARead = await request(app)
       .get(internalFunnelPath(brandId))
@@ -446,15 +447,15 @@ describe("per-funnel daily budgets", () => {
       .get(internalFunnelPath(brandId))
       .set(internalHeaders(otherOrgId));
 
-    expect(orgARead.body.dailyBudgetCents).toBe("100.0000000000");
-    expect(orgBRead.body.dailyBudgetCents).toBe("700.0000000000");
+    expect(orgARead.body.dailyBudgetCents).toBe("800.0000000000");
+    expect(orgBRead.body.dailyBudgetCents).toBe("900.0000000000");
   });
 
   it("serves the user read of a brand's own ceilings", async () => {
     await request(app)
       .put(funnelSetPath(brandId))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
 
     const res = await request(app)
       .get(funnelSetPath(brandId))
@@ -464,11 +465,11 @@ describe("per-funnel daily budgets", () => {
     expect(res.body).toEqual({
       brandId,
       orgId,
-      dailyBudgetCents: "100.0000000000",
+      dailyBudgetCents: "800.0000000000",
       funnels: [
         {
           funnelKey: "visit_form",
-          dailyBudgetCents: "100.0000000000",
+          dailyBudgetCents: "800.0000000000",
           updatedAt: expect.any(String),
         },
       ],
@@ -479,7 +480,7 @@ describe("per-funnel daily budgets", () => {
         {
           funnelKey: "visit_form",
           featureSlug: "sales-cold-email-outreach",
-          dailyBudgetCents: "100.0000000000",
+          dailyBudgetCents: "800.0000000000",
           updatedAt: expect.any(String),
         },
       ],
@@ -491,7 +492,7 @@ describe("per-funnel daily budgets", () => {
           funnelKey: "visit_form",
           featureSlug: "sales-cold-email-outreach",
           offerId: null,
-          dailyBudgetCents: "100.0000000000",
+          dailyBudgetCents: "800.0000000000",
           updatedAt: expect.any(String),
         },
       ],
@@ -505,7 +506,7 @@ describe("per-funnel daily budgets", () => {
           featureSlug: "sales-cold-email-outreach",
           offerId: null,
           legKey: null,
-          dailyBudgetCents: "100.0000000000",
+          dailyBudgetCents: "800.0000000000",
           updatedAt: expect.any(String),
         },
       ],
@@ -539,13 +540,13 @@ describe("per-funnel daily budgets", () => {
     const put = await request(app)
       .put(funnelSetPath("not-a-uuid"))
       .set(authHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
     expect(put.status).toBe(400);
 
     const patched = await request(app)
       .patch(funnelOnePath("not-a-uuid", "visit_form"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 100 });
+      .send({ dailyBudgetCents: 800 });
     expect(patched.status).toBe(400);
   });
 
@@ -553,7 +554,7 @@ describe("per-funnel daily budgets", () => {
     const res = await request(app)
       .put(funnelSetPath(brandId))
       .set(apiKeyHeaders)
-      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 100 }] });
+      .send({ funnels: [{ funnelKey: "visit_form", dailyBudgetCents: 800 }] });
     expect(res.status).toBe(400);
   });
 });

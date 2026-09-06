@@ -14,6 +14,7 @@ import {
 } from "../lib/brand-budgets.js";
 import {
   BrandBudgetManagedByFunnelsError,
+  ChannelTermsUnavailableError,
   ChannelSplitAcrossOffersError,
   OfferSplitAcrossLegsError,
   FunnelBudgetBelowMinimumError,
@@ -256,6 +257,14 @@ function respondToFunnelWriteError(err: unknown, res: Response): void {
     err instanceof OfferSplitAcrossLegsError
   ) {
     res.status(409).json({ error: err.message });
+    return;
+  }
+  // The acquisition channels' published terms could not be read, so no daily
+  // minimum is known. A gate that cannot be evaluated REFUSES — never lets the
+  // write through — and it is the producer that is unavailable, not the request
+  // that is wrong.
+  if (err instanceof ChannelTermsUnavailableError) {
+    res.status(502).json({ error: err.message });
     return;
   }
   throw err;

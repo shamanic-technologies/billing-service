@@ -43,8 +43,8 @@ describe("funnel-key aliases on the write surface", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "website_purchases", dailyBudgetCents: 500 },
-          { funnelKey: "form_magnet", dailyBudgetCents: 700 },
+          { funnelKey: "website_purchases", dailyBudgetCents: 900 },
+          { funnelKey: "form_magnet", dailyBudgetCents: 1000 },
         ],
       });
     expect(res.status).toBe(200);
@@ -52,16 +52,16 @@ describe("funnel-key aliases on the write surface", () => {
     expect(res.body.funnels).toEqual([
       {
         funnelKey: "visit_signup",
-        dailyBudgetCents: "500.0000000000",
+        dailyBudgetCents: "900.0000000000",
         updatedAt: expect.any(String),
       },
       {
         funnelKey: "visit_form",
-        dailyBudgetCents: "700.0000000000",
+        dailyBudgetCents: "1000.0000000000",
         updatedAt: expect.any(String),
       },
     ]);
-    expect(res.body.dailyBudgetCents).toBe("1200.0000000000");
+    expect(res.body.dailyBudgetCents).toBe("1900.0000000000");
   });
 
   it("accepts a canonical key on the single-funnel write", async () => {
@@ -121,12 +121,12 @@ describe("funnel-key aliases on the write surface", () => {
   });
 
   it("applies the product minimum to the funnel the alias names", async () => {
-    // $10/day on a Sales Meeting funnel, whose minimum is $24 — refused whether
-    // it is named the old way or the new one.
+    // $5/day on a cold-email ceiling, whose floor is $8 — refused whether the
+    // funnel is named the old way or the new one.
     const res = await request(app)
       .patch(funnelOnePath("sales_meetings_from_website"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 500 });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Sales Meeting (visit)");
   });

@@ -23,8 +23,8 @@ type FunnelRow = { funnelKey: string; dailyBudgetCents: string };
 
 /**
  * The live production state this exists for: a brand funding its
- * reply-to-meeting funnel at $8/day against a $24/day minimum, because the
- * ceiling predates the minimum and the attribution sweep carried it over
+ * reply-to-meeting funnel at $5/day against cold email's $8/day floor, because
+ * the ceiling predates the minimum and the attribution sweep carried it over
  * verbatim.
  */
 async function seedGrandfathered(cents: string): Promise<void> {
@@ -61,36 +61,36 @@ describe("a sub-minimum ceiling that predates the minimum can be kept or raised"
 
   // --- The one-funnel write (brand Settings) ---
 
-  it("raises an $8/day reply-to-meeting ceiling to $10/day", async () => {
-    await seedGrandfathered("800.0000000000");
+  it("raises a $5/day reply-to-meeting ceiling to $6/day", async () => {
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 600 });
 
     expect(res.status).toBe(200);
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "1000.0000000000"],
+      ["reply_meeting", "600.0000000000"],
     ]);
   });
 
-  it("accepts re-stating the same $8/day", async () => {
-    await seedGrandfathered("800.0000000000");
+  it("accepts re-stating the same $5/day", async () => {
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 800 });
+      .send({ dailyBudgetCents: 500 });
 
     expect(res.status).toBe(200);
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "800.0000000000"],
+      ["reply_meeting", "500.0000000000"],
     ]);
   });
 
   it("accepts raising it past the minimum", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
@@ -101,7 +101,7 @@ describe("a sub-minimum ceiling that predates the minimum can be kept or raised"
   });
 
   it("accepts setting it to zero — defunding is always allowed", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
@@ -112,75 +112,75 @@ describe("a sub-minimum ceiling that predates the minimum can be kept or raised"
     expect(await storedCeilings()).toEqual([["reply_meeting", "0.0000000000"]]);
   });
 
-  it("REFUSES lowering it to $5/day, and says what the customer can do", async () => {
-    await seedGrandfathered("800.0000000000");
+  it("REFUSES lowering it to $3/day, and says what the customer can do", async () => {
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 500 });
+      .send({ dailyBudgetCents: 300 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Sales Meeting (reply)");
-    expect(res.body.error).toContain("keep it at $8/day");
+    expect(res.body.error).toContain("keep it at $5/day");
     expect(res.body.error).toContain("raise it");
     expect(res.body.error).toContain("set it to 0");
 
     // Nothing moved.
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "800.0000000000"],
+      ["reply_meeting", "500.0000000000"],
     ]);
   });
 
   it("the grandfather is spent once the ceiling reaches the minimum", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const raise = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 2400 });
+      .send({ dailyBudgetCents: 800 });
     expect(raise.status).toBe(200);
 
     const back = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 600 });
     expect(back.status).toBe(400);
-    expect(back.body.error).toContain("needs at least $24/day");
+    expect(back.body.error).toContain("needs at least $8/day");
 
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "2400.0000000000"],
+      ["reply_meeting", "800.0000000000"],
     ]);
   });
 
   it("a funnel with NO stored ceiling is refused as before", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("visit_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 600 });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("Sales Meeting (visit)");
-    expect(res.body.error).toContain("needs at least $24/day");
+    expect(res.body.error).toContain("needs at least $8/day");
   });
 
   // --- The whole-set write (signup checkout) ---
 
   it("the whole-set write judges each funnel against ITS OWN stored ceiling", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
-    // reply_meeting is grandfathered at $8 and raised to $10 — accepted.
-    // visit_meeting has no stored ceiling, so $10 on it is refused, and one
-    // grandfathered funnel does not license the other.
+    // reply_meeting is grandfathered at $5 and raised to $6 — accepted.
+    // visit_meeting has no stored ceiling, so $6 on it is refused, and one
+    // grandfathered ceiling does not license the other.
     const refused = await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "reply_meeting", dailyBudgetCents: 1000 },
-          { funnelKey: "visit_meeting", dailyBudgetCents: 1000 },
+          { funnelKey: "reply_meeting", dailyBudgetCents: 600 },
+          { funnelKey: "visit_meeting", dailyBudgetCents: 600 },
         ],
       });
 
@@ -188,7 +188,7 @@ describe("a sub-minimum ceiling that predates the minimum can be kept or raised"
     expect(refused.body.error).toContain("Sales Meeting (visit)");
     // Nothing half-applied.
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "800.0000000000"],
+      ["reply_meeting", "500.0000000000"],
     ]);
 
     const accepted = await request(app)
@@ -196,63 +196,63 @@ describe("a sub-minimum ceiling that predates the minimum can be kept or raised"
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "reply_meeting", dailyBudgetCents: 1000 },
-          { funnelKey: "visit_meeting", dailyBudgetCents: 2400 },
+          { funnelKey: "reply_meeting", dailyBudgetCents: 600 },
+          { funnelKey: "visit_meeting", dailyBudgetCents: 800 },
         ],
       });
 
     expect(accepted.status).toBe(200);
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "1000.0000000000"],
-      ["visit_meeting", "2400.0000000000"],
+      ["reply_meeting", "600.0000000000"],
+      ["visit_meeting", "800.0000000000"],
     ]);
-    expect(accepted.body.dailyBudgetCents).toBe("3400.0000000000");
+    expect(accepted.body.dailyBudgetCents).toBe("1400.0000000000");
   });
 
   it("the whole-set write refuses LOWERING a grandfathered ceiling", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
       .send({
-        funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: 500 }],
+        funnels: [{ funnelKey: "reply_meeting", dailyBudgetCents: 300 }],
       });
 
     expect(res.status).toBe(400);
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "800.0000000000"],
+      ["reply_meeting", "500.0000000000"],
     ]);
   });
 
   it("the canonical spelling of the funnel is grandfathered too", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("sales_meetings_from_conversation"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 600 });
 
     expect(res.status).toBe(200);
     expect(await storedCeilings()).toEqual([
-      ["reply_meeting", "1000.0000000000"],
+      ["reply_meeting", "600.0000000000"],
     ]);
   });
 
   // --- Reads are unchanged ---
 
   it("the brand-level total still answers the sum of the ceilings", async () => {
-    await seedGrandfathered("800.0000000000");
+    await seedGrandfathered("500.0000000000");
 
     const read = await request(app).get(funnelReadPath).set(internalHeaders);
-    expect(read.body.dailyBudgetCents).toBe("800.0000000000");
+    expect(read.body.dailyBudgetCents).toBe("500.0000000000");
 
     await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 1000 });
+      .send({ dailyBudgetCents: 600 });
 
     const after = await request(app).get(funnelReadPath).set(internalHeaders);
-    expect(after.body.dailyBudgetCents).toBe("1000.0000000000");
+    expect(after.body.dailyBudgetCents).toBe("600.0000000000");
   });
 });
