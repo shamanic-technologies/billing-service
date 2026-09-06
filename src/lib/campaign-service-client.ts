@@ -42,6 +42,12 @@ export interface SpendableBudgetRow {
   funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
+  /**
+   * The funnel LEG this stored ceiling names, echoed back. `null` for every
+   * ceiling written before legs existed — which is what the leg backfill reads
+   * to find the ceilings still missing one.
+   */
+  legKey: string | null;
   resolvedOfferId: string | null;
   dailyBudgetCents: number;
   running: boolean;
@@ -57,6 +63,12 @@ export interface SpendableBudgetCampaign {
   funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
+  /**
+   * The funnel LEG this campaign is bought for — features-service's canonical
+   * leg id, minted there and carried on the campaign row. OPAQUE: billing never
+   * parses it and holds no leg vocabulary. `null` when the campaign names none.
+   */
+  legKey: string | null;
   configuredDailyBudgetCents: number;
   runningDailyBudgetCents: number;
 }
