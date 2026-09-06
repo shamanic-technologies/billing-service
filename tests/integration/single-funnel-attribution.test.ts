@@ -156,7 +156,7 @@ describe("attributing a brand-level ceiling to its single funnel", () => {
     await request(app)
       .patch(funnelOnePath("visit_signup"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 700 });
+      .send({ dailyBudgetCents: 900 });
 
     const outcome = await attributeBrandBudgetToSingleFunnel(
       orgId,
@@ -172,7 +172,7 @@ describe("attributing a brand-level ceiling to its single funnel", () => {
     expect(funnelRead.body.funnels).toEqual([
       {
         funnelKey: "visit_signup",
-        dailyBudgetCents: "700.0000000000",
+        dailyBudgetCents: "900.0000000000",
         updatedAt: expect.any(String),
       },
     ]);

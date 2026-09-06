@@ -113,16 +113,16 @@ describe("per-acquisition-channel daily ceilings", () => {
           {
             funnelKey: "visit_form",
             featureSlug: COLD,
-            dailyBudgetCents: 100,
+            dailyBudgetCents: 800,
           },
         ],
       });
 
     const stored = await read();
-    expect(stored.brandTotal).toBe("3500.0000000000");
+    expect(stored.brandTotal).toBe("4200.0000000000");
     expect(stored.funnels).toEqual([
       ["reply_meeting", "3400.0000000000"],
-      ["visit_form", "100.0000000000"],
+      ["visit_form", "800.0000000000"],
     ]);
   });
 
@@ -148,15 +148,15 @@ describe("per-acquisition-channel daily ceilings", () => {
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 500 });
+      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 900 });
     expect(res.status).toBe(200);
 
     const stored = await read();
     expect(stored.channels).toEqual([
-      ["reply_meeting", FEEDBACK, "500.0000000000"],
+      ["reply_meeting", FEEDBACK, "900.0000000000"],
       ["reply_meeting", COLD, "3000.0000000000"],
     ]);
-    expect(stored.funnels).toEqual([["reply_meeting", "3500.0000000000"]]);
+    expect(stored.funnels).toEqual([["reply_meeting", "3900.0000000000"]]);
   });
 
   it("0 is legal at the channel grain, and a wholly-zero set is a pause", async () => {
@@ -226,11 +226,11 @@ describe("per-acquisition-channel daily ceilings", () => {
     const res = await request(app)
       .patch(funnelOnePath("visit_form"))
       .set(authHeaders)
-      .send({ dailyBudgetCents: 100 });
+      .send({ dailyBudgetCents: 800 });
     expect(res.status).toBe(200);
 
     const stored = await read();
-    expect(stored.channels).toEqual([["visit_form", COLD, "100.0000000000"]]);
+    expect(stored.channels).toEqual([["visit_form", COLD, "800.0000000000"]]);
   });
 
   it("a funnel-grain write re-funds the channel the funnel already runs", async () => {
@@ -239,7 +239,7 @@ describe("per-acquisition-channel daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_signup", featureSlug: CRM, dailyBudgetCents: 500 },
+          { funnelKey: "visit_signup", featureSlug: CRM, dailyBudgetCents: 800 },
         ],
       });
 
@@ -319,21 +319,21 @@ describe("per-acquisition-channel daily ceilings", () => {
       .set(authHeaders)
       .send({
         funnels: [
-          { funnelKey: "visit_form", featureSlug: COLD, dailyBudgetCents: 100 },
+          { funnelKey: "visit_form", featureSlug: COLD, dailyBudgetCents: 800 },
           {
             funnelKey: "visit_signup",
             featureSlug: COLD,
-            dailyBudgetCents: 100,
+            dailyBudgetCents: 800,
           },
         ],
       });
     expect(ok.status).toBe(200);
-    expect(ok.body.dailyBudgetCents).toBe("200.0000000000");
+    expect(ok.body.dailyBudgetCents).toBe("1600.0000000000");
   });
 
-  // --- The minimum binds the FUNNEL TOTAL ---
+  // --- The minimum binds the (funnel, CHANNEL) TOTAL ---
 
-  it("accepts a split whose halves are each under the funnel minimum", async () => {
+  it("accepts a split across two channels, each clearing its own floor", async () => {
     const res = await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
@@ -355,7 +355,9 @@ describe("per-acquisition-channel daily ceilings", () => {
     expect(res.body.dailyBudgetCents).toBe("2400.0000000000");
   });
 
-  it("still refuses a funnel whose TOTAL is under the minimum", async () => {
+  it("refuses the one channel under ITS floor, whatever its siblings fund", async () => {
+    // Cold email clears its $8/day; the feedback channel at $5/day does not, and
+    // a sibling channel's money cannot excuse it — the two never pool.
     const res = await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
@@ -364,17 +366,18 @@ describe("per-acquisition-channel daily ceilings", () => {
           {
             funnelKey: "reply_meeting",
             featureSlug: COLD,
-            dailyBudgetCents: 1000,
+            dailyBudgetCents: 5000,
           },
           {
             funnelKey: "reply_meeting",
             featureSlug: FEEDBACK,
-            dailyBudgetCents: 1000,
+            dailyBudgetCents: 500,
           },
         ],
       });
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("$24/day");
+    expect(res.body.error).toContain(FEEDBACK);
+    expect(res.body.error).toContain("$8/day");
   });
 
   it("splits a funded funnel in two without tripping the minimum", async () => {
@@ -399,9 +402,9 @@ describe("per-acquisition-channel daily ceilings", () => {
     expect(res.body.dailyBudgetCents).toBe("6000.0000000000");
   });
 
-  it("refuses adding a channel that would leave the funnel total under the minimum", async () => {
-    // A funnel at 0 is unfunded; adding a $10/day channel funds it at $10 total,
-    // under the $24/day floor, so it is a fresh sub-minimum statement.
+  it("refuses adding a channel funded under its own floor", async () => {
+    // The channel is judged alone: $5/day is under cold email's $8/day floor,
+    // and the sibling channel sitting at 0 has nothing to lend it.
     await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
@@ -414,7 +417,7 @@ describe("per-acquisition-channel daily ceilings", () => {
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 1000 });
+      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 500 });
     expect(res.status).toBe(400);
   });
 });

@@ -64,13 +64,13 @@ describe("the minimum and its grandfather bind the funnel total", () => {
     await closeDb();
   });
 
-  it("splits an $8/day grandfathered funnel across two channels", async () => {
-    await seedCeiling(COLD, "800.0000000000");
+  it("keeps a grandfathered channel while a second channel opens at its own floor", async () => {
+    await seedCeiling(COLD, "500.0000000000");
 
-    // $8 -> $6 cold + $2 feedback keeps the funnel at $8: nothing about what the
-    // funnel spends per day changed, so it is neither a raise nor a new
-    // sub-minimum statement.
-    const res = await request(app)
+    // Each channel is judged on its own money: the grandfathered cold-email
+    // ceiling is kept, and the second channel must clear ITS floor — the
+    // grandfather does not extend to it.
+    const refused = await request(app)
       .put(`/v1/brands/${brandId}/funnel-budgets`)
       .set(authHeaders)
       .send({
@@ -78,7 +78,7 @@ describe("the minimum and its grandfather bind the funnel total", () => {
           {
             funnelKey: "reply_meeting",
             featureSlug: COLD,
-            dailyBudgetCents: 600,
+            dailyBudgetCents: 500,
           },
           {
             funnelKey: "reply_meeting",
@@ -87,35 +87,55 @@ describe("the minimum and its grandfather bind the funnel total", () => {
           },
         ],
       });
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toContain(FEEDBACK);
+
+    const res = await request(app)
+      .put(`/v1/brands/${brandId}/funnel-budgets`)
+      .set(authHeaders)
+      .send({
+        funnels: [
+          {
+            funnelKey: "reply_meeting",
+            featureSlug: COLD,
+            dailyBudgetCents: 500,
+          },
+          {
+            funnelKey: "reply_meeting",
+            featureSlug: FEEDBACK,
+            dailyBudgetCents: 800,
+          },
+        ],
+      });
     expect(res.status).toBe(200);
-    expect(await funnelTotal()).toBe("800.0000000000");
+    expect(await funnelTotal()).toBe("1300.0000000000");
   });
 
-  it("raises a grandfathered funnel by opening a second channel", async () => {
-    await seedCeiling(COLD, "800.0000000000");
+  it("raises a brand's spend by opening a second channel at its floor", async () => {
+    await seedCeiling(COLD, "500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 200 });
+      .send({ featureSlug: FEEDBACK, dailyBudgetCents: 800 });
     expect(res.status).toBe(200);
-    expect(await funnelTotal()).toBe("1000.0000000000");
+    expect(await funnelTotal()).toBe("1300.0000000000");
   });
 
-  it("refuses lowering a grandfathered funnel's TOTAL while still under the floor", async () => {
-    await seedCeiling(COLD, "800.0000000000");
+  it("refuses lowering a grandfathered channel's TOTAL while still under its floor", async () => {
+    await seedCeiling(COLD, "500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, dailyBudgetCents: 500 });
+      .send({ featureSlug: COLD, dailyBudgetCents: 300 });
     expect(res.status).toBe(400);
-    expect(res.body.error).toContain("$8/day");
-    expect(await funnelTotal()).toBe("800.0000000000");
+    expect(res.body.error).toContain("$5/day");
+    expect(await funnelTotal()).toBe("500.0000000000");
   });
 
-  it("still lets a grandfathered funnel be defunded to zero", async () => {
-    await seedCeiling(COLD, "800.0000000000");
+  it("still lets a grandfathered channel be defunded to zero", async () => {
+    await seedCeiling(COLD, "500.0000000000");
 
     const res = await request(app)
       .patch(funnelOnePath("reply_meeting"))
@@ -159,8 +179,8 @@ describe("the minimum and its grandfather bind the funnel total", () => {
     expect(await funnelTotal()).toBe("2400.0000000000");
   });
 
-  it("spends the grandfather once the funnel total reaches the minimum", async () => {
-    await seedCeiling(COLD, "800.0000000000");
+  it("spends the grandfather once the channel total reaches the minimum", async () => {
+    await seedCeiling(COLD, "500.0000000000");
 
     const raise = await request(app)
       .patch(funnelOnePath("reply_meeting"))
@@ -171,7 +191,7 @@ describe("the minimum and its grandfather bind the funnel total", () => {
     const lower = await request(app)
       .patch(funnelOnePath("reply_meeting"))
       .set(authHeaders)
-      .send({ featureSlug: COLD, dailyBudgetCents: 800 });
+      .send({ featureSlug: COLD, dailyBudgetCents: 600 });
     expect(lower.status).toBe(400);
     expect(await funnelTotal()).toBe("2400.0000000000");
   });

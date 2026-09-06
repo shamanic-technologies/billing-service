@@ -64,12 +64,12 @@ describe("Google Ads states its own daily minimum", () => {
     expect(read.body.dailyBudgetCents).toBe("1500.0000000000");
   });
 
-  it("funds the $24/day visit-to-meeting funnel at $5 through Google Ads", async () => {
-    // The funnel's own floor is $24/day, and it still is for cold email — the
-    // $5 is the CHANNEL's floor, not a re-pricing of the funnel.
+  it("funds the visit-to-meeting funnel at $5 through Google Ads, under cold email's $8", async () => {
+    // Each channel is priced by its own published terms: $5/day for Google Ads,
+    // $8/day for cold email, on the very same funnel.
     const cheap = await setOne("visit_meeting", COLD, 500);
     expect(cheap.status).toBe(400);
-    expect(cheap.body.error).toContain("$24/day");
+    expect(cheap.body.error).toContain("$8/day");
 
     const ads = await setOne("visit_meeting", GOOGLE_ADS, 500);
     expect(ads.status).toBe(200);
@@ -109,7 +109,7 @@ describe("Google Ads states its own daily minimum", () => {
     expect(pooled.status).toBe(400);
     expect(pooled.body.error).toContain(GOOGLE_ADS);
 
-    // ...and $5 of Google Ads cannot carry $1 of cold email over the funnel's.
+    // ...and $5 of Google Ads cannot carry $1 of cold email over its own $8.
     const other = await request(app)
       .put(funnelSetPath)
       .set(authHeaders)
@@ -124,7 +124,7 @@ describe("Google Ads states its own daily minimum", () => {
         ],
       });
     expect(other.status).toBe(400);
-    expect(other.body.error).toContain("$24/day");
+    expect(other.body.error).toContain("$8/day");
   });
 
   it("accepts zero on Google Ads, and a set where everything is zero", async () => {
@@ -149,7 +149,8 @@ describe("Google Ads states its own daily minimum", () => {
     for (const cents of [0, 500, 100000]) {
       const res = await setOne("visit_form", "carrier-pigeon-outreach", cents);
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain("unknown acquisition channel");
+      expect(res.body.error).toContain("carrier-pigeon-outreach");
+      expect(res.body.error).toContain("no daily operating cost");
     }
 
     // Nothing was stored on the way to the refusal.

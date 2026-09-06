@@ -166,20 +166,20 @@ describe("a ceiling states the funnel leg its campaign is bought for", () => {
       .send({
         funnels: [
           { funnelKey: "reply_meeting", dailyBudgetCents: 2400 },
-          { funnelKey: "visit_signup", dailyBudgetCents: 100 },
+          { funnelKey: "visit_signup", dailyBudgetCents: 800 },
         ],
       })
       .expect(200);
 
     const view = await read();
-    expect(view.brandTotal).toBe("2500.0000000000");
+    expect(view.brandTotal).toBe("3200.0000000000");
     expect(view.funnels).toEqual([
       ["reply_meeting", "2400.0000000000"],
-      ["visit_signup", "100.0000000000"],
+      ["visit_signup", "800.0000000000"],
     ]);
     expect(view.offers).toEqual([
       ["reply_meeting", COLD, null, "2400.0000000000"],
-      ["visit_signup", COLD, null, "100.0000000000"],
+      ["visit_signup", COLD, null, "800.0000000000"],
     ]);
     // The stored grain simply carries no leg. Nothing became required.
     expect(view.legs.map((l) => l[3])).toEqual([null, null]);
@@ -359,7 +359,7 @@ describe("a ceiling states the funnel leg its campaign is bought for", () => {
         ],
       });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/\$24\/day/);
+    expect(res.body.error).toMatch(/\$8\/day/);
   });
 
   it("counts a leg-less ceiling for a leg only while that leg is the brand's sole named one", async () => {
@@ -437,7 +437,7 @@ describe("a ceiling states the funnel leg its campaign is bought for", () => {
       .patch(funnelOnePath("visit_signup"))
       .set(getAuthHeaders(orgId, userId, runId))
       .send({
-        dailyBudgetCents: 100,
+        dailyBudgetCents: 800,
         featureSlug: COLD,
         legKey: "a_leg_billing_has_never_heard_of",
       });
