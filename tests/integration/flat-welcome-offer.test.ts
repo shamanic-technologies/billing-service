@@ -53,6 +53,8 @@ const COUPON_ID = "coupon_welcome_30";
 const orgId = "00000000-0000-0000-0000-0000000005a1";
 const otherOrgId = "00000000-0000-0000-0000-0000000005a2";
 const userId = "00000000-0000-0000-0000-0000000005a3";
+const invitee1 = "00000000-0000-0000-0000-0000000005a4";
+const invitee2 = "00000000-0000-0000-0000-0000000005a5";
 
 const NEVER_PRE_LAUNCH = () => Promise.resolve("0.0000000000");
 const cents = (n: number) => `${n}.0000000000`;
@@ -346,33 +348,118 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
     });
   });
 
-  // --- The referral ladder stacks on the new bar with no special-casing ---
+  // --- A GRANTED welcome is not a rung: the referral ladder ignores it ---
 
-  it("a referred signup's $500 promise sits at $30 + $500, straight from the ladder", async () => {
-    await insertSignupAccount(otherOrgId); // the inviter
-    await insertSignupAccount(orgId); // the invitee
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
-
-    // Materialise the invitee's welcome promise at its own $30 bar.
-    await settleFreeCreditPromises(orgId, "0.0000000000");
-    await claimReferral(orgId, otherOrgId);
-
+  /** Every promise the org carries, as (amount, bar), cheapest bar first. */
+  async function promiseLadder(id: string) {
     const rows = await db
       .select({
         amountCents: freeCreditPromises.amountCents,
         paidTriggerCents: freeCreditPromises.paidTriggerCents,
       })
       .from(freeCreditPromises)
-      .where(eq(freeCreditPromises.orgId, orgId));
+      .where(eq(freeCreditPromises.orgId, id));
+    return rows
+      .map((r) => [r.amountCents, r.paidTriggerCents])
+      .sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  }
 
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        { amountCents: 3000, paidTriggerCents: 3000 },
-        {
-          amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
-          paidTriggerCents: 3000 + CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
-        },
-      ])
-    );
+  /** One referral all the way through: the invitee claims, pays, and converts. */
+  async function convertReferral(inviteeId: string, inviterOrgId: string) {
+    await signupWithFlatGift(inviteeId);
+    await claimReferral(inviteeId, inviterOrgId);
+    await settleFreeCreditPromises(inviteeId, cents(1_000_000));
+  }
+
+  it("a referred signup earns its $500 at $500, not at $30 + $500", async () => {
+    await signupWithFlatGift(otherOrgId); // the inviter
+    await signupWithFlatGift(orgId); // the invitee
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+
+    // Materialise the invitee's welcome promise, exactly as the dashboard read does.
+    await settleFreeCreditPromises(orgId, "0.0000000000");
+    await claimReferral(orgId, otherOrgId);
+
+    expect(await promiseLadder(orgId)).toEqual([
+      // The welcome promise stays frozen at its own figures, and contributes no rung:
+      // nothing earns it, so the referral sits at its own $500.
+      [FLAT_GIFT_CENTS, FLAT_GIFT_CENTS],
+      [CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS, CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS],
+    ]);
+  });
+
+  it("a second referral promise still stacks above the first", async () => {
+    await signupWithFlatGift(orgId); // the inviter
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+
+    await convertReferral(invitee1, orgId);
+    await convertReferral(invitee2, orgId);
+
+    expect(await promiseLadder(orgId)).toEqual([
+      [FLAT_GIFT_CENTS, FLAT_GIFT_CENTS],
+      [CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS, CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS],
+      [
+        CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+        CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS * 2,
+      ],
+    ]);
+  });
+
+  it("a welcome offer genuinely EARNED on payments still sets the bar", async () => {
+    // The $400 MATCH cohort: $5 at signup, the $395 remainder earned at $400. Its
+    // trigger is a real bar and stays one, so the referral stacks to $900.
+    await insertTestAccount({
+      orgId,
+      welcomeCompletionEligible: true,
+      freeCreditEntitlementCents: 40000,
+      freeCreditPaidTriggerCents: 40000,
+    });
+    await insertTestPromoGrant({
+      orgId,
+      userId,
+      amountCents: 500,
+      promoCode: WELCOME_PROMO_CODE,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    await settleFreeCreditPromises(orgId, "0.0000000000");
+
+    await claimReferral(orgId, otherOrgId);
+
+    expect(await promiseLadder(orgId)).toEqual([
+      [40000, 40000],
+      [
+        CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+        40000 + CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+      ],
+    ]);
+  });
+
+  it("an EXISTING promise row is never re-barred, and a new one stacks above it", async () => {
+    await signupWithFlatGift(orgId); // the inviter
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    await settleFreeCreditPromises(orgId, "0.0000000000");
+
+    // A promise frozen under the OLD ladder ($500 @ $530), as prod may hold.
+    await db.insert(freeCreditPromises).values({
+      orgId,
+      kind: "referral",
+      amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+      paidTriggerCents: FLAT_GIFT_CENTS + CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+      referredOrgId: invitee2,
+    });
+
+    await convertReferral(invitee1, orgId);
+
+    expect(await promiseLadder(orgId)).toEqual([
+      [FLAT_GIFT_CENTS, FLAT_GIFT_CENTS],
+      [
+        CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+        FLAT_GIFT_CENTS + CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+      ],
+      [
+        CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
+        FLAT_GIFT_CENTS + CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS * 2,
+      ],
+    ]);
   });
 });
