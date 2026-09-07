@@ -12,8 +12,8 @@
  *
  * An org may carry any number of promises at once. Today two kinds exist:
  *
- *   - `welcome`  — the signup offer ("$400 in free credits", $25 for the
- *                  grandfathered cohort). One per org, amount and bar copied from
+ *   - `welcome`  — the signup offer ($30 flat today; $400 and $25 for the two older
+ *                  cohorts). One per org, amount and bar copied from
  *                  the figures already frozen on its billing account. It is granted
  *                  by lib/welcome-completion.ts, whose arithmetic is unchanged; this
  *                  module only materialises the row so the welcome offer is ONE of

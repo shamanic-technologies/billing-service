@@ -97,7 +97,7 @@ When reconciling or computing real cost: `WHERE rc.status='actual' AND rc.cost_s
 
 ## Local promos (`local_promos` table)
 
-The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` ($5 grant; seeded @$2 by migration 0016, bumped to $25 by 0018, reverted to $2 by 0019, set to $5 by 0028). Welcome-completion gift = `code='welcome_completion'` (technical code seeded at 0; dynamic per-row amount — see "Welcome-completion gift"). Other codes are admin-managed.
+The only persistent ledger billing-service owns. One row per (org, promo_code) — `UNIQUE (org_id, promo_code_id)`. Welcome trial = `code='welcome'` (seeded @$2 by migration 0016, bumped to $25 by 0018, reverted to $2 by 0019, set to $5 by 0028; re-priced at RUNTIME to $30 for the flat offer — the seed default is only what a fresh database starts at). Welcome-completion gift = `code='welcome_completion'` (technical code seeded at 0; dynamic per-row amount — see "Welcome-completion gift"). Other codes are admin-managed.
 
 **Removed — do NOT reintroduce `first_load_match` (migration 0031).** It backed `POST /v1/accounts/wallet_setup` (dollar-for-dollar match on the first paid load, capped $25). The whole path was dead: onboarding migrated off it (the dashboard's own `onboarding-flow.test.ts` asserts the flow does not contain `wallet_setup`, and its leftover `walletSetup()` helper had zero call sites) and prod never completed one — **0 of 1255** `payment_intents` carried `metadata.billing_reason='initial_load'`. Worse, it capped at $25 **on its own** with no reference to the free-credit entitlement, so `welcome` + `first_load_match` granted **$30** of free credit against a $25 entitlement — it contradicts the rule 0029 established. Its promise ("$25 free once you put money in") is now served by `welcome_completion`, on the checkout path onboarding actually uses. A removal guard in `tests/integration/accounts.test.ts` ("removed surfaces") asserts the route 404s and no `first_load_match` code row exists.
 
@@ -122,10 +122,15 @@ Until 0033 an org had exactly ONE outstanding promise, expressed as the two `bil
 
   | situation | ladder |
   |---|---|
-  | brand-new $400 account | $400 @ $400 (unchanged from today) |
-  | ...then referred | + $500 @ $900 |
-  | ...a third promise | + $500 @ $1,400, and so on, no ceiling |
+  | brand-new $30 account | $30 @ $30 |
+  | ...then referred | + $500 @ $530 |
+  | ...a third promise | + $500 @ $1,030, and so on, no ceiling |
+  | $400 account, referred | $400 @ $400, then $500 @ $900 |
   | grandfathered $25 account, referred | $25 @ $25, then $500 @ $525 |
+
+  The flat-$30 re-price (0040) needed NO change here and no special case: the welcome
+  bar is read off the account's own frozen trigger, so it simply became $30 and every
+  referral stacks $500 above whatever that org carries.
 
 - **An outstanding promise is a promise, not money.** No `local_promos` row exists until it is granted, so it is absent from `credited` / `balance` / `actual_balance` / spendable everywhere. Do NOT "helpfully" surface it in a balance figure.
 - **The referral offer has NO up-front portion** — the whole amount lands when the bar is crossed. The $5 up-front gift belongs to the welcome offer only, and is unchanged for every cohort.
@@ -203,7 +208,9 @@ The same trap bit the **dunning follow-ups**, which used `ep.runId ?? crypto.ran
 
 ## Welcome-completion gift — "$N in free credits", automatic (`src/lib/welcome-completion.ts`)
 
-Onboarding promises every new customer **$N of free credits**. Signup only grants the `welcome` row ($5 today), so for months the remainder was granted BY HAND (staff `admin_grant` rows described "Welcome credits (2/2)"). `welcome_completion` (migration 0029) automates the remainder.
+Onboarding promises every new customer **$N of free credits**. Under a MATCH offer signup granted only the `welcome` row ($5) and the remainder was earned by paying, so for months it was granted BY HAND (staff `admin_grant` rows described "Welcome credits (2/2)"); `welcome_completion` (migration 0029) automates it.
+
+**⚠️ For the CURRENT cohort this whole file is a no-op, and that is by design (migration 0040).** The offer is now a flat **$30 granted in full at signup** — the `welcome` promo row is priced at 3000 (the dashboard pushes that at boot via `PATCH /v1/promo-codes/welcome`), so the derived remainder is already zero and `settleWelcomeCompletion` returns `entitlement_already_full` without inserting anything, at any payment amount. Nothing was special-cased to achieve that: the remainder has always been `entitlement − what was already gifted`, and the two sides are now equal. The machinery is still here for the two MATCH cohorts ($25 and $400), which still earn their own remainder at their own trigger.
 
 **The rule (product-locked):**
 
@@ -215,11 +222,12 @@ Onboarding promises every new customer **$N of free credits**. Signup only grant
 
 Both figures used to be module-level constants, so re-pricing the offer re-priced it for **every existing customer at once**. They now live on `billing_accounts` — `free_credit_entitlement_cents` + `free_credit_paid_trigger_cents`, `integer NOT NULL` — written ONCE from the **column DEFAULT** at INSERT (`findOrCreateAccount` inserts `org_id` only) and never updated afterwards.
 
-- **Two cohorts today.** Accounts predating 0032 carry **$25 / $25** (`GRANDFATHERED_FREE_CREDIT_*`); accounts created after it carry **$400 / $400** (`CURRENT_FREE_CREDIT_*`). Verified on a prod fork: **93/93** existing accounts landed at 2500/2500 and a fresh `INSERT … (org_id)` came back 40000/40000.
+- **THREE cohorts today.** Accounts predating 0032 carry **$25 / $25** (`GRANDFATHERED_FREE_CREDIT_*`); accounts created between 0032 and 0040 carry **$400 / $400**; accounts created after 0040 carry **$30 / $30** (`CURRENT_FREE_CREDIT_*`). Measured in prod at 0040's ship time: **93** accounts at 2500/2500 and **10** at 40000/40000, none of which 0040 touches. Verified on a prod fork at 0032's ship time: 93/93 existing accounts landed at 2500/2500 and a fresh `INSERT … (org_id)` came back 40000/40000.
 - **Read the ROW, never a constant.** There is deliberately no bare `FREE_CREDIT_ENTITLEMENT_CENTS` export any more — a global entitlement is the exact bug this shape removes. `CURRENT_*` is the DB default, `GRANDFATHERED_*` is documentation for the cohort that must keep reading $25 forever. Do not re-price `GRANDFATHERED_*`.
 - **A future re-price is one line**: move the column DEFAULT. Existing rows already hold their value, so every customer grandfathers automatically — **no cutoff date, no backfill, no new rule to stack**. (Contrast `WELCOME_COMPLETION_LAUNCH_AT_ISO`, which needs a date because it is a claim about payment HISTORY. This is a claim about the account itself, so the row carries it.)
 - **Migration 0032's statement ORDER is the whole trick**, and it is why re-applying is safe: `ADD COLUMN … DEFAULT 2500` backfills existing rows with the offer they signed up under, *then* `ALTER COLUMN … SET DEFAULT 40000` aims future signups at the new one. On a re-apply, `ADD COLUMN IF NOT EXISTS` is a no-op, so a $400 account can never be re-stamped to $25. A test in `tests/integration/free-credit-offer-cohorts.test.ts` replays those exact statements and asserts it.
-- **The $5 up-front `welcome` gift is unchanged for BOTH cohorts.** Only the total and the trigger differ.
+- **Migration 0040 is that one-line re-price, and it is the shape to copy.** TWO `ALTER COLUMN … SET DEFAULT 3000` statements, no `ADD COLUMN` half and no row written — repeating 0032's backfill is the only way a re-price could reach an existing account, so it is absent. Idempotent by nature; the reverse SQL is in the migration header. A test replays it and asserts both older cohorts keep their exact figures.
+- **The `welcome` gift amount differs per cohort and is NOT a migration.** $5 for the two MATCH cohorts, $30 for the flat one — set at runtime on the `welcome` `local_promo_codes` row (`PATCH /v1/promo-codes/welcome`), so nothing in this repo hardcodes it. `WELCOME_PROMO_AMOUNT_CENTS` is only the seed default for a fresh database.
 - **`insertTestAccount` defaults to the GRANDFATHERED $25/$25**, so every suite written before the re-price keeps exercising the offer it was written against (same rationale as the `welcomeCompletionEligible: false` default). Pass `freeCreditEntitlementCents`/`freeCreditPaidTriggerCents` for the new cohort; to exercise what a REAL signup gets, insert with no offer columns at all so the DB DEFAULT applies.
 
 **Who drives it (never the browser).** Nothing pushes into billing when a Checkout payment lands (stripe-service only mirrors the PaymentIntent), so `settleWelcomeCompletion(orgId, paidTopupsCents, fetchPaidTopupsBeforeLaunchCents)` is called from every path that ALREADY holds the org's paid-topups sum — `composeAccountFunds` (so the dashboard read right after a payment makes it land in seconds) and the checkout route — plus, unconditionally, the hourly `runWelcomeCompletionSweep` on the existing dunning scheduler. A request can only make an already-EARNED grant land sooner; the condition is derived entirely from Stripe's record of money received plus billing's own ledger, so nothing a caller asserts can conjure a grant. `computeBalance` deliberately does NOT settle — `GET /internal/campaigns/:id/affordability` is documented side-effect-free and authorize stays hot-path-thin.
@@ -242,27 +250,38 @@ Verified on a prod fork: 88/88 eligible after 0030 (was 0/88), grant rows + gift
 
 **Fail loud:** a missing `welcome_completion` seed THROWS (→ 502 on the account read). Swallowing it would leave a buyer short of credit they were promised, which is the exact failure this exists to remove. This is not paranoia — prod HAS lost promo-code seeds (`invite_reward`/`invite_welcome` never applied per 0017; `first_load_match` was seeded by journaled 0023 yet is absent from prod today, apparently hand-renamed to a `brand_welcome` row).
 
-### Onboarding charges ONE DAY of the chosen budget, so a $400/day customer crosses the $400 trigger on their FIRST payment
+### Onboarding charges ONE DAY of the chosen budget, MINUS the $30 gift
 
-The daily budget the customer picks in onboarding IS the checkout amount — the flow charges roughly one day of it. That figure and the current cohort's `free_credit_paid_trigger_cents` are both **$400**, so a customer who sets $400/day pays $400 once and immediately earns the whole `welcome_completion` remainder. Observed in prod 2026-08-30, over 14 seconds on one org: paid $400 at 19:31:38, granted $395 at 19:31:51, budget row written at 19:31:52. Credited $800 against $400 collected.
+The daily budget the customer picks in onboarding IS the checkout amount — the flow charges roughly one day of it. Under the flat offer the gift comes off that charge, so the two sides of one $30 are:
 
-That is the offer working as designed, not a bug — but it is the shape to expect when a payment looks larger than a "trial", and it is why the number is the same on both sides of the sentence. It also means **the runway is one day**: at $400/day the $800 is gone in two days and the org lands in depletion dunning. Nothing in this service paces that; the daily budget is the only lever.
+    credit granted = $30, always, at signup
+    cash charged   = max($0, daily_budget − $30)
+
+A $30/day signup pays nothing (the dashboard sends a $0 setup-mode checkout instead) and starts with $30 of balance; a $50/day signup pays $20 and starts with $50. Both received exactly $30. **It is never $60 and never $0** — that invariant is the point of the design and is pinned by tests.
+
+Under the OLD $400 MATCH offer the same "one day of budget" property had a different consequence worth remembering: the checkout amount and the trigger were both $400, so a $400/day customer earned the whole $395 remainder on their FIRST payment. Observed in prod 2026-08-30, over 14 seconds on one org: paid $400 at 19:31:38, granted $395 at 19:31:51, budget row written at 19:31:52. Credited $800 against $400 collected — the offer working as designed, and the shape to expect on any account still carrying that cohort's figures. Its runway is one day: at $400/day the $800 is gone in two days and the org lands in depletion dunning. Nothing in this service paces that; the daily budget is the only lever.
 
 **Stopping a customer from being charged again = TWO independent levers, and only one of them is about money.** `DELETE /v1/accounts/auto_topup` removes the credit line (floor drops to `"0"`, strictly prepaid), stops every auto-reload, AND drops the org from the month-end sweep's candidate set, which selects auto-topup-ENABLED accounts only — so it closes all three charge paths at once. Setting the brand's daily budget to **0** pauses the work instead; it charges nothing by itself, because since campaign-service #343 it is the FUNDING of a sales funnel that makes its campaigns run (the pause flag is gone), so a funnel at 0 has campaigns that exist and do not spend. Reach for the budget when the customer wants to stop and come back, and for auto-topup when they meant to send money once. Doing only the budget leaves the sweep armed on any negative balance; doing only auto-topup leaves the spend running until the credit is gone.
 
-### Checkout-page copy — the gift is announced, never advanced
+### Checkout page — the gift comes OFF the price, or is announced as still coming
 
-`POST /v1/checkout-sessions` payment mode carries `custom_text.submit.message` = `welcomeCompletionCheckoutNotice(offer)`, telling the buyer the free credits are still coming. The SENTENCE is product-approved — do not reword it — but the two figures are substituted from the org's OWN offer, because they differ per cohort and quoting the wrong one would promise money we will not grant. `$25/$25` renders byte-identically to the string this service shipped before ("You get $25 in free credits. $5 now, the rest once your payments reach $25.") and there is a test pinning that; `$400/$400` renders the $400 wording. The `$5` is a literal on purpose (the welcome gift is $5 for every cohort). The notice is deliberately withheld from an ineligible org and from one already fully gifted (it would be a lie). Stripe caps `message` at 1200 chars.
+`decideCheckoutWelcomeOffer(orgId, paidTopupsCents)` returns `{couponId, noticeMessage}` and **exactly one is ever set, by construction**: the discount requires the entitlement to be fully gifted already, the notice requires some of it to still be coming. `POST /v1/checkout-sessions` payment mode then attaches `discounts: [{coupon}]` or `custom_text.submit.message`.
 
-`decideCheckoutWelcomeNotice(orgId)` returns that string or null. It takes ONLY the org: it no longer needs the paid-topups sum or the checkout amount, because nothing about the charge depends on it any more.
+**The notice** ("You get $25 in free credits. $5 now, the rest once your payments reach $25.") is product-approved — do not reword it — with both figures substituted from the org's OWN offer, because quoting the wrong cohort's would promise money we will not grant. The `$5` is a literal on purpose: the notice is only ever shown to an org that still has a remainder coming, i.e. one of the two MATCH cohorts, whose welcome gift is $5. The flat $30 cohort grants everything at signup, has no remainder, and never reaches the sentence. Withheld from an ineligible org and from one already fully gifted (it would be a lie). Stripe caps `message` at 1200 chars.
 
-**REMOVED — do NOT reintroduce the up-front checkout discount.** The route used to advance the whole entitlement as a pre-applied Stripe coupon (`discounts: [{coupon}]`, gated on `WELCOME_DISCOUNT_COUPON_ID`), so a first-ever checkout of at least `entitlement + trigger` was charged less and the credit landed immediately. Deleted along with `minDiscountedCheckoutCents`, `welcomeCompletionCodeExists`, the `applyDiscount`/`couponId` fields, and the `discounts` field on the checkout-session body.
+**The discount was REMOVED under the match offer and REINSTATED under the flat one (this is not a revert — the hazard is gone).** The old comment forbidding it said a discount "is the one place a buyer can be handed credit before the payment that earns it has cleared", and it required a floor of `entitlement + trigger` so the post-discount charge still reached the trigger. Both statements were about the MATCH: the credit had not been granted yet and paying is what earned it. With the flat offer the whole $30 is granted at signup and **no payment earns anything**, so nothing is advanced and the hazard has no way to occur. The discount is the CASH side of a gift the ledger has already recorded — and the buyer must SEE the $30 come off, not merely be charged less.
 
-The floor was the whole safety property: the post-discount charge still had to reach the trigger that EARNS the gift, or the discount handed over credit nobody paid for. At the $400 offer that floor is $800 — far above any real first checkout (onboarding charges roughly one day of budget) — so the branch had been **unreachable for every new signup** long before it was removed, and the grandfathered $25 cohort is the only one that could ever have hit it. The promise is served by `settleWelcomeCompletion`, on the path onboarding actually uses.
+The gate is stricter than the old floor rather than looser. All must hold:
 
-Two removal guards pin it: a first checkout at each cohort's old floor ($50 grandfathered, $800 new) must carry no `discounts` and must carry the notice instead. If you are tempted to bring the discount back, the thing to weigh is that it is the one place a buyer can be handed credit before the payment that earns it has cleared.
+- the org has already been gifted its **FULL** entitlement (remaining ≤ 0), so the discount can only ever mirror credit already in `local_promos`;
+- the org has **NEVER paid**, so it lands on the onboarding checkout once and can never repeat on a later top-up;
+- a coupon is configured whose **declared amount EQUALS this org's own frozen entitlement**.
 
-**`allow_promotion_codes` is gone and must not come back either.** It was enabled for a single journalist comp (that is done). Nothing in this service discounts a charge any more.
+**Two env vars, declared together so they cannot drift:** `WELCOME_DISCOUNT_COUPON_ID` and `WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS`. The amount is declared rather than read back from Stripe because billing has no coupon read (stripe-service exposes none) — and it must be known, because a coupon worth the wrong amount is money. Declaring it makes a re-price **FAIL SAFE**: move the offer without minting a matching coupon and the discount simply stops applying (the buyer is charged in full and still receives the credit), instead of taking the old figure off the new price. It is also what stops a grandfathered $25 org or a $400 org ever being handed a $30 coupon. Absent, unparseable, or mismatched → no discount anywhere, which is a coherent state and not a degraded one.
+
+Note the consequence for the coupon object itself: **a re-price needs a NEW Stripe coupon plus both env vars moved**, in that order. Nothing in this repo can mint one.
+
+**`allow_promotion_codes` is still gone and must not come back.** It was enabled for a single journalist comp (that is done), and it is mutually exclusive with the pre-applied discount above. The welcome discount is the ONLY thing that discounts a charge in this service.
 
 ## Billing/runs ownership target
 
@@ -475,7 +494,7 @@ Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they rea
 | `GET` | `/v1/accounts/balance` | shortcut: `{ balance_cents, depleted }` |
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
-| `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries the gift-is-coming notice quoting that org's own figures. Nothing discounts the charge: no pre-applied coupon, no user promotion-code entry. See "Welcome-completion gift" |
+| `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries EITHER a pre-applied coupon worth the org's already-granted free credits (so the buyer sees them come off) OR the gift-is-coming notice quoting that org's own figures — never both, and never a user promotion-code entry. See "Checkout page" |
 | `POST` | `/v1/portal-sessions` | Stripe Customer Portal session |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |

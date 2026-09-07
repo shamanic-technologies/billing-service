@@ -4,11 +4,19 @@
  * ## The rule
  *
  * An org receives ITS OWN `free_credit_entitlement_cents` in free credits IN TOTAL,
- * welcome gift included. Signup grants only the `welcome` row ($5 today, for every
- * cohort), so the completion is worth the remainder. The remainder is DERIVED from
+ * welcome gift included, so the completion is worth the remainder. The remainder is
+ * DERIVED from
  * what the org has actually been gifted (SUM(local_promos)), never from a hardcoded
  * difference — so it stays correct across cohorts, if the welcome amount is
  * re-priced, or if the org never got a welcome row at all.
+ *
+ * That derivation is what makes this whole file a clean NO-OP for the current cohort.
+ * The offer is no longer a match: signup grants the FULL $30 (the `welcome` row is
+ * priced at 3000), so the remainder is already zero and `settleWelcomeCompletion`
+ * returns `entitlement_already_full` without inserting anything, at any payment
+ * amount. Nothing was special-cased to achieve that. The two older cohorts ($5 of
+ * $25, $5 of $400) still earn their remainder at their own trigger exactly as
+ * before, which is the only reason this machinery is still here.
  *
  * The completion is EARNED once the org's cumulative SUCCEEDED payments reach ITS
  * OWN `free_credit_paid_trigger_cents`. The trigger is money actually received,
@@ -69,8 +77,9 @@
  * A missing `welcome_completion` promo-code seed THROWS. Swallowing it would leave
  * a buyer short of the credit they were promised — the exact failure this feature
  * exists to remove. Note prod HAS lost promo-code seeds before (see CLAUDE.md
- * "Migrations are hand-journaled"), which is why the checkout discount is gated on
- * this seed existing: the discount can never be granted without the credit.
+ * "Migrations are hand-journaled"). The checkout discount cannot be affected by a
+ * lost seed: it applies only to an org whose entitlement is ALREADY fully gifted,
+ * so the credit it mirrors is a row that exists, not one still to be written.
  */
 
 import { and, eq, notExists, sql as rawSql } from "drizzle-orm";
@@ -112,9 +121,12 @@ function dollars(cents: number): string {
  * Copy shown on the checkout page when NO up-front discount applies, so the buyer
  * knows the gift is coming before deciding to pay. The SENTENCE is approved verbatim
  * by the product owner — do not reword it. The two figures are substituted from the
- * org's OWN offer, because they now differ per cohort and quoting the wrong one would
+ * org's OWN offer, because they differ per cohort and quoting the wrong one would
  * promise money we will not grant (or hide money we will). The "$5" is a literal on
- * purpose: the up-front welcome gift is $5 for every cohort.
+ * purpose: this notice is only ever shown to an org that still has a remainder
+ * coming, i.e. one of the two MATCH cohorts ($25 and $400), whose up-front welcome
+ * gift is $5. The current flat $30 offer grants everything at signup, has no
+ * remainder, and therefore never reaches this sentence.
  * (No em-dash: customer-facing copy.)
  */
 export function welcomeCompletionCheckoutNotice(offer: FreeCreditOffer): string {
@@ -276,27 +288,95 @@ export async function settleWelcomeCompletion(
   return NOT_GRANTED("already_granted");
 }
 
+/** What the payment-mode checkout page should apply and say for this org. */
+export interface CheckoutWelcomeOffer {
+  /**
+   * Stripe coupon to pre-apply, so the buyer SEES the free credits come off the
+   * price rather than merely being charged less. null when none applies.
+   */
+  couponId: string | null;
+  /**
+   * "Gift is coming" copy, quoting THIS org's own offer; null when nothing is
+   * still coming. Built here rather than in the route so the figures can never
+   * drift from the account the decision was made against.
+   */
+  noticeMessage: string | null;
+}
+
+const NO_OFFER: CheckoutWelcomeOffer = { couponId: null, noticeMessage: null };
+
 /**
- * The "gift is coming" copy for this org's payment-mode checkout page, quoting
- * THIS org's own offer — or null when no notice should be shown. Built here
- * rather than in the route so the figures can never drift from the account the
- * decision was made against.
+ * The coupon this deployment may pre-apply, and the amount it is worth, declared
+ * together so they cannot drift.
  *
- * Shown only to an org that genuinely still has free credit coming. Telling an
- * org with its full entitlement already gifted (or one that is not eligible at
- * all) that "the rest" is on its way would be a lie.
+ * The amount is declared rather than read back from Stripe because billing has no
+ * coupon read (stripe-service exposes none) — and it must be known, because a coupon
+ * worth the wrong amount is money. Declaring it makes a re-price FAIL SAFE: move the
+ * offer without minting a matching coupon and the discount simply stops applying
+ * (the buyer is charged in full and still receives the credit), instead of taking
+ * the old figure off the new price.
  *
- * There is deliberately NO up-front discount path. Advancing the entitlement as
- * a pre-applied Stripe coupon was removed: it required a floor of
- * (entitlement + trigger) to keep the post-discount charge above the trigger
- * that EARNS the gift, and at the current $400 offer that floor is $800 — far
- * above any real first checkout, so the branch had been unreachable for new
- * signups long before it was deleted. The gift is granted after the fact by
- * `settleWelcomeCompletion`, which is the path onboarding actually uses. Do NOT
- * reintroduce a checkout-time discount: it is the one place a buyer can be
- * handed credit before the payment that earns it has cleared.
+ * Absent or unparseable → no discount anywhere. That is a coherent state, not a
+ * degraded one: the credit is granted at signup either way.
  */
-export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string | null> {
+function configuredWelcomeCoupon(): { id: string; amountCents: number } | null {
+  const id = process.env.WELCOME_DISCOUNT_COUPON_ID?.trim();
+  if (!id) return null;
+  const raw = process.env.WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS?.trim();
+  if (!raw) return null;
+  const amountCents = Number(raw);
+  if (!Number.isInteger(amountCents) || amountCents <= 0) return null;
+  return { id, amountCents };
+}
+
+/**
+ * Decide what the checkout page applies and says for this org's payment-mode
+ * checkout. Exactly one of the two fields is ever set, by construction: the
+ * discount requires the entitlement to be fully gifted already, the notice
+ * requires some of it to still be coming.
+ *
+ * ## The discount, and why it is safe NOW
+ *
+ * This used to be forbidden, and the comment that forbade it is worth keeping
+ * rather than deleting, because its reasoning is exactly what changed. Under the
+ * MATCH offer the discount ADVANCED the entitlement: the credit had not been
+ * granted yet, and it was earned by the payment being discounted. That needed a
+ * floor of (entitlement + trigger) so the post-discount charge still reached the
+ * trigger, and the note read "it is the one place a buyer can be handed credit
+ * before the payment that earns it has cleared".
+ *
+ * The offer is now FLAT: the whole $30 is granted at signup, unconditionally, and
+ * no payment earns anything. So nothing is advanced, nothing can be earned by
+ * paying, and the hazard the floor existed to prevent has no way to occur. The
+ * discount is now the CASH side of a gift the ledger has already recorded — the
+ * buyer is charged (budget - entitlement) and holds (budget) of balance, having
+ * received the entitlement exactly once.
+ *
+ * That is precisely what the gate below encodes, and it is stricter than the old
+ * floor rather than looser:
+ *
+ *   - the org has already been gifted its FULL entitlement (remaining <= 0), so the
+ *     discount can only ever mirror credit that is already in `local_promos`;
+ *   - the org has NEVER paid, so it lands on the onboarding checkout once and can
+ *     never repeat on a later top-up;
+ *   - a coupon is configured whose declared amount EQUALS this org's own frozen
+ *     entitlement, so a grandfathered $25 org and a $400 org can never be handed a
+ *     $30 coupon (nor the reverse).
+ *
+ * A re-price therefore cannot silently mis-discount anybody: the amounts must match
+ * to the cent or nothing is applied.
+ *
+ * ## The notice
+ *
+ * Shown only to an org that genuinely still has free credit coming — the two older
+ * cohorts, whose remainder is still earned at their own trigger. Telling an org with
+ * its entitlement already gifted that "the rest" is on its way would be a lie, and
+ * that is the same org the discount serves.
+ */
+export async function decideCheckoutWelcomeOffer(
+  orgId: string,
+  paidTopupsCents: string
+): Promise<CheckoutWelcomeOffer> {
   const [account] = await db
     .select({
       eligible: billingAccounts.welcomeCompletionEligible,
@@ -306,20 +386,33 @@ export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
-  if (!account || !account.eligible) return null;
+  if (!account) return NO_OFFER;
 
   const offer: FreeCreditOffer = {
     entitlementCents: account.entitlementCents,
     paidTriggerCents: account.paidTriggerCents,
   };
 
-  // Same exclusion as settleWelcomeCompletion — the notice describes the WELCOME
+  // Same exclusion as settleWelcomeCompletion — both surfaces describe the WELCOME
   // entitlement, so referral rewards must not count against what is left of it.
   const giftedCents = await sumEntitlementGrantsForOrg(orgId);
   const remainingCents = subCents(toCents(offer.entitlementCents), giftedCents);
-  if (cmpCents(remainingCents, ZERO) <= 0) return null;
 
-  return welcomeCompletionCheckoutNotice(offer);
+  if (cmpCents(remainingCents, ZERO) <= 0) {
+    // Fully gifted: nothing is coming, so no notice. The gift may instead be made
+    // visible on the price, once — see the doc above for why that is safe here and
+    // was not under the match offer.
+    const coupon = configuredWelcomeCoupon();
+    if (!coupon) return NO_OFFER;
+    if (coupon.amountCents !== offer.entitlementCents) return NO_OFFER;
+    if (cmpCents(paidTopupsCents, ZERO) > 0) return NO_OFFER;
+    return { couponId: coupon.id, noticeMessage: null };
+  }
+
+  // Still owed part of the entitlement. An org excluded from the completion will
+  // never receive that remainder, so promising it would be a lie.
+  if (!account.eligible) return NO_OFFER;
+  return { couponId: null, noticeMessage: welcomeCompletionCheckoutNotice(offer) };
 }
 
 /**
