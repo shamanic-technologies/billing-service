@@ -8,7 +8,7 @@ import {
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
+import { decideCheckoutWelcomeOffer } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -72,18 +72,18 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         };
       } else {
         // Free-credit offer for THIS checkout. Needs the org's cumulative paid
-        // topups: the $25 discount may only ever land on an org that has NEVER
-        // paid, otherwise every later top-up would silently get $25 off forever.
-        // Settling first also covers an org whose earlier payment already crossed
-        // the $25 trigger but was not yet settled, so the notice/discount decision
-        // reads a fresh ledger — including the grandfather resolution, which is what
-        // stops the "the rest is coming" notice being shown to an org that had
-        // already crossed the trigger before launch and is owed nothing. Both fail
-        // loud (the catch below → 502): a buyer must never get a discount without
-        // the matching credit grant.
+        // topups: the discount may only ever land on an org that has NEVER paid,
+        // otherwise every later top-up would silently get the free credits off
+        // forever. Settling first also covers an org whose earlier payment already
+        // crossed its trigger but was not yet settled, so the notice/discount
+        // decision reads a fresh ledger — including the grandfather resolution,
+        // which is what stops the "the rest is coming" notice being shown to an org
+        // that had already crossed the trigger before launch and is owed nothing.
+        // Both fail loud (the catch below → 502): the price a buyer is shown must
+        // be decided against the real ledger, never against a stale read of it.
         const paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
         await settleFreeCreditPromises(orgId, paidTopupsCents);
-        const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
+        const welcome = await decideCheckoutWelcomeOffer(orgId, paidTopupsCents);
 
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
         // by the 400 guard above (non-setup + undefined already returned). The `!`
@@ -112,10 +112,18 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           // PaymentIntents and are NOT invoiced by this — separate future work.
           invoice_creation: { enabled: true },
         };
-        if (welcomeNotice) {
-          // Tell the buyer the gift is still coming, so the promise is visible at
-          // the moment of payment. The figures quoted are this org's own offer.
-          body.custom_text = { submit: { message: welcomeNotice } };
+        if (welcome.couponId) {
+          // Show the free credits coming OFF the price. The org has already been
+          // gifted its full entitlement (that is the gate), so this discounts the
+          // cash side of a gift the ledger has already recorded — the buyer pays
+          // (budget - entitlement) and holds (budget) of balance. It is not an
+          // advance: nothing here is earned by paying. See lib/welcome-completion.
+          body.discounts = [{ coupon: welcome.couponId }];
+        } else if (welcome.noticeMessage) {
+          // Nothing to take off the price, but part of the gift is still coming:
+          // tell the buyer so, at the moment of payment. The figures quoted are
+          // this org's own offer.
+          body.custom_text = { submit: { message: welcome.noticeMessage } };
         }
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —

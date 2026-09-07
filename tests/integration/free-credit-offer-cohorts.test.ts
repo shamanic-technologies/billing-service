@@ -1,12 +1,15 @@
 /**
- * The free-credit offer is a PER-ACCOUNT property (migration 0032).
+ * The free-credit offer is a PER-ACCOUNT property (migration 0032, re-priced by 0040).
  *
- * distribute re-priced the offer from "$25 in free credits" to "$400 in free
- * credits", for NEW customers only: every org that already exists keeps the $25
- * offer it signed up under, permanently. These cases pin both cohorts side by side,
- * plus the two properties that make a THIRD re-price free: the amount is written
- * from the column DEFAULT at account creation, and the completion remainder stays
- * derived from what the org was actually gifted.
+ * distribute has re-priced it twice: $25 -> $400 -> a flat $30. Each re-price is for
+ * NEW customers only, so THREE cohorts now coexist and every org keeps the offer it
+ * signed up under, permanently. These cases pin all three side by side, plus the two
+ * properties that make the NEXT re-price free: the amount is written from the column
+ * DEFAULT at account creation, and the completion remainder stays derived from what
+ * the org was actually gifted.
+ *
+ * The flat $30 cohort's own behaviour (grant in full at signup, completion a clean
+ * no-op, discount on the checkout price) lives in flat-welcome-offer.test.ts.
  *
  * Own file, not a `describe` appended to welcome-completion.test.ts: that suite
  * closes the shared postgres.js connection in `afterAll`, which would take this
@@ -71,16 +74,24 @@ async function completionRows(orgId: string) {
     .where(eq(localPromoCodes.code, WELCOME_COMPLETION_CODE));
 }
 
-/** A NEW signup: inserted exactly the way findOrCreateAccount does it — org_id only. */
-async function insertSignupAccount(orgId: string) {
-  await db.insert(billingAccounts).values({ orgId });
+/**
+ * An account created between 0032 and 0040, i.e. the $400 MATCH cohort. Its figures
+ * are stated explicitly because they are no longer the column DEFAULT — which is the
+ * point: the re-price reached the default and left this row alone.
+ */
+async function insertLegacyMatchAccount(orgId: string) {
+  await db.insert(billingAccounts).values({
+    orgId,
+    freeCreditEntitlementCents: 40000,
+    freeCreditPaidTriggerCents: 40000,
+  });
   await db
     .update(billingAccounts)
     .set({ welcomeCompletionEligible: true })
     .where(eq(billingAccounts.orgId, orgId));
 }
 
-describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)", () => {
+describe("per-account free-credit offer (flat $30 current, $400 and $25 grandfathered)", () => {
   const app = createTestApp();
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
@@ -103,17 +114,17 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
 
   // --- AC: the amount is decided once, when the account comes into existence ---
 
-  it("a billing account created after this ships resolves to $400 / $400", async () => {
+  it("a billing account created after this ships resolves to $30 / $30", async () => {
     // Inserted with org_id only — exactly what findOrCreateAccount writes — so the
     // figures come from the column DEFAULT and nothing in code picks them.
     await db.insert(billingAccounts).values({ orgId: newOrgId });
 
     expect(await storedOffer(newOrgId)).toEqual({
-      entitlementCents: 40000,
-      paidTriggerCents: 40000,
+      entitlementCents: 3000,
+      paidTriggerCents: 3000,
     });
-    expect(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(40000);
-    expect(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(40000);
+    expect(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(3000);
+    expect(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(3000);
   });
 
   it("an account that existed before resolves to $25 / $25", async () => {
@@ -127,25 +138,43 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     expect(GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(2500);
   });
 
-  it("re-applying migration 0032 cannot re-price an account created under the new offer", async () => {
+  it("re-applying migration 0032 cannot re-price an account created under a later offer", async () => {
     await db.insert(billingAccounts).values({ orgId: newOrgId });
 
     // The two statements verbatim from 0032. ADD COLUMN IF NOT EXISTS is a no-op on
-    // a column that already exists, so the $400 row keeps its value — this is what
+    // a column that already exists, so the $30 row keeps its value — this is what
     // makes the migration safe to re-run.
     await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_entitlement_cents" integer NOT NULL DEFAULT 2500`;
     await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_paid_trigger_cents" integer NOT NULL DEFAULT 2500`;
 
     expect(await storedOffer(newOrgId)).toEqual({
+      entitlementCents: 3000,
+      paidTriggerCents: 3000,
+    });
+  });
+
+  it("re-applying migration 0040 writes no row, so no account is re-priced", async () => {
+    await insertLegacyMatchAccount(newOrgId);
+    await insertTestAccount({ orgId: oldOrgId });
+
+    // 0040 verbatim: it moves the DEFAULT and touches nothing.
+    await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 3000`;
+    await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 3000`;
+
+    expect(await storedOffer(newOrgId)).toEqual({
       entitlementCents: 40000,
       paidTriggerCents: 40000,
+    });
+    expect(await storedOffer(oldOrgId)).toEqual({
+      entitlementCents: 2500,
+      paidTriggerCents: 2500,
     });
   });
 
   // --- AC: each cohort earns its own remainder at its own trigger ---
 
-  it("new cohort: $399 of payments earns nothing; $400 grants the $395 remainder", async () => {
-    await insertSignupAccount(newOrgId);
+  it("$400 cohort: $399 of payments earns nothing; $400 grants the $395 remainder", async () => {
+    await insertLegacyMatchAccount(newOrgId);
     await insertTestPromoGrant({
       orgId: newOrgId,
       userId,
@@ -236,10 +265,10 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     expect(await completionRows(oldOrgId)).toHaveLength(1);
   });
 
-  // --- REMOVED SURFACE: the up-front checkout discount ---
+  // --- The checkout page, for a cohort that still has a remainder coming ---
 
-  it("new cohort: a $500 first checkout gets the notice, NOT a discount", async () => {
-    await insertSignupAccount(newOrgId);
+  it("$400 cohort: a $500 first checkout gets the notice, NOT a discount", async () => {
+    await insertLegacyMatchAccount(newOrgId);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     await request(app)
@@ -252,8 +281,9 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
       });
 
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
-    // Below the floor: discounting here would hand over $400 of credit for a $100
-    // payment, i.e. the gift without the payment that earns it.
+    // This org has NOT been gifted its entitlement yet — the $395 remainder is still
+    // earned by paying. Discounting here would hand over credit the ledger does not
+    // hold, which is exactly what the discount gate forbids.
     expect(body).not.toHaveProperty("discounts");
     expect(body.custom_text).toEqual({
       submit: {
@@ -263,12 +293,16 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     });
   });
 
-  // An $800 first checkout — the old floor for this cohort — used to be the ONE
-  // amount that carried a discount. No amount does any more, and the coupon env
-  // var being set must not bring it back.
-  it("removed: an $800 first checkout carries no discount either", async () => {
-    await insertSignupAccount(newOrgId);
+  // An $800 first checkout — the old (entitlement + trigger) floor for this cohort —
+  // used to be the ONE amount that carried a discount. The floor is gone and the
+  // discount is now gated on the entitlement being ALREADY gifted, which this org's
+  // is not: no checkout amount brings it back, and a configured coupon must not
+  // either.
+  it("$400 cohort: an $800 first checkout carries no discount, at any coupon config", async () => {
+    await insertLegacyMatchAccount(newOrgId);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    vi.stubEnv("WELCOME_DISCOUNT_COUPON_ID", COUPON_ID);
+    vi.stubEnv("WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS", "40000");
 
     await request(app)
       .post("/v1/checkout-sessions")
@@ -295,8 +329,8 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
     );
     expect(
       welcomeCompletionCheckoutNotice({
-        entitlementCents: CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS,
-        paidTriggerCents: CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS,
+        entitlementCents: 40000,
+        paidTriggerCents: 40000,
       })
     ).toBe(
       "You get $400 in free credits. $5 now, the rest once your payments reach $400."
@@ -305,8 +339,8 @@ describe("per-account free-credit offer ($400 new cohort vs $25 grandfathered)",
 
   // --- AC: the grant is still exactly-once and still fails loud ---
 
-  it("stays exactly-once per org under concurrent settles at the new figure", async () => {
-    await insertSignupAccount(newOrgId);
+  it("stays exactly-once per org under concurrent settles at the $400 figure", async () => {
+    await insertLegacyMatchAccount(newOrgId);
 
     const outcomes = await Promise.all([
       settleWelcomeCompletion(newOrgId, cents(40000), NEVER_PRE_LAUNCH),

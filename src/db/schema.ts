@@ -34,16 +34,30 @@ const FRACTIONAL_SCALE = 10;
 // off the account. (There is deliberately no bare `FREE_CREDIT_ENTITLEMENT_CENTS`
 // export any more — a global entitlement is the bug this shape exists to prevent.)
 
-/** Total free credits a NEWLY created account may ever receive, welcome gift INCLUDED. */
-export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 40000;
+/**
+ * Total free credits a NEWLY created account may ever receive, welcome gift INCLUDED.
+ *
+ * $30, and the offer is no longer a MATCH: the whole amount is granted at signup by
+ * the `welcome` promo row, unconditionally, with nothing left to earn. So for a new
+ * account this figure is also exactly what signup already gave, which is why the
+ * completion remainder is zero and `settleWelcomeCompletion` no-ops for that cohort.
+ * The two earlier cohorts ($25 grandfathered, $400) keep their own frozen figures and
+ * their own two-stage behaviour — see the column comment below.
+ */
+export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 3000;
 
 /**
  * Cumulative SUCCEEDED payments that earn the completion for a NEWLY created
  * account. The trigger is money actually received — NOT usage consumed: the
  * account model is threshold-postpaid, so an org can consume on credit before
  * paying anything, and we must not gift credits to someone whose card may fail.
+ *
+ * Equal to the entitlement, as it has been for every cohort. At $30 that equality
+ * has a second consequence worth stating: signup already grants the full $30, so the
+ * remainder is zero before the trigger is ever consulted and no new account can reach
+ * a second grant whatever it pays. The trigger still governs the two older cohorts.
  */
-export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 40000;
+export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 3000;
 
 /**
  * What every account that existed before migration 0032 carries, permanently.
@@ -77,8 +91,9 @@ export const billingAccounts = pgTable(
     // Written from the DB column DEFAULT on INSERT and never updated: re-pricing the
     // offer moves the default for FUTURE accounts only, so every existing org keeps
     // the offer it signed up under with no cutoff rule and no backfill. Accounts that
-    // predate 0032 carry GRANDFATHERED_* (2500/2500); accounts created after it carry
-    // CURRENT_* (40000/40000). Read these — never a module-level constant.
+    // predate 0032 carry GRANDFATHERED_* (2500/2500); accounts created between 0032
+    // and 0040 carry 40000/40000; accounts created after 0040 carry CURRENT_*
+    // (3000/3000). Read these — never a module-level constant.
     freeCreditEntitlementCents: integer("free_credit_entitlement_cents")
       .notNull()
       .default(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS),

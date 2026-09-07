@@ -73,7 +73,7 @@ describe("POST /v1/checkout-sessions", () => {
         custom_text: {
           submit: {
             message:
-              "You get $400 in free credits. $5 now, the rest once your payments reach $400.",
+              "You get $30 in free credits. $5 now, the rest once your payments reach $30.",
           },
         },
       }
@@ -335,7 +335,7 @@ describe("POST /v1/checkout-sessions", () => {
         custom_text: {
           submit: {
             message:
-              "You get $400 in free credits. $5 now, the rest once your payments reach $400.",
+              "You get $30 in free credits. $5 now, the rest once your payments reach $30.",
           },
         },
       }
