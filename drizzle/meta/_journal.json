@@ -281,6 +281,13 @@
       "when": 1791540000000,
       "tag": "0039_brand_funnel_leg_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1791626400000,
+      "tag": "0040_flat_thirty_free_credit_offer",
+      "breakpoints": true
     }
   ]
 }
