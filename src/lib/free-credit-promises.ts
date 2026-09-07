@@ -24,14 +24,28 @@
  *
  * ## The ladder
  *
- * The bar of a NEW promise is (the highest bar this org already carries) + (the new
- * promise's own amount) — whether or not that earlier promise has been earned,
- * because cumulative payments only ever go up so both readings give the same ladder:
+ * The bar of a NEW promise is (the highest bar this org already carries that some
+ * PAYMENT stands behind) + (the new promise's own amount). Whether that earlier
+ * promise has been earned YET does not matter — cumulative payments only ever go up,
+ * so both readings give the same ladder — but whether it can EVER be earned does: a
+ * promise handed over at signup has no payment behind its bar, so stacking on it
+ * would charge the next promise for money the customer was never asked to spend.
  *
- *   brand-new $400 account          → $400 @ $400          (unchanged from today)
+ *   brand-new $400 account          → $400 @ $400
  *   ...then referred a $500 promise → $500 @ $900
  *   ...then a third $500 promise    → $500 @ $1,400        (and so on, no ceiling)
  *   grandfathered $25 account       → $25 @ $25, $500 @ $525
+ *   flat $30 account (GRANTED)      → $30 @ $30 (worth nothing, never listed),
+ *                                     then $500 @ $500 — the granted welcome is not
+ *                                     a rung, because no payment earns it
+ *
+ * "Granted rather than earned" is read off the org's OWN figures and nothing else:
+ * the up-front `welcome` gift it received (or, before that row exists, the gift the
+ * live code says it will receive) against the entitlement frozen on its account. Gift
+ * < entitlement means a REMAINDER is earned at the account's trigger, so that trigger
+ * is a real bar and stays one FOREVER — including after the completion has landed,
+ * which is why the two MATCH cohorts are unaffected in either direction. Gift ==
+ * entitlement means signup already gave everything and there is nothing to earn.
  *
  * ## The referral chain
  *
@@ -80,6 +94,7 @@ import {
   PROMISE_KIND_REFERRAL,
   PROMISE_KIND_WELCOME,
   REFERRAL_REWARD_CODE,
+  WELCOME_PROMO_CODE,
   type FreeCreditPromise,
 } from "../db/schema.js";
 import { addCents, gte, subCents } from "./cents.js";
@@ -158,18 +173,54 @@ export async function referralRewardCodeExists(): Promise<boolean> {
 }
 
 /**
- * The highest bar this org already carries, in whole cents.
+ * The highest bar this org already carries that a PAYMENT stands behind, in whole
+ * cents — the rung a new promise stacks on.
  *
- * Reads the promises table AND the account's own frozen trigger, so it is correct
- * even for an org whose welcome promise row has not been materialised (an account
- * excluded from the welcome completion never gets one, yet it still carries that
- * bar). 0 when the org has neither.
+ * Two sources, and the welcome offer is deliberately NOT read out of the promises
+ * table:
+ *
+ *   - every REFERRAL promise's frozen bar. Those are earned on payments by
+ *     construction (the referral offer has no up-front portion), so they always
+ *     stack, which is what keeps $500, $1,000, $1,500 … working with no ceiling.
+ *   - the account's OWN frozen welcome trigger, but only while some of the welcome
+ *     entitlement is still EARNED at it. Reading it off the account rather than off
+ *     the welcome promise row is also what makes this correct for an org whose
+ *     welcome promise was never materialised (an account excluded from the welcome
+ *     completion never gets one, yet it still carries that bar).
+ *
+ * The up-front gift is this org's own `welcome` grant; before that row exists we
+ * read the live `welcome` code, which is what the org is about to be given — a
+ * referral claimed in the seconds before the signup grant lands must not get a
+ * different ladder from one claimed after it.
+ *
+ * 0 when the org carries neither, which is also exactly what the flat $30 cohort
+ * answers: its whole entitlement was granted at signup, so its trigger is not a bar.
  */
 async function highestBarCents(runner: Tx | typeof db, orgId: string): Promise<number> {
   const rows = (await runner.execute(rawSql`
     SELECT GREATEST(
-      COALESCE((SELECT MAX(paid_trigger_cents) FROM free_credit_promises WHERE org_id = ${orgId}), 0),
-      COALESCE((SELECT free_credit_paid_trigger_cents FROM billing_accounts WHERE org_id = ${orgId}), 0)
+      COALESCE((
+        SELECT MAX(paid_trigger_cents)
+          FROM free_credit_promises
+         WHERE org_id = ${orgId}
+           AND kind <> ${PROMISE_KIND_WELCOME}
+      ), 0),
+      COALESCE((
+        SELECT CASE
+                 WHEN COALESCE(
+                        (SELECT SUM(lp.amount_cents)
+                           FROM local_promos lp
+                           JOIN local_promo_codes c ON c.id = lp.promo_code_id
+                          WHERE lp.org_id = a.org_id AND c.code = ${WELCOME_PROMO_CODE}),
+                        (SELECT amount_cents FROM local_promo_codes WHERE code = ${WELCOME_PROMO_CODE}),
+                        0
+                      ) >= a.free_credit_entitlement_cents
+                 THEN 0
+                 ELSE a.free_credit_paid_trigger_cents
+               END
+          FROM billing_accounts a
+         WHERE a.org_id = ${orgId}
+      ), 0)
     )::int AS bar
   `)) as unknown as Array<{ bar: number }>;
   return Number(rows[0]?.bar ?? 0);
@@ -302,8 +353,10 @@ export async function claimReferral(
     return { promise: existing, alreadyClaimed: true };
   }
 
-  // The invitee's own welcome promise must exist first, or the referral bar would
-  // stack on nothing and land at $500 instead of $900.
+  // Materialise the invitee's own welcome promise first, so the dashboard lists what
+  // the org actually carries. It does not decide the referral bar: highestBarCents
+  // reads the welcome offer off the account either way, and ignores it entirely when
+  // that offer was GRANTED at signup rather than earned on payments.
   await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
   await ensureWelcomePromise(orgId);
 

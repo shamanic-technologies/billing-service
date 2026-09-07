@@ -122,19 +122,24 @@ Until 0033 an org had exactly ONE outstanding promise, expressed as the two `bil
 **The rules (product-locked):**
 
 - `amount_cents` and `paid_trigger_cents` are **FROZEN at creation and never updated**. Re-pricing an offer later reaches only promises created after the re-price — no cutoff date, no backfill, every existing customer grandfathered by construction. Same discipline as 0032, and the reason `insertStackedPromise` is the ONLY writer.
-- **The bar of a NEW promise is `(highest bar this org already carries) + (its own amount)`** — whether or not that earlier promise has been earned, because cumulative payments only ever go up. `highestBarCents` reads BOTH the promises table and the account's own frozen trigger, so it is right even for an org whose welcome promise row was never materialised. The ladder:
+- **The bar of a NEW promise is `(highest bar this org already carries that a PAYMENT stands behind) + (its own amount)`.** Whether that earlier promise has been earned YET does not matter (cumulative payments only ever go up); whether it can EVER be earned does. **A promise that is GRANTED rather than EARNED contributes nothing to the ladder** — its bar is not a bar, because no payment is behind it, and stacking on it would charge the next promise for money the customer was never asked to spend. The ladder:
 
   | situation | ladder |
   |---|---|
-  | brand-new $30 account | $30 @ $30 |
-  | ...then referred | + $500 @ $530 |
-  | ...a third promise | + $500 @ $1,030, and so on, no ceiling |
+  | brand-new $30 account (GRANTED in full at signup) | $30 @ $30 — worth nothing, never listed, and NOT a rung |
+  | ...then referred | + $500 @ **$500** |
+  | ...a third promise | + $500 @ $1,000, and so on, no ceiling |
   | $400 account, referred | $400 @ $400, then $500 @ $900 |
   | grandfathered $25 account, referred | $25 @ $25, then $500 @ $525 |
 
-  The flat-$30 re-price (0040) needed NO change here and no special case: the welcome
-  bar is read off the account's own frozen trigger, so it simply became $30 and every
-  referral stacks $500 above whatever that org carries.
+  **"Granted rather than earned" is read off the org's OWN frozen figures, never off the kind** — keying on `kind='welcome'` would retroactively demote the two MATCH cohorts, whose welcome genuinely had a payments trigger. `highestBarCents` takes the up-front `welcome` gift the org RECEIVED (or, before that row exists, the amount the live `welcome` code says it is about to receive — a referral claimed in the seconds before the signup grant lands must not get a different ladder from one claimed after it) and compares it to the entitlement frozen on the account:
+
+  - gift **<** entitlement → a REMAINDER is earned at the account's trigger, so that trigger is a real bar **forever**, including after the completion has landed. The $25 and $400 cohorts are untouched in both directions.
+  - gift **==** entitlement (the flat $30 offer) → signup already gave everything, so the trigger is not a bar and the referral sits at its own $500.
+
+  It reads the account rather than the welcome promise ROW for the same reason it always did (an org excluded from the welcome completion never gets a row yet still carries the bar), and takes `MAX(paid_trigger_cents)` over the org's REFERRAL promises only — those are earned on payments by construction, which is what keeps $500 / $1,000 / $1,500 stacking with no ceiling.
+
+  **Existing rows are untouched.** This changes only what a NEW promise freezes; an org still carrying a $500-@-$530 or $500-@-$900 promise keeps it exactly, and the next promise stacks above it. Pinned by tests in `tests/integration/flat-welcome-offer.test.ts`.
 
 - **An outstanding promise is a promise, not money.** No `local_promos` row exists until it is granted, so it is absent from `credited` / `balance` / `actual_balance` / spendable everywhere. Do NOT "helpfully" surface it in a balance figure.
 - **The referral offer has NO up-front portion** — the whole amount lands when the bar is crossed. The $5 up-front gift belongs to the welcome offer only, and is unchanged for every cohort.
