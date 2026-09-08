@@ -221,15 +221,48 @@
           "topup_threshold_cents"
         ]
       },
-      "PortalSessionResponse": {
+      "CardSetupResponse": {
         "type": "object",
         "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "card_setup"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "hosted_redirect",
+              "embedded_widget"
+            ]
+          },
           "url": {
             "type": "string"
+          },
+          "script_url": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "prod",
+              "sandbox"
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "save_payment_method_for": {
+            "type": "string",
+            "enum": [
+              "merchant"
+            ]
           }
         },
         "required": [
-          "url"
+          "object",
+          "mode"
         ]
       },
       "CreatePortalSessionRequest": {
@@ -251,6 +284,73 @@
         },
         "required": [
           "return_url"
+        ]
+      },
+      "CardSetupRequest": {
+        "type": "object",
+        "properties": {
+          "return_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "required": [
+          "return_url"
+        ]
+      },
+      "SavedPaymentMethodResponse": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "saved_payment_method"
+            ]
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "acquirer": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "saved_for": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "saved_for"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "org_id",
+          "acquirer",
+          "saved",
+          "method"
         ]
       },
       "CheckoutResponse": {
@@ -1992,7 +2092,8 @@
     },
     "/v1/portal-sessions": {
       "post": {
-        "summary": "Create Stripe Customer Portal session via stripe-service",
+        "summary": "How this org's customer adds a card (historical name)",
+        "description": "Historical name for the card-setup descriptor now also served at POST /v1/accounts/card_setup. Not every acquirer has a portal: the response names the MECHANISM (hosted_redirect | embedded_widget) and carries only what a browser may hold.",
         "parameters": [
           {
             "schema": {
@@ -2087,11 +2188,11 @@
         },
         "responses": {
           "200": {
-            "description": "Portal session URL",
+            "description": "Card-setup descriptor",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PortalSessionResponse"
+                  "$ref": "#/components/schemas/CardSetupResponse"
                 }
               }
             }
@@ -2118,6 +2219,267 @@
           },
           "502": {
             "description": "stripe-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/card_setup": {
+      "post": {
+        "summary": "What the browser needs to render this org's card form",
+        "description": "Org-scoped. Asks stripe-service how THIS org's acquirer saves a card and passes the descriptor through without interpreting it: `hosted_redirect` (send the customer to `url`) or `embedded_widget` (load `script_url`, initialise the SDK with the per-order PUBLIC `token`, mount the card field and pass `save_payment_method_for` on submit). No merchant credential is ever included — card details are entered in an iframe the acquirer hosts and never touch the page or this service. Nobody is charged for adding a card.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardSetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Card-setup descriptor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardSetupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Card setup could not be described (stripe-service unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/saved_payment_method": {
+      "get": {
+        "summary": "Does this org have a saved, chargeable card?",
+        "description": "Org-scoped, read live from whichever acquirer holds the org's cards (never cached). THREE answers, kept apart on purpose: 200 `{saved:true, method}` there is one; 200 `{saved:false, reason}` the acquirer answered and there is none; 502 we could not ask at all. A caller that collapses the last two would either tell a customer to re-enter a card we already hold, or arm a recurring charge off a timeout.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The acquirer answered — saved true or false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPaymentMethodResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Could not ask the acquirer — NOT the same as 'no card saved'",
             "content": {
               "application/json": {
                 "schema": {

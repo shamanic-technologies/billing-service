@@ -28,6 +28,8 @@ export interface StripeServiceMocks {
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getCardSetup: ReturnType<typeof vi.fn>;
+  getSavedPaymentMethod: ReturnType<typeof vi.fn>;
+  authorizeRecurringCharges: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   reloadOffSession: ReturnType<typeof vi.fn>;
 }
@@ -133,6 +135,17 @@ export function setupStripeMocks(): StripeServiceMocks {
       mode: "hosted_redirect",
       url: "https://billing.stripe.com/p/session/abc",
     }),
+    // Default: the org sits on the acquirer the legacy payment-method gate was
+    // written against, holding a saved card. Every suite written before the
+    // second acquirer therefore takes the identical path it always did.
+    getSavedPaymentMethod: vi.fn().mockResolvedValue({
+      object: "saved_payment_method",
+      org_id: "org_mock",
+      acquirer: "stripe",
+      saved: true,
+      method: { id: "pm_mock", type: "card", saved_for: "merchant" },
+    }),
+    authorizeRecurringCharges: vi.fn().mockResolvedValue({ authorized: true, details: {} }),
     listAllCustomersForOrg: vi.fn().mockResolvedValue([]),
     setCustomerMetadata: vi.fn().mockImplementation((id: string) =>
       Promise.resolve(buildMockCustomer({ id }))
@@ -171,6 +184,12 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
   vi.spyOn(ssClient, "getCardSetup").mockImplementation(mocks.getCardSetup as never);
+  vi.spyOn(ssClient, "getSavedPaymentMethod").mockImplementation(
+    mocks.getSavedPaymentMethod as never
+  );
+  vi.spyOn(ssClient, "authorizeRecurringCharges").mockImplementation(
+    mocks.authorizeRecurringCharges as never
+  );
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
   vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
   vi.spyOn(ssClient, "setCustomerMetadata").mockImplementation(mocks.setCustomerMetadata);

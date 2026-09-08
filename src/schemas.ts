@@ -191,11 +191,58 @@ export const CreatePortalSessionRequestSchema = z
   })
   .openapi("CreatePortalSessionRequest");
 
-export const PortalSessionResponseSchema = z
+// --- Card setup (acquirer-neutral descriptor, stripe-service v0.48.0) ---
+
+export const CardSetupRequestSchema = z
   .object({
-    url: z.string(),
+    return_url: z.string().url(),
+    currency: z.string().min(3).optional(),
   })
-  .openapi("PortalSessionResponse");
+  .openapi("CardSetupRequest");
+
+/**
+ * What the BROWSER needs to render the card form, and nothing else.
+ *
+ * Passed through from stripe-service verbatim: it names the mechanism its
+ * acquirer offers and hands over only what a page may hold. `token` is a
+ * PER-ORDER PUBLIC identifier scoped to this one setup attempt — not a merchant
+ * key, and stripe-service strips its own credentials before answering. Nothing
+ * here re-introduces one, and card details are typed inside an iframe the
+ * acquirer hosts, so they never reach the calling page or this service.
+ */
+export const CardSetupResponseSchema = z
+  .object({
+    object: z.literal("card_setup"),
+    mode: z.enum(["hosted_redirect", "embedded_widget"]),
+    url: z.string().optional(),
+    script_url: z.string().optional(),
+    environment: z.enum(["prod", "sandbox"]).optional(),
+    token: z.string().optional(),
+    save_payment_method_for: z.literal("merchant").optional(),
+  })
+  .openapi("CardSetupResponse");
+
+/**
+ * Whether a saved, chargeable card exists for this org. THREE answers, kept
+ * apart: `saved: true`; `saved: false` with a `reason`; or a 502, which means we
+ * could not ask and is never rendered as either of the other two.
+ */
+export const SavedPaymentMethodResponseSchema = z
+  .object({
+    object: z.literal("saved_payment_method"),
+    org_id: z.string(),
+    acquirer: z.string(),
+    saved: z.boolean(),
+    method: z
+      .object({
+        id: z.string(),
+        type: z.string(),
+        saved_for: z.string().nullable(),
+      })
+      .nullable(),
+    reason: z.string().optional(),
+  })
+  .openapi("SavedPaymentMethodResponse");
 
 // --- Balance ---
 
@@ -1021,7 +1068,11 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/portal-sessions",
-  summary: "Create Stripe Customer Portal session via stripe-service",
+  summary: "How this org's customer adds a card (historical name)",
+  description:
+    "Historical name for the card-setup descriptor now also served at POST /v1/accounts/card_setup. " +
+    "Not every acquirer has a portal: the response names the MECHANISM (hosted_redirect | embedded_widget) " +
+    "and carries only what a browser may hold.",
   request: {
     headers: protectedHeaders,
     body: {
@@ -1032,8 +1083,8 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: "Portal session URL",
-      content: { "application/json": { schema: PortalSessionResponseSchema } },
+      description: "Card-setup descriptor",
+      content: { "application/json": { schema: CardSetupResponseSchema } },
     },
     400: {
       description: "Invalid request",
@@ -1045,6 +1096,70 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/card_setup",
+  summary: "What the browser needs to render this org's card form",
+  description:
+    "Org-scoped. Asks stripe-service how THIS org's acquirer saves a card and passes the descriptor " +
+    "through without interpreting it: `hosted_redirect` (send the customer to `url`) or `embedded_widget` " +
+    "(load `script_url`, initialise the SDK with the per-order PUBLIC `token`, mount the card field and pass " +
+    "`save_payment_method_for` on submit). No merchant credential is ever included — card details are entered " +
+    "in an iframe the acquirer hosts and never touch the page or this service. Nobody is charged for adding a card.",
+  request: {
+    headers: protectedHeaders,
+    body: {
+      content: {
+        "application/json": { schema: CardSetupRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Card-setup descriptor",
+      content: { "application/json": { schema: CardSetupResponseSchema } },
+    },
+    400: {
+      description: "Invalid request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Card setup could not be described (stripe-service unavailable)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/saved_payment_method",
+  summary: "Does this org have a saved, chargeable card?",
+  description:
+    "Org-scoped, read live from whichever acquirer holds the org's cards (never cached). THREE answers, kept " +
+    "apart on purpose: 200 `{saved:true, method}` there is one; 200 `{saved:false, reason}` the acquirer answered " +
+    "and there is none; 502 we could not ask at all. A caller that collapses the last two would either tell a " +
+    "customer to re-enter a card we already hold, or arm a recurring charge off a timeout.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: {
+      description: "The acquirer answered — saved true or false",
+      content: { "application/json": { schema: SavedPaymentMethodResponseSchema } },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Could not ask the acquirer — NOT the same as 'no card saved'",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

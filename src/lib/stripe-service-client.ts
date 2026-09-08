@@ -863,3 +863,98 @@ export async function getCardSetup(
     { return_url: returnUrl, ...(amount ? { amount, currency } : {}) }
   );
 }
+
+// --- Card setup / saved-card confirmation (acquirer-neutral, stripe-service v0.48.0) ---
+
+/**
+ * Which acquirer the legacy, Stripe-shape payment-method gate was written
+ * against.
+ *
+ * This is NOT acquirer knowledge creeping back in: nothing here branches on a
+ * vendor's behaviour, resolves a vendor key or reads a vendor-shaped field. It
+ * records one transitional fact — `hasAttachedCardPm` + the issuing-country
+ * blocklist answer correctly only for the acquirer they were written for, and
+ * every OTHER acquirer is asked its own question instead
+ * (`authorizeRecurringCharges`). When the legacy gate is retired this constant
+ * goes with it and the authorisation becomes the only path.
+ */
+export const LEGACY_PM_GATE_ACQUIRER = "stripe";
+
+/**
+ * `GET /internal/saved_payment_method/by-org/{orgId}` — is a card saved for this
+ * org, on whichever acquirer holds its cards, that can be charged LATER with
+ * nobody present?
+ *
+ * THREE answers, kept apart on purpose and never collapsed here either:
+ *   - `saved: true`  — there is one, `method` describes it;
+ *   - `saved: false` — the acquirer answered and there is none (`reason` says why);
+ *   - a THROW         — we could not ask at all.
+ *
+ * Merging the last two is what arms a recurring charge off a timeout, so the
+ * distinction survives all the way to the wire (a caller renders "add a card"
+ * only for the middle case).
+ *
+ * Read LIVE by stripe-service, never cached. X-API-Key only — the org is in the
+ * path, so no identity headers and no invented user.
+ */
+export interface SavedPaymentMethodAnswer {
+  object: "saved_payment_method";
+  org_id: string;
+  acquirer: string;
+  saved: boolean;
+  method: { id: string; type: string; saved_for: string | null } | null;
+  reason?: string;
+}
+
+export async function getSavedPaymentMethod(orgId: string): Promise<SavedPaymentMethodAnswer> {
+  return call<SavedPaymentMethodAnswer>(
+    "GET",
+    `/internal/saved_payment_method/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+}
+
+/**
+ * `POST /internal/recurring_charges/by-org/{orgId}/authorize` — the gate that
+ * must be passed BEFORE automatic charges are armed for an org.
+ *
+ *   - `200`  → `{ authorized: true }`, a saved chargeable method exists;
+ *   - `409`  → `{ authorized: false, reason }`, the acquirer holds no card we
+ *              could charge — a definite NO;
+ *   - anything else → THROWS. An unknown answer is not a yes, and the caller
+ *              must refuse to arm rather than assume.
+ *
+ * Writes nothing and takes no money. X-API-Key only (org in the path).
+ */
+export interface RecurringChargeAuthorization {
+  authorized: boolean;
+  /** Present only on a refusal. The acquirer's own reason, passed through. */
+  reason?: string;
+  /** The 200 body verbatim (the method that would be charged). Diagnostic. */
+  details?: Record<string, unknown>;
+}
+
+export async function authorizeRecurringCharges(
+  orgId: string
+): Promise<RecurringChargeAuthorization> {
+  const { url, apiKey } = getConfig();
+  const path = `/internal/recurring_charges/by-org/${encodeURIComponent(orgId)}/authorize`;
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method: "POST",
+    headers: buildHeaders({}, apiKey),
+    body: JSON.stringify({}),
+  });
+  if (res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return { authorized: true, details: body };
+  }
+  // A 409 is the acquirer's definite "no card we could charge". Every other
+  // non-2xx means we could not ask, which must never read as either answer.
+  if (res.status === 409) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string; details?: unknown };
+    const details = body.details as { reason?: string } | undefined;
+    return { authorized: false, reason: details?.reason ?? body.error ?? "no_saved_payment_method" };
+  }
+  const text = await res.text();
+  throw new Error(`stripe-service POST ${path} failed: ${res.status} ${text}`);
+}
