@@ -420,24 +420,13 @@ export interface CheckoutSessionBody {
    */
   invoice_creation?: { enabled: boolean };
   /**
-   * Payment-mode only: pre-applied discounts, rendered on the Checkout page as a
-   * discount line so the buyer SEES the free credits come off rather than merely
-   * being charged less. Stripe accepts at most one entry.
-   *
-   * Used for exactly one thing: the flat welcome offer, on an org that has already
-   * been gifted its full entitlement and has never paid (see lib/welcome-completion
-   * for why that makes it safe, and why it was NOT safe under the old match offer).
-   *
-   * Mutually exclusive with user-entered promotion codes — billing deliberately does
-   * NOT set `allow_promotion_codes` anywhere (removed with the journalist comp it was
-   * added for), so there is no conflict to resolve.
-   */
-  discounts?: Array<{ coupon: string }>;
-  /**
    * Payment-mode only: copy rendered on the Checkout page alongside the pay button
    * (Stripe caps `message` at 1200 chars). Used to tell a buyer the free credits are
-   * still coming, on a cohort whose entitlement is not yet fully gifted. Never set
-   * alongside `discounts` — the two describe mutually exclusive states.
+   * still coming, on a cohort whose entitlement is not yet fully gifted.
+   *
+   * Note there is deliberately no `discounts` field: onboarding already subtracts
+   * the welcome gift from the amount it sends, so a coupon here would deduct it a
+   * second time. Nothing in this service discounts a charge.
    */
   custom_text?: { submit: { message: string } };
 }

@@ -41,7 +41,7 @@ import {
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 import {
-  decideCheckoutWelcomeOffer,
+  decideCheckoutWelcomeNotice,
   settleWelcomeCompletion,
 } from "../../src/lib/welcome-completion.js";
 import { claimReferral } from "../../src/lib/free-credit-promises.js";
@@ -261,64 +261,48 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
     expect(await giftedTotalCents(otherOrgId)).toBe(2500);
   });
 
-  // --- AC: the buyer SEES the $30 come off a payment-mode checkout ---
+  // --- The buyer SEES the $30 come off, and it happens ONE layer up ---
+  //
+  // Onboarding computes its charge as max(0, daily_budget - 30), sends THAT as
+  // topup_amount_cents, and shows the buyer the deduction itself (distribute.you
+  // lib/onboarding-charge.ts). So billing must NOT discount on top: a coupon here
+  // would take the $30 off a figure the $30 has already been taken off, and a
+  // $50/day signup would be charged $20 minus $30 = nothing and walk away with a
+  // $50 gift. These guards pin that no checkout body ever carries `discounts`.
 
-  it("shows the discount on the checkout page for an org that still has its $30", async () => {
+  it("carries NO discount on the checkout the dashboard has already netted", async () => {
     await signupWithFlatGift(orgId);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    // The env vars the removed coupon path read. Setting them must change nothing.
     vi.stubEnv("WELCOME_DISCOUNT_COUPON_ID", COUPON_ID);
     vi.stubEnv("WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS", String(FLAT_GIFT_CENTS));
 
-    // A $50/day signup: the dashboard charges the full budget and the $30 comes off
-    // in front of the buyer, so they pay $20 and hold $50.
+    // A $50/day signup: onboarding already subtracted the gift, so this IS $20.
     const res = await request(app)
       .post("/v1/checkout-sessions")
       .set(getAuthHeaders(orgId))
       .send({
         success_url: "https://example.com/s",
         cancel_url: "https://example.com/c",
-        topup_amount_cents: 5000,
+        topup_amount_cents: 2000,
       });
     expect(res.status).toBe(200);
 
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
-    expect(body.discounts).toEqual([{ coupon: COUPON_ID }]);
-    // Mutually exclusive with the notice: nothing is "still coming".
+    expect(body).not.toHaveProperty("discounts");
+    // Nothing is still coming, so no notice either.
     expect(body).not.toHaveProperty("custom_text");
-    // The charge is the full budget; Stripe applies the coupon to it.
-    expect(body.line_items[0].price_data.unit_amount).toBe(5000);
+    // The charge is exactly what the consumer asked for, untouched.
+    expect(body.line_items[0].price_data.unit_amount).toBe(2000);
+    // And the gift is in the ledger exactly once.
+    expect(await giftedTotalCents(orgId)).toBe(FLAT_GIFT_CENTS);
   });
 
-  it("does not discount a later top-up: the gift lands once, on the first checkout", async () => {
+  it("carries no discount on a later top-up either", async () => {
     await signupWithFlatGift(orgId);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(5000));
     vi.stubEnv("WELCOME_DISCOUNT_COUPON_ID", COUPON_ID);
     vi.stubEnv("WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS", String(FLAT_GIFT_CENTS));
-
-    const offer = await decideCheckoutWelcomeOffer(orgId, cents(5000));
-    expect(offer).toEqual({ couponId: null, noticeMessage: null });
-  });
-
-  it("does not hand a $30 coupon to a grandfathered $25 org", async () => {
-    await insertTestAccount({ orgId: otherOrgId, welcomeCompletionEligible: true });
-    await insertTestPromoGrant({
-      orgId: otherOrgId,
-      userId,
-      amountCents: 2500,
-      promoCode: WELCOME_PROMO_CODE,
-    });
-    vi.stubEnv("WELCOME_DISCOUNT_COUPON_ID", COUPON_ID);
-    vi.stubEnv("WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS", String(FLAT_GIFT_CENTS));
-
-    // Fully gifted and never paid, so only the amount check stands between this org
-    // and a coupon worth $5 more than its entitlement.
-    const offer = await decideCheckoutWelcomeOffer(otherOrgId, "0.0000000000");
-    expect(offer).toEqual({ couponId: null, noticeMessage: null });
-  });
-
-  it("applies no discount when no coupon is configured, and still grants the credit", async () => {
-    await signupWithFlatGift(orgId);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)
       .post("/v1/checkout-sessions")
@@ -332,20 +316,31 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
 
     const body = ssMocks.createCheckoutSession.mock.calls[0][1];
     expect(body).not.toHaveProperty("discounts");
-    expect(body).not.toHaveProperty("custom_text");
-    // The credit is in the ledger either way — the discount is only its cash side.
-    expect(await giftedTotalCents(orgId)).toBe(FLAT_GIFT_CENTS);
+    expect(await decideCheckoutWelcomeNotice(orgId)).toBeNull();
   });
 
-  it("applies no discount when the declared coupon amount is unparseable", async () => {
+  it("says nothing is coming to an org whose entitlement is fully gifted", async () => {
     await signupWithFlatGift(orgId);
-    vi.stubEnv("WELCOME_DISCOUNT_COUPON_ID", COUPON_ID);
-    vi.stubEnv("WELCOME_DISCOUNT_COUPON_AMOUNT_CENTS", "thirty dollars");
+    expect(await decideCheckoutWelcomeNotice(orgId)).toBeNull();
+  });
 
-    expect(await decideCheckoutWelcomeOffer(orgId, "0.0000000000")).toEqual({
-      couponId: null,
-      noticeMessage: null,
+  it("still tells a $400-cohort buyer the rest is coming", async () => {
+    await insertTestAccount({
+      orgId: otherOrgId,
+      welcomeCompletionEligible: true,
+      freeCreditEntitlementCents: 40000,
+      freeCreditPaidTriggerCents: 40000,
     });
+    await insertTestPromoGrant({
+      orgId: otherOrgId,
+      userId,
+      amountCents: 500,
+      promoCode: WELCOME_PROMO_CODE,
+    });
+
+    expect(await decideCheckoutWelcomeNotice(otherOrgId)).toBe(
+      "You get $400 in free credits. $5 now, the rest once your payments reach $400."
+    );
   });
 
   // --- A GRANTED welcome is not a rung: the referral ladder ignores it ---
