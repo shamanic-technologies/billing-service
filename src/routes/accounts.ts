@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
-import { UpdateAutoTopupRequestSchema } from "../schemas.js";
+import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { addCents, isDepleted, subCents } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
@@ -18,6 +18,10 @@ import {
   getOrgCardCountry,
   getOrgCardDisplay,
   isAutoReloadBlockedCountry,
+  getCardSetup,
+  getSavedPaymentMethod,
+  authorizeRecurringCharges,
+  LEGACY_PM_GATE_ACQUIRER,
 } from "../lib/stripe-service-client.js";
 
 const router = Router();
@@ -243,6 +247,98 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
   }
 });
 
+// POST /v1/accounts/card_setup — what the BROWSER needs to render this org's
+// card form, and nothing more.
+//
+// stripe-service resolves which acquirer holds the org's cards and DESCRIBES the
+// mechanism rather than performing it, because the acquirers genuinely differ:
+// one hosts a page we redirect to, the other saves a card only through a field
+// the page mounts itself. This repo passes the descriptor through without
+// interpreting it and without naming a vendor — the caller switches on `mode`,
+// a UI concern it owns anyway.
+//
+// No credential reaches the browser: the only thing handed over is a per-order
+// PUBLIC token scoped to this one setup attempt, and the card itself is typed
+// inside an iframe the acquirer hosts, so the number never touches the calling
+// page or this service. Nothing is added here, so nothing can be leaked here.
+//
+// `POST /v1/portal-sessions` serves the SAME descriptor under its historical
+// name; both call one function, so the two can never answer differently.
+router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+
+    const parsed = CardSetupRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.message });
+      return;
+    }
+    const { return_url, currency } = parsed.data;
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    const setup = await getCardSetup(orgId, return_url, undefined, currency);
+    res.json(setup);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[billing-service] card setup failed:", message);
+    res.status(502).json({ error: "Failed to start card setup" });
+  }
+});
+
+// GET /v1/accounts/saved_payment_method — has this org given us a card we can
+// charge later with nobody present?
+//
+// THREE answers, and they stay apart all the way to the wire:
+//   200 {saved:true, method}  — there is one;
+//   200 {saved:false, reason} — the acquirer answered and there is none;
+//   502                        — we could not ask at all.
+//
+// Collapsing the last two is the whole hazard: read as "no card" it tells a
+// customer to re-enter one we already hold; read as "card" it arms a recurring
+// charge off a timeout. stripe-service keeps them apart deliberately and this
+// route does not undo that.
+router.get("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    let answer;
+    try {
+      answer = await getSavedPaymentMethod(orgId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[billing-service] saved payment method read failed:", message);
+      res.status(502).json({ error: "Could not confirm whether a card is saved" });
+      return;
+    }
+
+    res.json(answer);
+  } catch (err) {
+    console.error("[billing-service] Error reading saved payment method:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -269,35 +365,82 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    let hasCardPm: boolean;
-    let cardCountry: string | null;
+    // Arming automatic top-up commits us to charging this org with nobody
+    // present, so it is gated on a card we KNOW is there.
+    //
+    // Which gate applies is decided by which acquirer holds the org's cards, and
+    // stripe-service states that on the saved-method answer. The Stripe-shape
+    // checks below (a card OR link payment method, plus the issuing-country
+    // blocklist) answer correctly only for the acquirer they were written
+    // against; every other acquirer is asked its OWN question instead. Nothing
+    // here branches on a vendor's behaviour — only on "is this the acquirer the
+    // legacy gate was written for", which is the carve-out that keeps the whole
+    // existing fleet behaving exactly as it does today.
+    //
+    // A read that FAILS refuses (502). It is not a fourth answer we may treat as
+    // a yes, and every other stripe-service call in this handler already fails
+    // the same way, so an org on the original acquirer sees no new outcome
+    // whenever stripe-service answers at all.
+    let acquirer: string;
     try {
-      const customer = await getCustomerByOrg(identity);
-      [hasCardPm, cardCountry] = await Promise.all([
-        hasAttachedCardPm(identity, customer.id),
-        getOrgCardCountry(identity, customer.id),
-      ]);
+      acquirer = (await getSavedPaymentMethod(orgId)).acquirer;
     } catch (err) {
-      console.error("[billing-service] Failed to fetch customer for PM check:", err);
+      console.error("[billing-service] Failed to resolve saved payment method:", err);
       res.status(502).json({ error: "Failed to query payment method status" });
       return;
     }
 
-    if (!hasCardPm) {
-      res.status(400).json({
-        error: "Payment method required. Create a checkout session first.",
-      });
-      return;
-    }
+    if (acquirer !== LEGACY_PM_GATE_ACQUIRER) {
+      // Ask the acquirer whether recurring charges may be armed. A refusal is a
+      // 400 (add a card first); anything we could not ask is a 502 — an unknown
+      // answer is not a yes. Arming without a confirmed card produces an org
+      // that pays once and then fails its first reload with nothing reporting
+      // why, which is the failure this gate exists to prevent.
+      let authorization;
+      try {
+        authorization = await authorizeRecurringCharges(orgId);
+      } catch (err) {
+        console.error("[billing-service] Recurring-charge authorization failed:", err);
+        res.status(502).json({ error: "Failed to query payment method status" });
+        return;
+      }
+      if (!authorization.authorized) {
+        res.status(400).json({
+          error: "Payment method required. Add a card before enabling auto top-up.",
+        });
+        return;
+      }
+    } else {
+      let hasCardPm: boolean;
+      let cardCountry: string | null;
+      try {
+        const customer = await getCustomerByOrg(identity);
+        [hasCardPm, cardCountry] = await Promise.all([
+          hasAttachedCardPm(identity, customer.id),
+          getOrgCardCountry(identity, customer.id),
+        ]);
+      } catch (err) {
+        console.error("[billing-service] Failed to fetch customer for PM check:", err);
+        res.status(502).json({ error: "Failed to query payment method status" });
+        return;
+      }
 
-    // Off_session auto-reload can't be charged for cards issued in mandate-required
-    // countries (e.g. India / RBI, issue #220). Reject the config rather than store one
-    // that silently never fires — fail loud so the dashboard surfaces the real reason.
-    if (isAutoReloadBlockedCountry(cardCountry)) {
-      res.status(400).json({
-        error: `Auto-reload is unavailable for cards issued in ${cardCountry} — off-session charges require a mandate Stripe can't register on this card. Add a card from another country to enable auto-reload.`,
-      });
-      return;
+      if (!hasCardPm) {
+        res.status(400).json({
+          error: "Payment method required. Create a checkout session first.",
+        });
+        return;
+      }
+
+      // Off_session auto-reload can't be charged for cards issued in mandate-required
+      // countries (e.g. India / RBI, issue #220). Reject the config rather than store one
+      // that silently never fires — fail loud so the dashboard surfaces the real reason.
+      if (isAutoReloadBlockedCountry(cardCountry)) {
+        res.status(400).json({
+          error: `Auto-reload is unavailable for cards issued in ${cardCountry} — off-session charges require a mandate Stripe can't register on this card. Add a card from another country to enable auto-reload.`,
+        });
+        return;
+      }
     }
 
     const [updated] = await db
