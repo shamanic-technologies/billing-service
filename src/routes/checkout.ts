@@ -8,7 +8,7 @@ import {
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { decideCheckoutWelcomeOffer } from "../lib/welcome-completion.js";
+import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
 
@@ -83,7 +83,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         // be decided against the real ledger, never against a stale read of it.
         const paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
         await settleFreeCreditPromises(orgId, paidTopupsCents);
-        const welcome = await decideCheckoutWelcomeOffer(orgId, paidTopupsCents);
+        const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
 
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
         // by the 400 guard above (non-setup + undefined already returned). The `!`
@@ -112,18 +112,11 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           // PaymentIntents and are NOT invoiced by this — separate future work.
           invoice_creation: { enabled: true },
         };
-        if (welcome.couponId) {
-          // Show the free credits coming OFF the price. The org has already been
-          // gifted its full entitlement (that is the gate), so this discounts the
-          // cash side of a gift the ledger has already recorded — the buyer pays
-          // (budget - entitlement) and holds (budget) of balance. It is not an
-          // advance: nothing here is earned by paying. See lib/welcome-completion.
-          body.discounts = [{ coupon: welcome.couponId }];
-        } else if (welcome.noticeMessage) {
-          // Nothing to take off the price, but part of the gift is still coming:
-          // tell the buyer so, at the moment of payment. The figures quoted are
-          // this org's own offer.
-          body.custom_text = { submit: { message: welcome.noticeMessage } };
+        if (welcomeNotice) {
+          // Nothing comes off the price here: onboarding has already subtracted the
+          // gift from the amount it sends (see lib/welcome-completion). This only
+          // tells a MATCH-cohort buyer that part of their credit is still coming.
+          body.custom_text = { submit: { message: welcomeNotice } };
         }
         if (isEmbedded) {
           // Embedded Checkout: mounted in an in-app modal iframe. No redirect URLs —
