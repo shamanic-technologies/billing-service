@@ -19,6 +19,8 @@
  *   - `brand_daily_budget_changed` → src/lib/brand-budget-notification.ts
  *   - `referral-reward-opened`     → src/lib/referral-notifications.ts
  *   - `referral-credits-granted`   → src/lib/referral-notifications.ts
+ *   - `credit-debt-card-required`  → src/lib/unpaid-debt.ts
+ *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
@@ -28,6 +30,10 @@ import {
   REFERRAL_REWARD_OPENED_EVENT,
   REFERRAL_CREDITS_GRANTED_EVENT,
 } from "./lib/referral-notifications.js";
+import {
+  UNPAID_DEBT_CARD_REQUIRED_EVENT,
+  UNPAID_DEBT_STAFF_EVENT,
+} from "./lib/unpaid-debt.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -101,6 +107,36 @@ const TEMPLATES = [
 <p>The credits come off what you spend from here, so there is nothing to claim.</p>`,
     textBody:
       "{{amount}} in referral credits is now in your account. {{reason}} The credits come off what you spend from here, so there is nothing to claim.",
+  },
+  {
+    // The org owes money and the card we would have taken it from is gone.
+    //
+    // Deliberately NOT one of the six `credit-depleted*` templates: those nudge
+    // "turn on auto-topup" and the `-blocked` variants nudge a manual recharge,
+    // and neither is reachable without a card on file. Adding a card is the one
+    // action that unblocks this customer, so that is what this says.
+    name: UNPAID_DEBT_CARD_REQUIRED_EVENT,
+    subject: "Add a payment method to resume your campaigns",
+    htmlBody: `<p>Your campaigns have stopped. You have an unpaid balance of {{amountOwed}} and we no longer have a card on file to charge.</p>
+<p>Add a payment method in your billing settings and we will settle the {{amountOwed}} and start your campaigns again.</p>`,
+    textBody:
+      "Your campaigns have stopped. You have an unpaid balance of {{amountOwed}} and we no longer have a card on file to charge. Add a payment method in your billing settings and we will settle the {{amountOwed}} and start your campaigns again.",
+  },
+  {
+    // Staff notification, not a customer email: transactional-email-service
+    // routes this event type to its own staff recipient list, so no recipient
+    // list lives here. Same shape as brand_daily_budget_changed, and the name is
+    // imported from the sender rather than retyped so the two cannot drift.
+    name: UNPAID_DEBT_STAFF_EVENT,
+    subject: "Unpaid debt {{amountOwed}}, no card on file",
+    htmlBody: `<p>An org owes {{amountOwed}} and has no chargeable card, so we cannot collect it.</p>
+<ul>
+<li>Org: {{orgId}}</li>
+<li>Billing email: {{billingEmail}}</li>
+</ul>
+<p>Their campaigns are stopped and they have been asked to add a card.</p>`,
+    textBody:
+      "An org owes {{amountOwed}} and has no chargeable card, so we cannot collect it. Org: {{orgId}}. Billing email: {{billingEmail}}. Their campaigns are stopped and they have been asked to add a card.",
   },
 ] as const;
 

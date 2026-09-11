@@ -11,6 +11,10 @@ import {
   REFERRAL_REWARD_OPENED_EVENT,
   REFERRAL_CREDITS_GRANTED_EVENT,
 } from "../../src/lib/referral-notifications.js";
+import {
+  UNPAID_DEBT_CARD_REQUIRED_EVENT,
+  UNPAID_DEBT_STAFF_EVENT,
+} from "../../src/lib/unpaid-debt.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +87,8 @@ describe("boot-time email template registration", () => {
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,
       REFERRAL_CREDITS_GRANTED_EVENT,
+      UNPAID_DEBT_CARD_REQUIRED_EVENT,
+      UNPAID_DEBT_STAFF_EVENT,
     ]);
     expect(names).toEqual(REGISTERED_TEMPLATE_NAMES);
   });

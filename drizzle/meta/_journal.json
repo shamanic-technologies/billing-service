@@ -288,6 +288,13 @@
       "when": 1791626400000,
       "tag": "0040_flat_thirty_free_credit_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1791712800000,
+      "tag": "0041_unpaid_debt_notification",
+      "breakpoints": true
     }
   ]
 }
