@@ -38,6 +38,7 @@ import { computeBalance } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
 import { reloadOffSession } from "./reload.js";
+import { flagUncollectableDebt } from "./unpaid-debt.js";
 
 
 // A hung stripe-service call must not stall the whole sweep loop.
@@ -198,8 +199,22 @@ export interface MonthEndSweepResult {
   eligible: number;
   /** Orgs charged one settling reload. */
   charged: number;
-  /** Orgs skipped (non-negative balance, no card, blocked country, zero charge). */
+  /** Orgs skipped because they owe nothing this cycle, or owe under the Stripe minimum. */
   skipped: number;
+  /**
+   * Orgs that OWE money with no chargeable card. NEVER counted as `skipped`:
+   * the debt is flagged on the org's depletion episode, the customer is told a
+   * card is required (with the amount), staff are told, and campaigns stop
+   * through the existing credit-line floor. See lib/unpaid-debt.
+   */
+  unpaidDebt: number;
+  /**
+   * Orgs that owe money on a card whose issuing country cannot be charged
+   * off_session (India / RBI). Also not `skipped` — the existing `-blocked`
+   * dunning copy already nudges these customers to recharge manually, so they
+   * are counted and logged rather than re-notified by a second mechanism.
+   */
+  blockedCountryDebt: number;
   /** Orgs whose reload errored / declined (logged + isolated). */
   failed: number;
 }
@@ -217,6 +232,8 @@ export async function runMonthEndSweep(
     eligible: 0,
     charged: 0,
     skipped: 0,
+    unpaidDebt: 0,
+    blockedCountryDebt: 0,
     failed: 0,
   };
 
@@ -245,8 +262,28 @@ export async function runMonthEndSweep(
 
       // Reload-capable guards — mirror usage_apply: chargeable card AND an
       // issuing country that supports off_session charges (India/RBI excluded).
+      //
+      // An org that owes money here cannot be charged, and that debt must NOT
+      // disappear into `skipped`: it is real money, it keeps growing while
+      // campaigns run, and nobody is told. It is flagged instead — see
+      // lib/unpaid-debt for what that means and why nothing new stops the
+      // campaigns (losing the card already drops the credit-line floor to 0).
       if (!snapshot.hasCardPm || !snapshot.autoReloadSupported) {
-        result.skipped += 1;
+        const owes = cmpCents(snapshot.balanceCents, "0") < 0;
+        if (!owes) {
+          result.skipped += 1;
+        } else if (!snapshot.hasCardPm) {
+          await flagUncollectableDebt({ orgId: account.orgId, snapshot });
+          result.unpaidDebt += 1;
+        } else {
+          result.blockedCountryDebt += 1;
+          console.warn(
+            `[billing-service] month-end sweep: org ${account.orgId} owes ` +
+              `${snapshot.balanceCents} cents on a card that cannot be charged ` +
+              `off_session (country=${snapshot.cardCountry ?? "unknown"}) — ` +
+              `uncollected (${bucket})`
+          );
+        }
         continue;
       }
 

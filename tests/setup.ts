@@ -123,6 +123,9 @@ beforeAll(async () => {
   `;
   // Stale-DB path: add the migration-0020 column if an older local DB predates it.
   await sql`ALTER TABLE "credit_depletion_episodes" ADD COLUMN IF NOT EXISTS "credited_cents_at_open" numeric(16,10)`;
+  // Migration 0041 — unpaid-debt (no chargeable card) notification claim + amount.
+  await sql`ALTER TABLE "credit_depletion_episodes" ADD COLUMN IF NOT EXISTS "card_required_notified_at" timestamp with time zone`;
+  await sql`ALTER TABLE "credit_depletion_episodes" ADD COLUMN IF NOT EXISTS "uncollectable_debt_cents" numeric(16,10)`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_one_open_episode_per_org" ON "credit_depletion_episodes" ("org_id") WHERE "recovered_at" IS NULL`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_credit_depletion_open" ON "credit_depletion_episodes" ("recovered_at")`;
 

@@ -345,6 +345,51 @@ Nothing about the balance, the checkout or the top-up flows changed, and no org 
 
 The same CSV convention applies to the `x-brand-id` header forwarded by workflow-service for multi-brand campaigns.
 
+## Settle the debt before the card may change (`src/lib/card-change-settlement.ts`)
+
+A customer who owes us money on the postpaid credit line must never be able to leave us holding the debt with no card to collect it. Google Ads, Meta and AWS all settle the outstanding balance before the payment method may be changed, and billing is the only service that knows what is owed — stripe-service separately makes the acquirer's card page replace-only, but the collection has to happen here.
+
+`settleOutstandingBeforeCardChange(orgId)` runs at the top of **both** `POST /v1/portal-sessions` and `POST /v1/accounts/card_setup`. They serve ONE descriptor, so they must gate identically or the gate is one URL away from being bypassed.
+
+| situation | what happens |
+|---|---|
+| balance ≥ 0 | session opens exactly as before, nothing charged |
+| negative, chargeable card | charge EXACTLY the outstanding amount; success opens the session |
+| charge declines / backoff / stripe-service errors | **402**, no session, body states what is owed |
+| negative, NO card | session OPENS — adding a card is the only way out of the debt |
+| negative, off_session-blocked card (India) | session OPENS — no off_session settle is possible on that card at all |
+| negative, under $0.50 | session OPENS — Stripe rejects the charge; rolls into the month-end sweep |
+
+- **The amount is `computeSettleCharge`, imported from the month-end sweep, never restated.** Two surfaces computing "settle to zero" separately is how they start disagreeing. Do NOT charge a tier multiple here for the same reason the sweep does not: there is no credit line to restore, only a balance to zero.
+- **The refusal is 402 with a stable `code: "outstanding_balance_unsettled"`**, plus `owed_cents` / `balance_cents` / `reason` (`charge_failed` | `charge_backoff`). It has to be distinguishable from a 400 (bad body), a 404 (no account) and a 502 (stripe-service down), because it is the ONE failure of these routes the customer can act on. Body shape lives in `src/lib/outstanding-balance-response.ts`.
+- **Idempotency keys on (org, UTC DAY, amount).** The amount is in the key for the reason the sweep documents at length (an acquirer replays a key whose parameters changed); the DAY is in it so a double-click collapses onto one charge while a legitimate settle of the same amount next week still goes through.
+- Goes through `coalesceReload`, so a card that just declined is refused by the existing backoff instead of being hammered — that refusal reaches the customer as `reason: "charge_backoff"`.
+- **Fail-loud**: nothing here falls back to opening the session anyway.
+
+## An unpaid debt we cannot collect is VISIBLE, never silently skipped (`src/lib/unpaid-debt.ts`, migration 0041)
+
+An org whose balance is negative and whose last chargeable card is gone owes us money we have no way to take. The month-end sweep used to count it `skipped`, and the debt then disappeared from every surface: no email, no staff signal, campaigns still running and the debt still growing.
+
+**Two things are deliberately REUSED rather than rebuilt, and that is most of the design:**
+
+- **Campaigns stop on their own.** `resolvePostpaidTier` grants a NEGATIVE credit-line floor only to an org that can actually be reloaded (config + chargeable card + non-blocked country), so losing the card drops the floor to `"0"` and both the authorize gate and the read-only affordability pre-flight read the org as depleted at any balance ≤ 0. Nothing in this feature stops anything.
+- **The state is the existing depletion EPISODE.** No new table and no second lifecycle: recovery stays keyed on `credited` rising (a real recharge), and adding a card back restores the credit line, which re-arms auto-reload and the month-end sweep. That is the whole of "adding a card resumes things through the existing dunning recovery path".
+
+**What is new is the telling.** Two sends, claimed at most once per episode by `card_required_notified_at`:
+
+- `credit-debt-card-required` → the customer, with the amount owed. Deliberately NOT one of the six `credit-depleted*` templates: those nudge "turn on auto-topup" and the `-blocked` variants nudge a manual recharge, and neither is reachable without a card on file.
+- `unpaid_debt_uncollectable` → staff, routed by transactional-email-service to the staff list it already owns (same shape as `brand_daily_budget_changed`; no recipient list lives here).
+
+Both are registered by THIS service in `src/instrument.ts` (a template belongs to whoever SENDS it), and both hang off a REAL platform run — `createPlatformRun` first, and a run we cannot open DEFERS the notification WITHOUT claiming the marker, so the next tick retries rather than burning the only send.
+
+**Three entry points, one function** (`flagUncollectableDebt`): the month-end sweep (which now counts `unpaidDebt`, never `skipped`), `POST /internal/payment-methods/lost` (stripe-service's immediate signal), and the hourly `runUnpaidDebtScan` on the existing dunning scheduler — the backstop that catches an org which went into debt while already card-less, refreshes the amount as the debt grows, and CLEARS the flag when a card returns (so the org leaves the staff surface and a LATER loss notifies afresh). The scan is bounded by the number of billing accounts (~100 in prod), one balance composition each, isolated per org.
+
+**`uncollectable_debt_cents` is frozen on the episode at flag time and refreshed on every tick while the debt persists**, so `GET /internal/unpaid-debts` is one query rather than a per-org fan-out.
+
+**A debt on an off_session-BLOCKED card (India) is counted (`blockedCountryDebt`) and logged, not flagged and not emailed** — the existing `-blocked` dunning copy already tells those customers to recharge manually, and a second mechanism must not mail them twice. It is still never `skipped`.
+
+**Fail-soft on the telling, fail-loud on the state**: a notification failure can never touch the money it describes, but a database failure propagates.
+
 ## Off_session auto-reload — country eligibility (India / RBI e-mandates)
 
 **Off_session auto-reload is IMPOSSIBLE for cards issued in some countries, and Stripe cannot fix it through the path billing uses. India is the confirmed, prod-observed case (GH #220).** Hard Stripe facts (verified against docs 2026-06-27 — re-verify before changing this):
@@ -514,7 +559,7 @@ Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they rea
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
 | `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries the gift-is-coming notice quoting that org's own figures. Nothing discounts the charge: onboarding already subtracted the gift from the amount it sends. See "Checkout page" |
-| `POST` | `/v1/portal-sessions` | Stripe Customer Portal session |
+| `POST` | `/v1/portal-sessions` | How this org's customer adds a card (historical name). **Settles any outstanding balance FIRST** — 402 `outstanding_balance_unsettled` when it cannot. See "Settle the debt before the card may change". |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |
@@ -524,6 +569,8 @@ Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they rea
 | `POST` | `/internal/referrals/claim` | client-service records that an org signed up through another org's invite link — body `{orgId, referrerOrgId}` → `{ok, alreadyClaimed, promise}`. Opens the INVITEE's outstanding referral promise (bar stacks above every bar it already carries) and remembers the referrer; grants NOTHING. Service-auth only. Idempotent on a re-claim; **409** when the org was already referred by a DIFFERENT org; 400 on self-referral; 500 when the `referral_reward` seed is missing. See "Free-credit promises". |
 | `GET` | `/v1/free-credit-promises` | every promise this org is still waiting on, for the customer dashboard (via the api-service gateway; org headers). → `{org_id, paid_topups_cents, outstanding_total_cents, promises[]}` cheapest bar first, each with `amount_cents` (what would actually land), `paid_trigger_cents`, `paid_so_far_cents`, `remaining_to_unlock_cents`, `progress_pct`, `referred_org_id` (the referred org that caused it) + `referred_org_name` / `referred_org_domain` (that org's display identity, resolved here — see "Naming the referral"), `referrer_org_id`. Settles first, so an earned grant lands sooner; it can never conjure one. 502 when stripe-service is down. |
 | `POST` | `/internal/dunning/tick` | run one out-of-credit dunning pass (ops/manual). Same pass runs on the in-process hourly scheduler. → `{processed, recovered, followup3dSent, followup10dSent}`. |
+| `POST` | `/internal/payment-methods/lost` | stripe-service reports that an org's last chargeable payment method is gone; billing decides what it means. Body `{orgId}` → `{orgId, state, owed_cents}`. An org with a NEGATIVE balance and no card now carries a debt we cannot collect → flagged, customer emailed ("add a card", with the amount), staff emailed, campaigns already stopped by the credit-line floor. Owes nothing / still has a card → no-op, so a false alarm is free. Idempotent per depletion episode. See "An unpaid debt we cannot collect". |
+| `GET` | `/internal/unpaid-debts` | Staff read: every org currently owing money we cannot collect → `{unpaid_debts:[{org_id, owed_cents, flagged_at, episode_started_at}]}`. A plain DB read (the amount is frozen on the episode at flag time and refreshed hourly), not a balance composition per org. A row leaves the list when a card comes back or the balance is restored. |
 | `GET` | `/internal/campaigns/:campaignId/affordability` | READ-ONLY pre-flight gate (campaign-service). → `{affordable, balanceCents, lastRequiredCents, hasHistory}`. ZERO side effects. See "Campaign affordability gate" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget` | READ this org's current daily budget for a brand (service auth + `x-org-id`). → `{brandId, dailyBudgetCents, updatedAt}`; unset for that org → `dailyBudgetCents:null, updatedAt:null`. See "Per-brand daily budget" below. |
 | `GET` | `/internal/brands/:brandId/daily-budget/history` | READ this org's ordered daily-budget CHANGE history for a brand (service auth + `x-org-id`, same auth as the current-value read). → `{brandId, history:[{dailyBudgetCents, changedAt}]}` oldest-first; no writes since the feature shipped → `history:[]`. Forward-only (no fabricated backfill). Consumer = features-service customer-health board. See "Per-brand daily budget". |

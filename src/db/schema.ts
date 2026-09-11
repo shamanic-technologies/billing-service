@@ -403,6 +403,21 @@ export const creditDepletionEpisodes = pgTable(
     t0SentAt: timestamp("t0_sent_at", { withTimezone: true }),
     followup3dSentAt: timestamp("followup_3d_sent_at", { withTimezone: true }),
     followup10dSentAt: timestamp("followup_10d_sent_at", { withTimezone: true }),
+    // Claims the ONE "your card is gone, we cannot collect what you owe"
+    // notification (customer + staff) for this episode — migration 0041. The
+    // hourly sweep re-examines every open episode, so without this marker the
+    // same debt would be mailed about forever. Cleared when the org regains a
+    // chargeable card, so a LATER loss notifies again.
+    cardRequiredNotifiedAt: timestamp("card_required_notified_at", {
+      withTimezone: true,
+    }),
+    // Amount owed while the debt is uncollectable, refreshed on each dunning
+    // tick — lets the staff read be a plain DB read with no per-org fan-out.
+    // NULL = this debt is not (or is no longer) uncollectable.
+    uncollectableDebtCents: numeric("uncollectable_debt_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
     recoveredAt: timestamp("recovered_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

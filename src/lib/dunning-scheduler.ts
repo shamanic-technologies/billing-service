@@ -12,6 +12,7 @@
 import { runDunningTick } from "./dunning.js";
 import { runMonthEndSweep } from "./month-end-sweep.js";
 import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
+import { runUnpaidDebtScan } from "./unpaid-debt.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
 // is plenty frequent for both follow-ups and recharge detection.
@@ -49,6 +50,25 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] month-end sweep failed:", err);
+      }
+
+      // Unpaid-debt scan — every org that owes money with no chargeable card
+      // gets flagged, told, and made visible to staff. This is the BACKSTOP for
+      // "the last card was lost": stripe-service calls
+      // POST /internal/payment-methods/lost the moment it happens, and this
+      // catches the org that went into debt while already card-less, refreshes
+      // the amount owed, and clears the flag when a card comes back. Isolated so
+      // a failure here never blocks the other sweeps, and vice-versa.
+      try {
+        const d = await runUnpaidDebtScan();
+        if (d.flagged > 0 || d.failed > 0) {
+          console.log(
+            `[billing-service] unpaid-debt scan: scanned=${d.scanned} ` +
+              `flagged=${d.flagged} alreadyFlagged=${d.alreadyFlagged} failed=${d.failed}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] unpaid-debt scan failed:", err);
       }
 
       // Welcome-completion sweep — the unconditional server-side driver for the
