@@ -564,6 +564,54 @@ export const DunningTickResponseSchema = z
   })
   .openapi("DunningTickResponse");
 
+// --- Unpaid debt: an org owes money we cannot collect ---
+
+// 402 body for a card-management session refused because the org's outstanding
+// balance could not be settled. `code` is stable and the dashboard keys on it —
+// this is the ONE failure of those routes the customer can act on.
+export const OutstandingBalanceResponseSchema = z
+  .object({
+    error: z.string(),
+    code: z.literal("outstanding_balance_unsettled"),
+    owed_cents: z.string(),
+    balance_cents: z.string(),
+    reason: z.enum(["charge_failed", "charge_backoff"]),
+  })
+  .openapi("OutstandingBalanceResponse");
+
+export const PaymentMethodLostRequestSchema = z
+  .object({
+    orgId: z.string().uuid(),
+  })
+  .openapi("PaymentMethodLostRequest");
+
+export const PaymentMethodLostResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    state: z.enum([
+      "no_debt",
+      "collectable",
+      "flagged",
+      "already_flagged",
+      "deferred",
+    ]),
+    owed_cents: z.string(),
+  })
+  .openapi("PaymentMethodLostResponse");
+
+export const UnpaidDebtsResponseSchema = z
+  .object({
+    unpaid_debts: z.array(
+      z.object({
+        org_id: z.string().uuid(),
+        owed_cents: z.string(),
+        flagged_at: z.string(),
+        episode_started_at: z.string(),
+      })
+    ),
+  })
+  .openapi("UnpaidDebtsResponse");
+
 // --- Campaign affordability (read-only pre-flight gate) ---
 
 export const CampaignAffordabilitySchema = z
@@ -1090,6 +1138,14 @@ registry.registerPath({
       description: "Invalid request",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    402: {
+      description:
+        "The org owes an outstanding balance that could not be settled on its saved card. " +
+        "No session is opened; the body states what is owed.",
+      content: {
+        "application/json": { schema: OutstandingBalanceResponseSchema },
+      },
+    },
     404: {
       description: "Billing account not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1127,6 +1183,14 @@ registry.registerPath({
     400: {
       description: "Invalid request",
       content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    402: {
+      description:
+        "The org owes an outstanding balance that could not be settled on its saved card. " +
+        "No session is opened; the body states what is owed.",
+      content: {
+        "application/json": { schema: OutstandingBalanceResponseSchema },
+      },
     },
     404: {
       description: "Billing account not found",
@@ -1594,6 +1658,67 @@ registry.registerPath({
     },
     502: {
       description: "Tick failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/payment-methods/lost",
+  summary: "An org's last chargeable payment method is gone",
+  description:
+    "stripe-service reports the event; billing decides what it means. An org with a negative " +
+    "balance and no chargeable card now carries a debt we cannot collect: it is flagged on its " +
+    "depletion episode, the customer is emailed that a card is required (with the amount owed), " +
+    "staff are notified, and campaigns stop through the existing credit-line floor. An org that " +
+    "owes nothing, or still has a card, is a no-op — so a false alarm is free. Idempotent: the " +
+    "notification is claimed once per episode, so a redelivered event sends nothing.",
+  request: {
+    headers: internalHeaders,
+    body: {
+      content: {
+        "application/json": { schema: PaymentMethodLostRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "What the org's debt state is now",
+      content: {
+        "application/json": { schema: PaymentMethodLostResponseSchema },
+      },
+    },
+    400: {
+      description: "orgId missing or not a UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Could not evaluate the org's balance",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/unpaid-debts",
+  summary: "Every org currently owing money we cannot collect",
+  description:
+    "The staff view of unpaid debt. One row per org whose balance is negative and whose last " +
+    "chargeable card is gone, with the amount owed (frozen when the debt was flagged and " +
+    "refreshed hourly while it persists). A row leaves this list when a card comes back or the " +
+    "balance is restored.",
+  request: {
+    headers: internalHeaders,
+  },
+  responses: {
+    200: {
+      description: "Unpaid debts",
+      content: { "application/json": { schema: UnpaidDebtsResponseSchema } },
+    },
+    502: {
+      description: "Read failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

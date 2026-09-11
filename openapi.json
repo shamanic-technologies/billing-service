@@ -265,6 +265,40 @@
           "mode"
         ]
       },
+      "OutstandingBalanceResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "outstanding_balance_unsettled"
+            ]
+          },
+          "owed_cents": {
+            "type": "string"
+          },
+          "balance_cents": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "charge_failed",
+              "charge_backoff"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "owed_cents",
+          "balance_cents",
+          "reason"
+        ]
+      },
       "CreatePortalSessionRequest": {
         "type": "object",
         "properties": {
@@ -797,6 +831,80 @@
           "recovered",
           "followup3dSent",
           "followup10dSent"
+        ]
+      },
+      "PaymentMethodLostResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "no_debt",
+              "collectable",
+              "flagged",
+              "already_flagged",
+              "deferred"
+            ]
+          },
+          "owed_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "orgId",
+          "state",
+          "owed_cents"
+        ]
+      },
+      "PaymentMethodLostRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "orgId"
+        ]
+      },
+      "UnpaidDebtsResponse": {
+        "type": "object",
+        "properties": {
+          "unpaid_debts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "org_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "owed_cents": {
+                  "type": "string"
+                },
+                "flagged_at": {
+                  "type": "string"
+                },
+                "episode_started_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "org_id",
+                "owed_cents",
+                "flagged_at",
+                "episode_started_at"
+              ]
+            }
+          }
+        },
+        "required": [
+          "unpaid_debts"
         ]
       },
       "CampaignAffordability": {
@@ -2207,6 +2315,16 @@
               }
             }
           },
+          "402": {
+            "description": "The org owes an outstanding balance that could not be settled on its saved card. No session is opened; the body states what is owed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutstandingBalanceResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Billing account not found",
             "content": {
@@ -2343,6 +2461,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The org owes an outstanding balance that could not be settled on its saved card. No session is opened; the body states what is owed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutstandingBalanceResponse"
                 }
               }
             }
@@ -3574,6 +3702,101 @@
           },
           "502": {
             "description": "Tick failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/payment-methods/lost": {
+      "post": {
+        "summary": "An org's last chargeable payment method is gone",
+        "description": "stripe-service reports the event; billing decides what it means. An org with a negative balance and no chargeable card now carries a debt we cannot collect: it is flagged on its depletion episode, the customer is emailed that a card is required (with the amount owed), staff are notified, and campaigns stop through the existing credit-line floor. An org that owes nothing, or still has a card, is a no-op — so a false alarm is free. Idempotent: the notification is claimed once per episode, so a redelivered event sends nothing.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentMethodLostRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the org's debt state is now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentMethodLostResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId missing or not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Could not evaluate the org's balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/unpaid-debts": {
+      "get": {
+        "summary": "Every org currently owing money we cannot collect",
+        "description": "The staff view of unpaid debt. One row per org whose balance is negative and whose last chargeable card is gone, with the amount owed (frozen when the debt was flagged and refreshed hourly while it persists). A row leaves this list when a card comes back or the balance is restored.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unpaid debts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpaidDebtsResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Read failed",
             "content": {
               "application/json": {
                 "schema": {

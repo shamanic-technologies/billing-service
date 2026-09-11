@@ -26,6 +26,7 @@ import { resolvePostpaidTier } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
+import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 
 const router = Router();
 
@@ -477,6 +478,57 @@ router.post("/internal/dunning/tick", async (_req, res) => {
   } catch (err) {
     console.error("[billing-service] dunning tick (manual) failed:", err);
     res.status(502).json({ error: "Dunning tick failed" });
+  }
+});
+
+// POST /internal/payment-methods/lost — stripe-service tells us an org's last
+// chargeable payment method is gone.
+//
+// It is the only service that can observe `payment_method.detached` and decide
+// whether anything chargeable is left; it is NOT the service that knows whether
+// the org owes us money. So it reports the EVENT and this route decides: an org
+// with a negative balance and no card now carries a debt we cannot collect, and
+// is flagged, told, and surfaced to staff immediately rather than an hour later
+// on the scan.
+//
+// Idempotent by construction — the notification is claimed once per depletion
+// episode, so a redelivered webhook re-reads the state and sends nothing. An org
+// that owes nothing (or still has a card) is a no-op, so a false alarm is free.
+router.post("/internal/payment-methods/lost", async (req, res) => {
+  try {
+    const orgId = (req.body ?? {}).orgId;
+    if (typeof orgId !== "string" || !UUID_RE.test(orgId)) {
+      res.status(400).json({ error: "orgId must be a valid UUID" });
+      return;
+    }
+    const outcome = await flagUncollectableDebt({ orgId });
+    res.json({ orgId, state: outcome.state, owed_cents: outcome.owedCents });
+  } catch (err) {
+    console.error("[billing-service] payment-method-lost handling failed:", err);
+    res.status(502).json({ error: "Failed to evaluate unpaid debt" });
+  }
+});
+
+// GET /internal/unpaid-debts — every org currently owing money we cannot
+// collect, for the staff surface that already reads dunning state.
+//
+// A plain DB read: the amount was frozen on the depletion episode when the debt
+// was flagged and is refreshed on every hourly tick while it persists, so this
+// costs one query rather than a balance composition per org.
+router.get("/internal/unpaid-debts", async (_req, res) => {
+  try {
+    const debts = await listUnpaidDebts();
+    res.json({
+      unpaid_debts: debts.map((d) => ({
+        org_id: d.orgId,
+        owed_cents: d.owedCents,
+        flagged_at: d.flaggedAt,
+        episode_started_at: d.episodeStartedAt,
+      })),
+    });
+  } catch (err) {
+    console.error("[billing-service] unpaid-debts read failed:", err);
+    res.status(502).json({ error: "Failed to read unpaid debts" });
   }
 });
 

@@ -176,7 +176,12 @@ describe("Month-end forced top-up sweep", () => {
     const res = await runMonthEndSweep(LAST_DAY);
 
     expect(res.charged).toBe(0);
-    expect(res.skipped).toBe(1);
+    // NOT `skipped`: this org OWES money we cannot collect, so it is flagged,
+    // its customer and staff are told, and it shows on the staff unpaid-debt
+    // surface. A silent skip is what made this debt invisible. See
+    // lib/unpaid-debt and unpaid-debt.test.ts.
+    expect(res.skipped).toBe(0);
+    expect(res.unpaidDebt).toBe(1);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
@@ -193,7 +198,11 @@ describe("Month-end forced top-up sweep", () => {
     const res = await runMonthEndSweep(LAST_DAY);
 
     expect(res.charged).toBe(0);
-    expect(res.skipped).toBe(1);
+    // Counted and logged rather than skipped — the existing `-blocked` dunning
+    // copy already nudges these customers to recharge manually, so this path
+    // must not mail them a second time.
+    expect(res.skipped).toBe(0);
+    expect(res.blockedCountryDebt).toBe(1);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 

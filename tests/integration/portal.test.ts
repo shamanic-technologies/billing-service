@@ -3,6 +3,7 @@ import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
+import * as runsClient from "../../src/lib/runs-client.js";
 
 describe("POST /v1/portal-sessions", () => {
   const app = createTestApp();
@@ -12,6 +13,16 @@ describe("POST /v1/portal-sessions", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
+    // The route now settles any outstanding balance before opening a session, so
+    // it composes a balance — these cases sit at 0 (paid 0, used 0) and take the
+    // "nothing owed" branch, which is the pre-settlement behaviour verbatim.
+    vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockImplementation(
+      async (org: string) => ({
+        org_id: org,
+        spent_cents: "0.0000000000",
+        as_of: "2026-01-31T00:00:00.000Z",
+      })
+    );
     await cleanTestData();
   });
 

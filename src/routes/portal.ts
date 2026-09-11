@@ -5,6 +5,11 @@ import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreatePortalSessionRequestSchema } from "../schemas.js";
 import { getCardSetup } from "../lib/stripe-service-client.js";
+import {
+  settleOutstandingBeforeCardChange,
+  OutstandingBalanceError,
+} from "../lib/card-change-settlement.js";
+import { outstandingBalanceBody } from "../lib/outstanding-balance-response.js";
 
 const router = Router();
 
@@ -41,9 +46,19 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
 
+    // An outstanding balance is collected BEFORE the customer may touch the
+    // card that owes it — see lib/card-change-settlement for the full rule (a
+    // card-less or off_session-blocked debtor still gets the session, because
+    // adding a card is their only way out).
+    await settleOutstandingBeforeCardChange(orgId);
+
     const setup = await getCardSetup(orgId, return_url, amount, currency);
     res.json(setup);
   } catch (err) {
+    if (err instanceof OutstandingBalanceError) {
+      res.status(402).json(outstandingBalanceBody(err));
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     console.error("[billing-service] card setup failed:", message);
     res.status(502).json({ error: "Failed to start card setup" });
