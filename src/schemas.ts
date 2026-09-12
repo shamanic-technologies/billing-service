@@ -1013,6 +1013,27 @@ export const BillingGrowthRowSchema = z
     credited_cents: CentsStringSchema,
     /** NET Stripe payments in this period. Returns are attributed to the period they happened in. */
     revenue_cents: CentsStringSchema,
+    /**
+     * Distinct accounts that PAID in this period, taken verbatim from
+     * stripe-service. COVERS EVERY ACQUIRER it takes money through — NOT the
+     * Stripe-only scope of `accounts_with_payment_method`, which counts saved
+     * Stripe cards. These count who PAID, never who has a card on file; the two
+     * populations differ substantially and neither contains the other.
+     *
+     * An account is the org, so an org paying on two acquirers in one period
+     * counts once. Distinct counts, so they do NOT sum to
+     * `total_paying_accounts` — an account paying every month is in every month.
+     * A period carrying only promo credit has no payments and reports 0.
+     */
+    paying_accounts: z.number().int(),
+    /**
+     * Of `paying_accounts`, those with no settled payment on ANY acquirer before
+     * this period — the numerator of a signup-to-paid conversion rate. Every
+     * account is first-time in exactly one period per grain, so summing this
+     * over all periods gives `total_paying_accounts`. A later refund never
+     * un-counts a payer.
+     */
+    first_time_paying_accounts: z.number().int(),
   })
   .openapi("BillingGrowthRow");
 
@@ -1039,6 +1060,22 @@ export const PublicBillingStatsSchema = z
     total_returned_cents: CentsStringSchema,
     /** Lifetime local promo credits only. */
     total_local_credits_cents: CentsStringSchema,
+    /**
+     * Distinct accounts that have EVER paid, taken verbatim from stripe-service.
+     * COVERS EVERY ACQUIRER it takes money through, which is deliberately NOT
+     * the Stripe-only scope of `accounts_with_payment_method` above — an org
+     * paying through a wallet or on the second acquirer holds no Stripe card and
+     * is counted here.
+     *
+     * This is who PAID, a different question from who has a card on file. In
+     * production the two figures differ and neither is a subset of the other, so
+     * a consumer must not read one as the other.
+     *
+     * Equals the sum of `first_time_paying_accounts` over all buckets, on either
+     * grain. Never a fallback zero: a count billing could not read fails the
+     * whole endpoint with a 502.
+     */
+    total_paying_accounts: z.number().int(),
     monthly_growth: z.array(BillingGrowthRowSchema),
     weekly_growth: z.array(BillingGrowthRowSchema),
   })
@@ -1082,13 +1119,27 @@ registry.registerPath({
   path: "/public/stats/billing",
   summary: "Aggregate billing stats (no auth)",
   description:
-    "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.",
+    "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.\n\n" +
+    "HOW MANY ACCOUNTS PAID rides the same buckets as how much they paid: `paying_accounts` and " +
+    "`first_time_paying_accounts` on every monthly and weekly bucket, plus `total_paying_accounts` for the " +
+    "platform. Two things a reader must not assume about them. ACQUIRER COVERAGE IS EVERY ACQUIRER " +
+    "stripe-service takes money through, which is deliberately NOT the Stripe-only scope of " +
+    "`accounts_with_payment_method` beside them. And they count who PAID, never who has a card on file: those " +
+    "populations differ substantially in production and neither contains the other.\n\n" +
+    "Taken from stripe-service verbatim — this hop forwards, it does not re-derive, so " +
+    "`first_time_paying_accounts` summed over all buckets equals `total_paying_accounts` on either grain while " +
+    "`paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as " +
+    "zero: it fails the endpoint with a 502.",
   responses: {
     200: {
       description: "Billing stats",
       content: {
         "application/json": { schema: PublicBillingStatsSchema },
       },
+    },
+    502: {
+      description: "stripe-service unavailable, or its reply carried no paying-account counts",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });
