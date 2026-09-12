@@ -136,6 +136,28 @@ export async function insertTestEpisode(data: {
   return row;
 }
 
+/**
+ * Insert a daily-budget CHANGE row directly, so a test can lay down a dated
+ * timeline without driving the write routes (which stamp `changed_at` as now).
+ */
+export async function insertTestBrandBudgetChange(data: {
+  orgId: string;
+  brandId: string;
+  dailyBudgetCents: string;
+  changedAt: Date;
+}) {
+  const [row] = await db
+    .insert(brandDailyBudgetChanges)
+    .values({
+      orgId: data.orgId,
+      brandId: data.brandId,
+      dailyBudgetCents: data.dailyBudgetCents,
+      changedAt: data.changedAt,
+    })
+    .returning();
+  return row;
+}
+
 export async function listEpisodes(orgId: string): Promise<CreditDepletionEpisode[]> {
   return db
     .select()
