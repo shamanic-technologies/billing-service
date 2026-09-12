@@ -681,6 +681,73 @@ export const ReadBrandDailyBudgetHistorySchema = z
   })
   .openapi("ReadBrandDailyBudgetHistory");
 
+export const BrandDailyBudgetDaySchema = z
+  .object({
+    /** The UTC calendar day, YYYY-MM-DD. */
+    date: z.string(),
+    /**
+     * `recorded` — a change governs this day, so dailyBudgetCents is the amount
+     * that was in force. `not_recorded` — the day precedes the first change
+     * this org+brand ever recorded, so billing does not know. A RECORDED "0"
+     * (a brand the customer deliberately defunded) is a different fact from a
+     * day billing never observed; tell them apart by this field, never by
+     * reading a number as a sentinel.
+     */
+    state: z.enum(["recorded", "not_recorded"]),
+    /** The amount in force at the END of that UTC day. null iff not_recorded. */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /**
+     * When that amount was set (ISO 8601) — inside the day when the customer
+     * changed it that day, before it otherwise. null iff not_recorded.
+     */
+    inForceSince: z.string().nullable(),
+  })
+  .openapi("BrandDailyBudgetDay");
+
+export const ReadBrandDailyBudgetByDaySchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    /**
+     * The grain these amounts are stated at. The BRAND total is the finest
+     * grain billing genuinely records over time.
+     */
+    grain: z.literal("brand"),
+    /**
+     * The first daily-budget change ever recorded for this org+brand (ISO
+     * 8601), or null when none exists. Every day before it is not_recorded —
+     * the change log is forward-only, so a budget set before it and never
+     * touched since leaves no trace of when it was set.
+     */
+    recordBeginsAt: z.string().nullable(),
+    /** Oldest day first, one entry per UTC day of the requested range. */
+    days: z.array(BrandDailyBudgetDaySchema),
+  })
+  .openapi("ReadBrandDailyBudgetByDay");
+
+export const PaymentStoppedPeriodSchema = z
+  .object({
+    /** When the period began (ISO 8601). */
+    startedAt: z.string(),
+    /** When it ended (ISO 8601), or null while the org is still in it. */
+    endedAt: z.string().nullable(),
+  })
+  .openapi("PaymentStoppedPeriod");
+
+export const PaymentStoppedPeriodsResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    /**
+     * The earliest instant this record demonstrably exists (ISO 8601), or null
+     * when no period has ever been recorded. A day before it is NOT RECORDED:
+     * the absence of a period there is not evidence that payment was on.
+     */
+    recordBeginsAt: z.string().nullable(),
+    /** Oldest first. An open period (endedAt null) can only be the last one. */
+    periods: z.array(PaymentStoppedPeriodSchema),
+  })
+  .openapi("PaymentStoppedPeriodsResponse");
+
 // --- Per-funnel daily ceilings (the brand budget, split by sales funnel) ---
 
 export const BrandFunnelKeySchema = z
@@ -1726,6 +1793,44 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/internal/accounts/by-org/{orgId}/payment-stopped-periods",
+  summary: "When this org's payment had stopped, as periods",
+  description:
+    "Every stretch of time during which this org was not paying — a failed card or credit " +
+    "gone — as periods with a beginning and an end (endedAt null while the org is still in " +
+    "one). A period is a credit-depletion episode: it opens when the balance falls past the " +
+    "org's credit-line floor and closes when a real recharge lands; the debt flag for a card " +
+    "we can no longer charge lives on that same episode, so both halves are one period. " +
+    "Service-to-service read with x-api-key only, orgId in the path — no x-org-id / x-user-id " +
+    "and no sentinel identity. Pure read. " +
+    "recordBeginsAt is the earliest episode recorded fleet-wide: a day before it is NOT " +
+    "RECORDED, and the absence of a period there is not evidence that payment was on. An " +
+    "episode opens on an authorize carrying campaign activity, so a period means payment had " +
+    "stopped while the org was trying to spend.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Payment-stopped periods, oldest first",
+      content: {
+        "application/json": { schema: PaymentStoppedPeriodsResponseSchema },
+      },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Read failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/campaigns/{campaignId}/affordability",
   summary: "Read-only pre-flight: can this org afford another run of campaign X?",
   description:
@@ -1875,6 +1980,48 @@ registry.registerPath({
     },
     400: {
       description: "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/daily-budget/by-day",
+  summary: "What daily amount was in force for this brand on each past UTC day",
+  description:
+    "Replays the caller org's append-only daily-budget change log to answer what amount " +
+    "was IN FORCE for this brand on each UTC day of a range, oldest day first. The amount " +
+    "for a day is the last change strictly before the next day's 00:00Z, i.e. the value the " +
+    "day finished on. Service-to-service read with x-api-key plus x-org-id, same auth as the " +
+    "current-value and history reads. " +
+    "GRAIN: the BRAND total, the finest grain billing genuinely records over time — the " +
+    "change log carries the brand-level figure on every write (per-funnel, per-channel, " +
+    "per-offer and per-leg writes included), while the finer ceilings are upserted in place " +
+    "with no change log of their own, so a past-day answer there would be invented. " +
+    "A day before the first recorded change is state not_recorded with a null amount — never " +
+    "0, and never the current value back-dated; a recorded \"0\" is a brand the customer " +
+    "deliberately defunded and is a different fact. Today is allowed (it answers with the " +
+    "amount in force right now); a future day is refused.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    query: z.object({
+      from: z.string().openapi({ description: "First UTC day, YYYY-MM-DD (inclusive)." }),
+      to: z.string().openapi({ description: "Last UTC day, YYYY-MM-DD (inclusive, not in the future)." }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "One entry per UTC day of the range, oldest first",
+      content: {
+        "application/json": { schema: ReadBrandDailyBudgetByDaySchema },
+      },
+    },
+    400: {
+      description:
+        "brandId or x-org-id is not a valid UUID, x-org-id is missing, a date is " +
+        "missing/malformed, to is earlier than from, the range is too long, or to is a future day",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
