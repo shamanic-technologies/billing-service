@@ -199,6 +199,28 @@ export interface StripeBillingStatsGrowthRow {
   period: string;
   paid_cents: string;
   net_cents: string;
+  /**
+   * How many distinct accounts PAID in this period, and how many of those were
+   * paying for the first time. Both ride the same buckets and the same settled
+   * predicates as the money above, so they cover EVERY acquirer stripe-service
+   * takes money through — NOT the Stripe-only scope of
+   * `accounts_with_payment_method`. An account is the org, so an org paying on
+   * two acquirers in one period counts once.
+   *
+   * These count who PAID, never who has a card on file. The two populations are
+   * genuinely different and neither contains the other.
+   *
+   * `paying_accounts` are DISTINCT counts, so they do NOT sum to
+   * `total_paying_accounts` — an account that pays every month is in every
+   * month. `first_time_paying_accounts` DOES sum to it: every account is
+   * first-time in exactly one period per grain.
+   *
+   * Optional on the wire only so a stripe-service older than the release that
+   * published them can be DETECTED — billing rejects such a reply rather than
+   * reading a missing count as zero. See `requirePayingCount` in the route.
+   */
+  paying_accounts?: number;
+  first_time_paying_accounts?: number;
 }
 
 export interface StripeBillingStatsResult {
@@ -212,6 +234,16 @@ export interface StripeBillingStatsResult {
   total_net_cents: string;
   total_returned_cents: string;
   accounts_with_payment_method: number;
+  /**
+   * Distinct accounts that have EVER paid, across EVERY acquirer. A different
+   * question AND a different acquirer scope from `accounts_with_payment_method`
+   * (Stripe cards on file) — an org paying through a wallet or on the second
+   * acquirer holds no Stripe card and is counted here.
+   *
+   * Optional on the wire for the same detect-an-old-producer reason as the
+   * per-bucket counts above.
+   */
+  total_paying_accounts?: number;
   monthly_growth: StripeBillingStatsGrowthRow[];
   weekly_growth: StripeBillingStatsGrowthRow[];
 }

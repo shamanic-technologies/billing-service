@@ -23,12 +23,20 @@
           },
           "revenue_cents": {
             "type": "string"
+          },
+          "paying_accounts": {
+            "type": "integer"
+          },
+          "first_time_paying_accounts": {
+            "type": "integer"
           }
         },
         "required": [
           "period",
           "credited_cents",
-          "revenue_cents"
+          "revenue_cents",
+          "paying_accounts",
+          "first_time_paying_accounts"
         ]
       },
       "PublicBillingStats": {
@@ -55,6 +63,9 @@
           "total_local_credits_cents": {
             "type": "string"
           },
+          "total_paying_accounts": {
+            "type": "integer"
+          },
           "monthly_growth": {
             "type": "array",
             "items": {
@@ -76,8 +87,20 @@
           "total_revenue_cents",
           "total_returned_cents",
           "total_local_credits_cents",
+          "total_paying_accounts",
           "monthly_growth",
           "weekly_growth"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "BillingAccount": {
@@ -169,17 +192,6 @@
           "card_country",
           "created_at",
           "updated_at"
-        ]
-      },
-      "ErrorResponse": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
         ]
       },
       "BalanceResponse": {
@@ -1821,7 +1833,7 @@
     "/public/stats/billing": {
       "get": {
         "summary": "Aggregate billing stats (no auth)",
-        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.",
+        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.\n\nHOW MANY ACCOUNTS PAID rides the same buckets as how much they paid: `paying_accounts` and `first_time_paying_accounts` on every monthly and weekly bucket, plus `total_paying_accounts` for the platform. Two things a reader must not assume about them. ACQUIRER COVERAGE IS EVERY ACQUIRER stripe-service takes money through, which is deliberately NOT the Stripe-only scope of `accounts_with_payment_method` beside them. And they count who PAID, never who has a card on file: those populations differ substantially in production and neither contains the other.\n\nTaken from stripe-service verbatim — this hop forwards, it does not re-derive, so `first_time_paying_accounts` summed over all buckets equals `total_paying_accounts` on either grain while `paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as zero: it fails the endpoint with a 502.",
         "responses": {
           "200": {
             "description": "Billing stats",
@@ -1829,6 +1841,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PublicBillingStats"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unavailable, or its reply carried no paying-account counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
