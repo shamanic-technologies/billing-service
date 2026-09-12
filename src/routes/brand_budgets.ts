@@ -9,9 +9,16 @@ import {
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
   getBrandDailyBudget,
+  getBrandDailyBudgetByDay,
   getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
 } from "../lib/brand-budgets.js";
+import {
+  MAX_DAY_RANGE_DAYS,
+  currentUtcDay,
+  parseUtcDay,
+  utcDaySpan,
+} from "../lib/utc-day.js";
 import {
   BrandBudgetManagedByFunnelsError,
   ChannelTermsUnavailableError,
@@ -430,6 +437,89 @@ router.get(
         changedAt: c.changedAt.toISOString(),
       })),
     });
+  }
+);
+
+// GET /internal/brands/:brandId/daily-budget/by-day?from=&to=
+//
+// What daily amount was IN FORCE for this brand on each UTC day of a range —
+// the past-day read a run-rate consumer needs, answered by replaying the
+// append-only change log rather than by anyone snapshotting billing's state.
+//
+// Auth: same as the current-value and history reads — x-api-key
+// (service-to-service) plus x-org-id (the internal org UUID). Shared brands
+// keep independent per-org answers.
+//
+// GRAIN: the BRAND total. brand_daily_budget_changes carries the brand-level
+// figure on EVERY write (per-funnel / per-channel / per-offer / per-leg writes
+// included), so the replay is complete at that grain. The finer ceilings are
+// upserted in place with no change log of their own, so a past-day answer
+// there would be invented — hence no finer read.
+//
+// Resp: { brandId, orgId, grain: "brand", recordBeginsAt, days: [{ date,
+// state, dailyBudgetCents, inForceSince }] }, oldest day first. A day before
+// the first recorded change is state "not_recorded" with a null amount — never
+// 0, and never the current value back-dated. A RECORDED "0" is a brand the
+// customer deliberately defunded, which is a different fact; the two are
+// distinguishable by `state`, not by reading a number as a sentinel.
+//
+// 400 on a non-UUID brandId, a missing/malformed date, to < from, a range over
+// MAX_DAY_RANGE_DAYS, or a day in the FUTURE (no change can exist there, so
+// answering would be a claim about what has not happened yet). TODAY is
+// allowed and answers with the amount in force right now.
+router.get(
+  "/internal/brands/:brandId/daily-budget/by-day",
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+
+    const orgId = requireInternalOrgId(req, res);
+    if (!orgId) return;
+
+    const fromRaw = req.query.from;
+    const toRaw = req.query.to;
+    if (typeof fromRaw !== "string" || typeof toRaw !== "string") {
+      res.status(400).json({
+        error: "from and to query params are required (YYYY-MM-DD, UTC)",
+      });
+      return;
+    }
+
+    const fromDay = parseUtcDay(fromRaw);
+    const toDay = parseUtcDay(toRaw);
+    if (!fromDay || !toDay) {
+      res
+        .status(400)
+        .json({ error: "from and to must be valid UTC dates (YYYY-MM-DD)" });
+      return;
+    }
+    if (toDay.getTime() < fromDay.getTime()) {
+      res.status(400).json({ error: "to must not be earlier than from" });
+      return;
+    }
+    if (utcDaySpan(fromDay, toDay) > MAX_DAY_RANGE_DAYS) {
+      res.status(400).json({
+        error: `range must not exceed ${MAX_DAY_RANGE_DAYS} days`,
+      });
+      return;
+    }
+    if (toDay.getTime() > currentUtcDay().getTime()) {
+      res
+        .status(400)
+        .json({ error: "to must not be a future UTC day" });
+      return;
+    }
+
+    const { recordBeginsAt, days } = await getBrandDailyBudgetByDay(
+      orgId,
+      brandId,
+      fromDay,
+      toDay
+    );
+    res.json({ brandId, orgId, grain: "brand", recordBeginsAt, days });
   }
 );
 

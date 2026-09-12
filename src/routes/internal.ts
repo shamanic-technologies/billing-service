@@ -27,6 +27,7 @@ import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
+import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
 
 const router = Router();
 
@@ -531,5 +532,52 @@ router.get("/internal/unpaid-debts", async (_req, res) => {
     res.status(502).json({ error: "Failed to read unpaid debts" });
   }
 });
+
+// GET /internal/accounts/by-org/:orgId/payment-stopped-periods
+//
+// When this org's payment had STOPPED, as periods with a beginning and an end.
+// The owner's rule: a failed card or credit gone takes the org out of the
+// run-rate however active its campaigns look, and billing is the only service
+// that can say when that was true.
+//
+// No new state: a period IS a credit-depletion episode (opened when the
+// balance falls past the org's credit-line floor, closed when a real recharge
+// lands). The debt flag for a card we can no longer charge lives on that same
+// episode, so both halves of "payment stopped" are already one period.
+//
+// Auth: x-api-key only, orgId in the PATH — no x-org-id / x-user-id / sentinel
+// identity, same user-less shape as the balance-by-org read above. Pure read.
+//
+// Resp: { orgId, recordBeginsAt, periods: [{ startedAt, endedAt }] }, oldest
+// first; endedAt null while the org is still in it. camelCase matches the
+// daily-budget reads this is paired with by the same consumer.
+//
+// recordBeginsAt is the earliest episode recorded fleet-wide: a day before it
+// is NOT RECORDED, and the absence of a period there is not evidence that
+// payment was on. Note too that an episode opens on an authorize carrying
+// campaign activity, so a period means payment had stopped WHILE THE ORG WAS
+// TRYING TO SPEND — an org that stopped paying and also stopped working opens
+// none. Both facts are stated rather than papered over.
+router.get(
+  "/internal/accounts/by-org/:orgId/payment-stopped-periods",
+  async (req, res) => {
+    const { orgId } = req.params;
+    if (!UUID_RE.test(orgId)) {
+      res.status(400).json({ error: "orgId must be a valid UUID" });
+      return;
+    }
+
+    try {
+      const { recordBeginsAt, periods } = await getPaymentStoppedPeriods(orgId);
+      res.json({ orgId, recordBeginsAt, periods });
+    } catch (err) {
+      console.error(
+        `[billing-service] payment-stopped-periods read failed for org ${orgId}:`,
+        err
+      );
+      res.status(502).json({ error: "Failed to read payment-stopped periods" });
+    }
+  }
+);
 
 export default router;

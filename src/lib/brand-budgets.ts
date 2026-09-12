@@ -9,7 +9,7 @@
  * Fail-loud: any DB error propagates (no swallow).
  */
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, lt } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
@@ -22,6 +22,11 @@ import {
   BrandBudgetManagedByFunnelsError,
   sumFunnelBudgets,
 } from "./brand-funnel-budgets.js";
+import {
+  enumerateUtcDays,
+  formatUtcDay,
+  utcDayEndExclusive,
+} from "./utc-day.js";
 
 export interface UpsertBrandDailyBudgetResult {
   row: BrandDailyBudget;
@@ -194,4 +199,117 @@ export async function getBrandDailyBudget(
     )
     .limit(1);
   return row ?? null;
+}
+
+/** What was in force for one brand on one past UTC day. */
+export interface BrandDailyBudgetDay {
+  /** The UTC calendar day, `YYYY-MM-DD`. */
+  date: string;
+  /**
+   * `recorded` — a change row governs this day, so `dailyBudgetCents` is the
+   * amount that was in force. `not_recorded` — the day precedes the first
+   * change this org+brand ever recorded, so billing does NOT know and says so.
+   *
+   * These are the two states the consumer must tell apart: a RECORDED `"0"` is
+   * a brand the customer deliberately defunded, and it is not the same fact as
+   * a day billing never observed.
+   */
+  state: "recorded" | "not_recorded";
+  /** The amount in force at the END of that UTC day. null iff `not_recorded`. */
+  dailyBudgetCents: string | null;
+  /**
+   * When that amount was set (ISO 8601). Falls INSIDE the day when the customer
+   * changed it that day, and before it otherwise. null iff `not_recorded`.
+   */
+  inForceSince: string | null;
+}
+
+export interface BrandDailyBudgetByDay {
+  /**
+   * The first daily-budget change ever recorded for this org+brand (ISO 8601),
+   * or null when none exists. Every day before it is `not_recorded` — the
+   * change log is forward-only (migration 0027), so a budget set before it and
+   * never touched since leaves no trace of WHEN it was set.
+   */
+  recordBeginsAt: string | null;
+  days: BrandDailyBudgetDay[];
+}
+
+/**
+ * Replay this org's daily-budget change log to answer what amount was in force
+ * for a brand on each UTC day of a range, oldest day first.
+ *
+ * GRAIN: the BRAND total, which is the finest grain billing genuinely records
+ * over time. `brand_daily_budget_changes` carries the brand-level figure on
+ * EVERY write, per-funnel / per-channel / per-offer / per-leg writes included
+ * (see setBrandFunnelDailyBudgets), so the replay is complete for the brand.
+ * The finer ceilings are upserted in place with NO change log of their own, so
+ * a past-day answer at that grain would be invented — we do not offer one.
+ *
+ * The amount in force for a day is the LAST change strictly before the next
+ * day's 00:00:00Z, i.e. the value the day finished on. A day that precedes the
+ * first recorded change is `not_recorded` with a null amount — never 0, and
+ * never the current value back-dated.
+ *
+ * Fail-loud: any DB error propagates.
+ */
+export async function getBrandDailyBudgetByDay(
+  orgId: string,
+  brandId: string,
+  fromDay: Date,
+  toDay: Date
+): Promise<BrandDailyBudgetByDay> {
+  const scope = and(
+    eq(brandDailyBudgetChanges.orgId, orgId),
+    eq(brandDailyBudgetChanges.brandId, brandId)
+  );
+
+  // The record's own beginning, asked separately: a range entirely before the
+  // first change returns no rows, and "no rows" alone cannot distinguish
+  // "nothing recorded yet" from "nothing recorded in this window".
+  const [earliest] = await db
+    .select({ changedAt: brandDailyBudgetChanges.changedAt })
+    .from(brandDailyBudgetChanges)
+    .where(scope)
+    .orderBy(
+      asc(brandDailyBudgetChanges.changedAt),
+      asc(brandDailyBudgetChanges.id)
+    )
+    .limit(1);
+
+  const rangeEnd = utcDayEndExclusive(toDay);
+  const changes = await db
+    .select({
+      dailyBudgetCents: brandDailyBudgetChanges.dailyBudgetCents,
+      changedAt: brandDailyBudgetChanges.changedAt,
+    })
+    .from(brandDailyBudgetChanges)
+    .where(and(scope, lt(brandDailyBudgetChanges.changedAt, rangeEnd)))
+    .orderBy(
+      asc(brandDailyBudgetChanges.changedAt),
+      asc(brandDailyBudgetChanges.id)
+    );
+
+  // One forward walk over the changes, one cursor over the days: each day takes
+  // the last change that landed before its end.
+  let cursor = 0;
+  let inForce: { dailyBudgetCents: string; changedAt: Date } | null = null;
+  const days = enumerateUtcDays(fromDay, toDay).map((dayStart) => {
+    const dayEnd = utcDayEndExclusive(dayStart);
+    while (cursor < changes.length && changes[cursor].changedAt < dayEnd) {
+      inForce = changes[cursor];
+      cursor += 1;
+    }
+    return {
+      date: formatUtcDay(dayStart),
+      state: inForce ? ("recorded" as const) : ("not_recorded" as const),
+      dailyBudgetCents: inForce ? inForce.dailyBudgetCents : null,
+      inForceSince: inForce ? inForce.changedAt.toISOString() : null,
+    };
+  });
+
+  return {
+    recordBeginsAt: earliest ? earliest.changedAt.toISOString() : null,
+    days,
+  };
 }

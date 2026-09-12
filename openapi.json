@@ -907,6 +907,46 @@
           "unpaid_debts"
         ]
       },
+      "PaymentStoppedPeriod": {
+        "type": "object",
+        "properties": {
+          "startedAt": {
+            "type": "string"
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "startedAt",
+          "endedAt"
+        ]
+      },
+      "PaymentStoppedPeriodsResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recordBeginsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentStoppedPeriod"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "recordBeginsAt",
+          "periods"
+        ]
+      },
       "CampaignAffordability": {
         "type": "object",
         "properties": {
@@ -1003,6 +1043,71 @@
         "required": [
           "brandId",
           "history"
+        ]
+      },
+      "BrandDailyBudgetDay": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "not_recorded"
+            ]
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "inForceSince": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "date",
+          "state",
+          "dailyBudgetCents",
+          "inForceSince"
+        ]
+      },
+      "ReadBrandDailyBudgetByDay": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grain": {
+            "type": "string",
+            "enum": [
+              "brand"
+            ]
+          },
+          "recordBeginsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BrandDailyBudgetDay"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "orgId",
+          "grain",
+          "recordBeginsAt",
+          "days"
         ]
       },
       "BrandDailyBudget": {
@@ -3808,6 +3913,63 @@
         }
       }
     },
+    "/internal/accounts/by-org/{orgId}/payment-stopped-periods": {
+      "get": {
+        "summary": "When this org's payment had stopped, as periods",
+        "description": "Every stretch of time during which this org was not paying — a failed card or credit gone — as periods with a beginning and an end (endedAt null while the org is still in one). A period is a credit-depletion episode: it opens when the balance falls past the org's credit-line floor and closes when a real recharge lands; the debt flag for a card we can no longer charge lives on that same episode, so both halves are one period. Service-to-service read with x-api-key only, orgId in the path — no x-org-id / x-user-id and no sentinel identity. Pure read. recordBeginsAt is the earliest episode recorded fleet-wide: a day before it is NOT RECORDED, and the absence of a period there is not evidence that payment was on. An episode opens on an authorize carrying campaign activity, so a period means payment had stopped while the org was trying to spend.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment-stopped periods, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentStoppedPeriodsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Read failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/campaigns/{campaignId}/affordability": {
       "get": {
         "summary": "Read-only pre-flight: can this org afford another run of campaign X?",
@@ -4090,6 +4252,80 @@
           },
           "400": {
             "description": "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/daily-budget/by-day": {
+      "get": {
+        "summary": "What daily amount was in force for this brand on each past UTC day",
+        "description": "Replays the caller org's append-only daily-budget change log to answer what amount was IN FORCE for this brand on each UTC day of a range, oldest day first. The amount for a day is the last change strictly before the next day's 00:00Z, i.e. the value the day finished on. Service-to-service read with x-api-key plus x-org-id, same auth as the current-value and history reads. GRAIN: the BRAND total, the finest grain billing genuinely records over time — the change log carries the brand-level figure on every write (per-funnel, per-channel, per-offer and per-leg writes included), while the finer ceilings are upserted in place with no change log of their own, so a past-day answer there would be invented. A day before the first recorded change is state not_recorded with a null amount — never 0, and never the current value back-dated; a recorded \"0\" is a brand the customer deliberately defunded and is a different fact. Today is allowed (it answers with the amount in force right now); a future day is refused.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "First UTC day, YYYY-MM-DD (inclusive)."
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Last UTC day, YYYY-MM-DD (inclusive, not in the future)."
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per UTC day of the range, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadBrandDailyBudgetByDay"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "brandId or x-org-id is not a valid UUID, x-org-id is missing, a date is missing/malformed, to is earlier than from, the range is too long, or to is a future day",
             "content": {
               "application/json": {
                 "schema": {
