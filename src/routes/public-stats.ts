@@ -13,11 +13,58 @@ const router = Router();
 // Public-stats sums are returned as full-precision decimal strings (numeric(16,10)::text).
 // Investor/dashboard consumers wanting a display-rounded integer should
 // `Math.ceil(parseFloat(...))` at the presentation layer.
+//
+// HOW MANY ACCOUNTS PAID, and the two things a reader must not assume about it:
+//
+//   `total_paying_accounts`, plus `paying_accounts` and
+//   `first_time_paying_accounts` on every monthly and weekly bucket.
+//
+//   ACQUIRER COVERAGE IS EVERY ACQUIRER stripe-service takes money through,
+//   which is deliberately NOT the scope of `accounts_with_payment_method` right
+//   beside them — that one is documented Stripe-only, because it counts saved
+//   Stripe cards. Reading the two under one scope is the mistake this exists to
+//   fix, so they are stated apart here rather than left to be inferred.
+//
+//   They count who PAID, never who has a card on file. Those populations differ
+//   substantially in production and neither is a subset of the other: a customer
+//   paying through a wallet or on the second acquirer holds no Stripe card, and a
+//   customer who saved a card has not necessarily been charged.
+//
+// Taken from stripe-service VERBATIM — this hop forwards, it does not re-derive.
+// stripe-service owns money and is the only service that sees every acquirer, so
+// a second implementation here would be a second answer. Consequently the
+// invariants are stripe-service's own and hold unchanged through this hop:
+// `first_time_paying_accounts` summed over all buckets equals
+// `total_paying_accounts` on either grain, while `paying_accounts` are distinct
+// counts and do not sum to anything.
 
 interface BillingGrowthRow {
   period: string;
   credited_cents: string;
   revenue_cents: string;
+  paying_accounts: number;
+  first_time_paying_accounts: number;
+}
+
+/**
+ * A count stripe-service publishes, read fail-loud.
+ *
+ * A count we could not read is NOT a count of zero: a zero here tells the staff
+ * metrics console that nobody paid that week, which is the exact wrong answer
+ * and indistinguishable from the truth. A stripe-service too old to publish
+ * these (or a reply that lost them) therefore fails the whole endpoint with a
+ * 502, the same posture every other money figure on this route takes.
+ *
+ * Same shape of guard as `netReceivedCents`'s `amount_returned` check: the
+ * field is optional on the wire ONLY so an old producer can be detected.
+ */
+function requirePayingCount(value: number | undefined, field: string, where: string): number {
+  if (typeof value !== "number") {
+    throw new Error(
+      `stripe-service billing stats are missing ${field}${where} — paying-account counts cannot be reported`
+    );
+  }
+  return value;
 }
 
 interface LocalGrowthRow {
@@ -47,21 +94,49 @@ async function queryLocalGrowth(truncTo: "month" | "week"): Promise<LocalGrowthR
 //
 // A return is attributed to the period it happened in, not the period of the
 // payment it reverses, so a past bucket is never rewritten.
+// The paying-account counts ride these same buckets, taken from stripe-service
+// VERBATIM — this hop adds no arithmetic to them, exactly as it adds none to
+// `net_cents`. A bucket that exists only because a promo was granted in it has
+// no stripe-service row, so nobody paid in it: 0 there is a measured fact, not
+// a missing value.
 function mergeGrowthRows(
   localRows: LocalGrowthRow[],
-  ssRows: StripeBillingStatsGrowthRow[]
+  ssRows: StripeBillingStatsGrowthRow[],
+  grain: string
 ): BillingGrowthRow[] {
-  const merged = new Map<string, { credited: string; revenue: string }>();
+  const merged = new Map<
+    string,
+    { credited: string; revenue: string; paying: number; firstTime: number }
+  >();
   for (const r of localRows) {
-    merged.set(r.period, { credited: r.credited_cents, revenue: "0.0000000000" });
+    merged.set(r.period, {
+      credited: r.credited_cents,
+      revenue: "0.0000000000",
+      paying: 0,
+      firstTime: 0,
+    });
   }
   for (const r of ssRows) {
+    const where = ` for ${grain} period ${r.period}`;
+    const paying = requirePayingCount(r.paying_accounts, "paying_accounts", where);
+    const firstTime = requirePayingCount(
+      r.first_time_paying_accounts,
+      "first_time_paying_accounts",
+      where
+    );
     const existing = merged.get(r.period);
     if (existing) {
       existing.credited = addCents(existing.credited, r.net_cents);
       existing.revenue = addCents(existing.revenue, r.net_cents);
+      existing.paying = paying;
+      existing.firstTime = firstTime;
     } else {
-      merged.set(r.period, { credited: r.net_cents, revenue: r.net_cents });
+      merged.set(r.period, {
+        credited: r.net_cents,
+        revenue: r.net_cents,
+        paying,
+        firstTime,
+      });
     }
   }
   return [...merged.entries()]
@@ -70,6 +145,8 @@ function mergeGrowthRows(
       period,
       credited_cents: v.credited,
       revenue_cents: v.revenue,
+      paying_accounts: v.paying,
+      first_time_paying_accounts: v.firstTime,
     }));
 }
 
@@ -102,18 +179,34 @@ router.get("/public/stats/billing", async (_req, res) => {
       queryLocalGrowth("week"),
     ]);
 
-    res.json({
-      total_accounts: accountStats.totalAccounts,
-      accounts_with_payment_method: ssStats.accounts_with_payment_method,
-      // NET for credited and revenue, GROSS kept as total_paid_cents. See mergeGrowthRows.
-      total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_net_cents),
-      total_paid_cents: ssStats.total_paid_cents,
-      total_revenue_cents: ssStats.total_net_cents,
-      total_returned_cents: ssStats.total_returned_cents,
-      total_local_credits_cents: localCreditStats.totalLocalCredits,
-      monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth),
-      weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth),
-    });
+    let body;
+    try {
+      body = {
+        total_accounts: accountStats.totalAccounts,
+        accounts_with_payment_method: ssStats.accounts_with_payment_method,
+        // NET for credited and revenue, GROSS kept as total_paid_cents. See mergeGrowthRows.
+        total_credited_cents: addCents(localCreditStats.totalLocalCredits, ssStats.total_net_cents),
+        total_paid_cents: ssStats.total_paid_cents,
+        total_revenue_cents: ssStats.total_net_cents,
+        total_returned_cents: ssStats.total_returned_cents,
+        total_local_credits_cents: localCreditStats.totalLocalCredits,
+        total_paying_accounts: requirePayingCount(
+          ssStats.total_paying_accounts,
+          "total_paying_accounts",
+          ""
+        ),
+        monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth, "monthly"),
+        weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth, "weekly"),
+      };
+    } catch (err) {
+      // An unreadable count is an upstream-contract failure, same class as
+      // stripe-service being unreachable — 502, never a zero.
+      console.error("[billing-service] stripe-service billing stats incomplete:", err);
+      res.status(502).json({ error: "Failed to fetch stats from stripe-service" });
+      return;
+    }
+
+    res.json(body);
   } catch (err) {
     console.error("[billing-service] GET /public/stats/billing failed:", err);
     res.status(500).json({ error: "Internal server error" });

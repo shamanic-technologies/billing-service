@@ -541,14 +541,30 @@ Composed from stripe-service `getStats()` + local `localPromos`:
   "total_revenue_cents": "15000.0000000000",        // cumulative all-time Stripe revenue, NET of returns (= paid − returned)
   "total_returned_cents": "0.0000000000",           // settled refunds + LOST disputes, platform-wide
   "total_local_credits_cents": "400.0000000000",    // SUM(local_promos.amount_cents)
+  "total_paying_accounts": 34,                      // distinct accounts that have EVER paid, EVERY acquirer. NOT the Stripe-only scope of accounts_with_payment_method, and NOT who has a card
   "monthly_growth": [
-    { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000" }
+    { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000",
+      "paying_accounts": 9, "first_time_paying_accounts": 4 }
   ],
   "weekly_growth": [ ... ]
 }
 ```
 
-Growth rows expose `credited_cents` and `revenue_cents` only, both NET (they read stripe-service's per-bucket `net_cents`). A return is bucketed in the period it HAPPENED, not the period of the payment it reverses — stripe-service does not back-date, so a past bucket is never rewritten. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
+Growth rows expose `credited_cents` and `revenue_cents`, both NET (they read stripe-service's per-bucket `net_cents`). A return is bucketed in the period it HAPPENED, not the period of the payment it reverses — stripe-service does not back-date, so a past bucket is never rewritten. Total consumed lives in runs-service. Endpoint returns 502 if stripe-service unreachable.
+
+#### How many accounts PAID — carried from stripe-service, never re-derived
+
+The staff metrics console (`admin.distribute.you/metrics`) asks how many customers started paying us, per week and per month. Nobody published that, so it derived one itself: it listed saved Stripe cards and dated each customer by when the card was ATTACHED. Measured in production 2026-09-12 that drew **12** paid users directly under a stat card, reading this very endpoint, that stated **31** — one screen, two numbers, same words — while **34** orgs had actually paid, and the chart had been empty since 2026-08-30 although payments ran every week since.
+
+stripe-service now publishes the real answer, and billing carries it through verbatim: **`total_paying_accounts`** plus **`paying_accounts`** and **`first_time_paying_accounts`** on every monthly and weekly bucket.
+
+- **ACQUIRER COVERAGE IS EVERY ACQUIRER** stripe-service takes money through, which is deliberately **NOT** the scope of `accounts_with_payment_method` sitting right beside them — that one is documented Stripe-only, because it counts saved Stripe cards. Assuming they share a scope is the mistake this fixes, so both docstrings state it rather than leaving it to be inferred.
+- **They count who PAID, never who has a card on file.** In production the two populations differ (33 paying vs 31 carded when this shipped) and **neither is a subset of the other**: a customer paying through a wallet or on the second acquirer holds no Stripe card, and a customer who saved a card has not necessarily been charged.
+- **Do NOT recompute them here from payments, customers or payment methods.** stripe-service owns money and is the only service that sees every acquirer; this hop forwards, it does not re-derive, and a second implementation is a second answer. Because nothing here recomputes them, stripe-service's own invariants hold unchanged through the hop: `first_time_paying_accounts` summed over every bucket equals `total_paying_accounts` on either grain, while `paying_accounts` are DISTINCT counts that sum to nothing (an account paying every month is in every month).
+- **A count we could not read is NOT a count of zero.** A zero here tells the console nobody paid that week, which is both wrong and indistinguishable from the truth. The fields are optional in `StripeBillingStatsResult` ONLY so an older stripe-service can be DETECTED; `requirePayingCount` throws and the whole endpoint answers **502**, the same posture every money figure on this route takes. Never give them a `?? 0`.
+- **A bucket that exists only because a promo was granted in it** has no stripe-service row, so nobody paid in it and 0 is a measured fact. That is the one place billing writes a count rather than copying one, and it writes the only value that can be true.
+
+Every field that existed before is unchanged in name, type and value — a consumer that does not know about the counts is byte-unaffected, and the api-service gateway in front of this is a `.passthrough()` proxy that forwards whatever this route returns.
 
 ## Endpoints reference
 
