@@ -244,6 +244,28 @@ export interface StripeBillingStatsResult {
    * per-bucket counts above.
    */
   total_paying_accounts?: number;
+  /**
+   * Every account's FIRST settled payment, unix SECONDS, ascending — one entry
+   * per account that has ever paid, so the array's length reproduces
+   * `total_paying_accounts`.
+   *
+   * This is how a ROLLING window is answered EXACTLY: the accounts that became
+   * customers in the last N days are those entries at or after
+   * `nowUnixSeconds - N * 86400`. Summing whole `first_time_paying_accounts`
+   * buckets CANNOT answer it — those buckets are calendar months and weeks, a
+   * rolling window aligns to neither, and the bucket straddling its edge holds
+   * payments on both sides (measured against production at 90 days, whole-bucket
+   * summing read 17 where the truth was 25).
+   *
+   * Same identity, same acquirer coverage and same settled-only predicates as
+   * `total_paying_accounts`, so the two can never tell different stories. No
+   * money is published at this grain — only when each account started paying.
+   *
+   * Optional on the wire for the same detect-an-old-producer reason as the
+   * counts above; billing rejects such a reply rather than reading an absent
+   * array as "nobody ever paid".
+   */
+  first_payment_times?: number[];
   monthly_growth: StripeBillingStatsGrowthRow[];
   weekly_growth: StripeBillingStatsGrowthRow[];
 }
