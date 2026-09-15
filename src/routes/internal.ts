@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   InternalAccountTeardownResponseSchema,
+  OnDemandChargeRequestSchema,
   TransferBrandRequestSchema,
 } from "../schemas.js";
 import {
@@ -28,6 +29,11 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
+import {
+  chargeOrgOnDemand,
+  OnDemandChargeError,
+} from "../lib/on-demand-charge.js";
+import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
 
 const router = Router();
 
@@ -579,5 +585,86 @@ router.get(
     }
   }
 );
+
+// POST /internal/accounts/by-org/:orgId/charge — charge a STATED amount
+// off-session against the org's saved card, crediting the balance like an
+// ordinary topup.
+//
+// Consumer: the api-service gateway, for the rebuilt sell-first onboarding.
+// Funnel 1 is paid via hosted Checkout (which saves the card); funnels 2..N
+// are paid one call at a time here, with no second redirect.
+//
+// No second Stripe integration: the charge is the existing reloadOffSession
+// path, so a succeeded charge is mirrored by stripe-service on the same
+// request and credited/balance rise immediately (verify via the existing
+// balance read).
+//
+// Every non-success is DISTINGUISHABLE by `code` + HTTP status:
+//   200 {ok, charged:true, amountCents, reference}
+//   402 charge_declined                    — card declined / money not taken
+//   409 no_chargeable_payment_method       — nothing saved to charge
+//   409 card_not_chargeable_off_session    — issuing country can't be charged
+//   429 charge_backoff                     — recent failure; retry later
+//   502 upstream_error                     — stripe-service unreachable/errored
+// So the dashboard can fall back to hosted checkout exactly on a 402/409 and
+// treat a 502 as "try again", never as a decline.
+router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  const parsed = OnDemandChargeRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const { amountCents, idempotencyKey } = parsed.data;
+  if (amountCents < STRIPE_MIN_CHARGE_CENTS) {
+    res.status(400).json({
+      error: `amountCents must be at least ${STRIPE_MIN_CHARGE_CENTS} (Stripe minimum charge)`,
+    });
+    return;
+  }
+
+  try {
+    const result = await chargeOrgOnDemand(orgId, amountCents, idempotencyKey);
+    res.json({
+      ok: true,
+      charged: true,
+      amountCents: result.amountCents,
+      reference: result.reference,
+    });
+  } catch (err) {
+    if (err instanceof OnDemandChargeError) {
+      const status =
+        err.code === "charge_declined"
+          ? 402
+          : err.code === "charge_backoff"
+            ? 429
+            : err.code === "upstream_error"
+              ? 502
+              : 409;
+      console.error(
+        `[billing-service] on-demand charge of ${amountCents} cents failed ` +
+          `for org ${orgId}: [${err.code}] ${err.message}`
+      );
+      res.status(status).json({
+        ok: false,
+        charged: false,
+        amountCents,
+        code: err.code,
+        error: err.message,
+      });
+      return;
+    }
+    console.error(
+      `[billing-service] on-demand charge errored for org ${orgId}:`,
+      err
+    );
+    res.status(502).json({ error: "Failed to charge the saved card" });
+  }
+});
 
 export default router;

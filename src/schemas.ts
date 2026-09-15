@@ -540,6 +540,26 @@ export const TransferBrandRequestSchema = z
   })
   .openapi("TransferBrandRequest");
 
+// --- On-demand off-session charge (sell-first onboarding, funnels 2..N) ---
+
+export const OnDemandChargeRequestSchema = z
+  .object({
+    amountCents: z.number().int().positive(),
+    idempotencyKey: z.string().min(1).optional(),
+  })
+  .openapi("OnDemandChargeRequest");
+
+export const OnDemandChargeResponseSchema = z
+  .object({
+    ok: z.boolean(),
+    charged: z.boolean(),
+    amountCents: z.number().int().positive(),
+    reference: z.string().optional(),
+    code: z.string().optional(),
+    error: z.string().optional(),
+  })
+  .openapi("OnDemandChargeResponse");
+
 export const TransferBrandTableResultSchema = z
   .object({
     tableName: z.string(),
