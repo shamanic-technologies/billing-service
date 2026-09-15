@@ -38,6 +38,7 @@ describe("GET /public/stats/billing", () => {
     expect(res.body.total_revenue_cents).toBe("0.0000000000");
     expect(res.body.total_local_credits_cents).toBe("0.0000000000");
     expect(res.body.total_paying_accounts).toBe(0);
+    expect(res.body.first_payment_times).toEqual([]);
     expect(res.body.monthly_growth).toEqual([]);
     expect(res.body.weekly_growth).toEqual([]);
   });
@@ -59,6 +60,7 @@ describe("GET /public/stats/billing", () => {
       total_net_cents: "15000.0000000000",
       accounts_with_payment_method: 1,
       total_paying_accounts: 3,
+      first_payment_times: [1700000000, 1700086400, 1700172800],
       monthly_growth: [],
       weekly_growth: [],
     });
@@ -84,6 +86,7 @@ describe("GET /public/stats/billing", () => {
       total_net_cents: "5000.0000000000",
       accounts_with_payment_method: 1,
       total_paying_accounts: 3,
+      first_payment_times: [1700000000, 1700086400, 1700172800],
       monthly_growth: [
         {
           period: "2026-05-01",
@@ -140,6 +143,7 @@ describe("GET /public/stats/billing", () => {
       total_net_cents: "7500.0000000000",
       accounts_with_payment_method: 1,
       total_paying_accounts: 3,
+      first_payment_times: [1700000000, 1700086400, 1700172800],
       monthly_growth: [],
       weekly_growth: [],
     });
@@ -162,6 +166,7 @@ describe("GET /public/stats/billing", () => {
       total_net_cents: "3000.0000000000",
       accounts_with_payment_method: 1,
       total_paying_accounts: 3,
+      first_payment_times: [1700000000, 1700086400, 1700172800],
       monthly_growth: [
         {
           period: "2026-05-01",
@@ -205,12 +210,18 @@ describe("GET /public/stats/billing", () => {
   // measured on a different clock. stripe-service publishes the real answer
   // across every acquirer; this hop carries it through untouched.
   describe("paying-account counts", () => {
+    // One instant per account that has ever paid — the array's length is the
+    // all-time total, which is stripe-service's own invariant and survives this
+    // hop because nothing here recomputes it.
+    const firstPaymentTimes = Array.from({ length: 34 }, (_, i) => 1700000000 + i * 86400);
+
     const ssStatsWithCounts = {
       total_paid_cents: "30000.0000000000",
       total_returned_cents: "0.0000000000",
       total_net_cents: "30000.0000000000",
       accounts_with_payment_method: 31,
       total_paying_accounts: 34,
+      first_payment_times: firstPaymentTimes,
       monthly_growth: [
         {
           period: "2026-08-01",
@@ -328,6 +339,7 @@ describe("GET /public/stats/billing", () => {
         total_net_cents: "0.0000000000",
         accounts_with_payment_method: 0,
         total_paying_accounts: 0,
+        first_payment_times: [],
         monthly_growth: [],
         weekly_growth: [],
       });
@@ -353,6 +365,108 @@ describe("GET /public/stats/billing", () => {
       const res = await request(app).get("/public/stats/billing");
 
       expect(res.status).toBe(502);
+    });
+
+    // The console's funnel states "Paid users" over three windows: since
+    // inception, the last 90 days, the last 30. Only the first was answerable
+    // and the other two rendered a dash, which a reader takes to mean nobody
+    // paid. This is the field that answers the other two.
+    describe("a rolling window", () => {
+      const DAY = 86400;
+
+      it("carries every account's first-payment instant, verbatim", async () => {
+        ssMocks.getStats.mockResolvedValue(ssStatsWithCounts);
+
+        const res = await request(app).get("/public/stats/billing");
+
+        expect(res.status).toBe(200);
+        expect(res.body.first_payment_times).toEqual(firstPaymentTimes);
+      });
+
+      // Any window, computed by the consumer from its own cutoff. This service
+      // never learns which windows exist, so a console adding a fourth needs no
+      // redeploy here.
+      it("lets a consumer count the accounts that started paying inside any window", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        // 3 inside 30 days, 5 more inside 90, 2 older than both — 10 in total.
+        const times = [
+          now - 400 * DAY,
+          now - 200 * DAY,
+          now - 80 * DAY,
+          now - 70 * DAY,
+          now - 60 * DAY,
+          now - 50 * DAY,
+          now - 40 * DAY,
+          now - 20 * DAY,
+          now - 10 * DAY,
+          now - 1 * DAY,
+        ];
+        ssMocks.getStats.mockResolvedValue({
+          ...ssStatsWithCounts,
+          total_paying_accounts: times.length,
+          first_payment_times: times,
+        });
+
+        const res = await request(app).get("/public/stats/billing");
+        const served: number[] = res.body.first_payment_times;
+
+        expect(served.filter((t) => t >= now - 30 * DAY).length).toBe(3);
+        expect(served.filter((t) => t >= now - 90 * DAY).length).toBe(8);
+        // The same computation over all history is the total this endpoint
+        // already publishes — the two can never tell different stories.
+        expect(served.length).toBe(res.body.total_paying_accounts);
+      });
+
+      // The buckets are calendar months and weeks; a rolling window is anchored
+      // on an instant and aligns to neither, so the bucket straddling its edge
+      // carries payments on both sides of it. That is why the instants are
+      // published rather than a per-window count.
+      it("is not answerable by summing whole first-time buckets", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const insideWindow = [now - 89 * DAY, now - 40 * DAY, now - 5 * DAY];
+        ssMocks.getStats.mockResolvedValue({
+          ...ssStatsWithCounts,
+          total_paying_accounts: insideWindow.length,
+          first_payment_times: insideWindow,
+          // The straddling bucket reports one first-time payer whose payment
+          // landed BEFORE the window opened, so the bucket sum over-counts.
+          monthly_growth: [
+            {
+              period: "2026-01-01",
+              paid_cents: "1000.0000000000",
+              net_cents: "1000.0000000000",
+              paying_accounts: 1,
+              first_time_paying_accounts: 1,
+            },
+          ],
+          weekly_growth: [],
+        });
+
+        const res = await request(app).get("/public/stats/billing");
+
+        const fromBuckets = res.body.monthly_growth.reduce(
+          (sum: number, r: { first_time_paying_accounts: number }) =>
+            sum + r.first_time_paying_accounts,
+          0
+        );
+        const fromInstants = res.body.first_payment_times.filter(
+          (t: number) => t >= now - 90 * DAY
+        ).length;
+
+        expect(fromInstants).toBe(3);
+        expect(fromBuckets).not.toBe(fromInstants);
+      });
+
+      // An absent array is not an empty one: `[]` would tell the console nobody
+      // has ever paid, which is both false and indistinguishable from the truth.
+      it("502s rather than reporting an empty window when the instants are absent", async () => {
+        const { first_payment_times: _omitted, ...withoutInstants } = ssStatsWithCounts;
+        ssMocks.getStats.mockResolvedValue(withoutInstants);
+
+        const res = await request(app).get("/public/stats/billing");
+
+        expect(res.status).toBe(502);
+      });
     });
 
     it("502s rather than reporting zero when a bucket is missing its counts", async () => {
@@ -386,6 +500,7 @@ describe("GET /public/stats/billing", () => {
       total_net_cents: "10000.0000000000",
       accounts_with_payment_method: 1,
       total_paying_accounts: 4,
+      first_payment_times: [1700000000, 1700086400, 1700172800, 1700259200],
       monthly_growth: [
         {
           period: "2026-05-01",

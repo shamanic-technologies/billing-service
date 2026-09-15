@@ -542,6 +542,7 @@ Composed from stripe-service `getStats()` + local `localPromos`:
   "total_returned_cents": "0.0000000000",           // settled refunds + LOST disputes, platform-wide
   "total_local_credits_cents": "400.0000000000",    // SUM(local_promos.amount_cents)
   "total_paying_accounts": 34,                      // distinct accounts that have EVER paid, EVERY acquirer. NOT the Stripe-only scope of accounts_with_payment_method, and NOT who has a card
+  "first_payment_times": [1774072370, 1789141447],  // every account's FIRST settled payment, unix SECONDS, ascending. length === total_paying_accounts. Answer any ROLLING window by counting entries >= your cutoff; do NOT sum first_time_paying_accounts buckets for that
   "monthly_growth": [
     { "period": "2026-05-01", "credited_cents": "25000.0000000000", "revenue_cents": "23000.0000000000",
       "paying_accounts": 9, "first_time_paying_accounts": 4 }
@@ -564,7 +565,21 @@ stripe-service now publishes the real answer, and billing carries it through ver
 - **A count we could not read is NOT a count of zero.** A zero here tells the console nobody paid that week, which is both wrong and indistinguishable from the truth. The fields are optional in `StripeBillingStatsResult` ONLY so an older stripe-service can be DETECTED; `requirePayingCount` throws and the whole endpoint answers **502**, the same posture every money figure on this route takes. Never give them a `?? 0`.
 - **A bucket that exists only because a promo was granted in it** has no stripe-service row, so nobody paid in it and 0 is a measured fact. That is the one place billing writes a count rather than copying one, and it writes the only value that can be true.
 
-Every field that existed before is unchanged in name, type and value — a consumer that does not know about the counts is byte-unaffected, and the api-service gateway in front of this is a `.passthrough()` proxy that forwards whatever this route returns.
+#### A ROLLING window is answered from the instants, never from the buckets — `first_payment_times`
+
+The staff console's acquisition funnel states "Paid users" over three windows: since inception, the last 30 days, the last 90. Only the first was answerable, and the other two rendered a **dash**, which a reader takes to mean nobody paid — false in the most alarming direction, on the page the founder reads. Measured in production 2026-09-15: **3** orgs first paid in the last 30 days and **23** in the last 90.
+
+The buckets beside it cannot answer that, and no finer grain would have. They are **calendar** months and weeks; a rolling window is anchored on an **instant** and aligns to neither, so the bucket straddling its edge carries payments on both sides of it — against the prod ledger at 90 days, whole-bucket summing read **17 where the truth was 25**, and wrong by an amount that moves with where the edge happens to land. A daily grain fails the same way: the edge is a second, not a midnight.
+
+So stripe-service publishes **`first_payment_times: number[]`** — every account's FIRST settled payment, unix **SECONDS**, ascending, one entry per account that has ever paid — and billing carries it through **verbatim**, exactly like the counts above.
+
+- **The consumer picks its own cutoff**: `first_payment_times.filter(t => t >= nowUnixSeconds - N * 86400).length`. Neither service ever learns which windows exist, so a console adding a fourth needs no change in either.
+- **Do NOT filter, truncate, re-sort, bucket or derive a window HERE.** A per-window count served from this hop would be a second answer to a question stripe-service already answers, and it would need a redeploy per window. The same "this hop forwards, it does not re-derive" rule as the counts.
+- **It cannot disagree with `total_paying_accounts`**: same identity (the org), same acquirer coverage (BOTH, not the Stripe-only scope of `accounts_with_payment_method`), same settled-only predicates, computed in the same round trip upstream. Counting the whole array reproduces the total — 33 in production at ship time. A payment with no resolvable org has no entry here exactly as it has no account in the counts, and its money still counts in every `*_cents` figure.
+- **An absent array is NOT an empty one.** `[]` would say nobody has ever paid — false, and indistinguishable from the truth. The field is optional in `StripeBillingStatsResult` ONLY so an older stripe-service can be DETECTED; `requireFirstPaymentTimes` throws and the endpoint answers **502**, the same posture every money figure here takes. Never `?? []`.
+- **No money is published at this grain**, and none should be requested: nobody reads it, and it would grow the payload for no consumer. The array grows with customers, not with time.
+
+Every field that existed before is unchanged in name, type and value — a consumer that does not know about the counts or the instants is byte-unaffected, and the api-service gateway in front of this is a `.passthrough()` proxy that forwards whatever this route returns.
 
 ## Endpoints reference
 
