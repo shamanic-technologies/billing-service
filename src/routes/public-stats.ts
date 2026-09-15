@@ -30,6 +30,15 @@ const router = Router();
 //   paying through a wallet or on the second acquirer holds no Stripe card, and a
 //   customer who saved a card has not necessarily been charged.
 //
+// A ROLLING WINDOW is answered from `first_payment_times`, never from the
+// buckets. Those buckets are calendar months and weeks; a rolling window is
+// anchored on an INSTANT and aligns to neither, so the bucket straddling its
+// edge carries payments on both sides of it — measured against production at 90
+// days, whole-bucket summing read 17 where the truth was 25. The array carries
+// every account's first settled payment in unix seconds, so a consumer counts
+// the entries at or after its own cutoff and gets the exact answer, for any
+// window, without this service ever learning which windows exist.
+//
 // Taken from stripe-service VERBATIM — this hop forwards, it does not re-derive.
 // stripe-service owns money and is the only service that sees every acquirer, so
 // a second implementation here would be a second answer. Consequently the
@@ -62,6 +71,24 @@ function requirePayingCount(value: number | undefined, field: string, where: str
   if (typeof value !== "number") {
     throw new Error(
       `stripe-service billing stats are missing ${field}${where} — paying-account counts cannot be reported`
+    );
+  }
+  return value;
+}
+
+/**
+ * The first-payment instants stripe-service publishes, read fail-loud.
+ *
+ * Same posture as `requirePayingCount`, and for the same reason: an absent array
+ * is not an empty one. Reporting `[]` tells the staff metrics console that
+ * nobody has ever paid, which is both false and indistinguishable from the
+ * truth, so a stripe-service too old to publish it fails the whole endpoint with
+ * a 502 instead.
+ */
+function requireFirstPaymentTimes(value: number[] | undefined): number[] {
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "stripe-service billing stats are missing first_payment_times — rolling-window payer counts cannot be reported"
     );
   }
   return value;
@@ -195,6 +222,12 @@ router.get("/public/stats/billing", async (_req, res) => {
           "total_paying_accounts",
           ""
         ),
+        // Taken VERBATIM, same as every count beside it: stripe-service owns
+        // money and is the only service that sees every acquirer. Nothing here
+        // filters, truncates, re-sorts or derives a window from it — the
+        // consumer picks its own cutoff, which is exactly why the instants are
+        // published instead of per-window counts.
+        first_payment_times: requireFirstPaymentTimes(ssStats.first_payment_times),
         monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth, "monthly"),
         weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth, "weekly"),
       };

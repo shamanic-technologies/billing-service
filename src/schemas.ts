@@ -1076,6 +1076,32 @@ export const PublicBillingStatsSchema = z
      * whole endpoint with a 502.
      */
     total_paying_accounts: z.number().int(),
+    /**
+     * Every account's FIRST settled payment, unix SECONDS, ascending — one entry
+     * per account that has ever paid, so `first_payment_times.length` reproduces
+     * `total_paying_accounts`. Taken verbatim from stripe-service; this hop
+     * neither filters nor re-derives it.
+     *
+     * THIS is how a rolling window is answered exactly. The accounts that became
+     * customers in the last N days are
+     * `first_payment_times.filter(t => t >= nowUnixSeconds - N * 86400).length`.
+     * Do NOT get that by summing `first_time_paying_accounts` over buckets:
+     * those buckets are calendar months and weeks, a rolling window is anchored
+     * on an instant and aligns to neither, and the bucket straddling its edge
+     * carries payments on both sides of it — measured against production at 90
+     * days, whole-bucket summing read 17 where the truth was 25.
+     *
+     * Same identity, same acquirer coverage (EVERY acquirer, not the Stripe-only
+     * scope of `accounts_with_payment_method`) and same settled-only predicates
+     * as `total_paying_accounts`, so the two can never tell different stories. A
+     * payment with no resolvable org has no entry here, exactly as it has no
+     * account in the counts. No money is published at this grain — only when
+     * each account started paying.
+     *
+     * Never a fallback empty array: an array billing could not read fails the
+     * whole endpoint with a 502, because `[]` would say nobody has ever paid.
+     */
+    first_payment_times: z.array(z.number().int()),
     monthly_growth: z.array(BillingGrowthRowSchema),
     weekly_growth: z.array(BillingGrowthRowSchema),
   })
@@ -1129,7 +1155,15 @@ registry.registerPath({
     "Taken from stripe-service verbatim — this hop forwards, it does not re-derive, so " +
     "`first_time_paying_accounts` summed over all buckets equals `total_paying_accounts` on either grain while " +
     "`paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as " +
-    "zero: it fails the endpoint with a 502.",
+    "zero: it fails the endpoint with a 502.\n\n" +
+    "A ROLLING WINDOW (last 30 days, last 90 days, since any instant) is answered EXACTLY from " +
+    "`first_payment_times` — every account's first settled payment in unix seconds, ascending, one entry per " +
+    "account that has ever paid. Count the entries at or after your cutoff. Summing whole " +
+    "`first_time_paying_accounts` buckets CANNOT answer it: those buckets are calendar months and weeks, a " +
+    "rolling window aligns to neither, and the bucket straddling its edge holds payments on both sides " +
+    "(measured against production at 90 days, whole-bucket summing read 17 where the truth was 25). The array " +
+    "carries the same identity, acquirer coverage and settled-only predicates as the counts, and counting all " +
+    "of it reproduces `total_paying_accounts`.",
   responses: {
     200: {
       description: "Billing stats",

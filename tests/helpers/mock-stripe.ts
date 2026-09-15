@@ -156,6 +156,7 @@ export function setupStripeMocks(): StripeServiceMocks {
       total_net_cents: "0.0000000000",
       accounts_with_payment_method: 0,
       total_paying_accounts: 0,
+      first_payment_times: [],
       monthly_growth: [],
       weekly_growth: [],
     }),
