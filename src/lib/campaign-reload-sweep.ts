@@ -66,6 +66,13 @@
  * org whose card IS charged here is not told anything — it is not out of credit
  * any more. Idempotent through the existing partial unique index, so re-examining
  * the same org hourly opens one episode and mails once.
+ *
+ * ONLY AN ORG THAT IS ACTUALLY TRYING TO SPEND IS WALKED. The estimates table is
+ * historical, so the walk is bounded by how recently the org authorized —
+ * `SWEEP_AUTHORIZE_FRESHNESS_MS` below carries the whole reasoning. It is a
+ * NARROWING: it removes dormant orgs from the walk, so it also stops
+ * re-presenting their cards, which is the failure mode the retry-schedule
+ * paragraph above exists to bound.
  */
 
 import { eq, sql } from "drizzle-orm";
@@ -188,17 +195,76 @@ interface OrgEstimate {
 }
 
 /**
- * Every org that has a stored campaign estimate, with the LARGEST of them.
+ * How recently an org must have authorized for this sweep to consider it.
+ *
+ * `campaign_authorize_costs` is HISTORICAL — one row per campaign that ever
+ * authorized, never deleted — so an unbounded walk includes orgs whose
+ * campaigns stopped months ago. That was tolerable while the sweep only tried
+ * to CHARGE; it stopped being tolerable once the same walk began opening a
+ * depletion episode and mailing "you are out of credit" for any swept org it
+ * could not unblock. A customer who stopped using us in June must not be mailed
+ * about it in September, and this service states the invariant out loud in
+ * `lib/payment-stopped.ts`: a period means payment had stopped WHILE THE ORG WAS
+ * TRYING TO SPEND.
+ *
+ * WHY A SHORT WINDOW IS SAFE, even though a wedged org's estimate goes STALE
+ * while it is wedged. `campaign_authorize_costs` is written by the authorize
+ * ROUTE; the read-only affordability pre-flight does not touch it, so an org
+ * refused at the pre-flight stops refreshing its own row from the moment it
+ * wedges. That argues for a window, not for a long one: the sweep only has to
+ * catch such an org ONCE — the episode it opens persists until a real recharge
+ * closes it — and the sweep runs hourly. The window therefore only has to
+ * exceed the gap between an org's last authorize and the tick that follows it,
+ * which is an hour. The subject of v0.80.5 (81b34252-…) last authorized
+ * 2026-09-16 00:16 and wedged at 00:17: one day stale when it was caught.
+ *
+ * WHY THREE WEEKS rather than one hour, and why it is not a free parameter. The
+ * window must STRICTLY EXCEED the retry ladder below, whose last rung fires
+ * +14d after a streak's first refusal. A wedged org stops authorizing at the
+ * moment it wedges, so its row only ages from then on: a window shorter than
+ * the ladder would drop the org out of the walk mid-schedule and silently
+ * truncate its own retries — the sweep would stand down without ever making the
+ * attempt it had scheduled. 21 days is that 14-day span plus a week of margin,
+ * which also buys the customer who defunds a brand for a fortnight (daily budget
+ * 0 is how a campaign is paused) and comes back to find itself wedged on the
+ * first poll: its newest authorize is its own pre-pause one, and nothing after a
+ * resume would refresh it. The production distribution has a clean gap either
+ * side, measured 2026-09-17: the freshest excluded org is 30 days stale, the
+ * stalest included one 11 days — so no window between 12 and 29 days classifies
+ * any live org differently.
+ *
+ * Deliberately NOT a campaign-service lookup. Campaign STATUS is a different
+ * question from "is this org trying to spend" (a campaign can be ongoing and
+ * held all day), and a cross-service call inside an hourly sweep buys a new
+ * failure mode for a filter billing can answer from its own table.
+ */
+export const SWEEP_AUTHORIZE_FRESHNESS_MS = 21 * 24 * 60 * 60 * 1000;
+
+/**
+ * Every org that authorized within `SWEEP_AUTHORIZE_FRESHNESS_MS`, with the
+ * LARGEST stored estimate across its campaigns.
  *
  * The largest is the right one: covering the hungriest campaign covers every
  * other campaign of the same org, and one reload serves them all — so an org is
  * never charged once per campaign.
+ *
+ * The freshness bound is a HAVING on the org, never a WHERE on the rows. An org
+ * kept by the filter is judged on the MAX over ALL its campaigns, exactly as it
+ * was before this bound existed: filtering rows first would drop the estimate of
+ * a campaign that wedged months ago while a sibling kept authorizing, and that
+ * stale estimate is precisely the hungriest one the pre-flight is refusing.
+ *
+ * No index on `updated_at`, deliberately: the table is 66 rows over 20 orgs in
+ * production (2026-09-17) and grows with campaigns, not with time, so the
+ * hourly aggregate is a trivial sequential scan. Add one if it ever stops being.
  */
-async function loadOrgEstimates(): Promise<OrgEstimate[]> {
+async function loadOrgEstimates(now: Date): Promise<OrgEstimate[]> {
+  const cutoff = new Date(now.getTime() - SWEEP_AUTHORIZE_FRESHNESS_MS);
   const rows = await db.execute<{ org_id: string; max_required: string }>(sql`
     SELECT org_id, MAX(last_authorize_required_cents) AS max_required
     FROM campaign_authorize_costs
     GROUP BY org_id
+    HAVING MAX(updated_at) >= ${cutoff.toISOString()}::timestamptz
   `);
   return (rows as unknown as { org_id: string; max_required: string }[]).map((r) => ({
     orgId: r.org_id,
@@ -397,7 +463,7 @@ export async function runCampaignReloadSweep(
     episodesOpened: 0,
   };
 
-  const estimates = await loadOrgEstimates();
+  const estimates = await loadOrgEstimates(now);
   const bucket = hourBucket(now);
 
   for (const { orgId, maxRequiredCents } of estimates) {

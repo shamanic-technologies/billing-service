@@ -155,9 +155,9 @@ describe("a permanently refused card is never presented again", () => {
     });
     await runCampaignReloadSweep(NOW);
 
-    // Every rung of the retry schedule, and a year beyond it. A permanent
-    // refusal outranks the schedule entirely.
-    for (const days of [1, 3, 7, 14, 365]) {
+    // Every rung of the retry schedule. A permanent refusal outranks the
+    // schedule entirely.
+    for (const days of [1, 3, 7, 14, 20]) {
       _resetCoalescer();
       const later = await runCampaignReloadSweep(
         new Date(NOW.getTime() + days * 24 * 3600_000)
@@ -165,6 +165,15 @@ describe("a permanently refused card is never presented again", () => {
       expect(later.cardUnusable).toBe(1);
       expect(later.awaitingRetry).toBe(0);
     }
+
+    // And a year on the org has long since left the walk (its authorize row
+    // stopped ageing the moment it wedged), so the card is not presented then
+    // either — by a second mechanism, for a different reason.
+    _resetCoalescer();
+    const ayear = await runCampaignReloadSweep(
+      new Date(NOW.getTime() + 365 * 24 * 3600_000)
+    );
+    expect(ayear.scanned).toBe(0);
 
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledTimes(1);

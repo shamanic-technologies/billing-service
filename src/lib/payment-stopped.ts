@@ -50,10 +50,15 @@
  *  - The record is FORWARD-ONLY. `recordBeginsAt` is the earliest instant
  *    EITHER source recorded anything, fleet-wide; before it, billing knows
  *    nothing and a day there is NOT evidence that payment was on.
- *  - An episode opens on an AUTHORIZE that carries campaign activity, so that
- *    kind of period means "payment had stopped while the org was trying to
- *    spend". An org that stopped paying and also stopped working opens none —
- *    which is precisely the gap the failed-streak source closes.
+ *  - An episode is only ever opened for an org that was TRYING TO SPEND, so
+ *    that kind of period means "payment had stopped while the org was working".
+ *    Two paths open one and both carry that property: an AUTHORIZE carrying
+ *    campaign activity, and — since v0.80.5 — the hourly blocked-campaign sweep,
+ *    for a wedged org that can never reach `authorize` at all. The sweep is
+ *    bounded to orgs that authorized within `SWEEP_AUTHORIZE_FRESHNESS_MS`
+ *    (lib/campaign-reload-sweep), which is what keeps the property true of it:
+ *    an org that stopped paying and also stopped working opens none by either
+ *    path — precisely the gap the failed-streak source closes.
  *
  * Fail-loud: any DB or stripe-service error propagates (the route answers 502).
  */
