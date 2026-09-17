@@ -387,6 +387,19 @@ A customer who owes money on the postpaid credit line should pay it at the momen
 - **The reload coalescer / backoff stays.** Two clicks in a row must not re-present a dead card to the issuer — repeated declines degrade the card at its bank and our decline rate at the acquirer. A click skipped by the backoff simply opens the session with no charge attempted.
 - **Awaited, not fire-and-forget**, deliberately: a charge still in flight while the customer detaches that same card in the acquirer's portal fails for no reason. An off_session auth is 1-3s, the same order as the card-setup call that follows it.
 
+## Removing the card — collect first, remove regardless (`src/lib/card-removal.ts`)
+
+A customer can stop us holding their card from the billing page, at any balance. Until this shipped there was no path at all: the acquirer's own card-management screen is pinned shut on purpose, and it stays that way.
+
+Removing a card is TWO actions and only this service can put them in the right order — somebody who owes money pays it at the moment they touch the card that owes it, and then the card goes. stripe-service owns the acquirer half (`DELETE /internal/payment_methods/by-org/{orgId}`, v0.52.0) and deliberately collects nothing: it has no idea whether the org owes us money. billing never detaches anything itself.
+
+- **The collection is the card-change rule, IMPORTED not restated.** `settleOutstandingBeforeCardChange` carries the conclusion this path needs most: it never gates what the customer came to do. Do not add a second settle here and do not re-derive the amount.
+- **The removal happens whatever the collection did.** Charged, declined, skipped, backed off, or the balance unreadable: the detach is attempted either way and the failure is LOUD in the logs. **A gate here would trap the one customer it exists to protect us from** — their card is dead, which is why the charge failed, which is why they are removing it. That is the dead end #461 removed from the card page; do not reintroduce it under another name.
+- **Nothing is forgiven.** No balance is erased, adjusted or marked settled. What is owed stays owed and stays owned by the month-end sweep, the campaign reload, dunning and the uncollectable-debt flag. A customer who comes back and adds a card is collected from as normal.
+- **The after-state is the EXISTING one and is NOT called inline.** Losing the last chargeable card drops the postpaid credit-line floor to `"0"` (so campaigns stop on their own), tells the customer and surfaces the org among the unpaid debts. All of it is driven by stripe-service's `payment_method.detached`, which fires for a detach WE initiate exactly as for one a customer performs. Calling `flagUncollectableDebt` here would make one detach two notifications — a test pins that no episode is opened by the route.
+- **Auto-topup is disarmed**, because a threshold that can never fire again is a configuration that lies — and it is what drops the org out of the month-end sweep's candidate set. Disarmed only AFTER a successful detach: a 502 leaves the card possibly still on file, so the configuration that would charge it must survive.
+- **`502` is a real answer, not a refusal.** A caller that cannot tell whether the card is gone must retry rather than be handed a silent success; the detach is safe to repeat.
+
 ## An unpaid debt we cannot collect is VISIBLE, never silently skipped (`src/lib/unpaid-debt.ts`, migration 0041)
 
 An org whose balance is negative and whose last chargeable card is gone owes us money we have no way to take. The month-end sweep used to count it `skipped`, and the debt then disappeared from every surface: no email, no staff signal, campaigns still running and the debt still growing.
@@ -619,6 +632,7 @@ Two live consumers read this endpoint: the staff metrics console and the PUBLIC 
 | `GET` | `/v1/accounts/balance` | shortcut: `{ balance_cents, depleted }` |
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
+| `DELETE` | `/v1/accounts/saved_payment_method` | Stop holding this org's card (user via gateway, org headers). **Collects what is owed FIRST, on the card that is about to go, then removes it whatever that collection did** — charged, declined, skipped or backed off. Refused for nobody; an org with no card is a 200. Nothing is forgiven. Auto-topup is disarmed. `502` = the removal could not be performed, retry. See "Removing the card". |
 | `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries the gift-is-coming notice quoting that org's own figures. Nothing discounts the charge: onboarding already subtracted the gift from the amount it sends. See "Checkout page" |
 | `POST` | `/v1/portal-sessions` | How this org's customer adds a card (historical name). **Attempts to collect any outstanding balance FIRST**, and hands the session over whatever that attempt does — never 402. See "Collect the debt when the card changes". |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |

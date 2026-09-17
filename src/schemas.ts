@@ -223,6 +223,29 @@ export const CardSetupResponseSchema = z
   .openapi("CardSetupResponse");
 
 /**
+ * The card is no longer held. What the collection attempted on the way out is
+ * REPORTED, never a veto: `settled_cents` is what was actually taken (0 when
+ * nothing was owed or nothing could be taken) and `settle_skip_reason` says
+ * why. Nothing is forgiven — a debt that could not be collected stays owed.
+ */
+export const RemoveSavedPaymentMethodResponseSchema = z
+  .object({
+    object: z.literal("saved_payment_method_removed"),
+    org_id: z.string(),
+    /** How many saved methods this call detached. 0 is a success, not an error. */
+    removed: z.number().int(),
+    /** How many were already gone when we asked. */
+    already_removed: z.number().int(),
+    /** True when a stored auto-topup configuration was cleared by this removal. */
+    auto_topup_disarmed: z.boolean(),
+    /** Cents collected at removal time, on the card that was about to go. */
+    settled_cents: z.number(),
+    /** Present when nothing was collected. Diagnostic — never a refusal. */
+    settle_skip_reason: z.string().optional(),
+  })
+  .openapi("RemoveSavedPaymentMethodResponse");
+
+/**
  * Whether a saved, chargeable card exists for this org. THREE answers, kept
  * apart: `saved: true`; `saved: false` with a `reason`; or a 502, which means we
  * could not ask and is never rendered as either of the other two.
@@ -1429,6 +1452,38 @@ registry.registerPath({
     },
     502: {
       description: "Could not ask the acquirer — NOT the same as 'no card saved'",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/v1/accounts/saved_payment_method",
+  summary: "Stop holding this org's card",
+  description:
+    "Org-scoped, self-serve. TWO actions in one order only this service can put them in: what the org owes is " +
+    "COLLECTED first, on the card that is about to go, under the same rule the card-change path uses (the collection " +
+    "never gates what the customer came to do); then the card is removed whatever that collection did — charged, " +
+    "declined, skipped or backed off. REFUSED FOR NOBODY: no balance, no debt state, no card state and no failed " +
+    "charge blocks it, and an org with no card is a 200. Nothing is forgiven — what is owed stays owed and stays " +
+    "owned by the existing sweeps and the uncollectable-debt flag. Auto-topup is disarmed, because a threshold that " +
+    "can never fire again is a configuration that lies. 502 means the removal could not be performed and must be " +
+    "retried — never a silent success.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: {
+      description: "The card is no longer held",
+      content: {
+        "application/json": { schema: RemoveSavedPaymentMethodResponseSchema },
+      },
+    },
+    404: {
+      description: "Billing account not found",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "The removal could not be performed — retry, the detach is safe to repeat",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
