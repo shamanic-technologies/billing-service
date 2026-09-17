@@ -20,6 +20,7 @@
  *   - `referral-reward-opened`     → src/lib/referral-notifications.ts
  *   - `referral-credits-granted`   → src/lib/referral-notifications.ts
  *   - `credit-debt-card-required`  → src/lib/unpaid-debt.ts
+ *   - `credit-card-unusable`       → src/lib/card-usability.ts
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
@@ -34,6 +35,7 @@ import {
   UNPAID_DEBT_CARD_REQUIRED_EVENT,
   UNPAID_DEBT_STAFF_EVENT,
 } from "./lib/unpaid-debt.js";
+import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -52,6 +54,21 @@ const TEMPLATES = [
     htmlBody: `<p>We attempted to automatically reload your account, but the payment failed. Please update your payment method.</p>
 <p><a href="{{settingsUrl}}">Update payment method</a></p>`,
     textBody: "We attempted to automatically reload your account, but the payment failed. Please update your payment method. Visit: {{settingsUrl}}",
+  },
+  {
+    // The card is still on file and can never be charged again: the bank called
+    // it lost, stolen, closed, or revoked our authorization.
+    //
+    // Deliberately NOT `credit-debt-card-required`, which says we no longer
+    // have a card on file. Here we do, and a customer told "add a card" while
+    // looking at the card in their settings will conclude the mail is wrong and
+    // ignore it. The action is to REPLACE it.
+    name: CARD_UNUSABLE_EVENT,
+    subject: "Your saved card can no longer be charged",
+    htmlBody: `<p>Your campaigns have stopped. We tried to charge your saved card and your bank refused it permanently, so we will not try that card again.</p>
+<p>Add a different payment method in your billing settings and your campaigns will start again.</p>`,
+    textBody:
+      "Your campaigns have stopped. We tried to charge your saved card and your bank refused it permanently, so we will not try that card again. Add a different payment method in your billing settings and your campaigns will start again.",
   },
   {
     // Staff notification, not a customer email: transactional-email-service

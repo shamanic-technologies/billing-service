@@ -139,6 +139,19 @@ export interface ChargeResult {
   currency: string;
   /** Hosted document for this charge, or null when the acquirer produces none. */
   hosted_document_url: string | null;
+  /**
+   * Present only on a REFUSAL. The acquirer answered and the answer was no, so
+   * this names the reason it gave — which is what tells a customer whether to
+   * try another card or call their bank. Absent on success, and absent when the
+   * charge never reached an acquirer at all (that is still a non-2xx and still
+   * lands in the caller's catch).
+   */
+  failure?: {
+    type: string;
+    /** The acquirer's own reason code, e.g. "insufficient_funds". */
+    code?: string | null;
+    message?: string | null;
+  };
 }
 
 export interface StripePaymentMethod {

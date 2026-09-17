@@ -357,11 +357,48 @@ export const CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS = 50000;
 // dedup on (org, promo_code)); admin grants have their own dedup path.
 export const ADMIN_GRANT_CODE = "admin_grant";
 
+/**
+ * Ledger key for a product-task reward (migration 0045).
+ *
+ * A customer is paid a small fixed credit each time they complete a product task,
+ * and the SAME task recurs for the same org roughly every month, forever. So this
+ * reason CANNOT dedup on (org, promo_code) the way the two invite reasons do — that
+ * shape pays once and then silently never again. It STACKS instead, on the caller's
+ * own per-completion identifier (`idempotency_key = 'task:<completionId>'`), which
+ * exempts it from the (org, promo_code) uniqueness and dedups on the completion.
+ *
+ * Same stacking mechanism as `admin_grant` / `referral_reward`, reached from the
+ * SERVICE-TO-SERVICE path: no staff identity and no staff email is involved, so
+ * `granted_by` stays NULL on these rows.
+ *
+ * The per-row amount lives on local_promos; this code row's amount_cents is a 0
+ * placeholder (the caller states what each completion is worth).
+ */
+export const PRODUCT_TASK_REWARD_CODE = "product_task_completed";
+
+/**
+ * Grant reasons a SERVICE may name on POST /internal/credits/grant. Closed set —
+ * a caller can never supply an arbitrary reason.
+ *
+ * They do NOT share one idempotency shape, and conflating them is the bug this
+ * split exists to prevent:
+ *   - PLATFORM_GRANT_REASONS   one-shot per (org, reason), idempotency_key NULL.
+ *   - STACKING_GRANT_REASONS   recurring, one row per caller-supplied completion id.
+ */
 export const PLATFORM_GRANT_REASONS = [
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
 ] as const;
 export type PlatformGrantReason = (typeof PLATFORM_GRANT_REASONS)[number];
+
+export const STACKING_GRANT_REASONS = [PRODUCT_TASK_REWARD_CODE] as const;
+export type StackingGrantReason = (typeof STACKING_GRANT_REASONS)[number];
+
+export const SERVICE_GRANT_REASONS = [
+  ...PLATFORM_GRANT_REASONS,
+  ...STACKING_GRANT_REASONS,
+] as const;
+export type ServiceGrantReason = (typeof SERVICE_GRANT_REASONS)[number];
 
 // credit_depletion_episodes: out-of-credit dunning state machine (issue #147).
 // One OPEN episode per org at a time — enforced by the partial unique index
@@ -456,6 +493,64 @@ export const campaignAuthorizeCosts = pgTable("campaign_authorize_costs", {
     .notNull()
     .defaultNow(),
 });
+
+// campaign_reload_sweep_attempts: one row per org the blocked-campaign reload
+// sweep has already presented a card for, keyed on the CREDITED total it saw.
+//
+// The sweep breaks a deadlock; it does not collect a debt. Once it has presented
+// a card and the card refused, the org is blocked by its own card — a state the
+// depletion-episode dunning engine already owns — so re-presenting it on every
+// hourly tick would degrade the card at its issuer and our decline rate at the
+// acquirer (see lib/reload-coalescer) for no chance of a different answer.
+//
+// `creditedCentsAtAttempt` is what makes "something changed" answerable with no
+// new lifecycle: credited only ever RISES, so any recharge (paid top-up, promo,
+// staff grant) moves it and re-arms the sweep for that org, while a dead card
+// moves nothing and is attempted exactly once. Migration 0042.
+export const campaignReloadSweepAttempts = pgTable("campaign_reload_sweep_attempts", {
+  orgId: uuid("org_id").primaryKey(),
+  creditedCentsAtAttempt: numeric("credited_cents_at_attempt", {
+    precision: FRACTIONAL_PRECISION,
+    scale: FRACTIONAL_SCALE,
+  }).notNull(),
+  /** "succeeded" | "failed". A succeeded row never stands an org down. */
+  lastOutcome: text("last_outcome").notNull(),
+  /**
+   * Which rung of the retry schedule the last attempt was. 1 = the first
+   * failure of this streak. Reset whenever `credited` moves.
+   */
+  attemptCount: integer("attempt_count").notNull().default(1),
+  /**
+   * When this streak's FIRST failure happened — the anchor the whole schedule
+   * is measured from, so a restart or a deploy cannot shift the next rung.
+   */
+  firstFailedAt: timestamp("first_failed_at", { withTimezone: true }),
+  /**
+   * Claims the ONE "we could not charge your card" mail for this streak.
+   * DURABLE on purpose: the gate used to be lib/reload-coalescer's in-memory
+   * failure counter, which a deploy resets — and we deploy several times a day,
+   * so "once per streak" silently meant "once per deploy". Migration 0043.
+   */
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  /**
+   * The acquirer's own reason for the last refusal, kept so a verdict about the
+   * card can be audited rather than guessed at. Migration 0044.
+   */
+  lastDeclineCode: text("last_decline_code"),
+  /**
+   * Set when the bank said the card is PERMANENTLY unusable (lost, stolen,
+   * account closed, authorization revoked). Card-network rules forbid
+   * resubmitting those at any interval, so both sweeps stop presenting it.
+   * Cleared by any successful charge. Migration 0044.
+   */
+  cardUnusableAt: timestamp("card_unusable_at", { withTimezone: true }),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type CampaignReloadSweepAttempt =
+  typeof campaignReloadSweepAttempts.$inferSelect;
 
 export type CampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferSelect;
 export type NewCampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferInsert;

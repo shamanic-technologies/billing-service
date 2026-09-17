@@ -295,6 +295,34 @@
       "when": 1791712800000,
       "tag": "0041_unpaid_debt_notification",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791799200000,
+      "tag": "0042_campaign_reload_sweep_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791885600000,
+      "tag": "0043_reload_retry_schedule",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791972000000,
+      "tag": "0044_card_unusable",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1792058400000,
+      "tag": "0045_product_task_reward",
+      "breakpoints": true
     }
   ]
 }

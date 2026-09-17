@@ -37,6 +37,12 @@ import { billingAccounts } from "../db/schema.js";
 import { computeBalance } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
+import {
+  isPermanentDecline,
+  isCardUnusableFor,
+  markCardUnusable,
+  clearCardUnusable,
+} from "./card-usability.js";
 import { reloadOffSession } from "./reload.js";
 import { flagUncollectableDebt } from "./unpaid-debt.js";
 
@@ -217,6 +223,13 @@ export interface MonthEndSweepResult {
   blockedCountryDebt: number;
   /** Orgs whose reload errored / declined (logged + isolated). */
   failed: number;
+  /**
+   * Orgs whose card the bank has called permanently unusable. This sweep
+   * otherwise retries forever by design, which for a stolen card means
+   * re-presenting it every month for the life of the account — useless, and
+   * something the card networks forbid outright. Never counted as `skipped`.
+   */
+  cardUnusable: number;
 }
 
 /**
@@ -235,6 +248,7 @@ export async function runMonthEndSweep(
     unpaidDebt: 0,
     blockedCountryDebt: 0,
     failed: 0,
+    cardUnusable: 0,
   };
 
   if (!isSweepTick(now)) return result;
@@ -287,6 +301,13 @@ export async function runMonthEndSweep(
         continue;
       }
 
+      // A permanent refusal is not a cadence problem, so no interval fixes it.
+      // This sweep is the one that would otherwise present a dead card forever.
+      if (await isCardUnusableFor(account.orgId, snapshot.creditedCents)) {
+        result.cardUnusable += 1;
+        continue;
+      }
+
       // Only settle a NEGATIVE balance (outstanding spend on credit that never
       // crossed the floor). A non-negative org owes nothing this cycle — the
       // normal floor-crossing path owns anything already past the floor.
@@ -309,19 +330,44 @@ export async function runMonthEndSweep(
         continue;
       }
 
-      const outcome = await coalesceReload(account.orgId, () =>
-        withTimeout(
-          RELOAD_TIMEOUT_MS,
-          reloadOffSession(
-            account.orgId,
-            chargeAmount,
-            sweepIdempotencyKey(account.orgId, bucket, chargeAmount),
-            { reason: "month_end_sweep", month: bucket }
-          )
-        )
+      const outcome = await coalesceReload(
+        account.orgId,
+        () =>
+          withTimeout(
+            RELOAD_TIMEOUT_MS,
+            reloadOffSession(
+              account.orgId,
+              chargeAmount,
+              sweepIdempotencyKey(account.orgId, bucket, chargeAmount),
+              { reason: "month_end_sweep", month: bucket }
+            )
+          ),
+        // This fires on ONE tick a month and cannot be a retry storm, so the
+        // post-failure cooldown must not eat it: a rung of the campaign retry
+        // schedule landing in the hour before this tick would otherwise cost
+        // the whole month's collection, silently.
+        { ignoreBackoff: true }
       );
 
+      if (isPermanentDecline(outcome.failure_code)) {
+        result.cardUnusable += 1;
+        result.failed += 1;
+        console.warn(
+          `[billing-service] month-end sweep: org ${account.orgId} refused ` +
+            `permanently (${outcome.failure_code}) — not presenting this card again`
+        );
+        await markCardUnusable({
+          orgId: account.orgId,
+          declineCode: outcome.failure_code as string,
+          creditedCents: snapshot.creditedCents,
+          recipientEmail: snapshot.customer.email,
+          now,
+        });
+        continue;
+      }
+
       if (outcome.status === "succeeded") {
+        await clearCardUnusable(account.orgId);
         result.charged += 1;
         console.log(
           `[billing-service] month-end sweep: charged org ${account.orgId} ` +

@@ -1,11 +1,11 @@
 /**
- * Settle the debt before the customer may change the card that owes it.
+ * Collect the debt when the customer opens a card session — and hand the session
+ * over whatever the collection does.
  *
- * The rule these pin: an org that owes money on a chargeable card pays it before
- * a card-management session is handed over, and a refusal says what is owed in a
- * shape the dashboard can tell apart from every other failure. The two carve-outs
- * (no card, off_session-blocked card) matter as much as the rule — refusing there
- * would trap an org in a debt it can never pay.
+ * The rule these pin: an org that owes money on a chargeable card is charged for
+ * it at click time, and NOTHING about that charge's outcome gates the session.
+ * Refusing it trapped exactly the customer the card page exists for — their card
+ * is dead, which is why the charge failed, which is why they came to replace it.
  *
  * Own file rather than a describe appended to portal.test.ts: that one closes the
  * shared postgres.js connection in afterAll (see CLAUDE.md).
@@ -24,7 +24,7 @@ import {
 const app = createTestApp();
 const orgId = "00000000-0000-0000-0000-0000000000d1";
 
-describe("outstanding balance is settled before a card-management session", () => {
+describe("outstanding balance is collected when a card-management session opens", () => {
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let usageCents: string;
 
@@ -94,7 +94,7 @@ describe("outstanding balance is settled before a card-management session", () =
     expect(keys[0]).toBe(keys[1]);
   });
 
-  it("AC2: a declining card gets NO session and a 402 stating what is owed", async () => {
+  it("AC2: a DECLINING card still gets the session — no 402, no unsettled-balance code", async () => {
     await insertTestAccount({ orgId });
     owingFifty();
     // A declined off_session charge reaches billing as a throw (stripe-service
@@ -106,15 +106,16 @@ describe("outstanding balance is settled before a card-management session", () =
       .set(getAuthHeaders(orgId))
       .send({ return_url: "https://example.com/return" });
 
-    expect(res.status).toBe(402);
-    expect(res.body.code).toBe("outstanding_balance_unsettled");
-    expect(res.body.owed_cents).toBe("5000");
-    expect(res.body.balance_cents).toBe("-5000.0000000000");
-    expect(res.body.reason).toBe("charge_failed");
-    expect(ssMocks.getCardSetup).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe("https://billing.stripe.com/p/session/abc");
+    expect(JSON.stringify(res.body)).not.toContain("outstanding_balance");
+    // The charge was still attempted, for exactly what is owed.
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(5000);
+    expect(ssMocks.getCardSetup).toHaveBeenCalledTimes(1);
   });
 
-  it("AC2b: a settled non-succeeded outcome also refuses, and never opens a session", async () => {
+  it("AC2b: a settled non-succeeded outcome also opens the session", async () => {
     await insertTestAccount({ orgId });
     owingFifty();
     ssMocks.reloadOffSession.mockResolvedValue({
@@ -127,9 +128,41 @@ describe("outstanding balance is settled before a card-management session", () =
       .set(getAuthHeaders(orgId))
       .send({ return_url: "https://example.com/return" });
 
-    expect(res.status).toBe(402);
-    expect(res.body.reason).toBe("charge_failed");
-    expect(ssMocks.getCardSetup).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(ssMocks.getCardSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("a declined settle leaves a LOUD log line naming the org and the amount", async () => {
+    await insertTestAccount({ orgId });
+    owingFifty();
+    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
+
+    const line = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(line).toContain(orgId);
+    expect(line).toContain("5000");
+    expect(line).toMatch(/DECLINED/);
+  });
+
+  it("a balance that cannot be READ at all still opens the session", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.sumSucceededTopupsForOrg.mockRejectedValue(
+      new Error("stripe-service unavailable")
+    );
+
+    const res = await request(app)
+      .post("/v1/portal-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ return_url: "https://example.com/return" });
+
+    expect(res.status).toBe(200);
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect(ssMocks.getCardSetup).toHaveBeenCalledTimes(1);
   });
 
   it("AC3: a positive balance opens the session exactly as before, with no charge", async () => {
@@ -190,19 +223,49 @@ describe("outstanding balance is settled before a card-management session", () =
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
-  it("POST /v1/accounts/card_setup gates identically — the rule is not one URL away from bypass", async () => {
+  it.each([
+    ["a declining card", "declining"],
+    ["a card that settles", "succeeding"],
+    ["a non-negative balance", "positive"],
+  ])(
+    "POST /v1/accounts/card_setup behaves identically to /v1/portal-sessions on %s",
+    async (_label, mode) => {
+      await insertTestAccount({ orgId });
+      if (mode === "positive") {
+        ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("1000.0000000000");
+        usageCents = "0.0000000000";
+      } else {
+        owingFifty();
+        if (mode === "declining") {
+          ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+        }
+      }
+
+      const res = await request(app)
+        .post("/v1/accounts/card_setup")
+        .set(getAuthHeaders(orgId))
+        .send({ return_url: "https://example.com/return" });
+
+      expect(res.status).toBe(200);
+      expect(JSON.stringify(res.body)).not.toContain("outstanding_balance");
+      expect(ssMocks.getCardSetup).toHaveBeenCalledTimes(1);
+      expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(
+        mode === "positive" ? 0 : 1
+      );
+    }
+  );
+
+  it("nothing in the repo can still produce the 402 refusal", async () => {
     await insertTestAccount({ orgId });
     owingFifty();
     ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
 
-    const res = await request(app)
-      .post("/v1/accounts/card_setup")
-      .set(getAuthHeaders(orgId))
-      .send({ return_url: "https://example.com/return" });
-
-    expect(res.status).toBe(402);
-    expect(res.body.code).toBe("outstanding_balance_unsettled");
-    expect(res.body.owed_cents).toBe("5000");
-    expect(ssMocks.getCardSetup).not.toHaveBeenCalled();
+    for (const path of ["/v1/portal-sessions", "/v1/accounts/card_setup"]) {
+      const res = await request(app)
+        .post(path)
+        .set(getAuthHeaders(orgId))
+        .send({ return_url: "https://example.com/return" });
+      expect(res.status).not.toBe(402);
+    }
   });
 });

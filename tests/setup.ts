@@ -149,6 +149,22 @@ beforeAll(async () => {
     )
   `;
 
+  // campaign_reload_sweep_attempts (retry schedule + durable notify marker,
+  // migrations 0042 + 0043 + 0044).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "campaign_reload_sweep_attempts" (
+      "org_id" uuid PRIMARY KEY NOT NULL,
+      "credited_cents_at_attempt" numeric(16,10) NOT NULL,
+      "last_outcome" text NOT NULL,
+      "attempt_count" integer DEFAULT 1 NOT NULL,
+      "first_failed_at" timestamp with time zone,
+      "notified_at" timestamp with time zone,
+      "last_decline_code" text,
+      "card_unusable_at" timestamp with time zone,
+      "attempted_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+
   // brand_daily_budgets (org-scoped per-brand daily spend ceiling, migrations 0022 + 0024).
   await sql`
     CREATE TABLE IF NOT EXISTS "brand_daily_budgets" (
@@ -258,7 +274,7 @@ beforeAll(async () => {
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "opened_notified_at" timestamp with time zone`;
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "granted_notified_at" timestamp with time zone`;
 
-  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033).
+  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.
   await sql`
@@ -267,7 +283,8 @@ beforeAll(async () => {
            ('invite_welcome', 2500, NULL, NULL),
            ('admin_grant', 0, NULL, NULL),
            ('welcome_completion', 0, NULL, NULL),
-           ('referral_reward', 50000, NULL, NULL)
+           ('referral_reward', 50000, NULL, NULL),
+           ('product_task_completed', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

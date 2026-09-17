@@ -37,6 +37,13 @@ export interface ReloadOutcome {
   reference?: string;
   failure_reason?: string;
   /**
+   * The acquirer's own reason code for a refusal, e.g. "insufficient_funds" or
+   * "stolen_card". Structured on purpose: `failure_reason` is prose for a log
+   * line, and "may this card ever be charged again" must not be decided by
+   * substring-matching prose. Absent when the charge never reached an acquirer.
+   */
+  failure_code?: string | null;
+  /**
    * True ONLY on an outcome synthesised by the backoff — no charge was
    * attempted and no new information was learned. Callers use it to stay quiet
    * (the customer was already told when the real failure happened); every
@@ -116,12 +123,25 @@ export function reloadBlockedForMs(orgId: string, nowMs: number = Date.now()): n
 
 export async function coalesceReload(
   orgId: string,
-  fn: () => Promise<ReloadOutcome>
+  fn: () => Promise<ReloadOutcome>,
+  opts?: {
+    /**
+     * Skip the post-failure cooldown for a charge that CANNOT be a retry storm.
+     *
+     * The cooldown exists to stop a declining card being hammered by repeated
+     * authorizes. A once-a-month settle is not that: it fires on a single tick,
+     * at most once per org per month, and it is the attempt we least want to
+     * lose. Without this, a rung of the retry schedule landing in the hour
+     * before the monthly tick silently costs the whole month's collection, and
+     * nothing reports it. Coalescing of in-flight calls still applies.
+     */
+    ignoreBackoff?: boolean;
+  }
 ): Promise<ReloadOutcome> {
   const existing = inFlight.get(orgId);
   if (existing) return existing;
 
-  const blockedForMs = reloadBlockedForMs(orgId);
+  const blockedForMs = opts?.ignoreBackoff ? 0 : reloadBlockedForMs(orgId);
   if (blockedForMs > 0) {
     const state = failures.get(orgId);
     return {

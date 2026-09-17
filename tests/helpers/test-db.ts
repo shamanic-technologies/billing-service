@@ -6,6 +6,7 @@ import {
   localPromos,
   creditDepletionEpisodes,
   campaignAuthorizeCosts,
+  campaignReloadSweepAttempts,
   brandDailyBudgets,
   brandDailyBudgetChanges,
   brandFunnelDailyBudgets,
@@ -17,6 +18,7 @@ import {
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
   REFERRAL_REWARD_CODE,
+  PRODUCT_TASK_REWARD_CODE,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
   GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
@@ -31,11 +33,13 @@ const SEEDED_PROMO_CODES = [
   ADMIN_GRANT_CODE,
   WELCOME_COMPLETION_CODE,
   REFERRAL_REWARD_CODE,
+  PRODUCT_TASK_REWARD_CODE,
 ];
 
 export async function cleanTestData() {
   await db.delete(freeCreditPromises);
   await db.delete(creditDepletionEpisodes);
+  await db.delete(campaignReloadSweepAttempts);
   await db.delete(campaignAuthorizeCosts);
   await db.delete(brandDailyBudgetChanges);
   await db.delete(brandFunnelDailyBudgets);
@@ -74,6 +78,20 @@ export async function cleanTestData() {
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS },
+    });
+  // Product-task rewards carry their amount per row (this code row is a 0
+  // placeholder), so restore it for a suite that exercised the fail-loud path.
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: PRODUCT_TASK_REWARD_CODE,
+      amountCents: 0,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: 0 },
     });
 }
 
