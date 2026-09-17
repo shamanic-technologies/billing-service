@@ -75,12 +75,19 @@ export async function reloadOffSession(
   if (charge.status === "succeeded") {
     return { status: "succeeded", reference: charge.reference };
   }
-  // stripe-service throws (non-2xx) on a declined off_session charge, so this
-  // branch is defensive — a 200 carrying a non-succeeded status is still a
-  // failed reload.
+  // A REFUSED card arrives HERE, not as a throw: the acquirer answered, so
+  // stripe-service reports the refusal as a completed request carrying the
+  // reason the bank gave (stripe-service v0.51.1). Keep that reason — it is the
+  // difference between "try another card" and "call your bank", and a bare
+  // `charge.status=failed` throws it away. This branch stopped being defensive
+  // the day that shipped; a charge that never reached an acquirer is still a
+  // non-2xx and still lands in the caller's catch.
+  const { failure } = charge;
   return {
     status: "failed",
     reference: charge.reference,
-    failure_reason: `charge.status=${charge.status ?? "unknown"}`,
+    failure_reason: failure
+      ? [failure.type, failure.code, failure.message].filter(Boolean).join(": ")
+      : `charge.status=${charge.status ?? "unknown"}`,
   };
 }
