@@ -274,7 +274,7 @@ beforeAll(async () => {
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "opened_notified_at" timestamp with time zone`;
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "granted_notified_at" timestamp with time zone`;
 
-  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033).
+  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.
   await sql`
@@ -283,7 +283,8 @@ beforeAll(async () => {
            ('invite_welcome', 2500, NULL, NULL),
            ('admin_grant', 0, NULL, NULL),
            ('welcome_completion', 0, NULL, NULL),
-           ('referral_reward', 50000, NULL, NULL)
+           ('referral_reward', 50000, NULL, NULL),
+           ('product_task_completed', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

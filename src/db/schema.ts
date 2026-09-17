@@ -357,11 +357,48 @@ export const CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS = 50000;
 // dedup on (org, promo_code)); admin grants have their own dedup path.
 export const ADMIN_GRANT_CODE = "admin_grant";
 
+/**
+ * Ledger key for a product-task reward (migration 0045).
+ *
+ * A customer is paid a small fixed credit each time they complete a product task,
+ * and the SAME task recurs for the same org roughly every month, forever. So this
+ * reason CANNOT dedup on (org, promo_code) the way the two invite reasons do — that
+ * shape pays once and then silently never again. It STACKS instead, on the caller's
+ * own per-completion identifier (`idempotency_key = 'task:<completionId>'`), which
+ * exempts it from the (org, promo_code) uniqueness and dedups on the completion.
+ *
+ * Same stacking mechanism as `admin_grant` / `referral_reward`, reached from the
+ * SERVICE-TO-SERVICE path: no staff identity and no staff email is involved, so
+ * `granted_by` stays NULL on these rows.
+ *
+ * The per-row amount lives on local_promos; this code row's amount_cents is a 0
+ * placeholder (the caller states what each completion is worth).
+ */
+export const PRODUCT_TASK_REWARD_CODE = "product_task_completed";
+
+/**
+ * Grant reasons a SERVICE may name on POST /internal/credits/grant. Closed set —
+ * a caller can never supply an arbitrary reason.
+ *
+ * They do NOT share one idempotency shape, and conflating them is the bug this
+ * split exists to prevent:
+ *   - PLATFORM_GRANT_REASONS   one-shot per (org, reason), idempotency_key NULL.
+ *   - STACKING_GRANT_REASONS   recurring, one row per caller-supplied completion id.
+ */
 export const PLATFORM_GRANT_REASONS = [
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
 ] as const;
 export type PlatformGrantReason = (typeof PLATFORM_GRANT_REASONS)[number];
+
+export const STACKING_GRANT_REASONS = [PRODUCT_TASK_REWARD_CODE] as const;
+export type StackingGrantReason = (typeof STACKING_GRANT_REASONS)[number];
+
+export const SERVICE_GRANT_REASONS = [
+  ...PLATFORM_GRANT_REASONS,
+  ...STACKING_GRANT_REASONS,
+] as const;
+export type ServiceGrantReason = (typeof SERVICE_GRANT_REASONS)[number];
 
 // credit_depletion_episodes: out-of-credit dunning state machine (issue #147).
 // One OPEN episode per org at a time — enforced by the partial unique index

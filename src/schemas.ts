@@ -278,7 +278,42 @@ export const CreditGrantRequestSchema = z
   .object({
     orgId: z.string().uuid(),
     amountCents: z.number().int().positive(),
-    reason: z.enum(["invite_reward", "invite_welcome"]),
+    /**
+     * Closed set — a caller can never supply an arbitrary reason. The two invite
+     * reasons are ONE-SHOT per (org, reason); `product_task_completed` RECURS and
+     * therefore requires a per-completion identifier.
+     */
+    reason: z.enum([
+      "invite_reward",
+      "invite_welcome",
+      "product_task_completed",
+    ]),
+    /**
+     * The caller's own identifier for ONE product-task completion. Required for
+     * `product_task_completed` (a recurring reward has no other way to tell a new
+     * completion from a retry of the last one) and REFUSED on the invite reasons,
+     * whose idempotency is (org, reason) and must not be weakened. No silent
+     * default and no silent ignore.
+     */
+    completionId: z.string().min(1).optional(),
+  })
+  .superRefine((body, ctx) => {
+    const recurring = body.reason === "product_task_completed";
+    if (recurring && body.completionId === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["completionId"],
+        message:
+          "completionId is required for reason=product_task_completed (the reward recurs, so a retry can only be told from a new completion by its identifier)",
+      });
+    }
+    if (!recurring && body.completionId !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["completionId"],
+        message: `completionId is not accepted for reason=${body.reason} (this grant is idempotent on (org, reason))`,
+      });
+    }
   })
   .openapi("CreditGrantRequest");
 
@@ -1562,10 +1597,14 @@ registry.registerPath({
   path: "/internal/credits/grant",
   summary: "Grant platform-issued credit to an org (no user-redeemable code required)",
   description:
-    "Inserts a local_promos row for an org under a reserved platform reason. " +
-    "Idempotent on (orgId, reason). " +
-    "When reason='invite_welcome', the existing $5 welcome row (if any) is deleted " +
-    "in the same tx so the invitee ends at the grant amount (not stacked). " +
+    "Inserts a local_promos row for an org under a reserved platform reason. The " +
+    "reason set is CLOSED — a caller can never supply an arbitrary one. " +
+    "invite_reward / invite_welcome are ONE-SHOT: idempotent on (orgId, reason), " +
+    "and they do not accept a completionId. product_task_completed RECURS (the same " +
+    "product task comes round for the same org roughly every month, forever), so it " +
+    "STACKS: it requires the caller's own completionId, a fresh one grants again and " +
+    "the same one retried never pays twice. It appears in the org's grants ledger " +
+    "under reason=product_task_completed, distinct from the invite and staff grants. " +
     "Returns the org's spendable balance after the grant.",
   request: {
     headers: internalHeaders,
