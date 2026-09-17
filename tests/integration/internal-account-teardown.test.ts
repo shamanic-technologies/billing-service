@@ -16,6 +16,7 @@ import {
   brandDailyBudgets,
   brandFunnelDailyBudgets,
   campaignAuthorizeCosts,
+  campaignReloadSweepAttempts,
   creditDepletionEpisodes,
   freeCreditPromises,
   localPromos,
@@ -38,6 +39,7 @@ async function orgRowCounts(orgId: string) {
     promoRows,
     episodeRows,
     campaignCostRows,
+    sweepAttemptRows,
     brandBudgetRows,
     funnelBudgetRows,
     promiseRows,
@@ -52,6 +54,10 @@ async function orgRowCounts(orgId: string) {
       .select()
       .from(campaignAuthorizeCosts)
       .where(eq(campaignAuthorizeCosts.orgId, orgId)),
+    db
+      .select()
+      .from(campaignReloadSweepAttempts)
+      .where(eq(campaignReloadSweepAttempts.orgId, orgId)),
     db.select().from(brandDailyBudgets).where(eq(brandDailyBudgets.orgId, orgId)),
     db
       .select()
@@ -65,6 +71,7 @@ async function orgRowCounts(orgId: string) {
     localPromos: promoRows.length,
     creditDepletionEpisodes: episodeRows.length,
     campaignAuthorizeCosts: campaignCostRows.length,
+    campaignReloadSweepAttempts: sweepAttemptRows.length,
     brandDailyBudgets: brandBudgetRows.length,
     brandFunnelDailyBudgets: funnelBudgetRows.length,
     welcomeCreditClaims: 0,
@@ -98,6 +105,11 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
     campaignId,
     orgId,
     lastAuthorizeRequiredCents: "42.0000000000",
+  });
+  await db.insert(campaignReloadSweepAttempts).values({
+    orgId,
+    creditedCentsAtAttempt: "1000.0000000000",
+    lastOutcome: "failed",
   });
   await db.insert(brandDailyBudgets).values({
     brandId,
@@ -141,6 +153,8 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
         localPromos: 1,
         creditDepletionEpisodes: 1,
         campaignAuthorizeCosts: 1,
+      campaignReloadSweepAttempts: 1,
+        campaignReloadSweepAttempts: 1,
         brandDailyBudgets: 1,
         brandFunnelDailyBudgets: 1,
         welcomeCreditClaims: 0,
@@ -152,6 +166,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       localPromos: 0,
       creditDepletionEpisodes: 0,
       campaignAuthorizeCosts: 0,
+      campaignReloadSweepAttempts: 0,
       brandDailyBudgets: 0,
       brandFunnelDailyBudgets: 0,
       welcomeCreditClaims: 0,
@@ -162,6 +177,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       localPromos: 1,
       creditDepletionEpisodes: 1,
       campaignAuthorizeCosts: 1,
+      campaignReloadSweepAttempts: 1,
       brandDailyBudgets: 1,
       brandFunnelDailyBudgets: 1,
       welcomeCreditClaims: 0,
@@ -180,6 +196,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       localPromos: 0,
       creditDepletionEpisodes: 0,
       campaignAuthorizeCosts: 0,
+      campaignReloadSweepAttempts: 0,
       brandDailyBudgets: 0,
       brandFunnelDailyBudgets: 0,
       welcomeCreditClaims: 0,

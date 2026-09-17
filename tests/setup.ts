@@ -149,6 +149,16 @@ beforeAll(async () => {
     )
   `;
 
+  // campaign_reload_sweep_attempts (attempt-once-per-credited-level, migration 0042).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "campaign_reload_sweep_attempts" (
+      "org_id" uuid PRIMARY KEY NOT NULL,
+      "credited_cents_at_attempt" numeric(16,10) NOT NULL,
+      "last_outcome" text NOT NULL,
+      "attempted_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+
   // brand_daily_budgets (org-scoped per-brand daily spend ceiling, migrations 0022 + 0024).
   await sql`
     CREATE TABLE IF NOT EXISTS "brand_daily_budgets" (

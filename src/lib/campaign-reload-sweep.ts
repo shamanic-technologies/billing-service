@@ -34,6 +34,16 @@
  * it side effects would make a GET charge cards, and relaxing its verdict would
  * re-open the paid-enrichment retry storm it exists to stop.
  *
+ * ATTEMPT ONCE PER CREDITED LEVEL. The first charge answers the only question
+ * this sweep can ask — is the org blocked by US or by its own card — and a
+ * refusal answers "the card", which the dunning engine already owns. The
+ * coalescer's backoff CAPS at one hour, exactly this sweep's interval, so
+ * without a durable marker a dead card would be re-presented ~24 times a day
+ * forever, degrading it at its issuer for no chance of a different answer.
+ * `campaign_reload_sweep_attempts` (migration 0042) records the CREDITED total
+ * at the attempt; credited only ever rises, so any recharge re-arms the sweep
+ * and a dead card does not.
+ *
  * An org that CANNOT be reloaded (no auto-topup config, no chargeable card, or a
  * blocked issuing country) is counted and logged, never charged and never mailed
  * by this module: those orgs are already owned by the depletion-episode dunning
@@ -42,12 +52,13 @@
  * already carried an OPEN episode with its T0 sent.
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { campaignReloadSweepAttempts } from "../db/schema.js";
 import crypto from "crypto";
 import { computeBalance } from "./balance.js";
 import { resolvePostpaidTier, computeTopupCharge } from "./topup-tier.js";
-import { addCents, subCents, gte as gteCents } from "./cents.js";
+import { addCents, subCents, cmpCents, gte as gteCents } from "./cents.js";
 import { reloadOffSession } from "./reload.js";
 import {
   coalesceReload,
@@ -129,6 +140,12 @@ export interface CampaignReloadSweepResult {
   notReloadCapable: number;
   /** Blocked orgs whose reload errored, declined, or was refused by the backoff. */
   failed: number;
+  /**
+   * Blocked orgs already attempted at this exact credited total, whose card
+   * refused. Not charged again until a recharge moves `credited` — see
+   * "attempt once per credited level" below.
+   */
+  awaitingRecharge: number;
 }
 
 interface OrgEstimate {
@@ -154,6 +171,63 @@ async function loadOrgEstimates(): Promise<OrgEstimate[]> {
     orgId: r.org_id,
     maxRequiredCents: String(r.max_required),
   }));
+}
+
+/**
+ * Has this org already been presented a card at this exact credited total, and
+ * refused?
+ *
+ * ATTEMPT ONCE PER CREDITED LEVEL. The sweep exists to break a DEADLOCK, not to
+ * collect a debt. Its first charge answers the only question it can ask: is the
+ * org blocked by us (the pre-flight refusing a run authorize would have funded)
+ * or by its own card? A refusal answers "the card", and that is a state the
+ * depletion-episode dunning engine already owns — so charging again on the next
+ * tick learns nothing, and the cost of asking is real: repeated declines degrade
+ * the card at its issuer and our decline rate at the acquirer (the whole reason
+ * lib/reload-coalescer's backoff exists). The coalescer's cooldown CAPS at one
+ * hour, which is exactly this sweep's own interval, so without this the sweep
+ * would re-present a dead card ~24 times a day forever.
+ *
+ * `credited` only ever RISES, so it needs no new lifecycle to say "something
+ * changed": any recharge — a paid top-up, a promo, a staff grant — moves it and
+ * re-arms the sweep, while a dead card moves nothing.
+ */
+async function alreadyAttemptedAtThisCredit(
+  orgId: string,
+  creditedCents: string
+): Promise<boolean> {
+  const [row] = await db
+    .select()
+    .from(campaignReloadSweepAttempts)
+    .where(eq(campaignReloadSweepAttempts.orgId, orgId))
+    .limit(1);
+  if (!row) return false;
+  if (row.lastOutcome === "succeeded") return false;
+  return cmpCents(row.creditedCentsAtAttempt, creditedCents) === 0;
+}
+
+/** Record that a card was presented for this org at this credited total. */
+async function recordAttempt(
+  orgId: string,
+  creditedCents: string,
+  outcome: "succeeded" | "failed"
+): Promise<void> {
+  await db
+    .insert(campaignReloadSweepAttempts)
+    .values({
+      orgId,
+      creditedCentsAtAttempt: creditedCents,
+      lastOutcome: outcome,
+      attemptedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: campaignReloadSweepAttempts.orgId,
+      set: {
+        creditedCentsAtAttempt: creditedCents,
+        lastOutcome: outcome,
+        attemptedAt: new Date(),
+      },
+    });
 }
 
 /** Tell the customer their card could not be charged — once per failure streak. */
@@ -192,6 +266,7 @@ export async function runCampaignReloadSweep(
     charged: 0,
     notReloadCapable: 0,
     failed: 0,
+    awaitingRecharge: 0,
   };
 
   const estimates = await loadOrgEstimates();
@@ -236,6 +311,16 @@ export async function runCampaignReloadSweep(
         continue;
       }
 
+      if (await alreadyAttemptedAtThisCredit(orgId, snapshot.creditedCents)) {
+        result.awaitingRecharge += 1;
+        console.log(
+          `[billing-service] campaign reload sweep: org ${orgId} already had a ` +
+            `card presented at credited=${snapshot.creditedCents} and it refused — ` +
+            `not charging again until a recharge moves credited (dunning owns it)`
+        );
+        continue;
+      }
+
       // Exactly what authorize charges: enough whole tier multiples to lift the
       // balance to (floor + required), so the run clears WITH the floor headroom
       // preserved.
@@ -269,6 +354,12 @@ export async function runCampaignReloadSweep(
         const synthetic: ReloadOutcome = { status: "failed", failure_reason: String(err) };
         return synthetic;
       });
+
+      await recordAttempt(
+        orgId,
+        snapshot.creditedCents,
+        outcome.status === "succeeded" ? "succeeded" : "failed"
+      );
 
       if (outcome.status === "succeeded") {
         result.charged += 1;
