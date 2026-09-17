@@ -476,8 +476,25 @@ export const campaignReloadSweepAttempts = pgTable("campaign_reload_sweep_attemp
     precision: FRACTIONAL_PRECISION,
     scale: FRACTIONAL_SCALE,
   }).notNull(),
-  /** "succeeded" | "failed" — diagnostic; the re-arm keys on credited alone. */
+  /** "succeeded" | "failed". A succeeded row never stands an org down. */
   lastOutcome: text("last_outcome").notNull(),
+  /**
+   * Which rung of the retry schedule the last attempt was. 1 = the first
+   * failure of this streak. Reset whenever `credited` moves.
+   */
+  attemptCount: integer("attempt_count").notNull().default(1),
+  /**
+   * When this streak's FIRST failure happened — the anchor the whole schedule
+   * is measured from, so a restart or a deploy cannot shift the next rung.
+   */
+  firstFailedAt: timestamp("first_failed_at", { withTimezone: true }),
+  /**
+   * Claims the ONE "we could not charge your card" mail for this streak.
+   * DURABLE on purpose: the gate used to be lib/reload-coalescer's in-memory
+   * failure counter, which a deploy resets — and we deploy several times a day,
+   * so "once per streak" silently meant "once per deploy". Migration 0043.
+   */
+  notifiedAt: timestamp("notified_at", { withTimezone: true }),
   attemptedAt: timestamp("attempted_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
