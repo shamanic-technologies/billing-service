@@ -553,10 +553,19 @@ router.get("/internal/unpaid-debts", async (_req, res) => {
 // run-rate however active its campaigns look, and billing is the only service
 // that can say when that was true.
 //
-// No new state: a period IS a credit-depletion episode (opened when the
-// balance falls past the org's credit-line floor, closed when a real recharge
-// lands). The debt flag for a card we can no longer charge lives on that same
-// episode, so both halves of "payment stopped" are already one period.
+// No new state — TWO existing sources, one per half of the rule:
+//   - CREDIT GONE is a credit-depletion episode (opened when the balance falls
+//     past the org's credit-line floor, closed when a real recharge lands).
+//   - A FAILED CARD is an OPEN failed reload streak
+//     (campaign_reload_sweep_attempts): the bank refused and the spaced retry
+//     schedule is still walking its rungs. It ends when a reload succeeds or
+//     when `credited` moves (a real recharge) — the same test the sweep makes.
+// An org can be blocked by a refused card while its balance sits INSIDE its
+// credit-line floor, where no episode ever opens, so the second source is not a
+// refinement of the first: without it that org reads as paying.
+// Overlapping stretches are merged, so a day is never described twice.
+// PAST failed streaks are NOT recorded (the attempts row is overwritten in
+// place and has no recovered_at), so only the OPEN one is expressible.
 //
 // Auth: x-api-key only, orgId in the PATH — no x-org-id / x-user-id / sentinel
 // identity, same user-less shape as the balance-by-org read above. Pure read.
@@ -565,7 +574,8 @@ router.get("/internal/unpaid-debts", async (_req, res) => {
 // first; endedAt null while the org is still in it. camelCase matches the
 // daily-budget reads this is paired with by the same consumer.
 //
-// recordBeginsAt is the earliest episode recorded fleet-wide: a day before it
+// recordBeginsAt is the earliest instant EITHER source recorded fleet-wide (in
+// practice the episodes, which are far older): a day before it
 // is NOT RECORDED, and the absence of a period there is not evidence that
 // payment was on. Note too that an episode opens on an authorize carrying
 // campaign activity, so a period means payment had stopped WHILE THE ORG WAS

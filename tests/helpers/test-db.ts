@@ -119,6 +119,36 @@ export async function removeWelcomeCompletionCode() {
 }
 
 /** Insert a depletion episode directly (lets tests back-date started_at). */
+/**
+ * A row in the campaign reload sweep's attempt ledger — the "the bank refused"
+ * state. Defaults describe an OPEN failed streak on its first rung.
+ */
+export async function insertTestSweepAttempt(data: {
+  orgId: string;
+  creditedCentsAtAttempt?: string;
+  lastOutcome?: "succeeded" | "failed";
+  attemptCount?: number;
+  firstFailedAt?: Date | null;
+  cardUnusableAt?: Date | null;
+  attemptedAt?: Date;
+}): Promise<void> {
+  const failed = (data.lastOutcome ?? "failed") === "failed";
+  await db.insert(campaignReloadSweepAttempts).values({
+    orgId: data.orgId,
+    creditedCentsAtAttempt: data.creditedCentsAtAttempt ?? "0.0000000000",
+    lastOutcome: data.lastOutcome ?? "failed",
+    attemptCount: data.attemptCount ?? 1,
+    firstFailedAt:
+      data.firstFailedAt === undefined
+        ? failed
+          ? new Date()
+          : null
+        : data.firstFailedAt,
+    cardUnusableAt: data.cardUnusableAt ?? null,
+    attemptedAt: data.attemptedAt ?? new Date(),
+  });
+}
+
 export async function insertTestEpisode(data: {
   orgId: string;
   userId: string;
