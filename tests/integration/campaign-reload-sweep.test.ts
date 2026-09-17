@@ -21,10 +21,13 @@ import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 import * as emailClient from "../../src/lib/email-client.js";
 import { upsertCampaignAuthorizeCost } from "../../src/lib/campaign-costs.js";
+import { sql } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
 import {
   runCampaignReloadSweep,
   campaignReloadIdempotencyKey,
   MAX_ATTEMPTS_PER_STREAK,
+  SWEEP_AUTHORIZE_FRESHNESS_MS,
 } from "../../src/lib/campaign-reload-sweep.js";
 
 const orgA = "00000000-0000-0000-0000-0000000000a1";
@@ -297,14 +300,26 @@ describe("blocked-campaign reload sweep", () => {
     }
 
     // Five refusals over a fortnight is an answer. The month-end sweep still
-    // settles what is owed; this sweep is done.
+    // settles what is owed; this sweep is done. Day 20 rather than day 60: the
+    // freshness window is 21 days, and it is deliberately LONGER than this
+    // ladder so the last rung can always fire — see the case below for what
+    // happens once the org falls out of the walk entirely.
     _resetCoalescer();
-    const after = await runCampaignReloadSweep(at(60));
+    const after = await runCampaignReloadSweep(at(20));
     expect(after.exhausted).toBe(1);
     expect(after.awaitingRetry).toBe(0);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(MAX_ATTEMPTS_PER_STREAK);
     // One mail for the whole streak, not one per rung.
     expect(sendMock).toHaveBeenCalledTimes(1);
+
+    // Past the window the org is not walked at all — a wedged org stops
+    // authorizing at the moment it wedges, so eventually it goes quiet here too.
+    // Its ladder is already spent by then, which is why the window can be
+    // shorter than "forever" without truncating anything.
+    _resetCoalescer();
+    const dormant = await runCampaignReloadSweep(at(60));
+    expect(dormant.scanned).toBe(0);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(MAX_ATTEMPTS_PER_STREAK);
   });
 
   it("tells the customer once per streak even across a restart", async () => {
@@ -364,13 +379,96 @@ describe("blocked-campaign reload sweep", () => {
     // it — a LATER refusal is news again.
     ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
     _resetCoalescer();
-    const later = await runCampaignReloadSweep(
-      new Date(NOW.getTime() + 30 * 24 * 3600_000)
-    );
+    // The charge unblocked the org, so its campaign ran and authorized again —
+    // which is what keeps it inside the freshness window a month later. Ageing
+    // the row forward is that resumed work, expressed in the fixture.
+    const later = new Date(NOW.getTime() + 30 * 24 * 3600_000);
+    await ageAuthorize(campaignA, new Date(later.getTime() - 3600_000));
+    const laterRes = await runCampaignReloadSweep(later);
 
-    expect(later.awaitingRetry).toBe(0);
-    expect(later.failed).toBe(1);
+    expect(laterRes.awaitingRetry).toBe(0);
+    expect(laterRes.failed).toBe(1);
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `upsertCampaignAuthorizeCost` stamps the real clock, so a test that needs a
+   * row to look old has to age it explicitly. Ageing is what production does by
+   * doing nothing.
+   */
+  async function ageAuthorize(campaignId: string, at: Date) {
+    await db.execute(sql`
+      UPDATE campaign_authorize_costs SET updated_at = ${at.toISOString()}::timestamptz WHERE campaign_id = ${campaignId}
+    `);
+  }
+
+  const cutoff = new Date(NOW.getTime() - SWEEP_AUTHORIZE_FRESHNESS_MS);
+
+  it("keeps the window strictly longer than the retry ladder", () => {
+    // If it were not, an org would drop out of the walk before its own last
+    // rung (+14d from the streak's first refusal) could fire, and the sweep
+    // would stand down without making an attempt it had scheduled.
+    expect(SWEEP_AUTHORIZE_FRESHNESS_MS).toBeGreaterThan(14 * 24 * 3600_000);
+  });
+
+  it("leaves a DORMANT org alone entirely — not scanned, not charged, no episode, no mail", async () => {
+    // The seven orgs measured in prod on 2026-09-17 whose newest authorize was
+    // 30 to 91 days old. Wedged on the numbers, and stopped working long ago.
+    await seedTrappedOrg();
+    await ageAuthorize(campaignA, new Date(NOW.getTime() - 30 * 24 * 3600_000));
+
+    const res = await runCampaignReloadSweep(NOW);
+
+    expect(res.scanned).toBe(0);
+    expect(res.blocked).toBe(0);
+    expect(res.charged).toBe(0);
+    expect(res.episodesOpened).toBe(0);
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("sweeps an org sitting EXACTLY on the window boundary", async () => {
+    await seedTrappedOrg();
+    await ageAuthorize(campaignA, cutoff);
+
+    const res = await runCampaignReloadSweep(NOW);
+
+    expect(res.scanned).toBe(1);
+    expect(res.charged).toBe(1);
+  });
+
+  it("drops an org one millisecond the wrong side of the boundary", async () => {
+    await seedTrappedOrg();
+    await ageAuthorize(campaignA, new Date(cutoff.getTime() - 1));
+
+    const res = await runCampaignReloadSweep(NOW);
+
+    expect(res.scanned).toBe(0);
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps a STALE campaign's estimate for an org a SIBLING campaign keeps fresh", async () => {
+    // The freshness bound is a HAVING on the org, never a WHERE on the rows: a
+    // campaign wedged for months stops refreshing its own row, and that stale
+    // estimate is exactly the hungriest one the pre-flight is refusing. Filtering
+    // rows first would decide this org on the 5-cent campaign and leave the
+    // 20-cent one refused forever.
+    await insertTestAccount({
+      orgId: orgA,
+      topupAmountCents: 4900,
+      topupThresholdCents: 500,
+    });
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(PROD_PAID);
+    setUsage(orgA, "27505.0000000000"); // balance −4990 against a −5000 floor
+    await upsertCampaignAuthorizeCost(campaignA, orgA, "5.0000000000");
+    await upsertCampaignAuthorizeCost(campaignA2, orgA, "20.0000000000");
+    await ageAuthorize(campaignA2, new Date(NOW.getTime() - 90 * 24 * 3600_000));
+
+    const res = await runCampaignReloadSweep(NOW);
+
+    expect(res.scanned).toBe(1);
+    expect(res.blocked).toBe(1);
+    expect(res.charged).toBe(1);
   });
 
   it("isolates a per-org failure — one unreachable org never blocks the rest", async () => {
