@@ -39,6 +39,20 @@ const router = Router();
 // the entries at or after its own cutoff and gets the exact answer, for any
 // window, without this service ever learning which windows exist.
 //
+// That array is served under TWO names for one release: `first_payment_times_unix`
+// (SECONDS, the name a consumer should read) and the DEPRECATED
+// `first_payment_times`, byte-identical. The unit belongs in the name because
+// `Date.now()` is MILLISECONDS, so `t >= Date.now() - 30 * 86400 * 1000` against a
+// seconds array silently counts zero and renders a dash — the exact false alarm
+// the array exists to kill. Every money field here already carries its `_cents`.
+//
+// And its absence is NOT a reason to deny the payload. It is the one figure on
+// this route only the staff console's rolling window needs; every money figure
+// beside it is computable without it, and failing the whole request for it took
+// down the PUBLIC investor metrics page. Absent upstream → both fields are `null`
+// plus a loud log. NEVER `[]`: unavailable and "nobody has ever paid" are
+// different facts and a consumer that cannot tell them apart renders 0 paid users.
+//
 // Taken from stripe-service VERBATIM — this hop forwards, it does not re-derive.
 // stripe-service owns money and is the only service that sees every acquirer, so
 // a second implementation here would be a second answer. Consequently the
@@ -77,21 +91,41 @@ function requirePayingCount(value: number | undefined, field: string, where: str
 }
 
 /**
- * The first-payment instants stripe-service publishes, read fail-loud.
+ * The first-payment instants stripe-service publishes — UNAVAILABLE is a value,
+ * not a failure of this endpoint.
  *
- * Same posture as `requirePayingCount`, and for the same reason: an absent array
- * is not an empty one. Reporting `[]` tells the staff metrics console that
- * nobody has ever paid, which is both false and indistinguishable from the
- * truth, so a stripe-service too old to publish it fails the whole endpoint with
- * a 502 instead.
+ * Every other figure on this route is a money figure that a consumer arithmetics
+ * on, so an unreadable one fails the request. This array is not: exactly one
+ * consumer needs it (the staff console's rolling-window payer count), and every
+ * other figure here — gross paid, returned, net, credited, local credits, the
+ * account counts, the buckets — is perfectly computable without it. Failing the
+ * whole payload for its absence took down the PUBLIC investor metrics page, whose
+ * landing reader does `if (!billingRes.ok) throw`, for a reason that had nothing
+ * to do with it.
+ *
+ * So an absent array yields `null` and a LOUD log. `null` is the whole point:
+ * `[]` would say nobody has ever paid, which is both false and indistinguishable
+ * from the truth, and a consumer that cannot tell those apart renders "0 paid
+ * users" — the exact false alarm this feature line exists to kill. UNAVAILABLE
+ * and EMPTY are different facts and they stay different on the wire.
+ *
+ * Reads the unit-carrying `first_payment_times_unix` FIRST and falls back to the
+ * legacy `first_payment_times`. stripe-service serves both, identical, for one
+ * release, so the deploy order of the two services never matters.
  */
-function requireFirstPaymentTimes(value: number[] | undefined): number[] {
-  if (!Array.isArray(value)) {
-    throw new Error(
-      "stripe-service billing stats are missing first_payment_times — rolling-window payer counts cannot be reported"
-    );
-  }
-  return value;
+function resolveFirstPaymentTimes(stats: {
+  first_payment_times_unix?: number[];
+  first_payment_times?: number[];
+}): number[] | null {
+  if (Array.isArray(stats.first_payment_times_unix)) return stats.first_payment_times_unix;
+  if (Array.isArray(stats.first_payment_times)) return stats.first_payment_times;
+  console.error(
+    "[billing-service] stripe-service billing stats carried NEITHER first_payment_times_unix NOR " +
+      "first_payment_times — rolling-window payer counts are unavailable this request. Every other " +
+      "figure is served as normal; both fields go out as null so a consumer can tell unavailable " +
+      "from empty."
+  );
+  return null;
 }
 
 interface LocalGrowthRow {
@@ -206,6 +240,11 @@ router.get("/public/stats/billing", async (_req, res) => {
       queryLocalGrowth("week"),
     ]);
 
+    // Resolved BEFORE the try below on purpose: an absent array is not a reason
+    // to deny the payload, so it must not travel the 502 path the unreadable
+    // money counts take.
+    const firstPaymentTimes = resolveFirstPaymentTimes(ssStats);
+
     let body;
     try {
       body = {
@@ -227,7 +266,15 @@ router.get("/public/stats/billing", async (_req, res) => {
         // filters, truncates, re-sorts or derives a window from it — the
         // consumer picks its own cutoff, which is exactly why the instants are
         // published instead of per-window counts.
-        first_payment_times: requireFirstPaymentTimes(ssStats.first_payment_times),
+        //
+        // Served under BOTH names, byte-identical, for one release:
+        // `first_payment_times_unix` carries the unit (SECONDS) and is what a
+        // consumer should read; `first_payment_times` is DEPRECATED and kept
+        // because a live consumer still reads it. `null` on both when
+        // stripe-service served neither — never `[]`, which would claim nobody
+        // has ever paid.
+        first_payment_times_unix: firstPaymentTimes,
+        first_payment_times: firstPaymentTimes,
         monthly_growth: mergeGrowthRows(monthlyLocal, ssStats.monthly_growth, "monthly"),
         weekly_growth: mergeGrowthRows(weeklyLocal, ssStats.weekly_growth, "weekly"),
       };

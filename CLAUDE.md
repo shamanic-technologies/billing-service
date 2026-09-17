@@ -581,6 +581,15 @@ So stripe-service publishes **`first_payment_times: number[]`** — every accoun
 
 Every field that existed before is unchanged in name, type and value — a consumer that does not know about the counts or the instants is byte-unaffected, and the api-service gateway in front of this is a `.passthrough()` proxy that forwards whatever this route returns.
 
+#### The unit is in the name, and an absent array is a VALUE — not a reason to deny the payload
+
+Two live consumers read this endpoint: the staff metrics console and the PUBLIC investor metrics page on the landing site, whose reader does `if (!billingRes.ok) throw`. The first-payment instants are the one figure here that only the console's rolling window needs; gross paid, returned, net, credited, local credits, the account counts and the buckets are all perfectly computable without them. Failing the whole request when stripe-service did not serve them therefore took a public page down for a reason that had nothing to do with it — a stripe-service rollback, a transient upstream failure or any future change dropping the field was enough.
+
+- **Absent upstream → `null`, plus a LOUD log. NEVER `[]`.** Unavailable and "nobody has ever paid" are different facts, and a consumer that cannot tell them apart renders "0 paid users" — the exact false alarm this whole feature line exists to kill. The absence is a real upstream problem worth seeing; it is just not a reason to deny every other figure. `resolveFirstPaymentTimes` is resolved OUTSIDE the `try` that maps an unreadable money count to a 502, so it cannot travel that path by accident.
+- **`requirePayingCount` is UNCHANGED and still 502s.** The counts are figures a consumer arithmetics on; the relaxation is for the array alone. Do not widen it.
+- **`first_payment_times_unix` is the name to read; `first_payment_times` is DEPRECATED and served identically for one release.** The unit belongs in the name because `Date.now()` is MILLISECONDS: a consumer writing `t >= Date.now() - 30 * 86400 * 1000` against a SECONDS array silently counts zero and renders a dash, which is precisely the bug the array was introduced to fix. Every money field here already carried its `_cents`; this one did not. Do NOT drop the old name in this release — a live consumer still reads it.
+- **The reader takes `first_payment_times_unix` first and falls back to `first_payment_times`**, because stripe-service publishes both, identical, for one release. Neither service's deploy order can leave this endpoint without the array.
+
 ## Endpoints reference
 
 | Method | Path | Purpose |

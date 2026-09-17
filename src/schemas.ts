@@ -1098,9 +1098,15 @@ export const PublicBillingStatsSchema = z
     total_paying_accounts: z.number().int(),
     /**
      * Every account's FIRST settled payment, unix SECONDS, ascending — one entry
-     * per account that has ever paid, so `first_payment_times.length` reproduces
-     * `total_paying_accounts`. Taken verbatim from stripe-service; this hop
-     * neither filters nor re-derives it.
+     * per account that has ever paid, so `first_payment_times_unix.length`
+     * reproduces `total_paying_accounts`. Taken verbatim from stripe-service;
+     * this hop neither filters nor re-derives it.
+     *
+     * THE UNIT IS IN THE NAME because `Date.now()` is MILLISECONDS: a consumer
+     * writing `t >= Date.now() - 30 * 86400 * 1000` against a seconds array
+     * silently counts zero and renders a dash, which is precisely the false
+     * alarm this array was introduced to kill. Every money field here already
+     * carries its unit (`_cents`); this one did not.
      *
      * THIS is how a rolling window is answered exactly. The accounts that became
      * customers in the last N days are
@@ -1118,10 +1124,23 @@ export const PublicBillingStatsSchema = z
      * account in the counts. No money is published at this grain — only when
      * each account started paying.
      *
-     * Never a fallback empty array: an array billing could not read fails the
-     * whole endpoint with a 502, because `[]` would say nobody has ever paid.
+     * `null` when stripe-service served neither spelling — NEVER `[]`. An
+     * unavailable list and an empty one are different facts: `[]` says nobody
+     * has ever paid, and a consumer that cannot tell them apart renders "0 paid
+     * users". Its absence never denies the rest of this payload: every money
+     * figure here is computable without it, and failing the whole request for it
+     * took down the public investor metrics page.
      */
-    first_payment_times: z.array(z.number().int()),
+    first_payment_times_unix: z.array(z.number().int()).nullable(),
+    /**
+     * DEPRECATED — read `first_payment_times_unix` instead.
+     *
+     * Byte-identical to it (same entries, same order, same `null`), kept for one
+     * release because a live consumer still reads this name. The replacement
+     * carries the unit its values are in (unix SECONDS), which this name did
+     * not.
+     */
+    first_payment_times: z.array(z.number().int()).nullable(),
     monthly_growth: z.array(BillingGrowthRowSchema),
     weekly_growth: z.array(BillingGrowthRowSchema),
   })
@@ -1177,13 +1196,19 @@ registry.registerPath({
     "`paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as " +
     "zero: it fails the endpoint with a 502.\n\n" +
     "A ROLLING WINDOW (last 30 days, last 90 days, since any instant) is answered EXACTLY from " +
-    "`first_payment_times` — every account's first settled payment in unix seconds, ascending, one entry per " +
-    "account that has ever paid. Count the entries at or after your cutoff. Summing whole " +
+    "`first_payment_times_unix` — every account's first settled payment in unix SECONDS, ascending, one entry " +
+    "per account that has ever paid. Count the entries at or after your cutoff. THE UNIT IS IN THE NAME " +
+    "because `Date.now()` is milliseconds, so comparing against a milliseconds cutoff silently counts zero. " +
+    "`first_payment_times` is the DEPRECATED spelling of the same array, byte-identical, kept for one release. " +
+    "Summing whole " +
     "`first_time_paying_accounts` buckets CANNOT answer it: those buckets are calendar months and weeks, a " +
     "rolling window aligns to neither, and the bucket straddling its edge holds payments on both sides " +
     "(measured against production at 90 days, whole-bucket summing read 17 where the truth was 25). The array " +
     "carries the same identity, acquirer coverage and settled-only predicates as the counts, and counting all " +
-    "of it reproduces `total_paying_accounts`.",
+    "of it reproduces `total_paying_accounts`. Both spellings are `null` — never `[]` — when stripe-service " +
+    "served neither: an unavailable list and an empty one are different facts, and `[]` would claim nobody has " +
+    "ever paid. Their absence never denies the rest of this payload, which every money figure is computable " +
+    "without.",
   responses: {
     200: {
       description: "Billing stats",
@@ -1192,7 +1217,9 @@ registry.registerPath({
       },
     },
     502: {
-      description: "stripe-service unavailable, or its reply carried no paying-account counts",
+      description:
+        "stripe-service unavailable, or its reply carried no paying-account counts. Missing first-payment " +
+        "instants do NOT produce a 502 — both array fields go out as null and every other figure is served.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

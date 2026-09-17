@@ -457,15 +457,88 @@ describe("GET /public/stats/billing", () => {
         expect(fromBuckets).not.toBe(fromInstants);
       });
 
-      // An absent array is not an empty one: `[]` would tell the console nobody
-      // has ever paid, which is both false and indistinguishable from the truth.
-      it("502s rather than reporting an empty window when the instants are absent", async () => {
-        const { first_payment_times: _omitted, ...withoutInstants } = ssStatsWithCounts;
+      // The unit belongs in the name: `Date.now()` is MILLISECONDS, so a
+      // consumer comparing against a milliseconds cutoff counts zero against a
+      // seconds array and renders a dash — the false alarm this array kills.
+      it("serves the instants under the unit-carrying name", async () => {
+        ssMocks.getStats.mockResolvedValue({
+          ...ssStatsWithCounts,
+          first_payment_times_unix: firstPaymentTimes,
+        });
+
+        const res = await request(app).get("/public/stats/billing");
+
+        expect(res.status).toBe(200);
+        expect(res.body.first_payment_times_unix).toEqual(firstPaymentTimes);
+        // The deprecated spelling is still served, still correct, for one
+        // release — a live consumer reads it.
+        expect(res.body.first_payment_times).toEqual(firstPaymentTimes);
+      });
+
+      // stripe-service publishes both names for one release, so neither deploy
+      // order can leave this endpoint without the array.
+      it("falls back to the legacy spelling when only it is served", async () => {
+        const { first_payment_times_unix: _absent, ...legacyOnly } = {
+          ...ssStatsWithCounts,
+          first_payment_times_unix: undefined as number[] | undefined,
+        };
+        ssMocks.getStats.mockResolvedValue(legacyOnly);
+
+        const res = await request(app).get("/public/stats/billing");
+
+        expect(res.status).toBe(200);
+        expect(res.body.first_payment_times_unix).toEqual(firstPaymentTimes);
+        expect(res.body.first_payment_times).toEqual(firstPaymentTimes);
+      });
+
+      // An array only the admin funnel needs must not be a hard dependency for
+      // every money figure beside it, nor for the PUBLIC investor page whose
+      // reader throws on a non-ok response.
+      it("still serves every other figure when the instants are absent", async () => {
+        const {
+          first_payment_times: _omitted,
+          ...withoutInstants
+        } = ssStatsWithCounts;
         ssMocks.getStats.mockResolvedValue(withoutInstants);
 
         const res = await request(app).get("/public/stats/billing");
 
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(200);
+        expect(res.body.total_paid_cents).toBe(ssStatsWithCounts.total_paid_cents);
+        expect(res.body.total_returned_cents).toBe(ssStatsWithCounts.total_returned_cents);
+        expect(res.body.total_revenue_cents).toBe(ssStatsWithCounts.total_net_cents);
+        expect(res.body.total_paying_accounts).toBe(ssStatsWithCounts.total_paying_accounts);
+        expect(res.body.accounts_with_payment_method).toBe(
+          ssStatsWithCounts.accounts_with_payment_method
+        );
+        expect(res.body.monthly_growth.length).toBeGreaterThan(0);
+      });
+
+      // UNAVAILABLE and EMPTY are different facts. `[]` says nobody has ever
+      // paid; a consumer that cannot tell them apart renders "0 paid users",
+      // which is the exact false alarm this feature line exists to kill.
+      it("reports unavailable instants as null, distinguishable from none", async () => {
+        const {
+          first_payment_times: _omitted,
+          ...withoutInstants
+        } = ssStatsWithCounts;
+        ssMocks.getStats.mockResolvedValue(withoutInstants);
+
+        const unavailable = await request(app).get("/public/stats/billing");
+
+        expect(unavailable.body.first_payment_times_unix).toBeNull();
+        expect(unavailable.body.first_payment_times).toBeNull();
+
+        ssMocks.getStats.mockResolvedValue({
+          ...ssStatsWithCounts,
+          total_paying_accounts: 0,
+          first_payment_times: [],
+        });
+
+        const genuinelyEmpty = await request(app).get("/public/stats/billing");
+
+        expect(genuinelyEmpty.body.first_payment_times_unix).toEqual([]);
+        expect(genuinelyEmpty.body.first_payment_times).toEqual([]);
       });
     });
 
