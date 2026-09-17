@@ -324,7 +324,7 @@ function buildHeaders(
 }
 
 async function call<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   identity: IdentityHeaders,
   body?: unknown,
@@ -908,6 +908,48 @@ export async function chargeOrgOffSession(
     {},
     body,
     { "Idempotency-Key": idempotencyKey }
+  );
+}
+
+/**
+ * `DELETE /internal/payment_methods/by-org/{orgId}` — stop holding this org's
+ * card. The acquirer half of a customer-initiated removal.
+ *
+ * stripe-service detaches EVERY saved method on the org's customer, not only
+ * the default: a customer who asked us to stop holding their card must not be
+ * left with a second one attached, and a method that survives without being the
+ * default reads downstream as "no card" while still sitting on file.
+ *
+ * Billing never detaches anything itself — the acquirer is stripe-service's,
+ * and nothing here names one. X-API-Key only (the org is in the path), so no
+ * identity headers and no invented user.
+ *
+ * Having nothing to remove is NOT an error: an org with no customer, or a
+ * customer with no attached method, answers 200 with an empty `detached`. The
+ * end state is the one the caller asked for.
+ *
+ * Fail-loud on anything else: a caller that cannot tell whether the card is
+ * gone must be told so rather than reporting a removal that did not happen.
+ * The detach is safe to repeat.
+ */
+export interface PaymentMethodsRemovedResult {
+  object: "payment_methods_removed";
+  org_id: string;
+  acquirer: string;
+  customer: string | null;
+  /** Ids detached by THIS call. */
+  detached: string[];
+  /** Ids already gone when we asked. */
+  already_detached: string[];
+}
+
+export async function removeSavedPaymentMethods(
+  orgId: string
+): Promise<PaymentMethodsRemovedResult> {
+  return call<PaymentMethodsRemovedResult>(
+    "DELETE",
+    `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}`,
+    {}
   );
 }
 

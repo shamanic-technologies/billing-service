@@ -12,6 +12,7 @@ import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
+import { removeCardForOrg } from "../lib/card-removal.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForOrg,
@@ -342,6 +343,72 @@ router.get("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, r
     res.json(answer);
   } catch (err) {
     console.error("[billing-service] Error reading saved payment method:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /v1/accounts/saved_payment_method — stop holding this org's card.
+//
+// The inverse of the GET above, and the one self-serve path a customer has for
+// it: the acquirer's own card-management screen is pinned shut on purpose.
+//
+// TWO actions in one order only this service can put them in. What is owed is
+// collected FIRST, on the card that is about to go, under the SAME rule the
+// card-change path uses (lib/card-change-settlement) — including its conclusion
+// that the collection never gates what the customer came to do. Then the card
+// goes, whatever that collection did.
+//
+// REFUSED FOR NOBODY. No balance, no debt state, no card state and no failed
+// charge blocks it. A gate here would trap the one customer it exists to
+// protect us from, which is exactly the dead end #461 removed from the card
+// page. An org with no card is not an error either.
+//
+// Nothing is forgiven: no balance is erased or marked settled, and the debt
+// stays owned by the month-end sweep, the campaign reload, dunning and the
+// uncollectable-debt flag. A customer who comes back and adds a card is
+// collected from as normal.
+//
+// 502 when the removal itself could not be performed — a caller that cannot
+// tell whether the card is gone must be told so rather than handed a silent
+// success.
+router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+
+    const [account] = await db
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    let outcome;
+    try {
+      outcome = await removeCardForOrg(orgId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[billing-service] card removal failed:", message);
+      res.status(502).json({ error: "Could not remove the saved card" });
+      return;
+    }
+
+    res.json({
+      object: "saved_payment_method_removed",
+      org_id: orgId,
+      removed: outcome.detached.length,
+      already_removed: outcome.alreadyDetached.length,
+      auto_topup_disarmed: outcome.autoTopupDisarmed,
+      settled_cents: outcome.settlement.chargedCents,
+      ...(outcome.settlement.skipReason
+        ? { settle_skip_reason: outcome.settlement.skipReason }
+        : {}),
+    });
+  } catch (err) {
+    console.error("[billing-service] Error removing saved payment method:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

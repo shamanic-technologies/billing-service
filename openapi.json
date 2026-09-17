@@ -381,6 +381,43 @@
           "method"
         ]
       },
+      "RemoveSavedPaymentMethodResponse": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "saved_payment_method_removed"
+            ]
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "integer"
+          },
+          "already_removed": {
+            "type": "integer"
+          },
+          "auto_topup_disarmed": {
+            "type": "boolean"
+          },
+          "settled_cents": {
+            "type": "number"
+          },
+          "settle_skip_reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object",
+          "org_id",
+          "removed",
+          "already_removed",
+          "auto_topup_disarmed",
+          "settled_cents"
+        ]
+      },
       "CheckoutResponse": {
         "type": "object",
         "properties": {
@@ -2702,6 +2739,125 @@
           },
           "502": {
             "description": "Could not ask the acquirer — NOT the same as 'no card saved'",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Stop holding this org's card",
+        "description": "Org-scoped, self-serve. TWO actions in one order only this service can put them in: what the org owes is COLLECTED first, on the card that is about to go, under the same rule the card-change path uses (the collection never gates what the customer came to do); then the card is removed whatever that collection did — charged, declined, skipped or backed off. REFUSED FOR NOBODY: no balance, no debt state, no card state and no failed charge blocks it, and an org with no card is a 200. Nothing is forgiven — what is owed stays owed and stays owned by the existing sweeps and the uncollectable-debt flag. Auto-topup is disarmed, because a threshold that can never fire again is a configuration that lies. 502 means the removal could not be performed and must be retried — never a silent success.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card is no longer held",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveSavedPaymentMethodResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The removal could not be performed — retry, the detach is safe to repeat",
             "content": {
               "application/json": {
                 "schema": {
