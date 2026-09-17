@@ -298,6 +298,13 @@ router.post("/internal/transfer-brand", async (req, res) => {
 // cross past the floor — matching what authorize would actually allow. A
 // zero-floor org is unchanged: affordable only while balance covers the run.
 //
+// The refusal below IS a depletion (lib/spend-block): an org whose next run
+// cannot be authorized is out of credit whatever side of its credit line the
+// balance sits on. This route still has ZERO side effects and must keep them —
+// the episode for such an org is opened by the hourly blocked-campaign reload
+// sweep (lib/campaign-reload-sweep), which is the only path a wedged org can
+// reach, since campaign-service stops dispatching before authorize.
+//
 // Fail-loud: a balance-compose failure surfaces as 502.
 const ZERO_CENTS = "0.0000000000";
 

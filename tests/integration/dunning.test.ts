@@ -136,9 +136,15 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(sendEmailSpy).not.toHaveBeenCalled();
   });
 
-  it("4: insufficient but balance > 0 (not depleted) → no episode", async () => {
+  it("4: balance > 0 but short of the next run → episode (it cannot spend)", async () => {
+    // 5 cents of real credit against a 10-cent run. The balance is positive and
+    // the org is nonetheless out of credit in the only sense that matters: no
+    // run can be authorized, so nothing it is doing can proceed. The episode
+    // gate is now the SAME predicate the affordability pre-flight refuses on
+    // (lib/spend-block) — the gap between them was a state an org could not
+    // climb out of. See tests/integration/wedged-org-dunning.test.ts.
     await insertTestAccount({ orgId });
-    setBalance("5.0000000000"); // balance 5 > 0, but required 10 → insufficient
+    setBalance("5.0000000000");
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
@@ -147,8 +153,11 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
-    expect(await listEpisodes(orgId)).toHaveLength(0);
-    expect(sendEmailSpy).not.toHaveBeenCalled();
+    expect(await listEpisodes(orgId)).toHaveLength(1);
+    const t0 = sendEmailSpy.mock.calls.filter(
+      (c) => c[0].eventType === "credit-depleted"
+    );
+    expect(t0).toHaveLength(1);
   });
 
   it("5: tick on episode aged ≥3d still depleted → sends +3d follow-up", async () => {

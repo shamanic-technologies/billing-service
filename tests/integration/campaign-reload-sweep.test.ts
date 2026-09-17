@@ -189,8 +189,13 @@ describe("blocked-campaign reload sweep", () => {
     expect(res.notReloadCapable).toBe(1);
     expect(res.charged).toBe(0);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
-    // No second notification mechanism for a state the dunning engine owns.
-    expect(sendMock).not.toHaveBeenCalled();
+    // No CARD is charged, and no reload-failure mail is sent — but the org IS
+    // handed to the dunning engine, which is what this sweep is for: it can
+    // never reach `authorize`, so this is the only place its episode can open.
+    // See tests/integration/wedged-org-dunning.test.ts.
+    expect(res.episodesOpened).toBe(1);
+    const eventTypes = sendMock.mock.calls.map((c) => c[0].eventType);
+    expect(eventTypes).toEqual(["credit-depleted"]);
   });
 
   it("never charges an org whose card cannot be charged off_session", async () => {

@@ -1,7 +1,10 @@
 /**
  * Out-of-credit dunning engine (issue #147).
  *
- * Two entry points:
+ * Three entry points:
+ *   - openBlockedCampaignEpisode: called from the blocked-campaign reload sweep
+ *     for an org whose campaigns the affordability pre-flight refuses and which
+ *     the sweep could not unblock — the one org that can never reach authorize.
  *   - openDepletionEpisodeIfDepleted: called from the authorize path. Opens a
  *     depletion episode (and sends the instant T0 email) the first time an org
  *     is observed depleted while running a campaign. Idempotent — a second
@@ -24,9 +27,10 @@ import {
   DUNNING_EVENT_3D_BLOCKED,
   DUNNING_EVENT_10D_BLOCKED,
 } from "../db/schema.js";
-import { isDepleted, cmpCents } from "./cents.js";
-import { computeBalance } from "./balance.js";
-import { createPlatformRun } from "./runs-client.js";
+import { cmpCents } from "./cents.js";
+import { computeBalance, type BalanceSnapshot } from "./balance.js";
+import { cannotSpend, resolveSpendBlock } from "./spend-block.js";
+import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
 
@@ -81,6 +85,14 @@ export interface OpenEpisodeParams {
    * never triggers a T0 email. Defaults to "0" (legacy strictly-prepaid gate).
    */
   thresholdCents?: string;
+  /**
+   * The cost of the run this authorize was refusing. An org whose balance is
+   * still inside its credit line but cannot cover the NEXT run is out of credit
+   * in the only sense that matters — see lib/spend-block for the gap this
+   * closes. Defaults to "0", which reduces the gate to the legacy
+   * `balance <= floor` check.
+   */
+  requiredCents?: string;
   /** Credited snapshot at the failing authorize — the recovery baseline. */
   creditedCents: string;
   /** Parsed workflow headers — gates the open on campaign activity. */
@@ -98,14 +110,24 @@ export interface OpenEpisodeParams {
 }
 
 /**
- * Open a depletion episode + send the instant T0 email, IFF the org is depleted
- * AND has campaign activity AND has no already-open episode. Returns whether a
- * NEW episode was opened (false = not depleted, no activity, or already open).
+ * Open a depletion episode + send the instant T0 email, IFF the org cannot pay
+ * for the run this authorize was refusing AND has campaign activity AND has no
+ * already-open episode. Returns whether a NEW episode was opened (false = it can
+ * spend, no activity, or already open).
+ *
+ * "Cannot pay" is `lib/spend-block`'s one predicate, so this agrees by
+ * construction with the affordability pre-flight that refuses the run — every
+ * call site here is on the insufficient branch, which is exactly that refusal.
  */
 export async function openDepletionEpisodeIfDepleted(
   params: OpenEpisodeParams
 ): Promise<{ opened: boolean }> {
-  if (!isDepleted(params.balanceCents, params.thresholdCents ?? "0")) return { opened: false };
+  const blocked = cannotSpend(
+    params.balanceCents,
+    params.requiredCents ?? "0",
+    params.thresholdCents ?? "0"
+  );
+  if (!blocked) return { opened: false };
   if (!hasCampaignActivity(params.workflow)) return { opened: false };
 
   // The partial unique index `(org_id) WHERE recovered_at IS NULL` is the
@@ -140,6 +162,101 @@ export async function openDepletionEpisodeIfDepleted(
     metadata: {},
     workflowHeaders: params.workflowHeaders,
   });
+
+  return { opened: true };
+}
+
+/**
+ * The platform is the actor: a sweep tick has no end user behind it, and none is
+ * invented. Same all-zeros sentinel lib/unpaid-debt stores on a row of this very
+ * table; the recipient is resolved from the org's Stripe billing email, so
+ * nothing downstream resolves a user from it.
+ */
+const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Open a depletion episode for an org the affordability pre-flight is refusing,
+ * and send it the instant T0 — the path the authorize route can never take for
+ * a WEDGED org, because campaign-service stops dispatching before authorize is
+ * ever reached (see lib/campaign-reload-sweep).
+ *
+ * Idempotent through the same partial unique index `(org_id) WHERE recovered_at
+ * IS NULL` the authorize opener relies on, so the hourly sweep re-examining the
+ * same org every tick opens one episode and mails once.
+ *
+ * WHY T0 IS SENT HERE, AND WHEN IT IS NOT. The episode exists to tell a customer
+ * their campaigns stopped, and for a wedged org they HAVE stopped — for days,
+ * silently. Opening the state without the message would fix the staff surfaces
+ * and leave the customer exactly as uninformed as the bug left them. Two things
+ * keep it honest, and both live in the caller: the sweep reaches this only AFTER
+ * failing to unblock the org itself (an org whose card is charged successfully
+ * is never told it ran out of credit), and it passes `sendT0: false` when it has
+ * ALREADY mailed that org on this tick — a declining card gets one message, not
+ * "we could not charge your card" followed seconds later by "you are out of
+ * credit". The episode still opens either way, so the +3d / +10d ladder and
+ * every staff surface pick the org up regardless.
+ *
+ * No campaign-activity gate: the sweep carries no request headers, and the org
+ * being refused on a stored campaign estimate IS the campaign activity. Unlike
+ * lib/unpaid-debt's `ensureOpenEpisode` this one DOES send T0 — that path
+ * describes a different thing (a debt we cannot collect) with its own message.
+ */
+export async function openBlockedCampaignEpisode(params: {
+  orgId: string;
+  snapshot: BalanceSnapshot;
+  /** False when the caller has already mailed this org on this tick. */
+  sendT0?: boolean;
+}): Promise<{ opened: boolean }> {
+  const sendT0 = params.sendT0 ?? true;
+  try {
+    await db.insert(creditDepletionEpisodes).values({
+      orgId: params.orgId,
+      userId: PLATFORM_USER_ID,
+      creditedCentsAtOpen: params.snapshot.creditedCents,
+      // Marked sent when we suppress it too: the marker claims the stage, and
+      // the stage is genuinely spent — the customer WAS told, by the message the
+      // caller had just sent about the same failure.
+      t0SentAt: new Date(),
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") return { opened: false };
+    throw err;
+  }
+
+  console.warn(
+    `[billing-service] credit depletion episode opened for org ${params.orgId} ` +
+      `— its campaigns are refused by the affordability pre-flight and it could ` +
+      `not be reloaded (balance=${params.snapshot.balanceCents})`
+  );
+
+  // A send with no end user behind it needs a run that ALREADY EXISTS in
+  // runs-service: the email service records the mail as a CHILD of the id we
+  // pass, so a minted uuid answers 200 with `sent: false` and the mail is
+  // dropped in silence. The episode still opened — the customer is told by the
+  // +3d follow-up, which opens its own run.
+  if (!sendT0) return { opened: true };
+
+  const runId = await createPlatformRun("blocked-campaign-depletion");
+  if (!runId) {
+    console.error(
+      `[billing-service] blocked-campaign episode for org ${params.orgId}: ` +
+        `no platform run, T0 not sent`
+    );
+    return { opened: true };
+  }
+
+  sendEmail({
+    eventType: dunningEventType(
+      DUNNING_EVENT_T0,
+      params.snapshot.autoReloadSupported
+    ),
+    orgId: params.orgId,
+    userId: PLATFORM_USER_ID,
+    runId,
+    recipientEmail: params.snapshot.customer.email ?? undefined,
+    metadata: {},
+  });
+  await completePlatformRun(runId);
 
   return { opened: true };
 }
@@ -223,10 +340,18 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       continue;
     }
 
-    // No recharge. Only dun while ACTUALLY depleted right now — a transient
-    // positive balance (provisioned holds released) sends nothing and leaves the
-    // episode open to re-evaluate next tick (no false recovery, no re-arm).
-    if (!isDepleted(snapshot.balanceCents)) continue;
+    // No recharge. Only dun while the org STILL cannot spend — the same verdict
+    // that opens an episode, so the two can never disagree (lib/spend-block).
+    //
+    // This gate used to compare the balance against a hardcoded "0", which made
+    // every postpaid org running normally negative within its credit line read
+    // as depleted. That was invisible only because the OPEN gate was narrower
+    // than this one; widening the open gate without reconciling this one would
+    // have started mailing "you are out of credit" to orgs paying us perfectly
+    // well. A transient recovery (provisioned holds released, a reload landing)
+    // sends nothing and leaves the episode open to re-evaluate next tick.
+    const { blocked } = await resolveSpendBlock(ep.orgId, snapshot);
+    if (!blocked) continue;
 
     const ageMs = now - ep.startedAt.getTime();
     const recipientEmail = snapshot.customer.email ?? undefined;
