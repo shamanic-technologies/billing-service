@@ -45,6 +45,40 @@ export interface BalanceSnapshot {
   balanceCents: string;
 }
 
+/** An org's credited total, and the paid half of it. */
+export interface CreditedCents {
+  /**
+   * Paid succeeded topups only (excludes promos) — the cumulative-paid signal
+   * that drives the derived postpaid tier.
+   */
+  paidTopupsCents: string;
+  /** Paid topups + local promo grants. */
+  creditedCents: string;
+}
+
+/**
+ * How much has EVER been credited to this org — the ONE definition.
+ *
+ * Extracted so nothing composes that sum a second time: `computeBalance` below
+ * subtracts usage from it, and lib/payment-stopped compares it against the
+ * figure a failed reload streak froze (the same comparison lib/card-usability
+ * and the campaign reload sweep make). Two places adding up "credited"
+ * separately is how they start disagreeing about whether a streak is over.
+ *
+ * Costs one stripe-service read plus one local query; no runs-service hop, so a
+ * caller that needs credited but not usage does not pay for usage.
+ */
+export async function composeCreditedCents(orgId: string): Promise<CreditedCents> {
+  const [paidTopups, localCredits] = await Promise.all([
+    sumSucceededTopupsForOrg(orgId),
+    sumLocalPromoCreditsForOrg(orgId),
+  ]);
+  return {
+    paidTopupsCents: paidTopups,
+    creditedCents: addCents(paidTopups, localCredits),
+  };
+}
+
 /**
  * Compose an org's balance from credited (paid topups + local promos) − usage.
  *
@@ -57,15 +91,13 @@ export interface BalanceSnapshot {
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const customer = await fetchOrgCustomer(orgId);
-  const [paidTopups, localCredits, runsUsage, hasCardPm, cardCountry] =
-    await Promise.all([
-      sumSucceededTopupsForOrg(orgId),
-      sumLocalPromoCreditsForOrg(orgId),
-      fetchRunsOrgUsageTotal(orgId, {}),
-      hasChargeablePmForOrg(orgId),
-      getOrgCardCountryByOrg(orgId),
-    ]);
-  const creditedCents = addCents(paidTopups, localCredits);
+  const [credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
+    composeCreditedCents(orgId),
+    fetchRunsOrgUsageTotal(orgId, {}),
+    hasChargeablePmForOrg(orgId),
+    getOrgCardCountryByOrg(orgId),
+  ]);
+  const { paidTopupsCents: paidTopups, creditedCents } = credited;
   // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at
   // cost-write in runs-service). Billing subtracts it verbatim — applying a
   // discount here again would double-count it.
