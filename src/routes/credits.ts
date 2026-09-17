@@ -6,6 +6,7 @@ import {
 import {
   grantCredit,
   grantAdminCredit,
+  grantProductTaskCredit,
   listGrantsForOrg,
   listAllGrants,
   sumLocalPromoCreditsForOrg,
@@ -19,6 +20,7 @@ import {
 } from "../lib/stripe-service-client.js";
 import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { computeBalance } from "../lib/balance.js";
+import { PRODUCT_TASK_REWARD_CODE } from "../db/schema.js";
 
 const router = Router();
 
@@ -33,11 +35,18 @@ const INTERNAL_USER_ID = "00000000-0000-0000-0000-000000000000";
 // POST /internal/credits/grant — platform-issued credit grant.
 //
 // Auth: x-api-key only (orgId is in the body; no x-org-id header required).
-// Body: { orgId, amountCents, reason: 'invite_reward' | 'invite_welcome' }
+// Body: { orgId, amountCents, reason, completionId? }
 // Resp: { ok: true, newBalanceCents }
 //
+// Two idempotency shapes behind one route, and they are deliberately NOT merged:
+//   - invite_reward / invite_welcome  one-shot per (org, reason); a completionId is
+//     REFUSED (accepting it would weaken an idempotency other callers rely on).
+//   - product_task_completed          recurs monthly, forever; stacks on the caller's
+//     own completionId, so a fresh completion grants again and a retry never pays
+//     twice. No staff identity is involved or faked on this path.
+//
 // Fails loud on:
-//   - invalid body / unknown reason → 400
+//   - invalid body / unknown reason / missing or misplaced completionId → 400
 //   - stripe-service or runs-service unreachable while composing balance → 502
 //     (grant write itself is already committed and idempotent — caller may retry)
 router.post("/internal/credits/grant", async (req, res) => {
@@ -46,10 +55,22 @@ router.post("/internal/credits/grant", async (req, res) => {
     res.status(400).json({ error: parsed.error.issues[0].message });
     return;
   }
-  const { orgId, amountCents, reason } = parsed.data;
+  const { orgId, amountCents, reason, completionId } = parsed.data;
 
   try {
-    await grantCredit(orgId, amountCents, reason);
+    if (reason === PRODUCT_TASK_REWARD_CODE) {
+      // Guaranteed present by the schema's superRefine; asserted rather than
+      // defaulted so a future schema change cannot silently grant unkeyed.
+      if (!completionId) {
+        res.status(400).json({
+          error: "completionId is required for reason=product_task_completed",
+        });
+        return;
+      }
+      await grantProductTaskCredit(orgId, amountCents, completionId);
+    } else {
+      await grantCredit(orgId, amountCents, reason);
+    }
   } catch (err) {
     if (err instanceof UnknownGrantReasonError) {
       res.status(400).json({ error: err.message });

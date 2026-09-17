@@ -8,6 +8,7 @@ import {
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
   REFERRAL_REWARD_CODE,
+  PRODUCT_TASK_REWARD_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
@@ -341,12 +342,87 @@ export async function grantAdminCredit(
   grantedBy: string | null,
   idempotencyKey: string
 ): Promise<AdminGrantResult> {
-  const [code] = await db
+  return insertStackingGrant({
+    code: ADMIN_GRANT_CODE,
+    orgId,
+    amountCents,
+    description: note,
+    grantedBy,
+    idempotencyKey,
+  });
+}
+
+/**
+ * Product-task reward — a small fixed credit the platform pays an org each time it
+ * completes a product task. Backs `POST /internal/credits/grant` with
+ * `reason: 'product_task_completed'`.
+ *
+ * The SAME task recurs for the same org roughly every month, forever, so this grant
+ * STACKS: each call with a fresh `completionId` inserts another `product_task_completed`
+ * row, keyed `task:<completionId>`, and a retry of the SAME completion is deduped by
+ * the partial unique index `idx_local_promos_org_idempotency` → never pays twice.
+ * The two invite reasons keep their one-shot (org, promo_code) idempotency untouched.
+ *
+ * This is the service-to-service path: no staff identity is involved and none is
+ * faked, so `grantedBy` stays NULL. The description is the customer-showable label.
+ *
+ * Fails loud (GrantPromoCodeMissingError) if the product_task_completed seed is absent.
+ */
+export async function grantProductTaskCredit(
+  orgId: string,
+  amountCents: number,
+  completionId: string
+): Promise<AdminGrantResult> {
+  return insertStackingGrant({
+    code: PRODUCT_TASK_REWARD_CODE,
+    orgId,
+    amountCents,
+    description: `Product task reward: $${(amountCents / 100).toFixed(2)}`,
+    grantedBy: null,
+    idempotencyKey: productTaskIdempotencyKey(completionId),
+  });
+}
+
+/**
+ * Namespaced so a completion id can never collide with a staff grant's key (both
+ * live in the one partial unique index on (org_id, idempotency_key)).
+ */
+export function productTaskIdempotencyKey(completionId: string): string {
+  return `task:${completionId}`;
+}
+
+interface StackingGrantParams {
+  code: string;
+  orgId: string;
+  amountCents: number;
+  description: string | null;
+  grantedBy: string | null;
+  idempotencyKey: string;
+}
+
+/**
+ * The one writer for a STACKING credit grant (admin_grant, product_task_completed).
+ *
+ * A row carrying an `idempotency_key` is EXEMPT from the (org, promo_code)
+ * uniqueness (migration 0025), so grants under one code stack; the partial unique
+ * index `idx_local_promos_org_idempotency` makes a retry of the same key a no-op.
+ * Two surfaces writing that shape separately is how they start disagreeing, so both
+ * go through here.
+ */
+async function insertStackingGrant({
+  code,
+  orgId,
+  amountCents,
+  description,
+  grantedBy,
+  idempotencyKey,
+}: StackingGrantParams): Promise<AdminGrantResult> {
+  const [promoCode] = await db
     .select()
     .from(localPromoCodes)
-    .where(eq(localPromoCodes.code, ADMIN_GRANT_CODE))
+    .where(eq(localPromoCodes.code, code))
     .limit(1);
-  if (!code) throw new GrantPromoCodeMissingError(ADMIN_GRANT_CODE);
+  if (!promoCode) throw new GrantPromoCodeMissingError(code);
 
   return await db.transaction(async (tx) => {
     // Pre-create the billing_accounts row so a concurrent findOrCreateAccount
@@ -359,8 +435,8 @@ export async function grantAdminCredit(
         orgId,
         userId: SYSTEM_USER_ID,
         amountCents: String(amountCents),
-        promoCodeId: code.id,
-        description: note,
+        promoCodeId: promoCode.id,
+        description,
         grantedBy,
         idempotencyKey,
       })
