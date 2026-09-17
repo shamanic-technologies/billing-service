@@ -34,15 +34,21 @@
  * it side effects would make a GET charge cards, and relaxing its verdict would
  * re-open the paid-enrichment retry storm it exists to stop.
  *
- * ATTEMPT ONCE PER CREDITED LEVEL. The first charge answers the only question
- * this sweep can ask — is the org blocked by US or by its own card — and a
- * refusal answers "the card", which the dunning engine already owns. The
- * coalescer's backoff CAPS at one hour, exactly this sweep's interval, so
- * without a durable marker a dead card would be re-presented ~24 times a day
- * forever, degrading it at its issuer for no chance of a different answer.
- * `campaign_reload_sweep_attempts` (migration 0042) records the CREDITED total
- * at the attempt; credited only ever rises, so any recharge re-arms the sweep
- * and a dead card does not.
+ * A SPACED, FINITE RETRY SCHEDULE, and this is what stops the fix becoming a
+ * worse bug than the deadlock. The coalescer's backoff CAPS at one hour —
+ * exactly this sweep's interval — so an unguarded sweep would re-present a
+ * refused card ~24 times a day forever, degrading it at its issuer, where
+ * before this feature it was only re-presented when the customer was working.
+ * The first correction (0042) stood an org down until `credited` moved, which
+ * is right for a dead card and wrong for a customer who is momentarily short
+ * and would pay on Thursday: it bought "never retry" and left the month-end
+ * sweep as the only deterministic attempt. So: one charge immediately, then
+ * +1d, +3d, +7d, +14d anchored on the streak's FIRST refusal, then stop.
+ * `campaign_reload_sweep_attempts` (migrations 0042 + 0043) holds the anchor,
+ * the rung and the notification marker. Two different things re-arm an org and
+ * they must not be confused — a move in `credited` means the WORLD changed and
+ * resets the streak; elapsed time means only that the next rung is due, so the
+ * customer is not told again.
  *
  * An org that CANNOT be reloaded (no auto-topup config, no chargeable card, or a
  * blocked issuing country) is counted and logged, never charged and never mailed
@@ -60,11 +66,7 @@ import { computeBalance } from "./balance.js";
 import { resolvePostpaidTier, computeTopupCharge } from "./topup-tier.js";
 import { addCents, subCents, cmpCents, gte as gteCents } from "./cents.js";
 import { reloadOffSession } from "./reload.js";
-import {
-  coalesceReload,
-  consecutiveReloadFailures,
-  type ReloadOutcome,
-} from "./reload-coalescer.js";
+import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
 import { sendEmail } from "./email-client.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 
@@ -141,11 +143,15 @@ export interface CampaignReloadSweepResult {
   /** Blocked orgs whose reload errored, declined, or was refused by the backoff. */
   failed: number;
   /**
-   * Blocked orgs already attempted at this exact credited total, whose card
-   * refused. Not charged again until a recharge moves `credited` — see
-   * "attempt once per credited level" below.
+   * Blocked orgs whose card already refused and whose next scheduled retry is
+   * not due yet.
    */
-  awaitingRecharge: number;
+  awaitingRetry: number;
+  /**
+   * Blocked orgs that refused every rung of the retry schedule. The sweep is
+   * done with them; the month-end sweep still settles what is owed.
+   */
+  exhausted: number;
 }
 
 interface OrgEstimate {
@@ -173,59 +179,128 @@ async function loadOrgEstimates(): Promise<OrgEstimate[]> {
   }));
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Has this org already been presented a card at this exact credited total, and
- * refused?
+ * When to re-present a card after the FIRST refusal of a streak, measured from
+ * that first refusal. One attempt immediately, then these; after the last one
+ * the sweep stands down for good and the month-end sweep owns the debt.
  *
- * ATTEMPT ONCE PER CREDITED LEVEL. The sweep exists to break a DEADLOCK, not to
- * collect a debt. Its first charge answers the only question it can ask: is the
- * org blocked by us (the pre-flight refusing a run authorize would have funded)
- * or by its own card? A refusal answers "the card", and that is a state the
- * depletion-episode dunning engine already owns — so charging again on the next
- * tick learns nothing, and the cost of asking is real: repeated declines degrade
- * the card at its issuer and our decline rate at the acquirer (the whole reason
- * lib/reload-coalescer's backoff exists). The coalescer's cooldown CAPS at one
- * hour, which is exactly this sweep's own interval, so without this the sweep
- * would re-present a dead card ~24 times a day forever.
- *
- * `credited` only ever RISES, so it needs no new lifecycle to say "something
- * changed": any recharge — a paid top-up, a promo, a staff grant — moves it and
- * re-arms the sweep, while a dead card moves nothing.
+ * Why a schedule at all, and why this one. 0042 stood an org down until
+ * `credited` moved, which is right for a dead card and wrong for the far more
+ * common case — a customer momentarily short who would pay on Thursday. It
+ * traded "re-present the card 24x a day forever" for "never retry", and the
+ * only remaining deterministic attempt was monthly. Widening intervals over a
+ * fortnight is what card-recovery practice converges on (Stripe's own Smart
+ * Retries sit in the same shape): frequent enough to catch a topped-up account,
+ * sparse enough not to degrade the card at its issuer, and FINITE, because a
+ * card that has refused five times over two weeks is not going to say yes on
+ * the sixth.
  */
-async function alreadyAttemptedAtThisCredit(
+const RETRY_SCHEDULE_MS = [1 * DAY_MS, 3 * DAY_MS, 7 * DAY_MS, 14 * DAY_MS] as const;
+
+/** Total attempts in one streak: the immediate one plus every scheduled rung. */
+export const MAX_ATTEMPTS_PER_STREAK = RETRY_SCHEDULE_MS.length + 1;
+
+type StandDown = "not_due" | "exhausted";
+
+interface AttemptDecision {
+  /** Null when a charge should be attempted now. */
+  standDown: StandDown | null;
+  /** The rung this attempt would be, 1-based. */
+  attemptCount: number;
+  /** Anchor for the schedule — this streak's first refusal. */
+  firstFailedAt: Date | null;
+  /** When the customer was told about THIS streak, or null if never. */
+  notifiedAt: Date | null;
+}
+
+/**
+ * Should a card be presented for this org right now?
+ *
+ * Two things re-arm an org, and they are different questions. A move in
+ * `credited` means the world changed — a paid top-up, a promo, a staff grant —
+ * so the streak is over and everything resets. Elapsed time means only that the
+ * next rung is due; the streak continues, and the customer is not told again.
+ *
+ * `credited` only ever RISES, so it needs no lifecycle of its own to answer the
+ * first question, and the schedule is anchored on the streak's FIRST failure so
+ * that a restart, a deploy or a missed tick cannot shift the next rung.
+ */
+async function decideAttempt(
   orgId: string,
-  creditedCents: string
-): Promise<boolean> {
+  creditedCents: string,
+  now: Date
+): Promise<AttemptDecision> {
   const [row] = await db
     .select()
     .from(campaignReloadSweepAttempts)
     .where(eq(campaignReloadSweepAttempts.orgId, orgId))
     .limit(1);
-  if (!row) return false;
-  if (row.lastOutcome === "succeeded") return false;
-  return cmpCents(row.creditedCentsAtAttempt, creditedCents) === 0;
+
+  const fresh: AttemptDecision = {
+    standDown: null,
+    attemptCount: 1,
+    firstFailedAt: null,
+    notifiedAt: null,
+  };
+
+  // No history, a last attempt that WORKED, or a world that has changed since:
+  // all three are a clean slate.
+  if (!row) return fresh;
+  if (row.lastOutcome === "succeeded") return fresh;
+  if (cmpCents(row.creditedCentsAtAttempt, creditedCents) !== 0) return fresh;
+
+  const anchor = row.firstFailedAt ?? row.attemptedAt;
+  const nextRung = RETRY_SCHEDULE_MS[row.attemptCount - 1];
+  const decided = {
+    attemptCount: row.attemptCount + 1,
+    firstFailedAt: anchor,
+    notifiedAt: row.notifiedAt,
+  };
+
+  // Past the last rung: five refusals over a fortnight is an answer. The
+  // month-end sweep still settles what is owed.
+  if (nextRung === undefined) return { ...decided, standDown: "exhausted" };
+  if (now.getTime() < anchor.getTime() + nextRung) {
+    return { ...decided, standDown: "not_due" };
+  }
+  return { ...decided, standDown: null };
 }
 
-/** Record that a card was presented for this org at this credited total. */
+/** Record the attempt, carrying the streak's anchor and rung forward. */
 async function recordAttempt(
   orgId: string,
   creditedCents: string,
-  outcome: "succeeded" | "failed"
+  outcome: "succeeded" | "failed",
+  decision: AttemptDecision,
+  justNotified: boolean,
+  now: Date
 ): Promise<void> {
+  // A succeeded attempt ends the streak, so its anchor and its notification
+  // marker go with it — the next failure is a NEW streak and is told afresh.
+  const values = {
+    orgId,
+    creditedCentsAtAttempt: creditedCents,
+    lastOutcome: outcome,
+    attemptCount: decision.attemptCount,
+    firstFailedAt: outcome === "failed" ? decision.firstFailedAt ?? now : null,
+    notifiedAt:
+      outcome === "failed" ? (justNotified ? now : decision.notifiedAt) : null,
+    attemptedAt: now,
+  };
   await db
     .insert(campaignReloadSweepAttempts)
-    .values({
-      orgId,
-      creditedCentsAtAttempt: creditedCents,
-      lastOutcome: outcome,
-      attemptedAt: new Date(),
-    })
+    .values(values)
     .onConflictDoUpdate({
       target: campaignReloadSweepAttempts.orgId,
       set: {
-        creditedCentsAtAttempt: creditedCents,
-        lastOutcome: outcome,
-        attemptedAt: new Date(),
+        creditedCentsAtAttempt: values.creditedCentsAtAttempt,
+        lastOutcome: values.lastOutcome,
+        attemptCount: values.attemptCount,
+        firstFailedAt: values.firstFailedAt,
+        notifiedAt: values.notifiedAt,
+        attemptedAt: values.attemptedAt,
       },
     });
 }
@@ -266,7 +341,8 @@ export async function runCampaignReloadSweep(
     charged: 0,
     notReloadCapable: 0,
     failed: 0,
-    awaitingRecharge: 0,
+    awaitingRetry: 0,
+    exhausted: 0,
   };
 
   const estimates = await loadOrgEstimates();
@@ -311,13 +387,19 @@ export async function runCampaignReloadSweep(
         continue;
       }
 
-      if (await alreadyAttemptedAtThisCredit(orgId, snapshot.creditedCents)) {
-        result.awaitingRecharge += 1;
+      const decision = await decideAttempt(orgId, snapshot.creditedCents, now);
+      if (decision.standDown === "exhausted") {
+        result.exhausted += 1;
         console.log(
-          `[billing-service] campaign reload sweep: org ${orgId} already had a ` +
-            `card presented at credited=${snapshot.creditedCents} and it refused — ` +
-            `not charging again until a recharge moves credited (dunning owns it)`
+          `[billing-service] campaign reload sweep: org ${orgId} refused ` +
+            `${MAX_ATTEMPTS_PER_STREAK} times over the retry schedule at ` +
+            `credited=${snapshot.creditedCents} — standing down, the month-end ` +
+            `sweep owns what is owed`
         );
+        continue;
+      }
+      if (decision.standDown === "not_due") {
+        result.awaitingRetry += 1;
         continue;
       }
 
@@ -355,13 +437,29 @@ export async function runCampaignReloadSweep(
         return synthetic;
       });
 
+      const succeeded = outcome.status === "succeeded";
+      // Tell the customer ONCE per streak, and never on a backoff-skipped
+      // outcome (no charge was attempted, so nothing new was learned). The
+      // marker is a COLUMN rather than lib/reload-coalescer's in-memory
+      // counter, because that counter resets on every deploy and we deploy
+      // several times a day — "once per streak" silently meant "once per
+      // deploy". It is also why the email is decided BEFORE the row is written.
+      const shouldNotify =
+        !succeeded && !outcome.backoffSkipped && decision.notifiedAt == null;
+      if (shouldNotify) {
+        await notifyReloadFailed(orgId, snapshot.customer.email);
+      }
+
       await recordAttempt(
         orgId,
         snapshot.creditedCents,
-        outcome.status === "succeeded" ? "succeeded" : "failed"
+        succeeded ? "succeeded" : "failed",
+        decision,
+        shouldNotify,
+        now
       );
 
-      if (outcome.status === "succeeded") {
+      if (succeeded) {
         result.charged += 1;
         console.log(
           `[billing-service] campaign reload sweep: charged org ${orgId} ` +
@@ -375,16 +473,9 @@ export async function runCampaignReloadSweep(
       result.failed += 1;
       console.warn(
         `[billing-service] campaign reload sweep: reload ${outcome.status} for org ` +
-          `${orgId}: ${outcome.failure_reason ?? ""}`
+          `${orgId} (attempt ${decision.attemptCount}/${MAX_ATTEMPTS_PER_STREAK}): ` +
+          `${outcome.failure_reason ?? ""}`
       );
-      // Tell the customer on the FIRST failure of a streak only, and never on a
-      // backoff-skipped outcome (no charge was attempted, nothing new was
-      // learned). Same guard as the authorize path, and for the same reason: the
-      // email is org-billed, so an unguarded send re-enters authorize and feeds
-      // the failure it reports.
-      if (!outcome.backoffSkipped && consecutiveReloadFailures(orgId) <= 1) {
-        await notifyReloadFailed(orgId, snapshot.customer.email);
-      }
     } catch (err) {
       result.failed += 1;
       console.error(

@@ -85,8 +85,8 @@ export function startDunningScheduler(): void {
           console.log(
             `[billing-service] campaign reload sweep: scanned=${c.scanned} ` +
               `blocked=${c.blocked} charged=${c.charged} ` +
-              `notReloadCapable=${c.notReloadCapable} awaitingRecharge=${c.awaitingRecharge} ` +
-              `failed=${c.failed}`
+              `notReloadCapable=${c.notReloadCapable} awaitingRetry=${c.awaitingRetry} ` +
+              `exhausted=${c.exhausted} failed=${c.failed}`
           );
         }
       } catch (err) {

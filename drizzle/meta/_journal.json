@@ -302,6 +302,13 @@
       "when": 1791799200000,
       "tag": "0042_campaign_reload_sweep_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1791885600000,
+      "tag": "0043_reload_retry_schedule",
+      "breakpoints": true
     }
   ]
 }
