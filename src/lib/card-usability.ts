@@ -27,7 +27,7 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaignReloadSweepAttempts } from "../db/schema.js";
+import { campaignReloadSweepAttempts, PLATFORM_USER_ID } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { sendEmail } from "./email-client.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
@@ -76,13 +76,6 @@ export function isPermanentDecline(code: string | null | undefined): boolean {
  * reasonably conclude the message is wrong and ignore it.
  */
 export const CARD_UNUSABLE_EVENT = "credit-card-unusable";
-
-/**
- * The platform is the actor: there is no end user behind a scheduler tick. Same
- * sentinel this service already uses for a write it performs itself; the
- * recipient is passed explicitly, so nothing downstream resolves a user from it.
- */
-const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 /**
  * Has this org's card been judged permanently unusable — and is that judgement

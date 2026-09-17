@@ -24,10 +24,10 @@ import {
 import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
-import { resolvePostpaidTier } from "../lib/topup-tier.js";
+import { cannotSpend, resolveOrgFloor } from "../lib/spend-block.js";
 import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
-import { gte as gteCents, isDepleted, subCents } from "../lib/cents.js";
+import { isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
 import {
@@ -327,15 +327,6 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     return;
   }
 
-  // The org's stored auto-topup flag (non-null topup amount ⇒ enabled) gates
-  // whether it has a postpaid credit line at all — read-only SELECT, no side
-  // effects. Absent account row ⇒ no config ⇒ zero floor (strictly prepaid).
-  const [account] = await db
-    .select({ topupAmountCents: billingAccounts.topupAmountCents })
-    .from(billingAccounts)
-    .where(eq(billingAccounts.orgId, stored.orgId))
-    .limit(1);
-
   // No end-user on this read-only pre-flight. computeBalance reads stripe-service
   // via the user-less /internal/*/by-org/{orgId} routes (X-API-Key + org only) —
   // no x-user-id, no sentinel.
@@ -351,22 +342,15 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     return;
   }
 
-  // Honor the SAME postpaid credit-line floor authorize gates on: a reload-capable
-  // org is affordable while its (possibly negative) balance stays within the line,
-  // and only flips to not-affordable when the next run would cross past the floor.
-  const { thresholdCents } = resolvePostpaidTier({
-    topupEnabled: account?.topupAmountCents != null,
-    hasCardPm: snapshot.hasCardPm,
-    autoReloadSupported: snapshot.autoReloadSupported,
-    paidTopupsCents: snapshot.paidTopupsCents,
-  });
-
+  // The verdict is lib/spend-block's `cannotSpend`, the same predicate the sweep
+  // and the dunning tick decide on, applied to THIS campaign's own estimate: a
+  // reload-capable org is affordable while its (possibly negative) balance stays
+  // within the line, and flips only when the next run would cross past the floor.
+  const { floorCents } = await resolveOrgFloor(stored.orgId, snapshot);
   const lastRequiredCents = stored.lastAuthorizeRequiredCents;
+
   res.json({
-    affordable: gteCents(
-      subCents(snapshot.balanceCents, lastRequiredCents),
-      thresholdCents
-    ),
+    affordable: !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents),
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
     hasHistory: true,

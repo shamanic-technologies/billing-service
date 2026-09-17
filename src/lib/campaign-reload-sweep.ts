@@ -77,12 +77,13 @@
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaignReloadSweepAttempts } from "../db/schema.js";
+import { campaignReloadSweepAttempts, PLATFORM_USER_ID } from "../db/schema.js";
 import crypto from "crypto";
 import { computeBalance, type BalanceSnapshot } from "./balance.js";
 import { openBlockedCampaignEpisode } from "./dunning.js";
-import { resolvePostpaidTier, computeTopupCharge } from "./topup-tier.js";
-import { addCents, subCents, cmpCents, gte as gteCents } from "./cents.js";
+import { computeTopupCharge } from "./topup-tier.js";
+import { addCents, cmpCents } from "./cents.js";
+import { cannotSpend, resolveOrgFloor } from "./spend-block.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
 import { sendEmail } from "./email-client.js";
@@ -94,15 +95,6 @@ import {
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 
 const RELOAD_TIMEOUT_MS = 30_000;
-
-/**
- * The platform is the actor on this charge — there is no end user behind a
- * scheduler tick. Same documented sentinel the month-end sweep and the promo
- * grants use for a WRITE this service genuinely performs; the recipient of the
- * failure mail is passed explicitly, so no user identity is ever resolved from
- * it.
- */
-const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 /** Hour bucket (UTC epoch hours) — the idempotency scope for one tick. */
 function hourBucket(now: Date): number {
@@ -480,27 +472,12 @@ export async function runCampaignReloadSweep(
     // seconds apart — the episode opens either way, the message does not double.
     let mailedThisTick = false;
     try {
-      const [snapshot, account] = await Promise.all([
-        computeBalance(orgId),
-        db
-          .execute<{ topup_amount_cents: number | null }>(sql`
-            SELECT topup_amount_cents FROM billing_accounts WHERE org_id = ${orgId} LIMIT 1
-          `)
-          .then(
-            (rows) =>
-              (rows as unknown as { topup_amount_cents: number | null }[])[0] ?? null
-          ),
-      ]);
+      const snapshot = await computeBalance(orgId);
+      const { tier, floorCents: thresholdCents } = await resolveOrgFloor(orgId, snapshot);
 
-      const { tier, thresholdCents } = resolvePostpaidTier({
-        topupEnabled: account?.topup_amount_cents != null,
-        hasCardPm: snapshot.hasCardPm,
-        autoReloadSupported: snapshot.autoReloadSupported,
-        paidTopupsCents: snapshot.paidTopupsCents,
-      });
-
-      // The affordability verdict, restated verbatim. Not blocked → nothing due.
-      if (gteCents(subCents(snapshot.balanceCents, maxRequiredCents), thresholdCents)) {
+      // The affordability verdict, on the org's hungriest campaign. Not blocked
+      // → nothing due.
+      if (!cannotSpend(snapshot.balanceCents, maxRequiredCents, thresholdCents)) {
         continue;
       }
       result.blocked += 1;
