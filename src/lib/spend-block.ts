@@ -31,7 +31,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { isDepleted, subCents, gte as gteCents } from "./cents.js";
-import { resolvePostpaidTier } from "./topup-tier.js";
+import { resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
 import type { BalanceSnapshot } from "./balance.js";
 
 /**
@@ -54,13 +54,46 @@ export function cannotSpend(
   return !gteCents(subCents(balanceCents, requiredCents), floorCents);
 }
 
-export interface SpendBlock {
+export interface OrgFloor {
+  /**
+   * The org's derived postpaid tier, or null when it has no credit line (no
+   * auto-topup config, no chargeable card, or a blocked issuing country).
+   */
+  tier: TopupTier | null;
   /** The org's postpaid credit-line floor ("0" when it has no credit line). */
   floorCents: string;
+}
+
+export interface SpendBlock extends OrgFloor {
   /** The largest stored campaign estimate for this org ("0" when none). */
   requiredCents: string;
   /** Whether the next run is refused right now. */
   blocked: boolean;
+}
+
+/**
+ * The org's credit-line floor, from its stored auto-topup flag (the credit line
+ * exists only for an org that can actually be reloaded) and the balance
+ * snapshot's card facts. The ONE place that account read + `resolvePostpaidTier`
+ * are composed for a user-less path; `authorize` composes the same thing from
+ * the account row it already holds.
+ */
+export async function resolveOrgFloor(
+  orgId: string,
+  snapshot: BalanceSnapshot
+): Promise<OrgFloor> {
+  const [account] = await db
+    .select({ topupAmountCents: billingAccounts.topupAmountCents })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+  const { tier, thresholdCents } = resolvePostpaidTier({
+    topupEnabled: account?.topupAmountCents != null,
+    hasCardPm: snapshot.hasCardPm,
+    autoReloadSupported: snapshot.autoReloadSupported,
+    paidTopupsCents: snapshot.paidTopupsCents,
+  });
+  return { tier, floorCents: thresholdCents };
 }
 
 /**
@@ -81,36 +114,26 @@ export async function maxCampaignEstimateCents(orgId: string): Promise<string> {
 }
 
 /**
- * Resolve, for one org, whether its next run is refused — the same verdict the
- * affordability pre-flight serves, composed from a balance snapshot the caller
- * already holds.
+ * Resolve, for one org, whether ANY of its campaigns is refused right now —
+ * judged on the LARGEST stored estimate, from a balance snapshot the caller
+ * already holds. Pure read.
  *
- * Reads the org's stored auto-topup flag (the credit line exists only for an org
- * that can actually be reloaded) and its largest campaign estimate. Pure read.
+ * The sweep and the dunning tick both read through this, so the org they charge
+ * for and the org they dun are decided by one function. The affordability
+ * pre-flight is per CAMPAIGN and uses `resolveOrgFloor` + `cannotSpend` with that
+ * campaign's own estimate instead.
  */
 export async function resolveSpendBlock(
   orgId: string,
   snapshot: BalanceSnapshot
 ): Promise<SpendBlock> {
-  const [[account], requiredCents] = await Promise.all([
-    db
-      .select({ topupAmountCents: billingAccounts.topupAmountCents })
-      .from(billingAccounts)
-      .where(eq(billingAccounts.orgId, orgId))
-      .limit(1),
+  const [floor, requiredCents] = await Promise.all([
+    resolveOrgFloor(orgId, snapshot),
     maxCampaignEstimateCents(orgId),
   ]);
-
-  const { thresholdCents } = resolvePostpaidTier({
-    topupEnabled: account?.topupAmountCents != null,
-    hasCardPm: snapshot.hasCardPm,
-    autoReloadSupported: snapshot.autoReloadSupported,
-    paidTopupsCents: snapshot.paidTopupsCents,
-  });
-
   return {
-    floorCents: thresholdCents,
+    ...floor,
     requiredCents,
-    blocked: cannotSpend(snapshot.balanceCents, requiredCents, thresholdCents),
+    blocked: cannotSpend(snapshot.balanceCents, requiredCents, floor.floorCents),
   };
 }

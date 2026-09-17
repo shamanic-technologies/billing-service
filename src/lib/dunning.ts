@@ -20,6 +20,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   creditDepletionEpisodes,
+  PLATFORM_USER_ID,
+  type CreditDepletionEpisode,
   DUNNING_EVENT_T0,
   DUNNING_EVENT_3D,
   DUNNING_EVENT_10D,
@@ -167,12 +169,57 @@ export async function openDepletionEpisodeIfDepleted(
 }
 
 /**
- * The platform is the actor: a sweep tick has no end user behind it, and none is
- * invented. Same all-zeros sentinel lib/unpaid-debt stores on a row of this very
- * table; the recipient is resolved from the org's Stripe billing email, so
- * nothing downstream resolves a user from it.
+ * The org's OPEN depletion episode, opening one if there is none — the ONE
+ * writer for an episode opened outside the authorize path (no request, no end
+ * user, no campaign-activity gate). `lib/unpaid-debt` and the blocked-campaign
+ * sweep both go through here.
+ *
+ * The partial unique index `(org_id) WHERE recovered_at IS NULL` is the race
+ * guard — a 23505 means someone else just opened it, so we re-read. `opened`
+ * is true only for the caller whose INSERT won.
  */
-const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
+export async function ensureOpenEpisode(
+  orgId: string,
+  snapshot: BalanceSnapshot,
+  opts: { t0SentAt?: Date } = {}
+): Promise<{ episode: CreditDepletionEpisode; opened: boolean }> {
+  const existing = await selectOpenEpisode(orgId);
+  if (existing) return { episode: existing, opened: false };
+
+  try {
+    const [row] = await db
+      .insert(creditDepletionEpisodes)
+      .values({
+        orgId,
+        userId: PLATFORM_USER_ID,
+        creditedCentsAtOpen: snapshot.creditedCents,
+        t0SentAt: opts.t0SentAt ?? null,
+      })
+      .returning();
+    return { episode: row, opened: true };
+  } catch (err) {
+    if ((err as { code?: string }).code !== "23505") throw err;
+    const raced = await selectOpenEpisode(orgId);
+    if (!raced) throw err;
+    return { episode: raced, opened: false };
+  }
+}
+
+async function selectOpenEpisode(
+  orgId: string
+): Promise<CreditDepletionEpisode | undefined> {
+  const [row] = await db
+    .select()
+    .from(creditDepletionEpisodes)
+    .where(
+      and(
+        eq(creditDepletionEpisodes.orgId, orgId),
+        isNull(creditDepletionEpisodes.recoveredAt)
+      )
+    )
+    .limit(1);
+  return row;
+}
 
 /**
  * Open a depletion episode for an org the affordability pre-flight is refusing,
@@ -208,20 +255,13 @@ export async function openBlockedCampaignEpisode(params: {
   sendT0?: boolean;
 }): Promise<{ opened: boolean }> {
   const sendT0 = params.sendT0 ?? true;
-  try {
-    await db.insert(creditDepletionEpisodes).values({
-      orgId: params.orgId,
-      userId: PLATFORM_USER_ID,
-      creditedCentsAtOpen: params.snapshot.creditedCents,
-      // Marked sent when we suppress it too: the marker claims the stage, and
-      // the stage is genuinely spent — the customer WAS told, by the message the
-      // caller had just sent about the same failure.
-      t0SentAt: new Date(),
-    });
-  } catch (err) {
-    if ((err as { code?: string }).code === "23505") return { opened: false };
-    throw err;
-  }
+  // Marked sent when we suppress it too: the marker claims the stage, and the
+  // stage is genuinely spent — the customer WAS told, by the message the caller
+  // had just sent about the same failure.
+  const { opened } = await ensureOpenEpisode(params.orgId, params.snapshot, {
+    t0SentAt: new Date(),
+  });
+  if (!opened) return { opened: false };
 
   console.warn(
     `[billing-service] credit depletion episode opened for org ${params.orgId} ` +
