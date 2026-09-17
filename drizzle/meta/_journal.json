@@ -309,6 +309,13 @@
       "when": 1791885600000,
       "tag": "0043_reload_retry_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1791972000000,
+      "tag": "0044_card_unusable",
+      "breakpoints": true
     }
   ]
 }

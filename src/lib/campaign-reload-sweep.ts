@@ -68,6 +68,11 @@ import { addCents, subCents, cmpCents, gte as gteCents } from "./cents.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
 import { sendEmail } from "./email-client.js";
+import {
+  isPermanentDecline,
+  markCardUnusable,
+  clearCardUnusable,
+} from "./card-usability.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 
 const RELOAD_TIMEOUT_MS = 30_000;
@@ -152,6 +157,12 @@ export interface CampaignReloadSweepResult {
    * done with them; the month-end sweep still settles what is owed.
    */
   exhausted: number;
+  /**
+   * Blocked orgs whose card the bank has called permanently unusable. Never
+   * presented again by any sweep, at any interval — the card networks forbid
+   * resubmitting those, and the customer has been told to replace the card.
+   */
+  cardUnusable: number;
 }
 
 interface OrgEstimate {
@@ -202,7 +213,7 @@ const RETRY_SCHEDULE_MS = [1 * DAY_MS, 3 * DAY_MS, 7 * DAY_MS, 14 * DAY_MS] as c
 /** Total attempts in one streak: the immediate one plus every scheduled rung. */
 export const MAX_ATTEMPTS_PER_STREAK = RETRY_SCHEDULE_MS.length + 1;
 
-type StandDown = "not_due" | "exhausted";
+type StandDown = "not_due" | "exhausted" | "card_unusable";
 
 interface AttemptDecision {
   /** Null when a charge should be attempted now. */
@@ -251,6 +262,22 @@ async function decideAttempt(
   if (row.lastOutcome === "succeeded") return fresh;
   if (cmpCents(row.creditedCentsAtAttempt, creditedCents) !== 0) return fresh;
 
+  // The verdict is checked AFTER the credited comparison above, and that order
+  // is the whole of it. Credited rising means money arrived — a hand payment, a
+  // promo, a grant — so either the card was replaced or the debt is settled,
+  // and a verdict about the OLD card is stale. Checking it first would be a
+  // deadlock in miniature: nothing would ever charge again, so nothing could
+  // ever succeed, so the mark could never be cleared. The same shape as the
+  // pre-flight trap this whole module exists to undo.
+  if (row.cardUnusableAt != null) {
+    return {
+      standDown: "card_unusable",
+      attemptCount: row.attemptCount,
+      firstFailedAt: row.firstFailedAt,
+      notifiedAt: row.notifiedAt,
+    };
+  }
+
   const anchor = row.firstFailedAt ?? row.attemptedAt;
   const nextRung = RETRY_SCHEDULE_MS[row.attemptCount - 1];
   const decided = {
@@ -287,6 +314,11 @@ async function recordAttempt(
     firstFailedAt: outcome === "failed" ? decision.firstFailedAt ?? now : null,
     notifiedAt:
       outcome === "failed" ? (justNotified ? now : decision.notifiedAt) : null,
+    // A permanent verdict is written by markCardUnusable alone, on a path that
+    // never reaches here. So any mark still on the row belongs to a world that
+    // has since moved on, and writing it away is what releases the org.
+    cardUnusableAt: null,
+    lastDeclineCode: null,
     attemptedAt: now,
   };
   await db
@@ -298,6 +330,8 @@ async function recordAttempt(
         creditedCentsAtAttempt: values.creditedCentsAtAttempt,
         lastOutcome: values.lastOutcome,
         attemptCount: values.attemptCount,
+        cardUnusableAt: values.cardUnusableAt,
+        lastDeclineCode: values.lastDeclineCode,
         firstFailedAt: values.firstFailedAt,
         notifiedAt: values.notifiedAt,
         attemptedAt: values.attemptedAt,
@@ -343,6 +377,7 @@ export async function runCampaignReloadSweep(
     failed: 0,
     awaitingRetry: 0,
     exhausted: 0,
+    cardUnusable: 0,
   };
 
   const estimates = await loadOrgEstimates();
@@ -388,6 +423,14 @@ export async function runCampaignReloadSweep(
       }
 
       const decision = await decideAttempt(orgId, snapshot.creditedCents, now);
+      // A permanent refusal outranks the schedule: no interval makes a stolen
+      // card chargeable, and the networks forbid resubmitting it at all. It is
+      // released by `credited` moving (handled inside decideAttempt), never by
+      // time passing.
+      if (decision.standDown === "card_unusable") {
+        result.cardUnusable += 1;
+        continue;
+      }
       if (decision.standDown === "exhausted") {
         result.exhausted += 1;
         console.log(
@@ -438,6 +481,28 @@ export async function runCampaignReloadSweep(
       });
 
       const succeeded = outcome.status === "succeeded";
+      const permanent =
+        !succeeded && !outcome.backoffSkipped && isPermanentDecline(outcome.failure_code);
+
+      if (permanent) {
+        // The verdict replaces the streak: no rung, no "we will try again"
+        // mail, and the record carries the reason it was based on.
+        result.cardUnusable += 1;
+        result.failed += 1;
+        console.warn(
+          `[billing-service] campaign reload sweep: org ${orgId} refused ` +
+            `permanently (${outcome.failure_code}) — ${outcome.failure_reason ?? ""}`
+        );
+        await markCardUnusable({
+          orgId,
+          declineCode: outcome.failure_code as string,
+          creditedCents: snapshot.creditedCents,
+          recipientEmail: snapshot.customer.email,
+          now,
+        });
+        continue;
+      }
+
       // Tell the customer ONCE per streak, and never on a backoff-skipped
       // outcome (no charge was attempted, so nothing new was learned). The
       // marker is a COLUMN rather than lib/reload-coalescer's in-memory
@@ -460,6 +525,9 @@ export async function runCampaignReloadSweep(
       );
 
       if (succeeded) {
+        // A charge that went through voids anything we concluded about the card
+        // (the customer may have replaced it).
+        await clearCardUnusable(orgId);
         result.charged += 1;
         console.log(
           `[billing-service] campaign reload sweep: charged org ${orgId} ` +
