@@ -89,5 +89,8 @@ export async function reloadOffSession(
     failure_reason: failure
       ? [failure.type, failure.code, failure.message].filter(Boolean).join(": ")
       : `charge.status=${charge.status ?? "unknown"}`,
+    // Structured, beside the prose: whether this card may ever be charged again
+    // is decided on the CODE, never by reading the sentence.
+    failure_code: failure?.code ?? null,
   };
 }

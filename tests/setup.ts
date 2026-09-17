@@ -150,7 +150,7 @@ beforeAll(async () => {
   `;
 
   // campaign_reload_sweep_attempts (retry schedule + durable notify marker,
-  // migrations 0042 + 0043).
+  // migrations 0042 + 0043 + 0044).
   await sql`
     CREATE TABLE IF NOT EXISTS "campaign_reload_sweep_attempts" (
       "org_id" uuid PRIMARY KEY NOT NULL,
@@ -159,6 +159,8 @@ beforeAll(async () => {
       "attempt_count" integer DEFAULT 1 NOT NULL,
       "first_failed_at" timestamp with time zone,
       "notified_at" timestamp with time zone,
+      "last_decline_code" text,
+      "card_unusable_at" timestamp with time zone,
       "attempted_at" timestamp with time zone DEFAULT now() NOT NULL
     )
   `;

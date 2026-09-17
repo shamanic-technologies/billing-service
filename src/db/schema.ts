@@ -495,6 +495,18 @@ export const campaignReloadSweepAttempts = pgTable("campaign_reload_sweep_attemp
    * so "once per streak" silently meant "once per deploy". Migration 0043.
    */
   notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  /**
+   * The acquirer's own reason for the last refusal, kept so a verdict about the
+   * card can be audited rather than guessed at. Migration 0044.
+   */
+  lastDeclineCode: text("last_decline_code"),
+  /**
+   * Set when the bank said the card is PERMANENTLY unusable (lost, stolen,
+   * account closed, authorization revoked). Card-network rules forbid
+   * resubmitting those at any interval, so both sweeps stop presenting it.
+   * Cleared by any successful charge. Migration 0044.
+   */
+  cardUnusableAt: timestamp("card_unusable_at", { withTimezone: true }),
   attemptedAt: timestamp("attempted_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

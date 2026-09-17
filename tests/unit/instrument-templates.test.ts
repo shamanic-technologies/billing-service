@@ -15,6 +15,7 @@ import {
   UNPAID_DEBT_CARD_REQUIRED_EVENT,
   UNPAID_DEBT_STAFF_EVENT,
 } from "../../src/lib/unpaid-debt.js";
+import { CARD_UNUSABLE_EVENT } from "../../src/lib/card-usability.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +85,7 @@ describe("boot-time email template registration", () => {
     const names = lastBody(fetchMock).templates.map((t) => t.name);
     expect(names).toEqual([
       "credits-reload-failed",
+      CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,
       REFERRAL_CREDITS_GRANTED_EVENT,
