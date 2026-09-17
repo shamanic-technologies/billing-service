@@ -266,6 +266,20 @@ export interface StripeBillingStatsResult {
    * array as "nobody ever paid".
    */
   first_payment_times?: number[];
+  /**
+   * The SAME array under its unit-carrying name — unix SECONDS, ascending.
+   *
+   * stripe-service publishes both spellings for one release and they are
+   * identical; the rename exists because `Date.now()` is MILLISECONDS, so a
+   * consumer writing `t >= Date.now() - 30 * 86400 * 1000` against a seconds
+   * array silently counts zero and renders a dash — precisely the false-alarm
+   * bug the array was introduced to kill. Every money field on that payload
+   * already carries its unit (`_cents`); this one did not.
+   *
+   * Read this one FIRST and fall back to the legacy spelling, so the deploy
+   * order of the two services never matters.
+   */
+  first_payment_times_unix?: number[];
   monthly_growth: StripeBillingStatsGrowthRow[];
   weekly_growth: StripeBillingStatsGrowthRow[];
 }
