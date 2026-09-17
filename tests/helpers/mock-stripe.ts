@@ -29,6 +29,7 @@ export interface StripeServiceMocks {
   createPortalSession: ReturnType<typeof vi.fn>;
   getCardSetup: ReturnType<typeof vi.fn>;
   getSavedPaymentMethod: ReturnType<typeof vi.fn>;
+  removeSavedPaymentMethods: ReturnType<typeof vi.fn>;
   authorizeRecurringCharges: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   reloadOffSession: ReturnType<typeof vi.fn>;
@@ -146,6 +147,16 @@ export function setupStripeMocks(): StripeServiceMocks {
       method: { id: "pm_mock", type: "card", saved_for: "merchant" },
     }),
     authorizeRecurringCharges: vi.fn().mockResolvedValue({ authorized: true, details: {} }),
+    // The acquirer detached one saved method. An org with nothing to remove is
+    // a success too — override with empty arrays for that case.
+    removeSavedPaymentMethods: vi.fn().mockResolvedValue({
+      object: "payment_methods_removed",
+      org_id: "org_mock",
+      acquirer: "stripe",
+      customer: MOCK_CUSTOMER_ID,
+      detached: ["pm_mock"],
+      already_detached: [],
+    }),
     listAllCustomersForOrg: vi.fn().mockResolvedValue([]),
     setCustomerMetadata: vi.fn().mockImplementation((id: string) =>
       Promise.resolve(buildMockCustomer({ id }))
@@ -191,6 +202,9 @@ export function setupStripeMocks(): StripeServiceMocks {
   );
   vi.spyOn(ssClient, "authorizeRecurringCharges").mockImplementation(
     mocks.authorizeRecurringCharges as never
+  );
+  vi.spyOn(ssClient, "removeSavedPaymentMethods").mockImplementation(
+    mocks.removeSavedPaymentMethods as never
   );
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
   vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
