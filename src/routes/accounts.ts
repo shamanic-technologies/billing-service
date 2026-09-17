@@ -11,11 +11,7 @@ import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/run
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
-import {
-  settleOutstandingBeforeCardChange,
-  OutstandingBalanceError,
-} from "../lib/card-change-settlement.js";
-import { outstandingBalanceBody } from "../lib/outstanding-balance-response.js";
+import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
 import {
   getCustomerByOrg,
   sumSucceededTopupsForOrg,
@@ -292,18 +288,14 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
     }
 
     // Same rule as POST /v1/portal-sessions: an outstanding balance is
-    // collected before the customer may touch the card that owes it. The two
-    // routes serve one descriptor, so they must gate identically or the gate is
-    // one URL away from being bypassed.
+    // collected when the customer opens a card session, and the outcome never
+    // gates it. The two routes serve one descriptor, so they must behave
+    // identically or the behaviour is one URL away from diverging.
     await settleOutstandingBeforeCardChange(orgId);
 
     const setup = await getCardSetup(orgId, return_url, undefined, currency);
     res.json(setup);
   } catch (err) {
-    if (err instanceof OutstandingBalanceError) {
-      res.status(402).json(outstandingBalanceBody(err));
-      return;
-    }
     const message = err instanceof Error ? err.message : String(err);
     console.error("[billing-service] card setup failed:", message);
     res.status(502).json({ error: "Failed to start card setup" });
