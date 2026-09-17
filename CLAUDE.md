@@ -345,26 +345,31 @@ Nothing about the balance, the checkout or the top-up flows changed, and no org 
 
 The same CSV convention applies to the `x-brand-id` header forwarded by workflow-service for multi-brand campaigns.
 
-## Settle the debt before the card may change (`src/lib/card-change-settlement.ts`)
+## Collect the debt when the card changes — and NEVER gate the session on it (`src/lib/card-change-settlement.ts`)
 
-A customer who owes us money on the postpaid credit line must never be able to leave us holding the debt with no card to collect it. Google Ads, Meta and AWS all settle the outstanding balance before the payment method may be changed, and billing is the only service that knows what is owed — stripe-service separately makes the acquirer's card page replace-only, but the collection has to happen here.
+A customer who owes money on the postpaid credit line should pay it at the moment they touch the card that owes it. Google Ads, Meta and AWS all do that, billing is the only service that knows what is owed, and for a healthy card it works: the debt clears right there.
 
-`settleOutstandingBeforeCardChange(orgId)` runs at the top of **both** `POST /v1/portal-sessions` and `POST /v1/accounts/card_setup`. They serve ONE descriptor, so they must gate identically or the gate is one URL away from being bypassed.
+**What the collection must never do is decide whether the customer reaches the card page.** That was the original rule (PR #437) and it produced a dead end for exactly the person the page exists for: to replace the card you must first pay, to pay you need a working card, and the only card we will charge is the one that does not work. Prod 2026-09-17, org `e4fc3f44-…`: balance −$29.84, two clicks at 07:07:48 and 07:14:41, two 2984-cent charges declined `insufficient_funds` on a Macedonian Visa debit, two refusals, and a paying customer locked out of their own card page. **Refusing the session does not protect the debt; it guarantees we can never collect it.** Owner, verbatim: *"il faut debiter tout de suite quand une personne clique sur Manage card, mais il ne faut pas bloquer la suite qq soit le résultat"*.
+
+`settleOutstandingBeforeCardChange(orgId)` runs at the top of **both** `POST /v1/portal-sessions` and `POST /v1/accounts/card_setup`. They serve ONE descriptor, so they must behave identically or the behaviour is one URL away from diverging — that reasoning applies to the un-gating exactly as it applied to the gating. A test pins both routes on all three cases.
 
 | situation | what happens |
 |---|---|
-| balance ≥ 0 | session opens exactly as before, nothing charged |
-| negative, chargeable card | charge EXACTLY the outstanding amount; success opens the session |
-| charge declines / backoff / stripe-service errors | **402**, no session, body states what is owed |
-| negative, NO card | session OPENS — adding a card is the only way out of the debt |
-| negative, off_session-blocked card (India) | session OPENS — no off_session settle is possible on that card at all |
-| negative, under $0.50 | session OPENS — Stripe rejects the charge; rolls into the month-end sweep |
+| balance ≥ 0 | session opens, nothing charged |
+| negative, chargeable card | charge EXACTLY the outstanding amount, then open the session |
+| charge declines / backoff / times out / stripe-service errors | **session opens anyway**, failure LOUD in the logs |
+| balance cannot be READ at all | session opens anyway (`skipReason: "balance_unavailable"`) |
+| negative, NO card | session opens — adding a card is the only way out of the debt |
+| negative, off_session-blocked card (India) | session opens — no off_session settle is possible on that card at all |
+| negative, card the issuer called lost/stolen/closed | session opens, NO charge attempted — re-presenting it is forbidden (see `lib/card-usability`) |
+| negative, under $0.50 | session opens — the acquirer rejects the charge; rolls into the month-end sweep |
 
+- **`settleOutstandingBeforeCardChange` NEVER throws and never refuses.** It always resolves; its `SettlementOutcome` (`chargedCents`, `balanceCents`, `skipReason`) is for logging and tests. **The 402 is gone entirely** — `OutstandingBalanceError`, `src/lib/outstanding-balance-response.ts` and the `OutstandingBalanceResponse` OpenAPI declaration were removed rather than left as a documented error nothing can produce. Do not reintroduce a refusal on this path.
+- **Collection is not abandoned.** What is owed stays owed and stays owned by the existing sweeps: the month-end settle-to-zero, the campaign reload when the credit line is crossed, and dunning. Deliberately NOT in scope: retrying the debt on the NEW card once the customer replaces it — a real gap and a separate decision.
 - **The amount is `computeSettleCharge`, imported from the month-end sweep, never restated.** Two surfaces computing "settle to zero" separately is how they start disagreeing. Do NOT charge a tier multiple here for the same reason the sweep does not: there is no credit line to restore, only a balance to zero.
-- **The refusal is 402 with a stable `code: "outstanding_balance_unsettled"`**, plus `owed_cents` / `balance_cents` / `reason` (`charge_failed` | `charge_backoff`). It has to be distinguishable from a 400 (bad body), a 404 (no account) and a 502 (stripe-service down), because it is the ONE failure of these routes the customer can act on. Body shape lives in `src/lib/outstanding-balance-response.ts`.
-- **Idempotency keys on (org, UTC DAY, amount).** The amount is in the key for the reason the sweep documents at length (an acquirer replays a key whose parameters changed); the DAY is in it so a double-click collapses onto one charge while a legitimate settle of the same amount next week still goes through.
-- Goes through `coalesceReload`, so a card that just declined is refused by the existing backoff instead of being hammered — that refusal reaches the customer as `reason: "charge_backoff"`.
-- **Fail-loud**: nothing here falls back to opening the session anyway.
+- **Idempotency keys on (org, UTC DAY, amount)** — unchanged. The amount is in the key for the reason the sweep documents at length (an acquirer replays a key whose parameters changed); the DAY is in it so a double-click collapses onto one charge while a legitimate settle of the same amount next week still goes through.
+- **The reload coalescer / backoff stays.** Two clicks in a row must not re-present a dead card to the issuer — repeated declines degrade the card at its bank and our decline rate at the acquirer. A click skipped by the backoff simply opens the session with no charge attempted.
+- **Awaited, not fire-and-forget**, deliberately: a charge still in flight while the customer detaches that same card in the acquirer's portal fails for no reason. An off_session auth is 1-3s, the same order as the card-setup call that follows it.
 
 ## An unpaid debt we cannot collect is VISIBLE, never silently skipped (`src/lib/unpaid-debt.ts`, migration 0041)
 
@@ -599,7 +604,7 @@ Two live consumers read this endpoint: the staff metrics console and the PUBLIC 
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
 | `POST` | `/v1/checkout-sessions` | one-shot top-up or setup-mode PM capture via Stripe Checkout; does NOT configure auto-topup. Payment mode carries the gift-is-coming notice quoting that org's own figures. Nothing discounts the charge: onboarding already subtracted the gift from the amount it sends. See "Checkout page" |
-| `POST` | `/v1/portal-sessions` | How this org's customer adds a card (historical name). **Settles any outstanding balance FIRST** — 402 `outstanding_balance_unsettled` when it cannot. See "Settle the debt before the card may change". |
+| `POST` | `/v1/portal-sessions` | How this org's customer adds a card (historical name). **Attempts to collect any outstanding balance FIRST**, and hands the session over whatever that attempt does — never 402. See "Collect the debt when the card changes". |
 | `POST` | `/v1/customer_balance/authorize` | check if `balance_cents >= amount` ; auto-reload via PI if configured |
 | `POST` | `/v1/customer_balance/usage_apply` | proactive topup hint after a run; no-op for the ledger |
 | `POST` | `/v1/promotion_codes/redeem` | redeem promo code → insert `local_promos` row |

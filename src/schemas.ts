@@ -586,19 +586,6 @@ export const DunningTickResponseSchema = z
 
 // --- Unpaid debt: an org owes money we cannot collect ---
 
-// 402 body for a card-management session refused because the org's outstanding
-// balance could not be settled. `code` is stable and the dashboard keys on it —
-// this is the ONE failure of those routes the customer can act on.
-export const OutstandingBalanceResponseSchema = z
-  .object({
-    error: z.string(),
-    code: z.literal("outstanding_balance_unsettled"),
-    owed_cents: z.string(),
-    balance_cents: z.string(),
-    reason: z.enum(["charge_failed", "charge_backoff"]),
-  })
-  .openapi("OutstandingBalanceResponse");
-
 export const PaymentMethodLostRequestSchema = z
   .object({
     orgId: z.string().uuid(),
@@ -1337,14 +1324,6 @@ registry.registerPath({
       description: "Invalid request",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
-    402: {
-      description:
-        "The org owes an outstanding balance that could not be settled on its saved card. " +
-        "No session is opened; the body states what is owed.",
-      content: {
-        "application/json": { schema: OutstandingBalanceResponseSchema },
-      },
-    },
     404: {
       description: "Billing account not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
@@ -1382,14 +1361,6 @@ registry.registerPath({
     400: {
       description: "Invalid request",
       content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    402: {
-      description:
-        "The org owes an outstanding balance that could not be settled on its saved card. " +
-        "No session is opened; the body states what is owed.",
-      content: {
-        "application/json": { schema: OutstandingBalanceResponseSchema },
-      },
     },
     404: {
       description: "Billing account not found",

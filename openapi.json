@@ -66,8 +66,16 @@
           "total_paying_accounts": {
             "type": "integer"
           },
+          "first_payment_times_unix": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "integer"
+            }
+          },
           "first_payment_times": {
             "type": "array",
+            "nullable": true,
             "items": {
               "type": "integer"
             }
@@ -94,6 +102,7 @@
           "total_returned_cents",
           "total_local_credits_cents",
           "total_paying_accounts",
+          "first_payment_times_unix",
           "first_payment_times",
           "monthly_growth",
           "weekly_growth"
@@ -282,40 +291,6 @@
         "required": [
           "object",
           "mode"
-        ]
-      },
-      "OutstandingBalanceResponse": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string",
-            "enum": [
-              "outstanding_balance_unsettled"
-            ]
-          },
-          "owed_cents": {
-            "type": "string"
-          },
-          "balance_cents": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "charge_failed",
-              "charge_backoff"
-            ]
-          }
-        },
-        "required": [
-          "error",
-          "code",
-          "owed_cents",
-          "balance_cents",
-          "reason"
         ]
       },
       "CreatePortalSessionRequest": {
@@ -1840,7 +1815,7 @@
     "/public/stats/billing": {
       "get": {
         "summary": "Aggregate billing stats (no auth)",
-        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.\n\nHOW MANY ACCOUNTS PAID rides the same buckets as how much they paid: `paying_accounts` and `first_time_paying_accounts` on every monthly and weekly bucket, plus `total_paying_accounts` for the platform. Two things a reader must not assume about them. ACQUIRER COVERAGE IS EVERY ACQUIRER stripe-service takes money through, which is deliberately NOT the Stripe-only scope of `accounts_with_payment_method` beside them. And they count who PAID, never who has a card on file: those populations differ substantially in production and neither contains the other.\n\nTaken from stripe-service verbatim — this hop forwards, it does not re-derive, so `first_time_paying_accounts` summed over all buckets equals `total_paying_accounts` on either grain while `paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as zero: it fails the endpoint with a 502.\n\nA ROLLING WINDOW (last 30 days, last 90 days, since any instant) is answered EXACTLY from `first_payment_times` — every account's first settled payment in unix seconds, ascending, one entry per account that has ever paid. Count the entries at or after your cutoff. Summing whole `first_time_paying_accounts` buckets CANNOT answer it: those buckets are calendar months and weeks, a rolling window aligns to neither, and the bucket straddling its edge holds payments on both sides (measured against production at 90 days, whole-bucket summing read 17 where the truth was 25). The array carries the same identity, acquirer coverage and settled-only predicates as the counts, and counting all of it reproduces `total_paying_accounts`.",
+        "description": "Cross-tenant aggregate billing statistics composed from stripe-service (paid balance) and local promo credits.\n\nHOW MANY ACCOUNTS PAID rides the same buckets as how much they paid: `paying_accounts` and `first_time_paying_accounts` on every monthly and weekly bucket, plus `total_paying_accounts` for the platform. Two things a reader must not assume about them. ACQUIRER COVERAGE IS EVERY ACQUIRER stripe-service takes money through, which is deliberately NOT the Stripe-only scope of `accounts_with_payment_method` beside them. And they count who PAID, never who has a card on file: those populations differ substantially in production and neither contains the other.\n\nTaken from stripe-service verbatim — this hop forwards, it does not re-derive, so `first_time_paying_accounts` summed over all buckets equals `total_paying_accounts` on either grain while `paying_accounts` are distinct counts that do not sum. A count that cannot be read is never reported as zero: it fails the endpoint with a 502.\n\nA ROLLING WINDOW (last 30 days, last 90 days, since any instant) is answered EXACTLY from `first_payment_times_unix` — every account's first settled payment in unix SECONDS, ascending, one entry per account that has ever paid. Count the entries at or after your cutoff. THE UNIT IS IN THE NAME because `Date.now()` is milliseconds, so comparing against a milliseconds cutoff silently counts zero. `first_payment_times` is the DEPRECATED spelling of the same array, byte-identical, kept for one release. Summing whole `first_time_paying_accounts` buckets CANNOT answer it: those buckets are calendar months and weeks, a rolling window aligns to neither, and the bucket straddling its edge holds payments on both sides (measured against production at 90 days, whole-bucket summing read 17 where the truth was 25). The array carries the same identity, acquirer coverage and settled-only predicates as the counts, and counting all of it reproduces `total_paying_accounts`. Both spellings are `null` — never `[]` — when stripe-service served neither: an unavailable list and an empty one are different facts, and `[]` would claim nobody has ever paid. Their absence never denies the rest of this payload, which every money figure is computable without.",
         "responses": {
           "200": {
             "description": "Billing stats",
@@ -1853,7 +1828,7 @@
             }
           },
           "502": {
-            "description": "stripe-service unavailable, or its reply carried no paying-account counts",
+            "description": "stripe-service unavailable, or its reply carried no paying-account counts. Missing first-payment instants do NOT produce a 502 — both array fields go out as null and every other figure is served.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2449,16 +2424,6 @@
               }
             }
           },
-          "402": {
-            "description": "The org owes an outstanding balance that could not be settled on its saved card. No session is opened; the body states what is owed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OutstandingBalanceResponse"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Billing account not found",
             "content": {
@@ -2595,16 +2560,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "The org owes an outstanding balance that could not be settled on its saved card. No session is opened; the body states what is owed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OutstandingBalanceResponse"
                 }
               }
             }
