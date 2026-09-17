@@ -56,13 +56,24 @@
  * engine, and a second notification mechanism for one state is how a customer
  * gets told twice. Verified 2026-09-17: all five such orgs blocked at the time
  * already carried an OPEN episode with its T0 sent.
+ *
+ * AND THE DUNNING ENGINE IS HANDED THE ONES IT COULD NOT REACH. Being blocked is
+ * being out of credit (lib/spend-block), but the episode that says so was only
+ * ever opened from `authorize` — which a wedged org never reaches, because
+ * campaign-service stops dispatching before it. So this tick is the one place an
+ * episode can be opened for such an org, and it opens one for every blocked org
+ * it could not unblock: no credit line, a stood-down retry, a declined card. An
+ * org whose card IS charged here is not told anything — it is not out of credit
+ * any more. Idempotent through the existing partial unique index, so re-examining
+ * the same org hourly opens one episode and mails once.
  */
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { campaignReloadSweepAttempts } from "../db/schema.js";
 import crypto from "crypto";
-import { computeBalance } from "./balance.js";
+import { computeBalance, type BalanceSnapshot } from "./balance.js";
+import { openBlockedCampaignEpisode } from "./dunning.js";
 import { resolvePostpaidTier, computeTopupCharge } from "./topup-tier.js";
 import { addCents, subCents, cmpCents, gte as gteCents } from "./cents.js";
 import { reloadOffSession } from "./reload.js";
@@ -163,6 +174,11 @@ export interface CampaignReloadSweepResult {
    * resubmitting those, and the customer has been told to replace the card.
    */
   cardUnusable: number;
+  /**
+   * Blocked orgs the sweep could not unblock, for which it opened a credit
+   * depletion episode so the dunning engine owns them from here.
+   */
+  episodesOpened: number;
 }
 
 interface OrgEstimate {
@@ -378,6 +394,7 @@ export async function runCampaignReloadSweep(
     awaitingRetry: 0,
     exhausted: 0,
     cardUnusable: 0,
+    episodesOpened: 0,
   };
 
   const estimates = await loadOrgEstimates();
@@ -385,6 +402,17 @@ export async function runCampaignReloadSweep(
 
   for (const { orgId, maxRequiredCents } of estimates) {
     result.scanned += 1;
+    // Set the moment the org is found blocked, cleared only by a charge that
+    // actually goes through. Whatever branch the org leaves by — no credit line,
+    // a stood-down retry schedule, a declined card, a thrown error — the `finally`
+    // below hands it to the dunning engine. This is the call site the whole fix
+    // turns on: a wedged org can never reach `authorize`, so this hourly tick is
+    // the ONLY place an episode can be opened for it.
+    let wedgedSnapshot: BalanceSnapshot | null = null;
+    // Whether this tick has already mailed the org. A declining card must not
+    // produce "we could not charge your card" AND "you are out of credit"
+    // seconds apart — the episode opens either way, the message does not double.
+    let mailedThisTick = false;
     try {
       const [snapshot, account] = await Promise.all([
         computeBalance(orgId),
@@ -410,6 +438,7 @@ export async function runCampaignReloadSweep(
         continue;
       }
       result.blocked += 1;
+      wedgedSnapshot = snapshot;
 
       if (!tier) {
         result.notReloadCapable += 1;
@@ -500,6 +529,9 @@ export async function runCampaignReloadSweep(
           recipientEmail: snapshot.customer.email,
           now,
         });
+        // That path tells the customer to REPLACE the card. The episode still
+        // opens below (they cannot spend), but it does not mail a second time.
+        mailedThisTick = true;
         continue;
       }
 
@@ -513,6 +545,7 @@ export async function runCampaignReloadSweep(
         !succeeded && !outcome.backoffSkipped && decision.notifiedAt == null;
       if (shouldNotify) {
         await notifyReloadFailed(orgId, snapshot.customer.email);
+        mailedThisTick = true;
       }
 
       await recordAttempt(
@@ -528,6 +561,10 @@ export async function runCampaignReloadSweep(
         // A charge that went through voids anything we concluded about the card
         // (the customer may have replaced it).
         await clearCardUnusable(orgId);
+        // Charged: the org is unblocked (or about to be on the next poll), so it
+        // is NOT told it ran out of credit. Telling a customer whose card we just
+        // charged successfully is exactly the false alarm this ordering avoids.
+        wedgedSnapshot = null;
         result.charged += 1;
         console.log(
           `[billing-service] campaign reload sweep: charged org ${orgId} ` +
@@ -551,6 +588,26 @@ export async function runCampaignReloadSweep(
         err
       );
       continue;
+    } finally {
+      if (wedgedSnapshot) {
+        try {
+          const { opened } = await openBlockedCampaignEpisode({
+            orgId,
+            snapshot: wedgedSnapshot,
+            sendT0: !mailedThisTick,
+          });
+          if (opened) result.episodesOpened += 1;
+        } catch (err) {
+          // Fail-soft on the telling, fail-loud in the log: the money decisions
+          // above have already been made and must not be rolled back by the
+          // bookkeeping that describes them.
+          console.error(
+            `[billing-service] campaign reload sweep: could not open a depletion ` +
+              `episode for blocked org ${orgId}:`,
+            err
+          );
+        }
+      }
     }
   }
 

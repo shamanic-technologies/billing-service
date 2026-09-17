@@ -900,6 +900,25 @@ Stops a credit "retry storm": an out-of-credit org's recurring campaign was re-t
 - No stored cost → `{affordable:true, balanceCents:"0", lastRequiredCents:null, hasHistory:false}` (first-run default — a brand-new campaign runs once to establish its cost; the org isn't resolvable without a stored row, hence `balanceCents:"0"`).
 - Stored cost → live balance via `computeBalance(stored.orgId)` (user-less balance path — X-API-Key + org only, NO `x-user-id`/sentinel, see stripe-service integration shape); `affordable = balanceCents >= lastRequiredCents`, `hasHistory:true`. Fail-loud 502 if stripe/runs unreachable. 400 on non-UUID `campaignId`.
 
+### Being BLOCKED is being out of credit — one predicate, and it must be REACHABLE (`src/lib/spend-block.ts`)
+
+The same trap has a second half, and it is the one that left a paying customer silently un-owned by anything. Two rules decided "this org is out of credit" and did not agree:
+
+- the pre-flight refuses the next run when `balance − lastRequired < floor`;
+- `openDepletionEpisodeIfDepleted` opened an episode when `balance <= floor`.
+
+The gap is exactly `lastRequiredCents` wide. Inside it every run is refused, so the balance never moves, so it never crosses the floor, so **no episode ever opens** — and because the refusal happens in the PRE-FLIGHT, `authorize` is never reached either, so every episode-opening call site in `src/routes/customer_balance.ts` is unreachable for exactly the org that needs one. Prod 2026-09-17, org `81b34252-…`: balance **−4994.13** against a **−5000** floor with an **11.80**-cent estimate — 5.87 cents of headroom for a run needing 11.80 — **83** refusals over 41 hours and **zero** depletion episodes ever recorded.
+
+`cannotSpend(balance, required, floor)` is now the ONE predicate: `balance <= floor` OR `balance − required < floor`. Three things follow, and none of them is optional:
+
+- **It is used by the opener AND by the tick.** `runDunningTick` gated its +3d / +10d follow-ups on `isDepleted(balance)` with the DEFAULT `"0"` threshold, i.e. every postpaid org running normally negative within its line read as depleted. That was harmless only while the OPEN gate was narrower than the tick's; widening one without the other would have mailed "you are out of credit" to orgs paying us perfectly well. The tick now resolves the same floor + estimate the opener does (`resolveSpendBlock`), so the two can never disagree. It is a NARROWING for postpaid orgs.
+- **The second clause is load-bearing.** With `required = 0` (an org with no stored estimate) the subtraction alone would read a balance sitting EXACTLY on the floor as spendable. Keeping `isDepleted(balance, floor)` makes that case byte-identical to the old behaviour.
+- **Positive balance is not spendable balance.** A prepaid org holding 5 cents against a 92-cent run cannot spend. 92 of 112 prod accounts carry no topup config, so they attempt no reload, produce no failed-reload streak, and were invisible on every surface.
+
+**The REACHABLE call site is the hourly blocked-campaign sweep, not the pre-flight.** `GET /internal/campaigns/:id/affordability` keeps its ZERO side effects — a GET must not open episodes or charge cards, and relaxing its verdict would re-open the paid-enrichment retry storm. `runCampaignReloadSweep` already walks exactly the blocked orgs, so it opens the episode for every blocked org **it could not unblock** (no credit line, a stood-down retry schedule, a declined card, a thrown error) via a `finally` that survives every branch. An org whose card IS charged is never told anything — it is not out of credit any more.
+
+**T0 is sent, except when the sweep has already mailed that org on the same tick.** Opening the state without the message would fix the staff surfaces and leave the customer as uninformed as the bug left them. But a declining card must not produce "we could not charge your card" and "you are out of credit" seconds apart, so `openBlockedCampaignEpisode({ sendT0: false })` marks `t0_sent_at` anyway — the stage is genuinely spent — and the +3d / +10d ladder carries it from there. Idempotency is the existing partial unique index `(org_id) WHERE recovered_at IS NULL`; no new table, no second lifecycle, and recovery still keys on `credited` rising and nothing else.
+
 ### The pre-flight's refusal IS the reload trigger, and it blocks the path that fires it (`src/lib/campaign-reload-sweep.ts`)
 
 Two correct rules compose into a state a paying org cannot leave. The pre-flight above refuses a run when `balance − lastRequired < floor`, so campaign-service does not dispatch. The reload fires inside `POST /v1/customer_balance/authorize`, which the workflow only reaches once campaign-service HAS dispatched. **So the recovery is behind the gate that blocks it** — the same shape as "a capability reported as MISSING is often present behind a GATE that excludes its own use case", except the capability here is the customer's own card being charged.
