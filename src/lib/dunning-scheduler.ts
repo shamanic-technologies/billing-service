@@ -13,6 +13,7 @@ import { runDunningTick } from "./dunning.js";
 import { runMonthEndSweep } from "./month-end-sweep.js";
 import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 import { runUnpaidDebtScan } from "./unpaid-debt.js";
+import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
 // is plenty frequent for both follow-ups and recharge detection.
@@ -69,6 +70,26 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] unpaid-debt scan failed:", err);
+      }
+
+      // Blocked-campaign reload sweep — fires the reload `authorize` would have
+      // fired for a campaign the read-only affordability pre-flight is refusing.
+      // That refusal IS the authorize reload condition, but campaign-service
+      // never dispatches the run, so authorize is never reached and the org sits
+      // in the band [floor, floor + estimate) indefinitely. This is what bounds
+      // that state to one tick. Isolated so a failure here never blocks the
+      // other sweeps, and vice-versa.
+      try {
+        const c = await runCampaignReloadSweep();
+        if (c.blocked > 0) {
+          console.log(
+            `[billing-service] campaign reload sweep: scanned=${c.scanned} ` +
+              `blocked=${c.blocked} charged=${c.charged} ` +
+              `notReloadCapable=${c.notReloadCapable} failed=${c.failed}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] campaign reload sweep failed:", err);
       }
 
       // Welcome-completion sweep — the unconditional server-side driver for the
