@@ -295,6 +295,13 @@
       "when": 1791712800000,
       "tag": "0041_unpaid_debt_notification",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1791799200000,
+      "tag": "0042_campaign_reload_sweep_attempts",
+      "breakpoints": true
     }
   ]
 }

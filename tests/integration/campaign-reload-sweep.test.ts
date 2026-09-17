@@ -17,6 +17,7 @@ import {
   closeDb,
 } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
+import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 import * as emailClient from "../../src/lib/email-client.js";
 import { upsertCampaignAuthorizeCost } from "../../src/lib/campaign-costs.js";
@@ -225,10 +226,13 @@ describe("blocked-campaign reload sweep", () => {
     // CHILD of it and silently drops a send whose parent does not exist.
     expect(runsClient.createPlatformRun).toHaveBeenCalled();
 
-    // Second tick inside the cooldown: the coalescer refuses the attempt, so
-    // nothing new was learned and the customer is not told again.
+    // Second tick: the durable marker stands the org down before any charge is
+    // attempted, so the customer is not told again and the card is not
+    // re-presented. (The coalescer's cooldown caps at one hour — this sweep's
+    // own interval — so it could not be relied on to stop the retry.)
     const second = await runCampaignReloadSweep(NOW);
-    expect(second.failed).toBe(1);
+    expect(second.awaitingRecharge).toBe(1);
+    expect(second.failed).toBe(0);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
@@ -241,6 +245,68 @@ describe("blocked-campaign reload sweep", () => {
 
     expect(res.failed).toBe(1);
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("presents a refused card ONCE, not on every tick", async () => {
+    await seedTrappedOrg();
+    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+
+    const first = await runCampaignReloadSweep(NOW);
+    expect(first.failed).toBe(1);
+    expect(first.awaitingRecharge).toBe(0);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+
+    // The coalescer backoff CAPS at one hour — exactly this sweep's interval —
+    // so without the durable marker the next tick would charge again. Reset it
+    // to prove the marker is what stops the second attempt, not the cooldown.
+    _resetCoalescer();
+    const second = await runCampaignReloadSweep(NOW);
+
+    expect(second.blocked).toBe(1);
+    expect(second.awaitingRecharge).toBe(1);
+    expect(second.failed).toBe(0);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    // And the customer is not told a second time about the same refusal.
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms the moment a recharge moves credited", async () => {
+    await seedTrappedOrg();
+    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+
+    await runCampaignReloadSweep(NOW);
+    _resetCoalescer();
+    expect((await runCampaignReloadSweep(NOW)).awaitingRecharge).toBe(1);
+
+    // The customer fixes their card and pays by hand. credited only ever
+    // RISES, so that alone says "something changed" — no new lifecycle needed.
+    // Still inside the band (usage moved with it), so still blocked.
+    // $3.85, deliberately keeping cumulative paid under the $200 tier
+    // breakpoint so the credit-line floor is unchanged and the org is still in
+    // the band — this case is about the marker re-arming, nothing else.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("19900.0000000000");
+    setUsage(orgA, "27894.1310968628");
+    ssMocks.reloadOffSession.mockResolvedValue({ status: "succeeded" });
+    _resetCoalescer();
+
+    const third = await runCampaignReloadSweep(NOW);
+
+    expect(third.awaitingRecharge).toBe(0);
+    expect(third.charged).toBe(1);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not stand down after a SUCCESSFUL charge", async () => {
+    await seedTrappedOrg();
+
+    const first = await runCampaignReloadSweep(NOW);
+    expect(first.charged).toBe(1);
+
+    // Same credited is impossible after a real charge, but assert the marker
+    // itself never blocks an org whose last attempt WORKED — a succeeded row
+    // must not read as "we already tried and it refused".
+    const second = await runCampaignReloadSweep(NOW);
+    expect(second.awaitingRecharge).toBe(0);
   });
 
   it("isolates a per-org failure — one unreachable org never blocks the rest", async () => {

@@ -11,6 +11,7 @@ import {
   brandDailyBudgets,
   brandFunnelDailyBudgets,
   campaignAuthorizeCosts,
+  campaignReloadSweepAttempts,
   creditDepletionEpisodes,
   freeCreditPromises,
   localPromos,
@@ -85,6 +86,11 @@ async function deleteBillingStateByOrg(
       .where(eq(campaignAuthorizeCosts.orgId, orgId))
       .returning({ campaignId: campaignAuthorizeCosts.campaignId });
 
+    const deletedSweepAttempts = await tx
+      .delete(campaignReloadSweepAttempts)
+      .where(eq(campaignReloadSweepAttempts.orgId, orgId))
+      .returning({ orgId: campaignReloadSweepAttempts.orgId });
+
     const deletedBrandBudgets = await tx
       .delete(brandDailyBudgets)
       .where(eq(brandDailyBudgets.orgId, orgId))
@@ -115,6 +121,7 @@ async function deleteBillingStateByOrg(
       localPromos: deletedLocalPromos.length,
       creditDepletionEpisodes: deletedDunningEpisodes.length,
       campaignAuthorizeCosts: deletedCampaignCosts.length,
+      campaignReloadSweepAttempts: deletedSweepAttempts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
       brandFunnelDailyBudgets: deletedFunnelBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,

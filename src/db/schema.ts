@@ -457,6 +457,35 @@ export const campaignAuthorizeCosts = pgTable("campaign_authorize_costs", {
     .defaultNow(),
 });
 
+// campaign_reload_sweep_attempts: one row per org the blocked-campaign reload
+// sweep has already presented a card for, keyed on the CREDITED total it saw.
+//
+// The sweep breaks a deadlock; it does not collect a debt. Once it has presented
+// a card and the card refused, the org is blocked by its own card — a state the
+// depletion-episode dunning engine already owns — so re-presenting it on every
+// hourly tick would degrade the card at its issuer and our decline rate at the
+// acquirer (see lib/reload-coalescer) for no chance of a different answer.
+//
+// `creditedCentsAtAttempt` is what makes "something changed" answerable with no
+// new lifecycle: credited only ever RISES, so any recharge (paid top-up, promo,
+// staff grant) moves it and re-arms the sweep for that org, while a dead card
+// moves nothing and is attempted exactly once. Migration 0042.
+export const campaignReloadSweepAttempts = pgTable("campaign_reload_sweep_attempts", {
+  orgId: uuid("org_id").primaryKey(),
+  creditedCentsAtAttempt: numeric("credited_cents_at_attempt", {
+    precision: FRACTIONAL_PRECISION,
+    scale: FRACTIONAL_SCALE,
+  }).notNull(),
+  /** "succeeded" | "failed" — diagnostic; the re-arm keys on credited alone. */
+  lastOutcome: text("last_outcome").notNull(),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type CampaignReloadSweepAttempt =
+  typeof campaignReloadSweepAttempts.$inferSelect;
+
 export type CampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferSelect;
 export type NewCampaignAuthorizeCost = typeof campaignAuthorizeCosts.$inferInsert;
 
