@@ -773,6 +773,15 @@ export type NewOrgUsageDiscount = typeof orgUsageDiscounts.$inferInsert;
 
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
+/**
+ * The platform is the actor. Written as `user_id` on a row this service creates
+ * with no end user behind it (a scheduler tick, a sweep), and sent as `x-user-id`
+ * on a write it genuinely performs itself. Never used to get past a READ gate,
+ * and nothing downstream resolves a user from it — recipients are resolved from
+ * the org's Stripe billing email.
+ */
+export const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 export const DUNNING_EVENT_T0 = "credit-depleted";
 export const DUNNING_EVENT_3D = "credit-depleted-followup-3d";
 export const DUNNING_EVENT_10D = "credit-depleted-followup-10d";

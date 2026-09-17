@@ -35,8 +35,8 @@
 import { and, eq, isNull, isNotNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, creditDepletionEpisodes } from "../db/schema.js";
-import type { CreditDepletionEpisode } from "../db/schema.js";
 import { computeBalance, type BalanceSnapshot } from "./balance.js";
+import { ensureOpenEpisode } from "./dunning.js";
 import { cmpCents } from "./cents.js";
 import { sendEmail } from "./email-client.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
@@ -59,15 +59,6 @@ export const UNPAID_DEBT_CARD_REQUIRED_EVENT = "credit-debt-card-required";
  * exactly like `brand_daily_budget_changed` — no recipient list lives here.
  */
 export const UNPAID_DEBT_STAFF_EVENT = "unpaid_debt_uncollectable";
-
-/**
- * The platform is the actor. There is no end user behind a sweep or a scheduler
- * tick, and none is invented for a READ — this is the all-zeros sentinel this
- * service already uses for a write it performs itself, stored on a row of its
- * OWN table. The recipient is resolved from the org's Stripe billing email, so
- * nothing downstream resolves a user from it.
- */
-const PLATFORM_USER_ID = "00000000-0000-0000-0000-000000000000";
 
 export type UnpaidDebtState =
   /** Balance is non-negative — nothing is owed. */
@@ -134,7 +125,9 @@ export async function flagUncollectableDebt(params: {
     return { state: "collectable", owedCents };
   }
 
-  const episode = await ensureOpenEpisode(params.orgId, snapshot);
+  // No T0 here: the debt already exists whether or not a campaign happens to be
+  // authorizing, and the message this path sends is a different one.
+  const { episode } = await ensureOpenEpisode(params.orgId, snapshot);
 
   if (episode.cardRequiredNotifiedAt != null) {
     // Already told. Refresh the amount so the staff surface tracks a growing
@@ -207,56 +200,6 @@ export async function flagUncollectableDebt(params: {
   await completePlatformRun(runId);
 
   return { state: "flagged", owedCents };
-}
-
-/**
- * The org's OPEN depletion episode, opening one if there is none.
- *
- * Unlike `openDepletionEpisodeIfDepleted` this does NOT require campaign
- * activity and sends no T0: the debt already exists whether or not a campaign
- * happens to be authorizing right now, and the message this path sends is a
- * different one. The partial unique index `(org_id) WHERE recovered_at IS NULL`
- * is the race guard — a 23505 means someone else just opened it, so we re-read.
- */
-async function ensureOpenEpisode(
-  orgId: string,
-  snapshot: BalanceSnapshot
-): Promise<CreditDepletionEpisode> {
-  const existing = await selectOpenEpisode(orgId);
-  if (existing) return existing;
-
-  try {
-    const [row] = await db
-      .insert(creditDepletionEpisodes)
-      .values({
-        orgId,
-        userId: PLATFORM_USER_ID,
-        creditedCentsAtOpen: snapshot.creditedCents,
-      })
-      .returning();
-    return row;
-  } catch (err) {
-    if ((err as { code?: string }).code !== "23505") throw err;
-    const raced = await selectOpenEpisode(orgId);
-    if (!raced) throw err;
-    return raced;
-  }
-}
-
-async function selectOpenEpisode(
-  orgId: string
-): Promise<CreditDepletionEpisode | undefined> {
-  const [row] = await db
-    .select()
-    .from(creditDepletionEpisodes)
-    .where(
-      and(
-        eq(creditDepletionEpisodes.orgId, orgId),
-        isNull(creditDepletionEpisodes.recoveredAt)
-      )
-    )
-    .limit(1);
-  return row;
 }
 
 /**
