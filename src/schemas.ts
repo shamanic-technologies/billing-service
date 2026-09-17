@@ -803,12 +803,16 @@ export const PaymentStoppedPeriodsResponseSchema = z
   .object({
     orgId: z.string().uuid(),
     /**
-     * The earliest instant this record demonstrably exists (ISO 8601), or null
-     * when no period has ever been recorded. A day before it is NOT RECORDED:
-     * the absence of a period there is not evidence that payment was on.
+     * The earliest instant this record demonstrably exists (ISO 8601), across
+     * BOTH sources (depletion episodes and failed reload streaks), or null when
+     * no period has ever been recorded. A day before it is NOT RECORDED: the
+     * absence of a period there is not evidence that payment was on.
      */
     recordBeginsAt: z.string().nullable(),
-    /** Oldest first. An open period (endedAt null) can only be the last one. */
+    /**
+     * Oldest first and DISJOINT — overlapping stretches are merged, so an open
+     * period (endedAt null) can only be the last one.
+     */
     periods: z.array(PaymentStoppedPeriodSchema),
   })
   .openapi("PaymentStoppedPeriodsResponse");
@@ -1995,12 +1999,18 @@ registry.registerPath({
   description:
     "Every stretch of time during which this org was not paying — a failed card or credit " +
     "gone — as periods with a beginning and an end (endedAt null while the org is still in " +
-    "one). A period is a credit-depletion episode: it opens when the balance falls past the " +
-    "org's credit-line floor and closes when a real recharge lands; the debt flag for a card " +
-    "we can no longer charge lives on that same episode, so both halves are one period. " +
+    "one). Two sources, one per half: CREDIT GONE is a credit-depletion episode (it opens " +
+    "when the balance falls past the org's credit-line floor and closes when a real recharge " +
+    "lands), and a FAILED CARD is an open failed reload streak (the bank refused and the " +
+    "spaced retry schedule is still walking its rungs; it ends on a succeeded reload or when " +
+    "credited moves). An org blocked by a refused card while its balance is still inside its " +
+    "credit-line floor opens no episode at all, so the second source is not a refinement of " +
+    "the first. Overlapping stretches are merged, so a day is never described twice. PAST " +
+    "failed streaks are not recorded — the attempts row is overwritten in place — so only the " +
+    "OPEN one is expressible. " +
     "Service-to-service read with x-api-key only, orgId in the path — no x-org-id / x-user-id " +
     "and no sentinel identity. Pure read. " +
-    "recordBeginsAt is the earliest episode recorded fleet-wide: a day before it is NOT " +
+    "recordBeginsAt is the earliest instant either source recorded fleet-wide: a day before it is NOT " +
     "RECORDED, and the absence of a period there is not evidence that payment was on. An " +
     "episode opens on an authorize carrying campaign activity, so a period means payment had " +
     "stopped while the org was trying to spend.",
