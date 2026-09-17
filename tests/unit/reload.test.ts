@@ -130,3 +130,56 @@ describe("reloadOffSession", () => {
     expect(body).not.toHaveProperty("payment_method");
   });
 });
+
+/**
+ * A refusal now arrives as a COMPLETED request carrying the acquirer's own
+ * reason (stripe-service v0.51.1), not as a throw. Own describe block, own
+ * file-level fixture — see the parent block's mock setup.
+ */
+describe("reloadOffSession on a refused card", () => {
+  let chargeOrgOffSession: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    chargeOrgOffSession = vi.spyOn(ssClient, "chargeOrgOffSession");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps the reason the bank gave", async () => {
+    chargeOrgOffSession.mockResolvedValue(
+      buildCharge({
+        status: "failed",
+        reference: "pi_declined",
+        hosted_document_url: null,
+        failure: {
+          type: "card_declined",
+          code: "insufficient_funds",
+          message: "Your card has insufficient funds.",
+        },
+      })
+    );
+
+    const result = await reloadOffSession(ORG_ID, 2500, IDEMPOTENCY_KEY);
+
+    expect(result.status).toBe("failed");
+    expect(result.reference).toBe("pi_declined");
+    // "try another card" and "call your bank" are different instructions, and
+    // a bare `charge.status=failed` cannot tell them apart.
+    expect(result.failure_reason).toBe(
+      "card_declined: insufficient_funds: Your card has insufficient funds."
+    );
+  });
+
+  it("still reports a failure that names no reason", async () => {
+    chargeOrgOffSession.mockResolvedValue(
+      buildCharge({ status: "failed", hosted_document_url: null })
+    );
+
+    const result = await reloadOffSession(ORG_ID, 2500, IDEMPOTENCY_KEY);
+
+    expect(result.status).toBe("failed");
+    expect(result.failure_reason).toBe("charge.status=failed");
+  });
+});
