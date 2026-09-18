@@ -284,7 +284,8 @@ beforeAll(async () => {
            ('admin_grant', 0, NULL, NULL),
            ('welcome_completion', 0, NULL, NULL),
            ('referral_reward', 50000, NULL, NULL),
-           ('product_task_completed', 0, NULL, NULL)
+           ('product_task_completed', 0, NULL, NULL),
+           ('trial_seed', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

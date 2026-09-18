@@ -191,6 +191,38 @@ export const WELCOME_PROMO_CODE = "welcome";
 // 0028); this constant documents the canonical amount.
 export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 
+// --- Trial seed (migration 0046) ---
+//
+// An organisation can exist, and spend, BEFORE anyone has signed up: the dashboard
+// walks a visitor through their whole setup (reading their site, drafting an offer,
+// assembling audiences) against an ordinary org that simply has no identity-provider
+// identity yet. That work is metered, so a stranger typing a URL spends our money.
+//
+// What caps them is CREDIT, not a counter: the org is seeded with a very small amount
+// and the affordability gate this service already enforces refuses the first call it
+// cannot afford. No new threshold, no consumer-side spend limit.
+//
+// It is recorded under its OWN ledger key, never as the welcome gift — the two mean
+// different things and the customer eventually sees the welcome one by name. The seed
+// is NEVER surfaced to the visitor.
+//
+// Per-row amount lives on local_promos (the code row's amount_cents is a 0
+// placeholder) because the figure is derived from the LIVE welcome amount — see
+// lib/trial-seed.ts.
+export const TRIAL_SEED_CODE = "trial_seed";
+
+/**
+ * What a trial seed is worth, BEFORE it is capped by the welcome amount.
+ *
+ * It is never read on its own: `resolveTrialSeedAmountCents` clamps it to the live
+ * welcome figure, and the welcome grant at signup is the REMAINDER
+ * (`welcome − already seeded`). That subtraction is what pins the two together: a
+ * seeded org's TOTAL free credit is the welcome amount for ANY seed value, at any
+ * welcome price, with nobody having to remember this rule. Re-pricing the welcome
+ * offer therefore cannot leave the two summing to anything else.
+ */
+export const TRIAL_SEED_TARGET_CENTS = 500;
+
 // Platform-issued grant codes (DIS-64 Wave 0.5 invite-only gate).
 // Backed by migration 0017. Both are purely ADDITIVE: `invite_welcome` used to
 // DELETE the org's `welcome` row so the two could not stack, which is exactly the

@@ -323,6 +323,13 @@
       "when": 1792058400000,
       "tag": "0045_product_task_reward",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1792144800000,
+      "tag": "0046_trial_seed",
+      "breakpoints": true
     }
   ]
 }

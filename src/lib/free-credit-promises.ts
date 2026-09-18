@@ -95,6 +95,7 @@ import {
   PROMISE_KIND_WELCOME,
   REFERRAL_REWARD_CODE,
   WELCOME_PROMO_CODE,
+  TRIAL_SEED_CODE,
   type FreeCreditPromise,
 } from "../db/schema.js";
 import { addCents, gte, subCents } from "./cents.js";
@@ -188,10 +189,14 @@ export async function referralRewardCodeExists(): Promise<boolean> {
  *     welcome promise was never materialised (an account excluded from the welcome
  *     completion never gets one, yet it still carries that bar).
  *
- * The up-front gift is this org's own `welcome` grant; before that row exists we
- * read the live `welcome` code, which is what the org is about to be given — a
- * referral claimed in the seconds before the signup grant lands must not get a
- * different ladder from one claimed after it.
+ * The up-front gift is this org's own `welcome` grant PLUS any `trial_seed` it was
+ * given before signing up; before those rows exist we read the live `welcome` code,
+ * which is what the org is about to be given — a referral claimed in the seconds
+ * before the signup grant lands must not get a different ladder from one claimed
+ * after it. The seed belongs in that sum because a seeded org's welcome row carries
+ * only the REMAINDER (see lib/trial-seed.ts): counting the row alone would read a
+ * fully-gifted org as still owing itself something and hand it a bar it does not
+ * have.
  *
  * 0 when the org carries neither, which is also exactly what the flat $30 cohort
  * answers: its whole entitlement was granted at signup, so its trigger is not a bar.
@@ -211,7 +216,8 @@ async function highestBarCents(runner: Tx | typeof db, orgId: string): Promise<n
                         (SELECT SUM(lp.amount_cents)
                            FROM local_promos lp
                            JOIN local_promo_codes c ON c.id = lp.promo_code_id
-                          WHERE lp.org_id = a.org_id AND c.code = ${WELCOME_PROMO_CODE}),
+                          WHERE lp.org_id = a.org_id
+                            AND c.code IN (${WELCOME_PROMO_CODE}, ${TRIAL_SEED_CODE})),
                         (SELECT amount_cents FROM local_promo_codes WHERE code = ${WELCOME_PROMO_CODE}),
                         0
                       ) >= a.free_credit_entitlement_cents
