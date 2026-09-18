@@ -31,6 +31,7 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
+import { getPaymentOutlook } from "../lib/payment-outlook.js";
 import {
   seedTrialCredit,
   settleSignupWelcome,
@@ -654,6 +655,63 @@ router.get(
     }
   }
 );
+
+// GET /internal/accounts/by-org/:orgId/payment-outlook
+//
+// When will we next take money from this customer, and if never, why not.
+//
+// No new rule and no new state — this composes what billing already owns: the
+// spendable balance and the credit-line floor (lib/balance + lib/spend-block,
+// the same predicate the affordability pre-flight and the dunning tick read),
+// the retry schedule for a refused card (lib/campaign-reload-sweep), the
+// permanently-unusable verdict (lib/card-usability), the month-end settle date
+// (lib/month-end-sweep), the realized spend per day (lib/realized-burn, from
+// runs-service) and the configured-vs-running ceilings (billing's own tables +
+// campaign-service, fail-soft).
+//
+// THREE THINGS THE PRODUCTION MEASUREMENT CHANGED, each against the obvious
+// design, taken over the twelve orgs that spent anything in the fortnight to
+// 2026-09-18:
+//   - SIX OF TWELVE HAVE NO AUTO-TOPUP. They are never charged automatically;
+//     they run out and stop. `no_autopay` therefore carries no date, because a
+//     date there would be a fabrication about half the population.
+//   - A DATE IS A CHARGE ATTEMPT, NOT A PAYMENT. The two orgs already past
+//     their floor are exactly the two whose card the bank is refusing.
+//   - THE BURN IS MEASURED, NEVER THE CEILING. Utilisation ran 4% to 146%, so
+//     the configured budget is not even an upper bound. All three figures are
+//     served side by side and must not be substituted for one another.
+//
+// A figure that cannot be established honestly is null with a NAMED reason,
+// never zero: a consumer that cannot tell "we do not know" from "nothing was
+// spent" renders the second, which is a lie about a paying customer.
+//
+// Auth: x-api-key only, orgId in the PATH — no x-org-id / x-user-id and no
+// sentinel identity, the same user-less shape as the reads above. PURE read: it
+// opens no episode, charges nothing and changes no retry state. No discount is
+// applied to the floor or the ceilings — both are configuration, and the
+// per-org usage modifier applies to charges only.
+router.get("/internal/accounts/by-org/:orgId/payment-outlook", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  try {
+    const outlook = await getPaymentOutlook(orgId);
+    if (!outlook) {
+      res.status(404).json({ error: "No billing account for this org" });
+      return;
+    }
+    res.json(outlook);
+  } catch (err) {
+    console.error(
+      `[billing-service] payment-outlook read failed for org ${orgId}:`,
+      err
+    );
+    res.status(502).json({ error: "Failed to read payment outlook" });
+  }
+});
 
 // POST /internal/accounts/by-org/:orgId/charge — charge a STATED amount
 // off-session against the org's saved card, crediting the balance like an

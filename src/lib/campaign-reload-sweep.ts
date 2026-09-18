@@ -287,6 +287,25 @@ const RETRY_SCHEDULE_MS = [1 * DAY_MS, 3 * DAY_MS, 7 * DAY_MS, 14 * DAY_MS] as c
 /** Total attempts in one streak: the immediate one plus every scheduled rung. */
 export const MAX_ATTEMPTS_PER_STREAK = RETRY_SCHEDULE_MS.length + 1;
 
+/**
+ * When the NEXT attempt of an open streak falls due, or null when the streak is
+ * out of rungs.
+ *
+ * Pure, and exported so the payment outlook can DATE a blocked org's next
+ * charge attempt off the same schedule this sweep walks. Two surfaces stating
+ * different retry dates for one card is how they start disagreeing, so the
+ * schedule is read here and nowhere else.
+ *
+ * `attemptCount` is the number of attempts already made in this streak, and
+ * `anchor` is the streak's FIRST refusal — anchoring on the first rather than
+ * the last is what stops a deploy or a missed tick shifting every later rung.
+ */
+export function nextRetryDueAt(attemptCount: number, anchor: Date): Date | null {
+  const rung = RETRY_SCHEDULE_MS[attemptCount - 1];
+  if (rung === undefined) return null;
+  return new Date(anchor.getTime() + rung);
+}
+
 type StandDown = "not_due" | "exhausted" | "card_unusable";
 
 interface AttemptDecision {
@@ -353,7 +372,7 @@ async function decideAttempt(
   }
 
   const anchor = row.firstFailedAt ?? row.attemptedAt;
-  const nextRung = RETRY_SCHEDULE_MS[row.attemptCount - 1];
+  const dueAt = nextRetryDueAt(row.attemptCount, anchor);
   const decided = {
     attemptCount: row.attemptCount + 1,
     firstFailedAt: anchor,
@@ -362,8 +381,8 @@ async function decideAttempt(
 
   // Past the last rung: five refusals over a fortnight is an answer. The
   // month-end sweep still settles what is owed.
-  if (nextRung === undefined) return { ...decided, standDown: "exhausted" };
-  if (now.getTime() < anchor.getTime() + nextRung) {
+  if (dueAt === null) return { ...decided, standDown: "exhausted" };
+  if (now.getTime() < dueAt.getTime()) {
     return { ...decided, standDown: "not_due" };
   }
   return { ...decided, standDown: null };
