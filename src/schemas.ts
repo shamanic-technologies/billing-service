@@ -845,6 +845,76 @@ export const PaymentStoppedPeriodsResponseSchema = z
   })
   .openapi("PaymentStoppedPeriodsResponse");
 
+// --- Payment outlook (when will this org next be charged) ---
+
+export const PaymentOutlookResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    /**
+     * What billing expects next, money-wise.
+     *
+     * `no_autopay` is not a failure — it means this org will never be charged
+     * automatically and will simply run out and stop. Half the orgs that were
+     * spending anything in the fortnight to 2026-09-18 were in that state, so a
+     * consumer that renders a date for every org will be wrong about half of
+     * them. `unknown` means spend is happening but cannot be measured honestly
+     * (see burnUnavailableReason) — it is never rendered as idle.
+     */
+    state: z.enum([
+      "will_charge",
+      "charge_due_now",
+      "charge_blocked",
+      "no_autopay",
+      "idle",
+      "unknown",
+    ]),
+    /**
+     * When billing expects to PRESENT the card next (ISO 8601), or null when it
+     * does not expect to. This is a CHARGE ATTEMPT, never a payment: for a card
+     * the bank is refusing, billing can say when it will try again and nothing
+     * about whether the bank will say yes.
+     */
+    nextChargeAttemptAt: z.string().nullable(),
+    /** What brings that date about. Null whenever the date is null. */
+    trigger: z.enum(["floor", "month_end", "retry_rung"]).nullable(),
+    /** Why no charge is possible. Null unless state is charge_blocked. */
+    blockedReason: z
+      .enum([
+        "card_declined",
+        "card_unusable",
+        "retries_exhausted",
+        "no_chargeable_card",
+        "card_country_unsupported",
+      ])
+      .nullable(),
+    balanceCents: z.string(),
+    /** The postpaid credit-line floor ("0" when the org has no credit line). */
+    floorCents: z.string(),
+    /**
+     * Net platform spend per day over the burn window, or null when it cannot be
+     * measured honestly. Never 0 as a stand-in for "we do not know".
+     */
+    realizedDailyBurnCents: z.string().nullable(),
+    /** Named reason the burn is absent. Null when the burn is present. */
+    burnUnavailableReason: z
+      .enum(["platform_only_dated_spend_not_served"])
+      .nullable(),
+    burnWindowDays: z.number(),
+    /**
+     * The ceilings this org's brands are configured at. A PERMISSION, not a
+     * prediction: measured utilisation ran 4% to 146% of it, so it is served
+     * beside the realized burn and must not be substituted for it.
+     */
+    configuredDailyBudgetCents: z.string(),
+    /**
+     * The share of those ceilings with a campaign actually running behind them.
+     * Null when campaign-service could not be read — never the configured total
+     * wearing a running label.
+     */
+    runningDailyBudgetCents: z.string().nullable(),
+  })
+  .openapi("PaymentOutlookResponse");
+
 // --- Per-funnel daily ceilings (the brand budget, split by sales funnel) ---
 
 export const BrandFunnelKeySchema = z
@@ -2135,6 +2205,55 @@ registry.registerPath({
     },
     502: {
       description: "Read failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/payment-outlook",
+  summary: "When this org will next be charged, and if never, why not",
+  description:
+    "Composes what billing already knows into one answer: the spendable balance and the " +
+    "postpaid credit-line floor, the retry schedule for a card the bank is refusing, the " +
+    "month-end settle date, this org's realized spend per day, and its configured versus " +
+    "running daily ceilings. Nothing new is stored and no new rule is introduced — every " +
+    "input is already the source of truth for the thing it describes. " +
+    "THREE PROPERTIES A CONSUMER MUST NOT COLLAPSE. (1) nextChargeAttemptAt is when billing " +
+    "will PRESENT the card, never when the customer will pay: the orgs already past their " +
+    "floor are typically the ones whose card is being refused. (2) state no_autopay carries " +
+    "NO date, because such an org is never charged automatically — it runs out and stops; " +
+    "that was half the spending orgs when this shipped, so rendering a date for every org is " +
+    "wrong about half of them. (3) realizedDailyBurnCents is measured spend and " +
+    "configuredDailyBudgetCents is a permission; measured utilisation ran 4% to 146%, so the " +
+    "ceiling is not even an upper bound and must not be substituted for the burn. " +
+    "A figure that cannot be established honestly is null with a named reason, never zero. " +
+    "Service-to-service read with x-api-key only, orgId in the path — no x-org-id / x-user-id " +
+    "and no sentinel identity. Pure read: it opens no episode, charges nothing, and changes " +
+    "no retry state. No discount is applied to the floor or the ceilings — both are " +
+    "configuration, and the per-org usage modifier applies to charges only.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "What billing expects to charge this org, and when",
+      content: {
+        "application/json": { schema: PaymentOutlookResponseSchema },
+      },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No billing account for this org",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Could not read the org's balance or its realized spend",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
