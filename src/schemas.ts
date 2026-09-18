@@ -457,6 +457,34 @@ export const InternalAccountTeardownResponseSchema = z
   })
   .openapi("InternalAccountTeardownResponse");
 
+// --- Trial seed (migration 0046) ---
+
+export const TrialSeedResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    orgId: z.string().uuid(),
+    /** What the org holds as a trial seed, in cents. */
+    seededCents: z.number().int(),
+    /** true when the org was already seeded — the seed is never doubled. */
+    alreadySeeded: z.boolean(),
+  })
+  .openapi("TrialSeedResponse");
+
+export const SignupWelcomeResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    orgId: z.string().uuid(),
+    /** What this org was seeded with before signing up (0 when it never was). */
+    trialSeedCents: z.number().int(),
+    /** What this call granted under the welcome code (0 when nothing was left to grant). */
+    welcomeGrantedCents: z.number().int(),
+    /** Seed + welcome. Equals the live welcome amount. */
+    totalFreeCreditCents: z.number().int(),
+    /** true when the org had already been settled — a replay grants nothing. */
+    alreadySettled: z.boolean(),
+  })
+  .openapi("SignupWelcomeResponse");
+
 // --- Free-credit promises (stacked welcome + referral offers, migration 0033) ---
 
 export const ReferralClaimRequestSchema = z
@@ -1613,6 +1641,82 @@ const internalHeaders = z.object({
 const internalOrgHeaders = z.object({
   "x-api-key": z.string(),
   "x-org-id": z.string().uuid(),
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/accounts/by-org/{orgId}/trial-seed",
+  summary: "Seed free credit on an organisation that has not signed up",
+  description:
+    "Puts a very small amount of credit on an org that exists but has no " +
+    "identity-provider identity yet, so the unauthenticated setup a visitor walks " +
+    "through can do its metered work. Recorded under its OWN ledger key (trial_seed), " +
+    "never as the welcome gift, and never surfaced to the visitor. What caps the " +
+    "spend is this credit plus the affordability gate this service already enforces " +
+    "— there is no counter and no new threshold. Idempotent: seeding twice does not " +
+    "double the seed. 409 when the org already holds the welcome gift (it has signed " +
+    "up, or spent before it was seeded), because seeding it would take its free " +
+    "credit past the welcome amount.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Org seeded (or already was)",
+      content: { "application/json": { schema: TrialSeedResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Org already holds the welcome gift",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "trial_seed ledger key missing (migration 0046 not applied)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/accounts/by-org/{orgId}/signup",
+  summary: "Land an organisation's free credit on exactly the welcome amount",
+  description:
+    "Called when an org signs up. An org with no trial seed receives the whole " +
+    "welcome offer, exactly as it always has. A seeded org receives the REMAINDER " +
+    "(welcome − seeded), so its TOTAL free credit is the welcome amount rather than " +
+    "the welcome amount plus its seed; unspent seed is never clawed back. Idempotent " +
+    "— a replay grants nothing.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Free credit settled on the welcome amount",
+      content: { "application/json": { schema: SignupWelcomeResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "welcome ledger key missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
 });
 
 registry.registerPath({

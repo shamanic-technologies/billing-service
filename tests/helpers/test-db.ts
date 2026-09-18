@@ -19,6 +19,8 @@ import {
   WELCOME_COMPLETION_CODE,
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
+  TRIAL_SEED_CODE,
+  WELCOME_PROMO_AMOUNT_CENTS,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
   GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
@@ -34,6 +36,7 @@ const SEEDED_PROMO_CODES = [
   WELCOME_COMPLETION_CODE,
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
+  TRIAL_SEED_CODE,
 ];
 
 export async function cleanTestData() {
@@ -92,6 +95,35 @@ export async function cleanTestData() {
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: 0 },
+    });
+  // Trial seeds carry their amount per row too (derived from the live welcome
+  // figure), so this code row is a 0 placeholder — restored for the same reason.
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: TRIAL_SEED_CODE,
+      amountCents: 0,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: 0 },
+    });
+  // The welcome amount is the live figure BOTH the trial seed and the signup
+  // remainder are derived from, so a suite that re-priced it must not leak that
+  // price into the next one.
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: WELCOME_PROMO_CODE,
+      amountCents: WELCOME_PROMO_AMOUNT_CENTS,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: WELCOME_PROMO_AMOUNT_CENTS },
     });
 }
 

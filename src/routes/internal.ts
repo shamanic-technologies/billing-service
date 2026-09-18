@@ -15,6 +15,7 @@ import {
   creditDepletionEpisodes,
   freeCreditPromises,
   localPromos,
+  PLATFORM_USER_ID,
 } from "../db/schema.js";
 import {
   listAllCustomersForOrg,
@@ -30,6 +31,11 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
+import {
+  seedTrialCredit,
+  settleSignupWelcome,
+  TrialSeedWelcomeAlreadyGrantedError,
+} from "../lib/trial-seed.js";
 import {
   chargeOrgOnDemand,
   OnDemandChargeError,
@@ -355,6 +361,61 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     lastRequiredCents,
     hasHistory: true,
   });
+});
+
+// POST /internal/accounts/by-org/:orgId/trial-seed
+//
+// Put the trial seed on an org that has not signed up — see lib/trial-seed.ts.
+// Service-auth + the orgId in the PATH only (no x-org-id / x-user-id, no sentinel
+// identity): there is no end user behind an org nobody has signed up for.
+router.post("/internal/accounts/by-org/:orgId/trial-seed", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  try {
+    const result = await seedTrialCredit(orgId);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    if (err instanceof TrialSeedWelcomeAlreadyGrantedError) {
+      res.status(409).json({
+        error:
+          "Org already holds the welcome gift — seeding it would take its free credit past the welcome amount",
+      });
+      return;
+    }
+    console.error(
+      `[billing-service] trial-seed failed for org ${orgId}:`,
+      err
+    );
+    res.status(500).json({ error: "Failed to seed trial credit" });
+  }
+});
+
+// POST /internal/accounts/by-org/:orgId/signup
+//
+// The org signed up: land its TOTAL free credit on exactly the welcome amount. An
+// unseeded org is byte-for-byte unaffected (it receives the whole welcome offer);
+// a seeded one receives the remainder. Idempotent. Same auth as the seed above.
+router.post("/internal/accounts/by-org/:orgId/signup", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  try {
+    const result = await settleSignupWelcome(orgId, PLATFORM_USER_ID);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error(
+      `[billing-service] signup free-credit settle failed for org ${orgId}:`,
+      err
+    );
+    res.status(500).json({ error: "Failed to settle signup free credit" });
+  }
 });
 
 // GET /internal/accounts/by-org/:orgId/balance
