@@ -578,6 +578,68 @@
           "code"
         ]
       },
+      "TrialSeedResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seededCents": {
+            "type": "integer"
+          },
+          "alreadySeeded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "orgId",
+          "seededCents",
+          "alreadySeeded"
+        ]
+      },
+      "SignupWelcomeResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "trialSeedCents": {
+            "type": "integer"
+          },
+          "welcomeGrantedCents": {
+            "type": "integer"
+          },
+          "totalFreeCreditCents": {
+            "type": "integer"
+          },
+          "alreadySettled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "orgId",
+          "trialSeedCents",
+          "welcomeGrantedCents",
+          "totalFreeCreditCents",
+          "alreadySettled"
+        ]
+      },
       "InternalAccountTeardownDeletedRows": {
         "type": "object",
         "properties": {
@@ -3348,6 +3410,150 @@
           },
           "409": {
             "description": "Promo code already redeemed by this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/trial-seed": {
+      "post": {
+        "summary": "Seed free credit on an organisation that has not signed up",
+        "description": "Puts a very small amount of credit on an org that exists but has no identity-provider identity yet, so the unauthenticated setup a visitor walks through can do its metered work. Recorded under its OWN ledger key (trial_seed), never as the welcome gift, and never surfaced to the visitor. What caps the spend is this credit plus the affordability gate this service already enforces — there is no counter and no new threshold. Idempotent: seeding twice does not double the seed. 409 when the org already holds the welcome gift (it has signed up, or spent before it was seeded), because seeding it would take its free credit past the welcome amount.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org seeded (or already was)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrialSeedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Org already holds the welcome gift",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "trial_seed ledger key missing (migration 0046 not applied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/signup": {
+      "post": {
+        "summary": "Land an organisation's free credit on exactly the welcome amount",
+        "description": "Called when an org signs up. An org with no trial seed receives the whole welcome offer, exactly as it always has. A seeded org receives the REMAINDER (welcome − seeded), so its TOTAL free credit is the welcome amount rather than the welcome amount plus its seed; unspent seed is never clawed back. Idempotent — a replay grants nothing.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Free credit settled on the welcome amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupWelcomeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "welcome ledger key missing",
             "content": {
               "application/json": {
                 "schema": {
