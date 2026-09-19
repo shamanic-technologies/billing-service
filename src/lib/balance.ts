@@ -6,11 +6,11 @@
  * downstream error (stripe-service / runs-service) propagates to the caller.
  */
 
-import { addCents, subCents } from "./cents.js";
+import { addCents, subCents, ZERO_CENTS } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
 import { fetchRunsOrgUsageTotal } from "./runs-client.js";
 import {
-  fetchOrgCustomer,
+  fetchOrgCustomerOrNull,
   sumSucceededTopupsForOrg,
   hasChargeablePmForOrg,
   getOrgCardCountryByOrg,
@@ -19,7 +19,16 @@ import {
 } from "./stripe-service-client.js";
 
 export interface BalanceSnapshot {
-  customer: StripeCustomer;
+  /**
+   * The org's Stripe customer, or NULL when it has none.
+   *
+   * Null is an ordinary state, not a failure: a customer is created when an org
+   * first pays or saves a card, so an org still walking the unauthenticated
+   * onboarding holds only its trial seed and has no customer at all. Read it as
+   * `customer?.email` — every consumer here wants nothing but the notification
+   * recipient, and a customer-less org has none.
+   */
+  customer: StripeCustomer | null;
   hasCardPm: boolean;
   /** Issuing country of the card the reload would charge (null when no card PM). */
   cardCountry: string | null;
@@ -68,9 +77,16 @@ export interface CreditedCents {
  * Costs one stripe-service read plus one local query; no runs-service hop, so a
  * caller that needs credited but not usage does not pay for usage.
  */
-export async function composeCreditedCents(orgId: string): Promise<CreditedCents> {
+export async function composeCreditedCents(
+  orgId: string,
+  opts: { hasStripeCustomer?: boolean } = {}
+): Promise<CreditedCents> {
+  // An org with NO Stripe customer has no Stripe payments — a payment cannot
+  // exist without one — so the paid half is a derived zero, not a read we skip
+  // and hope about. Asking anyway would be one more call that can only 404.
+  const hasStripeCustomer = opts.hasStripeCustomer ?? true;
   const [paidTopups, localCredits] = await Promise.all([
-    sumSucceededTopupsForOrg(orgId),
+    hasStripeCustomer ? sumSucceededTopupsForOrg(orgId) : Promise.resolve(ZERO_CENTS),
     sumLocalPromoCreditsForOrg(orgId),
   ]);
   return {
@@ -90,12 +106,23 @@ export async function composeCreditedCents(orgId: string): Promise<CreditedCents
  * Fail-loud: any downstream error (stripe-service / runs-service) propagates.
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
-  const customer = await fetchOrgCustomer(orgId);
+  const customer = await fetchOrgCustomerOrNull(orgId);
+  // No Stripe customer → the org has never paid and holds no saved card, because
+  // neither object can exist without one. So the three Stripe reads below are
+  // answered by derivation rather than skipped: paid topups "0", no chargeable
+  // PM, no card country. It leaves the org STRICTLY PREPAID — resolvePostpaidTier
+  // grants no credit line without a chargeable card, so the floor is "0" — which
+  // is exactly right for an org whose only money is a trial seed, and its credit
+  // is spendable down to zero like anyone else's.
+  //
+  // This is NOT a fallback that hides an outage: `fetchOrgCustomerOrNull` returns
+  // null ONLY on stripe-service's definite 404. Any other failure propagates.
+  const hasStripeCustomer = customer !== null;
   const [credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
-    composeCreditedCents(orgId),
+    composeCreditedCents(orgId, { hasStripeCustomer }),
     fetchRunsOrgUsageTotal(orgId, {}),
-    hasChargeablePmForOrg(orgId),
-    getOrgCardCountryByOrg(orgId),
+    hasStripeCustomer ? hasChargeablePmForOrg(orgId) : Promise.resolve(false),
+    hasStripeCustomer ? getOrgCardCountryByOrg(orgId) : Promise.resolve(null),
   ]);
   const { paidTopupsCents: paidTopups, creditedCents } = credited;
   // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at

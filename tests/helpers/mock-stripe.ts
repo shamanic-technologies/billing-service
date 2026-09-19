@@ -6,6 +6,13 @@ import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 export interface StripeServiceMocks {
   ensureCustomer: ReturnType<typeof vi.fn>;
   getCustomerByOrg: ReturnType<typeof vi.fn>;
+  /**
+   * Customer-or-null twin, read by composeAccountFunds and the auto-topup PM
+   * gate. Defaults to a customer, so every suite written before customer-less
+   * orgs existed takes the identical path. Resolve null to exercise an org that
+   * has never paid (an anonymous onboarding holding only its trial seed).
+   */
+  getCustomerByOrgOrNull: ReturnType<typeof vi.fn>;
   createPaymentIntent: ReturnType<typeof vi.fn>;
   getPaymentIntent: ReturnType<typeof vi.fn>;
   listPaymentIntents: ReturnType<typeof vi.fn>;
@@ -20,6 +27,12 @@ export interface StripeServiceMocks {
   sumPaidTopupsForOrgAsOf: ReturnType<typeof vi.fn>;
   // User-less org-keyed reads (balance path — computeBalance).
   fetchOrgCustomer: ReturnType<typeof vi.fn>;
+  /**
+   * The read `computeBalance` ACTUALLY makes. Defaults to a customer; resolve
+   * null for an org with none (stripe-service's definite 404). `fetchOrgCustomer`
+   * is kept mocked beside it for the referral-notification recipient lookup.
+   */
+  fetchOrgCustomerOrNull: ReturnType<typeof vi.fn>;
   sumSucceededTopupsForOrg: ReturnType<typeof vi.fn>;
   hasChargeablePmForOrg: ReturnType<typeof vi.fn>;
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
@@ -70,6 +83,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   const mocks: StripeServiceMocks = {
     ensureCustomer: vi.fn().mockResolvedValue({ customer_id: MOCK_CUSTOMER_ID }),
     getCustomerByOrg: vi.fn().mockResolvedValue(buildMockCustomer()),
+    getCustomerByOrgOrNull: vi.fn(),
     createPaymentIntent: vi.fn().mockResolvedValue({
       id: "pi_mock",
       object: "payment_intent",
@@ -121,6 +135,7 @@ export function setupStripeMocks(): StripeServiceMocks {
     getOrgCardDisplay: vi.fn().mockResolvedValue(null),
     sumPaidTopupsForOrgAsOf: vi.fn().mockResolvedValue("0.0000000000"),
     fetchOrgCustomer: vi.fn().mockResolvedValue(buildMockCustomer()),
+    fetchOrgCustomerOrNull: vi.fn(),
     sumSucceededTopupsForOrg: vi.fn().mockResolvedValue("0.0000000000"),
     hasChargeablePmForOrg: vi.fn().mockResolvedValue(true),
     getOrgCardCountryByOrg: vi.fn().mockResolvedValue(null),
@@ -177,8 +192,21 @@ export function setupStripeMocks(): StripeServiceMocks {
     }),
   };
 
+  // The `*OrNull` reads are the ones production actually makes; the throwing
+  // originals are thin wrappers over them. Delegate by DEFAULT so a suite that
+  // seeds `fetchOrgCustomer` / `getCustomerByOrg` (most of them predate the
+  // customer-less org) drives the read its code path takes, with no edit. A test
+  // that wants an org with NO customer overrides the `*OrNull` mock directly.
+  mocks.fetchOrgCustomerOrNull.mockImplementation((orgId: string) =>
+    mocks.fetchOrgCustomer(orgId)
+  );
+  mocks.getCustomerByOrgOrNull.mockImplementation((identity: ssClient.IdentityHeaders) =>
+    mocks.getCustomerByOrg(identity)
+  );
+
   vi.spyOn(ssClient, "ensureCustomer").mockImplementation(mocks.ensureCustomer);
   vi.spyOn(ssClient, "getCustomerByOrg").mockImplementation(mocks.getCustomerByOrg);
+  vi.spyOn(ssClient, "getCustomerByOrgOrNull").mockImplementation(mocks.getCustomerByOrgOrNull);
   vi.spyOn(ssClient, "createPaymentIntent").mockImplementation(mocks.createPaymentIntent);
   vi.spyOn(ssClient, "getPaymentIntent").mockImplementation(mocks.getPaymentIntent);
   vi.spyOn(ssClient, "listPaymentIntents").mockImplementation(mocks.listPaymentIntents);
@@ -190,6 +218,9 @@ export function setupStripeMocks(): StripeServiceMocks {
     mocks.sumPaidTopupsForOrgAsOf
   );
   vi.spyOn(ssClient, "fetchOrgCustomer").mockImplementation(mocks.fetchOrgCustomer);
+  vi.spyOn(ssClient, "fetchOrgCustomerOrNull").mockImplementation(
+    mocks.fetchOrgCustomerOrNull
+  );
   vi.spyOn(ssClient, "sumSucceededTopupsForOrg").mockImplementation(
     mocks.sumSucceededTopupsForOrg
   );

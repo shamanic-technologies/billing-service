@@ -147,7 +147,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: snapshot.customer.email,
+        recipientEmail: snapshot.customer?.email ?? null,
         autoReloadSupported: snapshot.autoReloadSupported,
       });
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "no_topup_config" } }, req.headers);
@@ -168,7 +168,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: snapshot.customer.email,
+        recipientEmail: snapshot.customer?.email ?? null,
         autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
@@ -191,7 +191,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: snapshot.customer.email,
+        recipientEmail: snapshot.customer?.email ?? null,
         autoReloadSupported: snapshot.autoReloadSupported,
       });
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "auto_reload_unsupported_country", card_country: snapshot.cardCountry } }, req.headers);
@@ -218,7 +218,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: snapshot.customer.email,
+        recipientEmail: snapshot.customer?.email ?? null,
         autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
@@ -280,7 +280,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: snapshot.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: snapshot.customer.email,
+        recipientEmail: snapshot.customer?.email ?? null,
         autoReloadSupported: snapshot.autoReloadSupported,
       });
       res.json({
@@ -310,7 +310,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         creditedCents: after.creditedCents,
         workflow: wf,
         workflowHeaders: wfHeaders,
-        recipientEmail: after.customer.email,
+        recipientEmail: after.customer?.email ?? null,
         autoReloadSupported: after.autoReloadSupported,
       });
     }

@@ -588,7 +588,7 @@ export async function runCampaignReloadSweep(
           orgId,
           declineCode: outcome.failure_code as string,
           creditedCents: snapshot.creditedCents,
-          recipientEmail: snapshot.customer.email,
+          recipientEmail: snapshot.customer?.email ?? null,
           now,
         });
         // That path tells the customer to REPLACE the card. The episode still
@@ -606,7 +606,7 @@ export async function runCampaignReloadSweep(
       const shouldNotify =
         !succeeded && !outcome.backoffSkipped && decision.notifiedAt == null;
       if (shouldNotify) {
-        await notifyReloadFailed(orgId, snapshot.customer.email);
+        await notifyReloadFailed(orgId, snapshot.customer?.email ?? null);
         mailedThisTick = true;
       }
 
