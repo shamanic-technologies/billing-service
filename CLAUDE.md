@@ -322,6 +322,19 @@ Shipped briefly in v0.74.0 and removed before it could ever fire (both env vars 
 
 **`allow_promotion_codes` is still gone and must not come back either.** It was enabled for a single journalist comp (that is done). Nothing in this service discounts a charge.
 
+## An org can hold credit with NO Stripe customer — that is prepaid, not broken (`fetchOrgCustomerOrNull`)
+
+A Stripe customer is created when an org first pays or saves a card. An org that has done neither still holds money: the trial seed (an anonymous onboarding, see "Trial seed"), the welcome gift, a staff grant. Every balance composition opened with `fetchOrgCustomer`, so stripe-service's `404 {"error":"Customer not found"}` propagated and billing answered **502 `Failed to compute balance`** — which made that credit unspendable and 502'd every spend authorization the org attempted.
+
+Measured in prod 2026-09-19: **81** authorize failures since 09-18 12:41, every one an anonymous org (`e4d3392f-…`, `0a8cffbf-…`, `8d6a5acf-…`), so no anonymous visitor's site extraction or ICP draft could run at all. The same read also failed the hourly unpaid-debt scan for those orgs.
+
+- **A 404 is stripe-service's DEFINITE "no customer"; every other non-2xx means we could not ASK.** `fetchOrgCustomerOrNull` keeps them apart — same split as `authorizeRecurringCharges`' 409 — and **only the 404 becomes null**. Collapsing the two would answer "no card, no payments, no credit line" during a stripe-service outage, which is the silent fallback this repo forbids. A test pins 500/502/503/401/429 as throws. `fetchOrgCustomer` remains, implemented on top and throwing, for the referral-recipient lookup.
+- **The other three Stripe reads are DERIVED, not skipped.** No customer → paid topups `0`, no chargeable PM, no card country, because no payment and no payment method can exist without a customer. So they are never issued (they could only 404) and `composeCreditedCents` takes a `hasStripeCustomer` flag rather than guessing.
+- **The org lands STRICTLY PREPAID with nothing special-cased.** `resolvePostpaidTier` grants a credit line only to an org that can be reloaded, so no card ⇒ floor `"0"`: it spends its credit down to zero and `cannotSpend` refuses it after that. **The refusal IS the cap** — no counter, no per-org spend limit, no new threshold, exactly as the trial seed's design states. Nothing about an org that DOES have a customer changes: `computeBalance` for one is byte-identical.
+- **Same rule on the real-user path.** `composeAccountFunds` reads `getCustomerByOrgOrNull`, whose "none" needs no status handling (that route serves a LIST, so an empty `data` is an unambiguous 200). The `PATCH /v1/accounts/auto_topup` gate answers **400 "Payment method required"** rather than 502 — no customer is a definite no-card, while an unreachable stripe-service still 502s.
+- **An uncollectable debt is NOT flagged for a customer-less org** (`flagUncollectableDebt` → `state: "no_customer"`). It has never paid us, so there is no billing relationship to collect against and no billing address to write to: the customer mail would have no recipient and the staff mail would fire once per visitor who overshoots their seed. Guard on POSITIVE evidence that a paying relationship exists, never on the absence of a card — the same shape as "an exhaustion signal computed as nothing-left is also true for never-had-anything". The moment a customer exists, the ordinary path resumes.
+- **In tests, `fetchOrgCustomerOrNull` / `getCustomerByOrgOrNull` DELEGATE to the throwing mocks by default** (`tests/helpers/mock-stripe.ts`), so every suite that seeds `fetchOrgCustomer` drives the read its code path actually takes with no edit. Override the `*OrNull` mock with `null` to exercise an org with no customer.
+
 ## Billing/runs ownership target
 
 - **Billing-service** owns: local promo grants (`local_promos`), topup config (`billing_accounts.topup_amount_cents`, `topup_threshold_cents`).

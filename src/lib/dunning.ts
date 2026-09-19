@@ -293,7 +293,7 @@ export async function openBlockedCampaignEpisode(params: {
     orgId: params.orgId,
     userId: PLATFORM_USER_ID,
     runId,
-    recipientEmail: params.snapshot.customer.email ?? undefined,
+    recipientEmail: params.snapshot.customer?.email ?? undefined,
     metadata: {},
   });
   await completePlatformRun(runId);
@@ -394,7 +394,7 @@ export async function runDunningTick(): Promise<DunningTickResult> {
     if (!blocked) continue;
 
     const ageMs = now - ep.startedAt.getTime();
-    const recipientEmail = snapshot.customer.email ?? undefined;
+    const recipientEmail = snapshot.customer?.email ?? undefined;
 
     // The follow-ups run on a scheduler tick, so there is no request run to
     // borrow when the episode was opened without one. A minted UUID is NOT a

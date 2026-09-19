@@ -70,7 +70,12 @@ export type UnpaidDebtState =
   /** Uncollectable, already flagged on this episode — amount refreshed, no email. */
   | "already_flagged"
   /** Uncollectable, but the notification could not be claimed this tick (retried). */
-  | "deferred";
+  | "deferred"
+  /**
+   * The org has no Stripe customer at all, so there is no debt to flag and
+   * nobody to tell. Not a failure and not a skip — see the guard below.
+   */
+  | "no_customer";
 
 export interface UnpaidDebtOutcome {
   state: UnpaidDebtState;
@@ -115,6 +120,26 @@ export async function flagUncollectableDebt(params: {
     // clear it so the staff surface does not show a debt that no longer exists.
     await clearUncollectableFlag(params.orgId);
     return { state: "no_debt", owedCents: "0" };
+  }
+
+  if (snapshot.customer === null) {
+    // No Stripe customer means this org has never paid us and holds no card —
+    // an org still walking the unauthenticated onboarding on nothing but its
+    // trial seed. It has overspent a gift, which is not a debt: there is no
+    // billing relationship to collect against and no billing address to write
+    // to, so the customer mail would have no recipient and the staff mail would
+    // fire once per visitor who overshoots their seed.
+    //
+    // This is the same guard as "an exhaustion signal computed as nothing-left
+    // is also true for never-had-anything": flag on POSITIVE evidence that a
+    // paying relationship exists, never on the absence of a card. The moment one
+    // does exist (a customer is created at the first payment or saved card), the
+    // ordinary path resumes with nothing special-cased.
+    console.warn(
+      `[billing-service] unpaid debt: org ${params.orgId} is ${owedCents} cents past ` +
+        `its credit with no Stripe customer — never a paying customer, nothing to flag`
+    );
+    return { state: "no_customer", owedCents };
   }
 
   if (snapshot.hasCardPm) {
@@ -183,7 +208,7 @@ export async function flagUncollectableDebt(params: {
     orgId: params.orgId,
     userId: episode.userId,
     runId,
-    recipientEmail: snapshot.customer.email ?? undefined,
+    recipientEmail: snapshot.customer?.email ?? undefined,
     metadata: { amountOwed, orgId: params.orgId },
   });
   sendEmail({
@@ -194,7 +219,7 @@ export async function flagUncollectableDebt(params: {
     metadata: {
       amountOwed,
       orgId: params.orgId,
-      billingEmail: snapshot.customer.email ?? "unknown",
+      billingEmail: snapshot.customer?.email ?? "unknown",
     },
   });
   await completePlatformRun(runId);
