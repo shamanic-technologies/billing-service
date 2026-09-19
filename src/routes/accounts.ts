@@ -5,7 +5,7 @@ import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
-import { addCents, isDepleted, subCents } from "../lib/cents.js";
+import { addCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
@@ -14,7 +14,7 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
 import { removeCardForOrg } from "../lib/card-removal.js";
 import {
-  getCustomerByOrg,
+  getCustomerByOrgOrNull,
   sumSucceededTopupsForOrg,
   hasAttachedCardPm,
   getOrgCardCountry,
@@ -62,15 +62,22 @@ async function composeAccountFunds(
   cardExpYear: number | null;
   autoReloadSupported: boolean;
 }> {
-  const customer = await getCustomerByOrg(identity);
+  // An org with NO Stripe customer is an ordinary state, not a failure: the
+  // customer is created at the first payment or saved card, so an org whose only
+  // money is a trial seed or a welcome gift has none. It has no Stripe payments
+  // and no saved card either — neither object can exist without a customer — so
+  // those three reads are answered by derivation rather than issued and 404'd.
+  // Same rule and the same "definite none, never an outage" distinction as
+  // lib/balance's computeBalance; see fetchOrgCustomerOrNull.
+  const customer = await getCustomerByOrgOrNull(identity);
   const [paidTopups, localCreditsBeforeSettle, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
     await Promise.all([
-      sumSucceededTopupsForOrg(orgId),
+      customer ? sumSucceededTopupsForOrg(orgId) : Promise.resolve(ZERO_CENTS),
       sumLocalPromoCreditsForOrg(orgId),
       fetchRunsOrgUsageTotal(orgId, identity),
       fetchRunsOrgActualUsageTotal(orgId, identity),
-      hasAttachedCardPm(identity, customer.id),
-      getOrgCardDisplay(identity, customer.id),
+      customer ? hasAttachedCardPm(identity, customer.id) : Promise.resolve(false),
+      customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
       getUsageDiscountPct(orgId),
     ]);
   // Free-credit promises (welcome + referral): paid topups are the trigger for all
@@ -488,11 +495,17 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       let hasCardPm: boolean;
       let cardCountry: string | null;
       try {
-        const customer = await getCustomerByOrg(identity);
-        [hasCardPm, cardCountry] = await Promise.all([
-          hasAttachedCardPm(identity, customer.id),
-          getOrgCardCountry(identity, customer.id),
-        ]);
+        // No customer → no saved card, by construction. That is a definite "no
+        // payment method", so it must reach the 400 below, not the 502 an
+        // unreadable stripe-service deserves. An unreachable stripe-service
+        // still throws here and still 502s.
+        const customer = await getCustomerByOrgOrNull(identity);
+        [hasCardPm, cardCountry] = customer
+          ? await Promise.all([
+              hasAttachedCardPm(identity, customer.id),
+              getOrgCardCountry(identity, customer.id),
+            ])
+          : [false, null];
       } catch (err) {
         console.error("[billing-service] Failed to fetch customer for PM check:", err);
         res.status(502).json({ error: "Failed to query payment method status" });

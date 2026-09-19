@@ -356,12 +356,27 @@ export async function ensureCustomer(identity: IdentityHeaders): Promise<Custome
  * Returns the first (and only) customer in the list. Throws if none exists.
  */
 export async function getCustomerByOrg(identity: IdentityHeaders): Promise<StripeCustomer> {
-  const list = await call<StripeCustomerList>("GET", "/v1/customers?limit=1", identity);
-  const customer = list.data[0];
+  const customer = await getCustomerByOrgOrNull(identity);
   if (!customer) {
     throw new Error("stripe-service returned empty customer list for org");
   }
   return customer;
+}
+
+/**
+ * Org-implicit customer fetch that answers null for an org with no customer.
+ *
+ * Here the "none" answer needs no status handling: stripe-service serves a LIST,
+ * so an org with no customer is a 200 carrying an empty `data` — unambiguous, and
+ * distinct from any error, which still throws. The user-less twin
+ * (`fetchOrgCustomerOrNull`) has to read a 404 for the same fact because its
+ * route returns the object directly.
+ */
+export async function getCustomerByOrgOrNull(
+  identity: IdentityHeaders
+): Promise<StripeCustomer | null> {
+  const list = await call<StripeCustomerList>("GET", "/v1/customers?limit=1", identity);
+  return list.data[0] ?? null;
 }
 
 // --- PaymentIntent ---
@@ -725,16 +740,47 @@ export async function getOrgCardDisplay(
 // content-type. Fail-loud: `call` throws on any non-2xx (incl. 404 no-customer).
 
 /**
+ * The org's Stripe customer object, or null when stripe-service says it has none.
+ *
+ * A 404 is stripe-service's DEFINITE answer that this org has no customer, and
+ * that is an ORDINARY state, not a failure: an org only gets a Stripe customer
+ * when it first pays or saves a card, so an org still walking the unauthenticated
+ * onboarding — holding nothing but its trial seed — has none by construction.
+ * Treating that as an error made the seed unspendable and 502'd every spend
+ * authorization for it.
+ *
+ * Every OTHER non-2xx means we could not ASK, and must never read as "no
+ * customer": a stripe-service outage answering "this org has no card, no
+ * payments, no credit line" is the silent-fallback failure this repo forbids.
+ * Same split as `authorizeRecurringCharges`' 409.
+ */
+export async function fetchOrgCustomerOrNull(orgId: string): Promise<StripeCustomer | null> {
+  const { url, apiKey } = getConfig();
+  const path = `/internal/customers/by-org/${encodeURIComponent(orgId)}`;
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method: "GET",
+    headers: buildHeaders({}, apiKey),
+  });
+  if (res.ok) return (await res.json()) as StripeCustomer;
+  if (res.status === 404) return null;
+  const text = await res.text();
+  throw new Error(`stripe-service GET ${path} failed: ${res.status} ${text}`);
+}
+
+/**
  * Fetch the org's Stripe customer object verbatim via the user-less
  * `/internal/customers/by-org/{orgId}` route. The response is the customer
- * object directly (NOT a list). Throws (404) if the org has no customer.
+ * object directly (NOT a list). Throws if the org has no customer.
+ *
+ * For a caller that can legitimately meet an org with NO customer (any balance
+ * composition — see lib/balance), use `fetchOrgCustomerOrNull` instead.
  */
 export async function fetchOrgCustomer(orgId: string): Promise<StripeCustomer> {
-  return call<StripeCustomer>(
-    "GET",
-    `/internal/customers/by-org/${encodeURIComponent(orgId)}`,
-    {}
-  );
+  const customer = await fetchOrgCustomerOrNull(orgId);
+  if (!customer) {
+    throw new Error(`stripe-service has no customer for org ${orgId}`);
+  }
+  return customer;
 }
 
 /**

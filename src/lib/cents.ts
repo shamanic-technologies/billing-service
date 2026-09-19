@@ -75,6 +75,12 @@ export function parseNonNegativeCents(input: unknown): string {
   return dec.toFixed(SCALE);
 }
 
+/**
+ * Canonical zero at the DB column's scale, so a derived zero is byte-identical
+ * to one that came back from a sum (both `toFixed(10)`).
+ */
+export const ZERO_CENTS = new Decimal(0).toFixed(SCALE);
+
 /** Add two cent strings — returns canonical fixed-scale string. */
 export function addCents(a: string, b: string): string {
   return new Decimal(a).plus(b).toFixed(SCALE);
