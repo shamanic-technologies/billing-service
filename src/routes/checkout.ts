@@ -3,11 +3,10 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CreateCheckoutRequestSchema } from "../schemas.js";
 import {
   createCheckoutSession,
-  getCustomerByOrg,
   sumSucceededTopupsForOrg,
 } from "../lib/stripe-service-client.js";
 import type { CheckoutSessionBody } from "../lib/stripe-service-client.js";
-import { findOrCreateAccount } from "../lib/account.js";
+import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
 import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -56,7 +55,9 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     let session;
     try {
-      const customer = await getCustomerByOrg(identity);
+      // A claimed org that started anonymous has a billing row but no Stripe
+      // customer yet (see ensureOrgStripeCustomer) — create it here, idempotently.
+      const customer = await ensureOrgStripeCustomer(identity);
       let body: CheckoutSessionBody;
       if (isSetup) {
         // No-charge card capture: saves a reusable off-session card (Stripe

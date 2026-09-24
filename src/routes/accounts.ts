@@ -4,7 +4,7 @@ import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
-import { findOrCreateAccount } from "../lib/account.js";
+import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
 import { addCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
@@ -300,6 +300,14 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
     // gates it. The two routes serve one descriptor, so they must behave
     // identically or the behaviour is one URL away from diverging.
     await settleOutstandingBeforeCardChange(orgId);
+
+    // Same as POST /v1/portal-sessions: an org with a billing row but no Stripe
+    // customer (it started anonymous) gets one here, before stripe-service 409s.
+    await ensureOrgStripeCustomer({
+      "x-org-id": orgId,
+      "x-user-id": req.headers["x-user-id"] as string,
+      ...forwardWorkflowHeaders(getWorkflowHeaders(req)),
+    });
 
     const setup = await getCardSetup(orgId, return_url, undefined, currency);
     res.json(setup);
