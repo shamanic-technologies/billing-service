@@ -24,13 +24,17 @@ interface RunsOrgUsageTotalResponse {
   as_of: string;
 }
 
-interface RunsExpectedTotalsResponse {
+// runs-service GET /internal/org-actual-total: the org's actualized platform
+// total, served from a write-maintained per-org row. It replaced
+// /internal/runs-expected-totals here because that route also returned one
+// entry per run (411,780 entries / 33 MB / 5.4s for the heaviest org on
+// 2026-09-24) that billing never read, and it sat on every dashboard page.
+// Same figure, same field name.
+interface RunsOrgActualTotalResponse {
+  org_id: string;
   total_expected_cents: string;
   net_total_expected_cents: string;
-  runs: Array<{
-    run_id: string;
-    expected_cents: string;
-  }>;
+  as_of: string;
 }
 
 export interface RunsOrgActualUsageTotalResult {
@@ -217,7 +221,7 @@ export async function fetchRunsOrgActualUsageTotal(
   }
 
   const res = await fetchWithRetry(
-    `${config.url}/internal/runs-expected-totals?org_id=${encodeURIComponent(orgId)}`,
+    `${config.url}/internal/org-actual-total?org_id=${encodeURIComponent(orgId)}`,
     {
       headers: {
         "x-api-key": config.apiKey,
@@ -229,14 +233,14 @@ export async function fetchRunsOrgActualUsageTotal(
   if (!res.ok) {
     const body = await res.text();
     throw new Error(
-      `runs-service runs-expected-totals failed for org ${orgId}: ${res.status} ${body}`
+      `runs-service org-actual-total failed for org ${orgId}: ${res.status} ${body}`
     );
   }
 
-  const body = (await res.json()) as RunsExpectedTotalsResponse;
+  const body = (await res.json()) as RunsOrgActualTotalResponse;
   if (body.net_total_expected_cents == null) {
     throw new Error(
-      `runs-service runs-expected-totals missing net_total_expected_cents for org ${orgId}`
+      `runs-service org-actual-total missing net_total_expected_cents for org ${orgId}`
     );
   }
   return { spent_cents: body.net_total_expected_cents };
