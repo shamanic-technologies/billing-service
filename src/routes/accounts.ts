@@ -72,15 +72,26 @@ async function composeAccountFunds(
   // those three reads are answered by derivation rather than issued and 404'd.
   // Same rule and the same "definite none, never an outage" distinction as
   // lib/balance's computeBalance; see fetchOrgCustomerOrNull.
-  const customer = await getCustomerByOrgOrNull(identity);
-  const [paidTopups, localCreditsBeforeSettle, runsUsage, actualRunsUsage, hasCardPm, cardDisplay, discountPct] =
-    await Promise.all([
+  //
+  // Latency: this read sits on every dashboard page, so nothing waits on
+  // anything it does not need. The runs-service usage reads, the promo sum and
+  // the discount do not depend on the Stripe customer, so they start at once
+  // instead of behind the customer lookup; only the three customer-dependent
+  // Stripe reads chain on it. Same calls, same figures — only the ordering moved.
+  const customerP = getCustomerByOrgOrNull(identity);
+  const stripeP = customerP.then((customer) =>
+    Promise.all([
       customer ? sumSucceededTopupsForOrg(orgId) : Promise.resolve(ZERO_CENTS),
+      customer ? hasAttachedCardPm(identity, customer.id) : Promise.resolve(false),
+      customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
+    ])
+  );
+  const [[paidTopups, hasCardPm, cardDisplay], localCreditsBeforeSettle, runsUsage, actualRunsUsage, discountPct] =
+    await Promise.all([
+      stripeP,
       sumLocalPromoCreditsForOrg(orgId),
       fetchRunsOrgUsageTotal(orgId, identity),
       fetchRunsOrgActualUsageTotal(orgId, identity),
-      customer ? hasAttachedCardPm(identity, customer.id) : Promise.resolve(false),
-      customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
       getUsageDiscountPct(orgId),
     ]);
   // Free-credit promises (welcome + referral): paid topups are the trigger for all
