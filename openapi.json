@@ -286,11 +286,35 @@
             "enum": [
               "merchant"
             ]
+          },
+          "settle_result": {
+            "type": "string",
+            "enum": [
+              "charged",
+              "declined",
+              "failed",
+              "not_attempted"
+            ],
+            "description": "charged = the outstanding balance was just taken (`settled_cents`). declined = the acquirer answered and refused the card; the balance is still owed (`settle_decline_message` carries the acquirer's own customer-readable reason when it gave one). failed = we could not get an answer from the payment side; nothing is known to be charged and the balance is still owed (NOT a decline: the card may be fine). not_attempted = no charge was presented; `settle_skip_reason` says why (e.g. nothing_owed, no_card, card_unusable, below_minimum, charge_backoff)."
+          },
+          "settled_cents": {
+            "type": "number"
+          },
+          "settle_skip_reason": {
+            "type": "string"
+          },
+          "settle_decline_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "The acquirer's own customer-readable refusal sentence (e.g. \"Your card does not support this type of purchase.\"). Set only when settle_result is `declined` and the acquirer gave one; null otherwise. Never a raw processor payload."
           }
         },
         "required": [
           "object",
-          "mode"
+          "mode",
+          "settle_result",
+          "settled_cents",
+          "settle_decline_message"
         ]
       },
       "CreatePortalSessionRequest": {
@@ -402,11 +426,26 @@
           "auto_topup_disarmed": {
             "type": "boolean"
           },
+          "settle_result": {
+            "type": "string",
+            "enum": [
+              "charged",
+              "declined",
+              "failed",
+              "not_attempted"
+            ],
+            "description": "charged = the outstanding balance was just taken (`settled_cents`). declined = the acquirer answered and refused the card; the balance is still owed (`settle_decline_message` carries the acquirer's own customer-readable reason when it gave one). failed = we could not get an answer from the payment side; nothing is known to be charged and the balance is still owed (NOT a decline: the card may be fine). not_attempted = no charge was presented; `settle_skip_reason` says why (e.g. nothing_owed, no_card, card_unusable, below_minimum, charge_backoff)."
+          },
           "settled_cents": {
             "type": "number"
           },
           "settle_skip_reason": {
             "type": "string"
+          },
+          "settle_decline_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "The acquirer's own customer-readable refusal sentence (e.g. \"Your card does not support this type of purchase.\"). Set only when settle_result is `declined` and the acquirer gave one; null otherwise. Never a raw processor payload."
           }
         },
         "required": [
@@ -415,7 +454,9 @@
           "removed",
           "already_removed",
           "auto_topup_disarmed",
-          "settled_cents"
+          "settle_result",
+          "settled_cents",
+          "settle_decline_message"
         ]
       },
       "CheckoutResponse": {

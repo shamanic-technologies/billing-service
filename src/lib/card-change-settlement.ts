@@ -116,7 +116,35 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * What happened to the settle, as the CALLER must tell the customer — one of:
+ *
+ *   charged       → the outstanding balance was taken (`chargedCents`).
+ *   declined      → the acquirer answered and REFUSED the card; the balance is
+ *                   still owed. `declineMessage` carries the acquirer's own
+ *                   customer-readable sentence when it gave one.
+ *   failed        → we could not get an answer (stripe-service error, timeout);
+ *                   nothing is known to have been charged and the balance is
+ *                   still owed. Deliberately NOT called a decline: telling a
+ *                   customer their card was refused when it never reached their
+ *                   bank sends them to replace a card that works.
+ *   not_attempted → no charge was presented (`skipReason` says why: nothing
+ *                   owed, no card, a blocked or dead card, below the minimum,
+ *                   the reload backoff, an unreadable balance).
+ *
+ * Reported, never a veto: every value hands the session over.
+ */
+export type SettlementResult = "charged" | "declined" | "failed" | "not_attempted";
+
 export interface SettlementOutcome {
+  /** What the caller tells the customer. See `SettlementResult`. */
+  result: SettlementResult;
+  /**
+   * The acquirer's customer-readable refusal sentence. Set only when
+   * `result === "declined"` and the acquirer gave one; null otherwise. Never a
+   * raw payload or a code.
+   */
+  declineMessage: string | null;
   /** Cents actually charged (0 when nothing was owed or nothing could be taken). */
   chargedCents: number;
   /** The balance read before the settle; null when it could not be read. */
@@ -149,6 +177,8 @@ export async function settleOutstandingBeforeCardChange(
       err instanceof Error ? err.message : String(err)
     );
     return {
+      result: "not_attempted",
+      declineMessage: null,
       chargedCents: 0,
       balanceCents: null,
       skipReason: "balance_unavailable",
@@ -159,7 +189,13 @@ export async function settleOutstandingBeforeCardChange(
 async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcome> {
   const snapshot = await computeBalance(orgId);
   const balanceCents = snapshot.balanceCents;
-  const skip = (skipReason: SettlementSkipReason): SettlementOutcome => ({
+  const skip = (
+    skipReason: SettlementSkipReason,
+    result: SettlementResult = "not_attempted",
+    declineMessage: string | null = null
+  ): SettlementOutcome => ({
+    result,
+    declineMessage,
     chargedCents: 0,
     balanceCents,
     skipReason,
@@ -231,7 +267,9 @@ async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcom
         `${orgId} (owed ${balanceCents} cents) — opening the session anyway:`,
       err instanceof Error ? err.message : String(err)
     );
-    return skip("charge_failed");
+    // No acquirer answer reached us, so we cannot claim the CARD was refused —
+    // and the thrown text is not customer-readable, so it is never surfaced.
+    return skip("charge_failed", "failed");
   }
 
   if (outcome.status !== "succeeded") {
@@ -243,12 +281,43 @@ async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcom
         `${orgId} (owed ${balanceCents} cents, ${reason}: ` +
         `${outcome.failure_reason ?? outcome.status}) — opening the session anyway`
     );
-    return skip(reason);
+    if (reason === "charge_backoff") return skip(reason);
+    // The acquirer answered and refused. Its own sentence is the only part of
+    // the refusal the customer may see.
+    const message = outcome.failure_message?.trim() || null;
+    return skip(reason, "declined", message);
   }
 
   console.log(
     `[billing-service] card change: settled ${chargeAmount} cents for org ${orgId} ` +
       `before opening a card session`
   );
-  return { chargedCents: chargeAmount, balanceCents, snapshot };
+  return {
+    result: "charged",
+    declineMessage: null,
+    chargedCents: chargeAmount,
+    balanceCents,
+    snapshot,
+  };
+}
+
+/**
+ * The settle outcome as it goes on the wire — ONE vocabulary for every route
+ * that settles before touching a card (the card session, card removal), so the
+ * dashboard reads one concept one way. `settled_cents` / `settle_skip_reason`
+ * keep their original meaning; `settle_result` / `settle_decline_message` say
+ * what to tell the customer.
+ */
+export function settlementWireFields(outcome: SettlementOutcome): {
+  settle_result: SettlementResult;
+  settled_cents: number;
+  settle_skip_reason?: SettlementSkipReason;
+  settle_decline_message: string | null;
+} {
+  return {
+    settle_result: outcome.result,
+    settled_cents: outcome.chargedCents,
+    ...(outcome.skipReason ? { settle_skip_reason: outcome.skipReason } : {}),
+    settle_decline_message: outcome.declineMessage,
+  };
 }
