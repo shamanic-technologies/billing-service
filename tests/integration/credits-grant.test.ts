@@ -269,7 +269,10 @@ describe("POST /internal/credits/grant", () => {
   });
 
   it("returns 502 when stripe-service unavailable (balance compose fails after grant write)", async () => {
-    ssMocks.getCustomerByOrg.mockRejectedValue(new Error("stripe-service down"));
+    // The compose reads stripe-service through the payment summary (the customer
+    // read it used to gate on was unused and is gone — an org with no customer
+    // must still get its grant's balance back).
+    ssMocks.sumSucceededTopupsForOrg.mockRejectedValue(new Error("stripe-service down"));
 
     const res = await request(app)
       .post("/internal/credits/grant")

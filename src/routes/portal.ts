@@ -6,6 +6,7 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CreatePortalSessionRequestSchema } from "../schemas.js";
 import { getCardSetup } from "../lib/stripe-service-client.js";
 import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
+import { ensureOrgStripeCustomer } from "../lib/account.js";
 
 const router = Router();
 
@@ -48,6 +49,14 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     // fire-and-forget so a charge is not still in flight while the customer
     // detaches that same card in the acquirer's portal.
     await settleOutstandingBeforeCardChange(orgId);
+
+    // stripe-service 409s card setup for an org with no customer; a claimed org
+    // that started anonymous has none yet, so create it (idempotently) first.
+    await ensureOrgStripeCustomer({
+      "x-org-id": orgId,
+      "x-user-id": req.headers["x-user-id"] as string,
+      ...forwardWorkflowHeaders(getWorkflowHeaders(req)),
+    });
 
     const setup = await getCardSetup(orgId, return_url, amount, currency);
     res.json(setup);
