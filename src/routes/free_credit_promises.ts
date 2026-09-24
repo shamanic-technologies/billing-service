@@ -6,7 +6,6 @@ import {
 } from "../middleware/auth.js";
 import { ReferralClaimRequestSchema } from "../schemas.js";
 import {
-  getCustomerByOrg,
   sumSucceededTopupsForOrg,
 } from "../lib/stripe-service-client.js";
 import {
@@ -117,7 +116,6 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
     let promises: FreeCreditPromiseView[];
     let paidTopupsCents: string;
     try {
-      const customer = await getCustomerByOrg(identity);
       paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
       await settleFreeCreditPromises(orgId, paidTopupsCents);
       promises = await attachReferredOrgIdentities(
