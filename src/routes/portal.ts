@@ -9,6 +9,7 @@ import {
   settleOutstandingBeforeCardChange,
   settlementWireFields,
 } from "../lib/card-change-settlement.js";
+import { ensureOrgStripeCustomer } from "../lib/account.js";
 
 const router = Router();
 
@@ -55,6 +56,14 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     // tell the customer before redirecting whether the balance was just charged,
     // was declined (and why, in the acquirer's own words), or was not attempted.
     const settlement = await settleOutstandingBeforeCardChange(orgId);
+
+    // stripe-service 409s card setup for an org with no customer; a claimed org
+    // that started anonymous has none yet, so create it (idempotently) first.
+    await ensureOrgStripeCustomer({
+      "x-org-id": orgId,
+      "x-user-id": req.headers["x-user-id"] as string,
+      ...forwardWorkflowHeaders(getWorkflowHeaders(req)),
+    });
 
     const setup = await getCardSetup(orgId, return_url, amount, currency);
     res.json({ ...setup, ...settlementWireFields(settlement) });

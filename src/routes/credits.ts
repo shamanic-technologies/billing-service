@@ -15,7 +15,6 @@ import {
 } from "../lib/promos.js";
 import { addCents, subCents } from "../lib/cents.js";
 import {
-  getCustomerByOrg,
   sumSucceededTopupsForOrg,
 } from "../lib/stripe-service-client.js";
 import { fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
@@ -91,7 +90,6 @@ router.post("/internal/credits/grant", async (req, res) => {
 
   let newBalanceCents: string;
   try {
-    const customer = await getCustomerByOrg(identity);
     const [paidTopups, localCredits, runsUsage] = await Promise.all([
       sumSucceededTopupsForOrg(orgId),
       sumLocalPromoCreditsForOrg(orgId),
