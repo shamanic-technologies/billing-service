@@ -5,7 +5,10 @@ import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreatePortalSessionRequestSchema } from "../schemas.js";
 import { getCardSetup } from "../lib/stripe-service-client.js";
-import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
+import {
+  settleOutstandingBeforeCardChange,
+  settlementWireFields,
+} from "../lib/card-change-settlement.js";
 import { ensureOrgStripeCustomer } from "../lib/account.js";
 
 const router = Router();
@@ -48,7 +51,11 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     // lib/card-change-settlement for the full rule. Awaited rather than
     // fire-and-forget so a charge is not still in flight while the customer
     // detaches that same card in the acquirer's portal.
-    await settleOutstandingBeforeCardChange(orgId);
+    //
+    // The OUTCOME is reported beside the descriptor (additive), so the caller can
+    // tell the customer before redirecting whether the balance was just charged,
+    // was declined (and why, in the acquirer's own words), or was not attempted.
+    const settlement = await settleOutstandingBeforeCardChange(orgId);
 
     // stripe-service 409s card setup for an org with no customer; a claimed org
     // that started anonymous has none yet, so create it (idempotently) first.
@@ -59,7 +66,7 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     });
 
     const setup = await getCardSetup(orgId, return_url, amount, currency);
-    res.json(setup);
+    res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[billing-service] card setup failed:", message);

@@ -44,6 +44,13 @@ export interface ReloadOutcome {
    */
   failure_code?: string | null;
   /**
+   * The acquirer's own CUSTOMER-READABLE sentence for a refusal, e.g. "Your card
+   * does not support this type of purchase." — the only part of a refusal that
+   * may be shown to the customer. Never the raw payload, never the code.
+   * Absent when the charge never reached an acquirer.
+   */
+  failure_message?: string | null;
+  /**
    * True ONLY on an outcome synthesised by the backoff — no charge was
    * attempted and no new information was learned. Callers use it to stay quiet
    * (the customer was already told when the real failure happened); every

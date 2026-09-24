@@ -210,6 +210,35 @@ export const CardSetupRequestSchema = z
  * here re-introduces one, and card details are typed inside an iframe the
  * acquirer hosts, so they never reach the calling page or this service.
  */
+/**
+ * What the outstanding-balance collection did on the way to a card surface.
+ * Shared by every route that settles before touching a card (the card session
+ * and card removal) so a caller reads one concept one way. REPORTED, never a
+ * veto: every value accompanies a successful response.
+ */
+const SettleOutcomeFields = {
+  settle_result: z
+    .enum(["charged", "declined", "failed", "not_attempted"])
+    .openapi({
+      description:
+        "charged = the outstanding balance was just taken (`settled_cents`). " +
+        "declined = the acquirer answered and refused the card; the balance is still owed " +
+        "(`settle_decline_message` carries the acquirer's own customer-readable reason when it gave one). " +
+        "failed = we could not get an answer from the payment side; nothing is known to be charged and the balance is still owed " +
+        "(NOT a decline: the card may be fine). " +
+        "not_attempted = no charge was presented; `settle_skip_reason` says why (e.g. nothing_owed, no_card, card_unusable, below_minimum, charge_backoff).",
+    }),
+  /** Cents collected by this request (0 when nothing was taken). */
+  settled_cents: z.number(),
+  /** Present when nothing was collected. Diagnostic — never a refusal. */
+  settle_skip_reason: z.string().optional(),
+  settle_decline_message: z.string().nullable().openapi({
+    description:
+      "The acquirer's own customer-readable refusal sentence (e.g. \"Your card does not support this type of purchase.\"). " +
+      "Set only when settle_result is `declined` and the acquirer gave one; null otherwise. Never a raw processor payload.",
+  }),
+};
+
 export const CardSetupResponseSchema = z
   .object({
     object: z.literal("card_setup"),
@@ -219,6 +248,11 @@ export const CardSetupResponseSchema = z
     environment: z.enum(["prod", "sandbox"]).optional(),
     token: z.string().optional(),
     save_payment_method_for: z.literal("merchant").optional(),
+    /**
+     * Additive: what the outstanding-balance collection attempted before this
+     * descriptor was issued. The descriptor is handed over whatever it says.
+     */
+    ...SettleOutcomeFields,
   })
   .openapi("CardSetupResponse");
 
@@ -238,10 +272,8 @@ export const RemoveSavedPaymentMethodResponseSchema = z
     already_removed: z.number().int(),
     /** True when a stored auto-topup configuration was cleared by this removal. */
     auto_topup_disarmed: z.boolean(),
-    /** Cents collected at removal time, on the card that was about to go. */
-    settled_cents: z.number(),
-    /** Present when nothing was collected. Diagnostic — never a refusal. */
-    settle_skip_reason: z.string().optional(),
+    /** What the collection at removal time did, on the card that was about to go. */
+    ...SettleOutcomeFields,
   })
   .openapi("RemoveSavedPaymentMethodResponse");
 

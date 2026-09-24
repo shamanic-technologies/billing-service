@@ -92,5 +92,7 @@ export async function reloadOffSession(
     // Structured, beside the prose: whether this card may ever be charged again
     // is decided on the CODE, never by reading the sentence.
     failure_code: failure?.code ?? null,
+    // The acquirer's own sentence, the one piece a customer may be shown.
+    failure_message: failure?.message ?? null,
   };
 }
