@@ -11,7 +11,10 @@ import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/run
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
-import { settleOutstandingBeforeCardChange } from "../lib/card-change-settlement.js";
+import {
+  settleOutstandingBeforeCardChange,
+  settlementWireFields,
+} from "../lib/card-change-settlement.js";
 import { removeCardForOrg } from "../lib/card-removal.js";
 import {
   getCustomerByOrgOrNull,
@@ -299,10 +302,11 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
     // collected when the customer opens a card session, and the outcome never
     // gates it. The two routes serve one descriptor, so they must behave
     // identically or the behaviour is one URL away from diverging.
-    await settleOutstandingBeforeCardChange(orgId);
+    // Its outcome is reported beside the descriptor, same fields as there.
+    const settlement = await settleOutstandingBeforeCardChange(orgId);
 
     const setup = await getCardSetup(orgId, return_url, undefined, currency);
-    res.json(setup);
+    res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[billing-service] card setup failed:", message);
@@ -409,10 +413,7 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
       removed: outcome.detached.length,
       already_removed: outcome.alreadyDetached.length,
       auto_topup_disarmed: outcome.autoTopupDisarmed,
-      settled_cents: outcome.settlement.chargedCents,
-      ...(outcome.settlement.skipReason
-        ? { settle_skip_reason: outcome.settlement.skipReason }
-        : {}),
+      ...settlementWireFields(outcome.settlement),
     });
   } catch (err) {
     console.error("[billing-service] Error removing saved payment method:", err);

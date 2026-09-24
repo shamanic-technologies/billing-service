@@ -76,6 +76,11 @@ describe("POST /v1/portal-sessions", () => {
       public_key: "pk_test",
       token: "tok_1",
       save_payment_method_for: "merchant",
+      // Additive: what the settle did (nothing owed here).
+      settle_result: "not_attempted",
+      settled_cents: 0,
+      settle_skip_reason: "nothing_owed",
+      settle_decline_message: null,
     });
   });
 

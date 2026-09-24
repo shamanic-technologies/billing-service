@@ -65,9 +65,14 @@ describe("card setup + saved-card confirmation", () => {
       environment: "prod",
       token: "per_order_public_token",
       save_payment_method_for: "merchant",
+      // The ONLY additions: what the settle did. No credential, no processor payload.
+      settle_result: "not_attempted",
+      settled_cents: 0,
+      settle_skip_reason: "nothing_owed",
+      settle_decline_message: null,
     });
-    // Nothing is added on the way through, so nothing can leak on the way
-    // through: no api key, no merchant key, no customer id.
+    // Nothing but the settle outcome is added on the way through, so nothing can
+    // leak on the way through: no api key, no merchant key, no customer id.
     const serialized = JSON.stringify(res.body);
     expect(serialized).not.toContain("test-stripe-key");
     expect(serialized).not.toContain("api_key");
