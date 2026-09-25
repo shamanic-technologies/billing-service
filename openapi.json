@@ -2008,6 +2008,185 @@
           "outstanding_total_cents",
           "promises"
         ]
+      },
+      "CampaignDailyBudget": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
+      "ReadCampaignDailyBudgets": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "dailyBudgetCents",
+          "campaigns"
+        ]
+      },
+      "ReadCampaignDailyBudget": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "brandId",
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "dailyBudgetCents",
+          "updatedAt"
+        ]
+      },
+      "SetCampaignDailyBudgetResponse": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "brandDailyBudgetCents": {
+            "type": "string"
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CampaignDailyBudget"
+            }
+          }
+        },
+        "required": [
+          "brandId",
+          "orgId",
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "dailyBudgetCents",
+          "updatedAt",
+          "brandDailyBudgetCents",
+          "campaigns"
+        ]
+      },
+      "SetCampaignDailyBudgetRequest": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "featureSlug": {
+            "type": "string",
+            "minLength": 1
+          },
+          "dailyBudgetCents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "required": [
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "dailyBudgetCents"
+        ]
       }
     },
     "parameters": {}
@@ -6047,6 +6226,549 @@
           },
           "502": {
             "description": "stripe-service unavailable, or a promise could not be settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/campaign-budgets": {
+      "get": {
+        "summary": "Read every campaign daily ceiling of a brand, with no sales funnel",
+        "description": "One entry per campaign — (offer, leg, acquisition channel) — with the sales funnel dropped: ceilings the funnel used to split are summed. The entries add up to `dailyBudgetCents`, which is byte-identical to the brand-level read. Service-to-service read with x-api-key plus x-org-id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every campaign ceiling + the brand total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadCampaignDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/campaign-budgets": {
+      "get": {
+        "summary": "Read every campaign daily ceiling of a brand (user, via the gateway)",
+        "description": "Same answer as the internal read, for the user's own org.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every campaign ceiling + the brand total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadCampaignDailyBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or missing org headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/campaign-budget": {
+      "get": {
+        "summary": "Read ONE campaign's daily ceiling, with no sales funnel",
+        "description": "A campaign is (offer x leg x acquisition channel); all three are required. Answers the SUM of the ceilings that are this campaign's money under any funnel or none. A ceiling written before offers (or legs) existed counts only while the brand names no other offer (the channel no other leg). Nothing funds it -> dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "legKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This campaign's ceiling (null when nothing funds it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadCampaignDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId / x-org-id, or a missing offerId, legKey or featureSlug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/campaign-budget": {
+      "get": {
+        "summary": "Read ONE campaign's daily ceiling (user, via the gateway)",
+        "description": "Same answer as the internal read, for the user's own org.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "legKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This campaign's ceiling (null when nothing funds it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadCampaignDailyBudget"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId, missing org headers, or an incomplete campaign address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Set ONE campaign's daily ceiling, with no sales funnel",
+        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money under one or several funnels are CONSOLIDATED into one row carrying the new amount (a funnel-keyed row is kept when there is one, so funnel-grain reads keep showing it); when none exists a funnel-less ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand and grandfathered exactly as on the funnel-keyed write. The brand's daily budget is the SUM of every ceiling.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCampaignDailyBudgetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "This campaign's ceiling + every campaign ceiling + the brand total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetCampaignDailyBudgetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid address or amount, an unknown acquisition channel, or a funded channel below its floor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The acquisition channels' published terms could not be read",
             "content": {
               "application/json": {
                 "schema": {

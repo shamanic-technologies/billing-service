@@ -330,6 +330,13 @@
       "when": 1792144800000,
       "tag": "0046_trial_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1792231200000,
+      "tag": "0047_funnel_less_ceilings",
+      "breakpoints": true
     }
   ]
 }

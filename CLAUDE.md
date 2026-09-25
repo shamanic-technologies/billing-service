@@ -948,6 +948,17 @@ Run against production 2026-09-06: **24 leg-less ceilings, 21 attributed, 3 left
 
 `tests/integration/funnel-leg-budgets.test.ts` covers the rule; `funnel-leg-migration.test.ts` replays 0039 against the 0037 shape (including a re-apply and the constraint's shape). ⚠️ As with 0036 and 0037, `tests/setup.ts` is `CREATE TABLE IF NOT EXISTS`, so a local DB that has run the suite before needs `DROP TABLE brand_funnel_daily_budgets` once; and both earlier migration tests' `toCurrentShape()` had to move to the 0039 shape, or every LATER file in the run dies on a missing `leg_key`.
 
+### One ceiling per CAMPAIGN, with no funnel (`src/lib/campaign-budgets.ts`, migration 0047)
+
+The fleet is retiring the sales funnel: a campaign is **(offer x leg x acquisition channel)**, and one leg belongs to several funnels, so a funnel-keyed ceiling let one campaign hold several ceilings and a total count its money twice. This is the ADDITIVE wave; every funnel-keyed read and write above still works unchanged.
+
+- **Same table, `funnel_key` now NULLABLE.** NULL = a ceiling stated per campaign. It counts in EVERY total (`getBrandDailyBudget`, the funnel-budgets `dailyBudgetCents`, the per-offer / per-leg reads) and is NEVER rendered in a funnel-grain array (`funnels` / `channels` / `offers` / `legs`) — campaign-service's current parser drops the whole read (`if (!raw?.funnelKey) return {ok:false}`) on a row with no funnel. Totals are composed over `getBrandCeilings` / `CeilingRow`; `getBrandFunnelDailyBudgets` / `BrandFunnelDailyBudget` are the funnel-keyed subset (`isFunnelRow`). **Never sum the subset for a total.**
+- **Routes:** `GET /{internal,v1}/brands/:brandId/campaign-budgets` (every campaign, funnel dropped, summing to the brand total); `GET /{internal,v1}/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug=` (one campaign, `null` when nothing funds it); `PUT /v1/brands/:brandId/campaign-budget` `{offerId, legKey, featureSlug, dailyBudgetCents}`. All three address fields REQUIRED.
+- **One resolver for read AND write (`campaignCeilingRows`).** A row on the channel naming the offer and leg, under any funnel or none, is the campaign's; an offer-less row is only while the brand names no OTHER offer; a leg-less row only while that channel names no OTHER leg. The read SUMS them (so it agrees with the total); the write CONSOLIDATES them into one row (a funnel-keyed keeper when one exists, stamped with the offer + leg), else opens a funnel-less row.
+- **Mirror:** a funnel-keyed write naming the same (channel, offer, leg) ADOPTS a funnel-less ceiling (`supersededFunnelLessRows`); a replace-mode `PUT funnel-budgets` never deletes an unrelated funnel-less ceiling.
+- **Floor:** the channel's published minimum, judged on the channel TOTAL across the brand, same grandfather (`assertChannelGroupMeetsMinimum`).
+- **Measured in prod at ship (2026-09-25):** 28 ceilings, 24 (org, brand) pairs, $260.00/day; **0** rows sharing (org, brand, offer, leg, channel) under different funnels, so nothing was consolidated by shipping. Before/after probe of all 75 existing reads: byte-identical.
+
 ## Campaign affordability gate (read-only pre-flight)
 
 Stops a credit "retry storm": an out-of-credit org's recurring campaign was re-triggered every minute by campaign-service, each run doing paid Apollo enrichment then 402-ing at the LLM step. campaign-service now asks billing "can this org afford another run of campaign X?" BEFORE dispatching — billing answers live, per-campaign, **without charging or reloading**.
