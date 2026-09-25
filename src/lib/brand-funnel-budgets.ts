@@ -88,6 +88,7 @@ import {
   brandDailyBudgetChanges,
   brandFunnelDailyBudgets,
   type BrandFunnelDailyBudget,
+  type CeilingRow,
 } from "../db/schema.js";
 import { addCents, parseNonNegativeCents } from "./cents.js";
 import {
@@ -565,6 +566,27 @@ export function assertFundedChannelMeetsMinimum(
   storedDailyBudgetCents: string | null,
   minimums: ChannelMinimums
 ): void {
+  assertChannelGroupMeetsMinimum(
+    `${BRAND_FUNNEL_LABELS[funnelKey]} on ${featureSlug}`,
+    featureSlug,
+    dailyBudgetCents,
+    storedDailyBudgetCents,
+    minimums
+  );
+}
+
+/**
+ * The rule above, for a group named by `where` — the funnel-keyed write names a
+ * (funnel, channel) pair, the per-campaign write (`lib/campaign-budgets.ts`)
+ * names the channel alone. One rule, one grandfather, one wording.
+ */
+export function assertChannelGroupMeetsMinimum(
+  where: string,
+  featureSlug: string,
+  dailyBudgetCents: string,
+  storedDailyBudgetCents: string | null,
+  minimums: ChannelMinimums
+): void {
   // The channel is resolved BEFORE the zero shortcut: a slug whose published
   // terms state no daily operating cost is refused whatever the amount, so a
   // channel nobody prices can never be stored and then re-stated at a floor
@@ -577,8 +599,7 @@ export function assertFundedChannelMeetsMinimum(
   if (value.greaterThanOrEqualTo(minimum)) return;
 
   // The floor is the CHANNEL's, so the channel is what the customer is told
-  // about — the funnel names which ceiling, the channel says what it costs.
-  const where = `${BRAND_FUNNEL_LABELS[funnelKey]} on ${featureSlug}`;
+  // about — `where` names which ceiling, the channel says what it costs.
   const what = "channel";
 
   const stored =
@@ -606,6 +627,15 @@ export function sumFunnelBudgets(
     (total, row) => addCents(total, row.dailyBudgetCents),
     "0.0000000000"
   );
+}
+
+/**
+ * Does this ceiling carry a sales funnel? A funnel-LESS ceiling (migration 0047,
+ * stated per campaign) counts in every total but is never rendered in a
+ * funnel-grain array, because every consumer of those arrays parses a funnel key.
+ */
+export function isFunnelRow(row: CeilingRow): row is BrandFunnelDailyBudget {
+  return row.funnelKey !== null;
 }
 
 /** One funnel's figure: the SUM of every acquisition channel funding it. */
@@ -766,7 +796,11 @@ export interface OfferBudgetView {
    * campaign was bought at before legs existed, restricted to it.
    */
   offers: OfferBudgetTotal[];
-  /** ADDITIVE: this offer's STORED ceilings, one per campaign (leg included). */
+  /**
+   * ADDITIVE: this offer's STORED funnel-keyed ceilings, one per campaign (leg
+   * included). A funnel-less ceiling counts in `dailyBudgetCents` but is not
+   * listed here — see `isFunnelRow`.
+   */
   legs: BrandFunnelDailyBudget[];
 }
 
@@ -799,10 +833,10 @@ export function namedOffersOf(
  * An offer that names nothing here has NO ceiling — which is a different answer
  * from a ceiling of zero, and neither is invented from the other.
  */
-export function offerBudgetRows(
-  rows: BrandFunnelDailyBudget[],
+export function offerBudgetRows<R extends CeilingRow>(
+  rows: R[],
   offerId: string
-): BrandFunnelDailyBudget[] {
+): R[] {
   const named = namedOffersOf(rows);
   const owned = rows.filter((row) => row.offerId === offerId);
   if (owned.length === 0) return [];
@@ -820,7 +854,7 @@ export function offerBudgetRows(
  * which is why every other grain is served here too.
  */
 export function aggregateOfferBudget(
-  rows: BrandFunnelDailyBudget[],
+  rows: CeilingRow[],
   offerId: string
 ): OfferBudgetView | null {
   const owned = offerBudgetRows(rows, offerId);
@@ -831,14 +865,15 @@ export function aggregateOfferBudget(
     if (row.updatedAt > updatedAt) updatedAt = row.updatedAt;
   }
 
+  const funnelRows = owned.filter(isFunnelRow);
   return {
     offerId,
     dailyBudgetCents: sumFunnelBudgets(owned),
     updatedAt,
-    funnels: aggregateFunnelTotals(owned),
-    channels: aggregateChannelTotals(owned),
-    offers: aggregateOfferTotals(owned),
-    legs: owned,
+    funnels: aggregateFunnelTotals(funnelRows),
+    channels: aggregateChannelTotals(funnelRows),
+    offers: aggregateOfferTotals(funnelRows),
+    legs: funnelRows,
   };
 }
 
@@ -867,10 +902,10 @@ export function namedLegsOf(rows: Array<{ legKey: ResolvedLegKey }>): string[] {
  * A leg that names nothing here has NO ceiling — a different answer from a
  * ceiling of zero, and neither is invented from the other.
  */
-export function legBudgetRows(
-  rows: BrandFunnelDailyBudget[],
+export function legBudgetRows<R extends CeilingRow>(
+  rows: R[],
   legKey: string
-): BrandFunnelDailyBudget[] {
+): R[] {
   const named = namedLegsOf(rows);
   const owned = rows.filter((row) => row.legKey === legKey);
   if (owned.length === 0) return [];
@@ -901,12 +936,12 @@ export interface LegBudgetView {
   channels: ChannelBudgetTotal[];
   /** This leg's per-(funnel, channel, offer) figures, same restriction. */
   offers: OfferBudgetTotal[];
-  /** This leg's STORED ceilings. */
+  /** This leg's STORED funnel-keyed ceilings (a funnel-less one is in the total only). */
   legs: BrandFunnelDailyBudget[];
 }
 
 export function aggregateLegBudget(
-  rows: BrandFunnelDailyBudget[],
+  rows: CeilingRow[],
   legKey: string
 ): LegBudgetView | null {
   const owned = legBudgetRows(rows, legKey);
@@ -917,14 +952,15 @@ export function aggregateLegBudget(
     if (row.updatedAt > updatedAt) updatedAt = row.updatedAt;
   }
 
+  const funnelRows = owned.filter(isFunnelRow);
   return {
     legKey,
     dailyBudgetCents: sumFunnelBudgets(owned),
     updatedAt,
-    funnels: aggregateFunnelTotals(owned),
-    channels: aggregateChannelTotals(owned),
-    offers: aggregateOfferTotals(owned),
-    legs: owned,
+    funnels: aggregateFunnelTotals(funnelRows),
+    channels: aggregateChannelTotals(funnelRows),
+    offers: aggregateOfferTotals(funnelRows),
+    legs: funnelRows,
   };
 }
 
@@ -958,13 +994,15 @@ export function channelTotalOf(
 }
 
 /**
- * Read one org's per-channel ceilings for a brand, one row per
- * (funnel, acquisition-channel feature). Empty when never set.
+ * Read EVERY stored ceiling of one org+brand — funnel-keyed and funnel-less
+ * (migration 0047) alike. Any TOTAL is composed over this, never over the
+ * funnel-keyed subset, so a ceiling stated per campaign is never left out of
+ * the money. Empty when never set.
  */
-export async function getBrandFunnelDailyBudgets(
+export async function getBrandCeilings(
   orgId: string,
   brandId: string
-): Promise<BrandFunnelDailyBudget[]> {
+): Promise<CeilingRow[]> {
   const rows = await db
     .select()
     .from(brandFunnelDailyBudgets)
@@ -977,15 +1015,33 @@ export async function getBrandFunnelDailyBudgets(
   return sortByFunnelOrder(rows);
 }
 
-/** Stable, product-meaningful order (BRAND_FUNNEL_KEYS), not insertion order. */
-function sortByFunnelOrderOf<T>(rows: T[], keyOf: (row: T) => string): T[] {
+/**
+ * Read one org's FUNNEL-KEYED ceilings for a brand, one row per
+ * (funnel, acquisition-channel feature, offer, leg). Empty when never set. A
+ * funnel-less ceiling is not returned — sum `getBrandCeilings` for a total.
+ */
+export async function getBrandFunnelDailyBudgets(
+  orgId: string,
+  brandId: string
+): Promise<BrandFunnelDailyBudget[]> {
+  return (await getBrandCeilings(orgId, brandId)).filter(isFunnelRow);
+}
+
+/**
+ * Stable, product-meaningful order (BRAND_FUNNEL_KEYS), not insertion order. A
+ * funnel-less ceiling (null key) sorts after every funnel.
+ */
+export function sortByFunnelOrderOf<T>(
+  rows: T[],
+  keyOf: (row: T) => string | null
+): T[] {
   const order = new Map<string, number>(
     BRAND_FUNNEL_KEYS.map((key, i) => [key as string, i])
   );
   return [...rows].sort(
     (a, b) =>
-      (order.get(keyOf(a)) ?? Number.MAX_SAFE_INTEGER) -
-      (order.get(keyOf(b)) ?? Number.MAX_SAFE_INTEGER)
+      (order.get(keyOf(a) ?? "") ?? Number.MAX_SAFE_INTEGER) -
+      (order.get(keyOf(b) ?? "") ?? Number.MAX_SAFE_INTEGER)
   );
 }
 
@@ -994,9 +1050,7 @@ function sortByFunnelOrderOf<T>(rows: T[], keyOf: (row: T) => string): T[] {
  * ceiling first at each grain, since it is the one that predates it), so a split
  * renders stably.
  */
-function sortByFunnelOrder(
-  rows: BrandFunnelDailyBudget[]
-): BrandFunnelDailyBudget[] {
+export function sortByFunnelOrder<R extends CeilingRow>(rows: R[]): R[] {
   return sortByFunnelOrderOf(
     [...rows].sort(
       (a, b) =>
@@ -1010,17 +1064,23 @@ function sortByFunnelOrder(
 
 export interface SetFunnelBudgetsResult {
   /**
-   * Every STORED ceiling after the write, one per
+   * Every STORED funnel-keyed ceiling after the write, one per
    * (funnel, acquisition channel, offer, LEG) - i.e. one per campaign.
    */
   legs: BrandFunnelDailyBudget[];
+  /**
+   * Every STORED ceiling after the write, funnel-less ones included — what the
+   * notification diffs against `previousLegs`, and what the total sums.
+   */
+  ceilings: CeilingRow[];
   /**
    * Every STORED ceiling BEFORE this write, read under the same lock. The staff
    * notification needs the previous value of each individual ceiling to state
    * the RUNNING figure on the before side (see lib/brand-running-budget.ts) —
    * the brand-level scalar cannot express which campaign's money moved.
+   * Funnel-less ceilings included.
    */
-  previousLegs: BrandFunnelDailyBudget[];
+  previousLegs: CeilingRow[];
   /** The per-OFFER figures, each the sum of the legs funding that triple. */
   offers: OfferBudgetTotal[];
   /** The per-CHANNEL figures, each the sum of the offers funding that pair. */
@@ -1081,7 +1141,7 @@ export async function setBrandFunnelDailyBudgets(
   return db.transaction(async (tx) => {
     const changedAt = new Date();
 
-    const existingFunnels = await tx
+    const existingCeilings = await tx
       .select()
       .from(brandFunnelDailyBudgets)
       .where(
@@ -1091,6 +1151,10 @@ export async function setBrandFunnelDailyBudgets(
         )
       )
       .for("update");
+    // Every funnel-grain decision below is made over the funnel-keyed ceilings.
+    // A funnel-less one (migration 0047) takes part in exactly two things: the
+    // brand TOTAL, and adoption — see `supersededFunnelLessRows`.
+    const existingFunnels = existingCeilings.filter(isFunnelRow);
 
     const [existingBrandRow] = await tx
       .select()
@@ -1132,9 +1196,10 @@ export async function setBrandFunnelDailyBudgets(
     // ceiling is the pre-offer unscoped one, ADOPTS that ceiling rather than
     // sitting beside it - see `supersededUnscopedRows`. A ceiling that names a
     // LEG does the same to the pre-leg one, one grain down.
-    const superseded = [
+    const superseded: CeilingRow[] = [
       ...supersededUnscopedRows(existingFunnels, resolved),
       ...supersededLegLessRows(existingFunnels, resolved),
+      ...supersededFunnelLessRows(existingCeilings, resolved),
     ];
 
     // The minimum binds a GROUP TOTAL, and which ceilings share a group is
@@ -1169,8 +1234,8 @@ export async function setBrandFunnelDailyBudgets(
     }
 
     const previousBrandDailyBudgetCents =
-      existingFunnels.length > 0
-        ? sumFunnelBudgets(existingFunnels)
+      existingCeilings.length > 0
+        ? sumFunnelBudgets(existingCeilings)
         : existingBrandRow
           ? existingBrandRow.dailyBudgetCents
           : null;
@@ -1179,10 +1244,15 @@ export async function setBrandFunnelDailyBudgets(
     // absent from the body goes - including an offer of a (funnel, channel)
     // pair that IS in the body, and a channel of a funnel that is. That already
     // removes an adopted unscoped ceiling, so only "merge" has to delete it.
+    // A funnel-LESS ceiling is outside the funnel grain a replace-mode set
+    // speaks for, so it is removed only when this write ADOPTS it.
     const keep = new Set(resolved.map((e) => rowIdentity(e)));
-    const toDelete =
+    const toDelete: CeilingRow[] =
       mode === "replace"
-        ? existingFunnels.filter((row) => !keep.has(rowIdentity(row)))
+        ? [
+            ...existingFunnels.filter((row) => !keep.has(rowIdentity(row))),
+            ...supersededFunnelLessRows(existingCeilings, resolved),
+          ]
         : superseded;
     for (const row of toDelete) {
       await tx
@@ -1191,7 +1261,7 @@ export async function setBrandFunnelDailyBudgets(
           and(
             eq(brandFunnelDailyBudgets.orgId, orgId),
             eq(brandFunnelDailyBudgets.brandId, brandId),
-            eq(brandFunnelDailyBudgets.funnelKey, row.funnelKey),
+            funnelMatches(row.funnelKey),
             eq(brandFunnelDailyBudgets.featureSlug, row.featureSlug),
             offerMatches(row.offerId),
             legMatches(row.legKey)
@@ -1232,7 +1302,7 @@ export async function setBrandFunnelDailyBudgets(
         });
     }
 
-    const legs = sortByFunnelOrder(
+    const ceilings = sortByFunnelOrder(
       await tx
         .select()
         .from(brandFunnelDailyBudgets)
@@ -1243,11 +1313,13 @@ export async function setBrandFunnelDailyBudgets(
           )
         )
     );
+    const legs = ceilings.filter(isFunnelRow);
     const offers = aggregateOfferTotals(legs);
     const channels = aggregateChannelTotals(legs);
     const funnels = aggregateFunnelTotals(legs);
 
-    const brandDailyBudgetCents = sumFunnelBudgets(legs);
+    // The TOTAL is every ceiling's, funnel-less ones included.
+    const brandDailyBudgetCents = sumFunnelBudgets(ceilings);
 
     // The brand-level scalar is now DERIVED. Drop the superseded row so it can
     // never be served instead of the sum.
@@ -1271,8 +1343,9 @@ export async function setBrandFunnelDailyBudgets(
 
     return {
       legs,
+      ceilings,
       offers,
-      previousLegs: existingFunnels,
+      previousLegs: existingCeilings,
       channels,
       funnels,
       previousBrandDailyBudgetCents,
@@ -1536,14 +1609,51 @@ function supersededUnscopedRows(
   });
 }
 
+/**
+ * The stored FUNNEL-LESS ceilings a funnel-keyed write ADOPTS — the mirror of the
+ * campaign write's own adoption of funnel-keyed rows (`lib/campaign-budgets.ts`).
+ *
+ * A funnel-less ceiling was stated for one campaign, (offer, leg, channel). A
+ * funnel-keyed write naming that same campaign under a funnel is RE-STATING it,
+ * not opening a second ceiling beside it: the brand total is a SUM, so keeping
+ * both would count the campaign's money twice. Exact match on the three, nulls
+ * compared as values.
+ */
+function supersededFunnelLessRows(
+  existing: CeilingRow[],
+  resolved: Array<{
+    featureSlug: string;
+    offerId: ResolvedOfferId;
+    legKey: ResolvedLegKey;
+  }>
+): CeilingRow[] {
+  return existing.filter(
+    (row) =>
+      row.funnelKey === null &&
+      resolved.some(
+        (entry) =>
+          entry.featureSlug === row.featureSlug &&
+          entry.offerId === row.offerId &&
+          entry.legKey === row.legKey
+      )
+  );
+}
+
+/** Match one ceiling's funnel in a WHERE clause (`IS NULL` for a funnel-less one). */
+export function funnelMatches(funnelKey: string | null) {
+  return funnelKey === null
+    ? isNull(brandFunnelDailyBudgets.funnelKey)
+    : eq(brandFunnelDailyBudgets.funnelKey, funnelKey);
+}
+
 /** A stored ceiling's identity: one (funnel, channel, offer, leg) = one campaign. */
 function rowIdentity(row: {
-  funnelKey: string;
+  funnelKey: string | null;
   featureSlug: string;
   offerId: ResolvedOfferId;
   legKey: ResolvedLegKey;
 }): string {
-  return `${row.funnelKey}\u0000${row.featureSlug}\u0000${row.offerId ?? ""}\u0000${row.legKey ?? ""}`;
+  return `${row.funnelKey ?? ""}\u0000${row.featureSlug}\u0000${row.offerId ?? ""}\u0000${row.legKey ?? ""}`;
 }
 
 /**
@@ -1551,7 +1661,7 @@ function rowIdentity(row: {
  * `IS NULL` - `= NULL` matches nothing, which would silently leave the row that
  * a replace-mode write is supposed to delete.
  */
-function offerMatches(offerId: ResolvedOfferId) {
+export function offerMatches(offerId: ResolvedOfferId) {
   return offerId === null
     ? isNull(brandFunnelDailyBudgets.offerId)
     : eq(brandFunnelDailyBudgets.offerId, offerId);
@@ -1562,7 +1672,7 @@ function offerMatches(offerId: ResolvedOfferId) {
  * `offerMatches` one grain up — `= NULL` matches nothing, which would silently
  * leave the row a replace-mode write is supposed to delete.
  */
-function legMatches(legKey: ResolvedLegKey) {
+export function legMatches(legKey: ResolvedLegKey) {
   return legKey === null
     ? isNull(brandFunnelDailyBudgets.legKey)
     : eq(brandFunnelDailyBudgets.legKey, legKey);
@@ -1587,7 +1697,7 @@ function projectFunnelRows(
     dailyBudgetCents: string;
   }>,
   mode: "replace" | "merge",
-  superseded: BrandFunnelDailyBudget[] = []
+  superseded: CeilingRow[] = []
 ): Array<{ funnelKey: string; featureSlug: string; dailyBudgetCents: string }> {
   const written = new Set(resolved.map((entry) => rowIdentity(entry)));
   const dropped = new Set(superseded.map((row) => rowIdentity(row)));

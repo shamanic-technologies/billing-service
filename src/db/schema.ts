@@ -671,8 +671,16 @@ export const brandFunnelDailyBudgets = pgTable(
   {
     orgId: uuid("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
-    /** A brand-service sales-funnel key. Validated in the service layer. */
-    funnelKey: text("funnel_key").notNull(),
+    /**
+     * A brand-service sales-funnel key. Validated in the service layer.
+     *
+     * NULLABLE since migration 0047: NULL is a ceiling stated per CAMPAIGN
+     * (offer x leg x acquisition channel) with no funnel, which is the model the
+     * fleet is moving to. Such a row counts in every TOTAL and is never rendered
+     * in a funnel-grain array, so no consumer that parses a funnel key ever sees
+     * a null one. See `lib/campaign-budgets.ts`.
+     */
+    funnelKey: text("funnel_key"),
     /**
      * The ACQUISITION CHANNEL this ceiling funds, as a features-service feature
      * slug (migration 0036). A channel IS a feature slug — there is no separate
@@ -771,8 +779,17 @@ export const brandFunnelDailyBudgets = pgTable(
   ]
 );
 
-export type BrandFunnelDailyBudget =
-  typeof brandFunnelDailyBudgets.$inferSelect;
+/**
+ * Any stored ceiling, funnel-keyed or not (migration 0047). Totals are always
+ * composed over THIS type, so a funnel-less ceiling is never left out of one.
+ */
+export type CeilingRow = typeof brandFunnelDailyBudgets.$inferSelect;
+
+/**
+ * A ceiling that carries a sales funnel — the only kind a funnel-grain read
+ * renders. Narrow with `isFunnelRow`.
+ */
+export type BrandFunnelDailyBudget = CeilingRow & { funnelKey: string };
 export type NewBrandFunnelDailyBudget =
   typeof brandFunnelDailyBudgets.$inferInsert;
 

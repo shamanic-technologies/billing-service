@@ -5,6 +5,7 @@ import {
   SetBrandDailyBudgetRequestSchema,
   SetBrandFunnelDailyBudgetRequestSchema,
   SetBrandFunnelDailyBudgetSetRequestSchema,
+  SetCampaignDailyBudgetRequestSchema,
 } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
@@ -33,7 +34,8 @@ import {
   aggregateOfferBudget,
   aggregateLegBudget,
   aggregateOfferTotals,
-  getBrandFunnelDailyBudgets,
+  getBrandCeilings,
+  isFunnelRow,
   parseFunnelBudgetSet,
   setBrandFunnelDailyBudgets,
   sumFunnelBudgets,
@@ -43,6 +45,14 @@ import {
   type ParsedFunnelBudget,
 } from "../lib/brand-funnel-budgets.js";
 import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
+import {
+  aggregateCampaignTotals,
+  campaignBudgetOf,
+  parseCampaignKey,
+  setCampaignDailyBudget,
+  type CampaignBudgetTotal,
+  type CampaignKey,
+} from "../lib/campaign-budgets.js";
 import {
   brandGrainChange,
   ceilingChangesBetween,
@@ -151,10 +161,13 @@ function renderLegs(rows: BrandFunnelDailyBudget[]) {
  * GET /internal/brands/:brandId/daily-budget.
  */
 async function composeFunnelBudgetsView(orgId: string, brandId: string) {
-  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
-  if (stored.length > 0) {
+  // The TOTAL is every ceiling's; the arrays render the funnel-keyed ones only
+  // (a funnel-less ceiling, migration 0047, has no funnel to be listed under).
+  const all = await getBrandCeilings(orgId, brandId);
+  const stored = all.filter(isFunnelRow);
+  if (all.length > 0) {
     return {
-      dailyBudgetCents: sumFunnelBudgets(stored),
+      dailyBudgetCents: sumFunnelBudgets(all),
       funnels: renderFunnels(aggregateFunnelTotals(stored)),
       channels: renderChannels(aggregateChannelTotals(stored)),
       offers: renderOffers(aggregateOfferTotals(stored)),
@@ -183,7 +196,7 @@ async function composeOfferBudgetView(
   brandId: string,
   offerId: string
 ) {
-  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
+  const stored = await getBrandCeilings(orgId, brandId);
   const offer = aggregateOfferBudget(stored, offerId);
   if (!offer) {
     return {
@@ -221,7 +234,7 @@ async function composeLegBudgetView(
   brandId: string,
   legKey: string
 ) {
-  const stored = await getBrandFunnelDailyBudgets(orgId, brandId);
+  const stored = await getBrandCeilings(orgId, brandId);
   const leg = aggregateLegBudget(stored, legKey);
   if (!leg) {
     return {
@@ -307,6 +320,7 @@ async function applyFunnelWrite(
   }
   const {
     legs,
+    ceilings,
     offers,
     previousLegs,
     channels,
@@ -328,7 +342,7 @@ async function applyFunnelWrite(
   // on both sides. A brand's FIRST per-funnel write also retires its brand-grain
   // scalar (deleted in the same transaction), which no stored ceiling can
   // express — it enters the diff as that grain going to zero.
-  const changes = ceilingChangesBetween(previousLegs, legs);
+  const changes = ceilingChangesBetween(previousLegs, ceilings);
   if (previousLegs.length === 0 && previousBrandDailyBudgetCents !== null) {
     changes.push(...brandGrainChange(previousBrandDailyBudgetCents, "0"));
   }
@@ -894,6 +908,218 @@ router.patch(
 
     const orgId = req.headers["x-org-id"] as string;
     await applyFunnelWrite(req, res, orgId, brandId, entries, "merge");
+  }
+);
+
+// --- One CAMPAIGN's daily ceiling, with no sales funnel -------------------
+//
+// A campaign is (offer x leg x acquisition channel). The sales funnel is being
+// retired, and one leg belongs to several funnels, so these routes address a
+// ceiling by the campaign alone — see lib/campaign-budgets.ts. Every
+// funnel-keyed route above keeps working unchanged until its consumers move.
+
+function renderCampaigns(totals: CampaignBudgetTotal[]) {
+  return totals.map((total) => ({
+    offerId: total.offerId,
+    legKey: total.legKey,
+    featureSlug: total.featureSlug,
+    dailyBudgetCents: total.dailyBudgetCents,
+    updatedAt: total.updatedAt.toISOString(),
+  }));
+}
+
+/**
+ * Every campaign ceiling of a brand, the funnel dropped, plus the brand total
+ * (null when nothing was ever configured — the same answer as the brand-level
+ * read). The entries add up to the total by construction.
+ */
+async function composeCampaignBudgetsView(orgId: string, brandId: string) {
+  const all = await getBrandCeilings(orgId, brandId);
+  if (all.length > 0) {
+    return {
+      dailyBudgetCents: sumFunnelBudgets(all),
+      campaigns: renderCampaigns(aggregateCampaignTotals(all)),
+    };
+  }
+  const brandLevel = await getBrandDailyBudget(orgId, brandId);
+  return {
+    dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
+    campaigns: [],
+  };
+}
+
+async function composeCampaignBudgetView(
+  orgId: string,
+  brandId: string,
+  key: CampaignKey
+) {
+  const found = campaignBudgetOf(await getBrandCeilings(orgId, brandId), key);
+  return {
+    ...key,
+    dailyBudgetCents: found ? found.dailyBudgetCents : null,
+    updatedAt: found ? found.updatedAt.toISOString() : null,
+  };
+}
+
+/** Parse the campaign address out of the query string; writes the 400 itself. */
+function campaignKeyFromQuery(req: Request, res: Response): CampaignKey | null {
+  try {
+    return parseCampaignKey(req.query as Record<string, unknown>);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return null;
+  }
+}
+
+// GET /internal/brands/:brandId/campaign-budgets — every campaign ceiling of a
+// brand, no funnel. Auth: x-api-key + x-org-id.
+router.get("/internal/brands/:brandId/campaign-budgets", async (req, res) => {
+  const { brandId } = req.params;
+  if (!UUID_RE.test(brandId)) {
+    res.status(400).json({ error: "brandId must be a valid UUID" });
+    return;
+  }
+  const orgId = requireInternalOrgId(req, res);
+  if (!orgId) return;
+  res.json({ brandId, ...(await composeCampaignBudgetsView(orgId, brandId)) });
+});
+
+// GET /v1/brands/:brandId/campaign-budgets — the same list for the user, via
+// the gateway. Auth: org headers.
+router.get(
+  "/v1/brands/:brandId/campaign-budgets",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = req.headers["x-org-id"] as string;
+    res.json({
+      brandId,
+      orgId,
+      ...(await composeCampaignBudgetsView(orgId, brandId)),
+    });
+  }
+);
+
+// GET /internal/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug=
+// — ONE campaign's ceiling (campaign-service pacing). All three are required.
+// Nothing funds it -> dailyBudgetCents: null, never 0. Auth: x-api-key + x-org-id.
+router.get("/internal/brands/:brandId/campaign-budget", async (req, res) => {
+  const { brandId } = req.params;
+  if (!UUID_RE.test(brandId)) {
+    res.status(400).json({ error: "brandId must be a valid UUID" });
+    return;
+  }
+  const orgId = requireInternalOrgId(req, res);
+  if (!orgId) return;
+  const key = campaignKeyFromQuery(req, res);
+  if (!key) return;
+  res.json({ brandId, ...(await composeCampaignBudgetView(orgId, brandId, key)) });
+});
+
+// GET /v1/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug= — the
+// same answer for the user, via the gateway. Auth: org headers.
+router.get(
+  "/v1/brands/:brandId/campaign-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const key = campaignKeyFromQuery(req, res);
+    if (!key) return;
+    const orgId = req.headers["x-org-id"] as string;
+    res.json({
+      brandId,
+      orgId,
+      ...(await composeCampaignBudgetView(orgId, brandId, key)),
+    });
+  }
+);
+
+// PUT /v1/brands/:brandId/campaign-budget — state ONE campaign's ceiling, no
+// funnel (the dashboard's budget controls). Body: { offerId, legKey,
+// featureSlug, dailyBudgetCents }. Other campaigns untouched. 0 is legal; a
+// funded channel below its published floor is a 400 (grandfathered as on the
+// funnel-keyed write). Auth: org headers.
+router.put(
+  "/v1/brands/:brandId/campaign-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const parsedBody = SetCampaignDailyBudgetRequestSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      res.status(400).json({ error: parsedBody.error.issues[0].message });
+      return;
+    }
+
+    let key: CampaignKey;
+    try {
+      key = parseCampaignKey(parsedBody.data);
+    } catch (err) {
+      respondToFunnelWriteError(err, res);
+      return;
+    }
+
+    const orgId = req.headers["x-org-id"] as string;
+    let written;
+    try {
+      written = await setCampaignDailyBudget(
+        orgId,
+        brandId,
+        key,
+        parsedBody.data.dailyBudgetCents
+      );
+    } catch (err) {
+      respondToFunnelWriteError(err, res);
+      return;
+    }
+
+    console.log(
+      `[billing-service] campaign budget set: brand=${brandId} org=${orgId} campaign=${key.offerId}/${key.legKey}/${key.featureSlug} value=${written.campaign.dailyBudgetCents} total=${written.brandDailyBudgetCents}`
+    );
+
+    const changes = ceilingChangesBetween(
+      written.previousCeilings,
+      written.ceilings
+    );
+    if (
+      written.previousCeilings.length === 0 &&
+      written.previousBrandDailyBudgetCents !== null
+    ) {
+      changes.push(
+        ...brandGrainChange(written.previousBrandDailyBudgetCents, "0")
+      );
+    }
+    void notifyBrandDailyBudgetChanged({
+      orgId,
+      userId: req.headers["x-user-id"] as string,
+      runId: req.headers["x-run-id"] as string,
+      brandId,
+      previousDailyBudgetCents: written.previousBrandDailyBudgetCents,
+      newDailyBudgetCents: written.brandDailyBudgetCents,
+      changes,
+      actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
+    });
+
+    res.json({
+      brandId,
+      orgId,
+      ...key,
+      dailyBudgetCents: written.campaign.dailyBudgetCents,
+      updatedAt: written.campaign.updatedAt.toISOString(),
+      brandDailyBudgetCents: written.brandDailyBudgetCents,
+      campaigns: renderCampaigns(aggregateCampaignTotals(written.ceilings)),
+    });
   }
 );
 
