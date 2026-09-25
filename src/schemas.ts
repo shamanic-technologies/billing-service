@@ -1178,6 +1178,90 @@ export const ReadBrandLegDailyBudgetSchema = z
   })
   .openapi("ReadBrandLegDailyBudget");
 
+/** One campaign's ceiling, the funnel dropped (migration 0047). */
+export const CampaignDailyBudgetSchema = z
+  .object({
+    /**
+     * brand-service offer UUID. `null` only on a ceiling written before offers
+     * existed; a per-campaign write always names one.
+     */
+    offerId: z.string().uuid().nullable(),
+    /**
+     * features-service's canonical leg id, carried OPAQUE. `null` only on a
+     * ceiling written before legs existed.
+     */
+    legKey: z.string().nullable(),
+    /** The acquisition channel (a features-service feature slug) performing the leg. */
+    featureSlug: z.string(),
+    /** This campaign's ceiling: the SUM of its stored rows across every funnel. */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+  })
+  .openapi("CampaignDailyBudget");
+
+export const ReadCampaignDailyBudgetsSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /** Present on the user-facing read only. */
+    orgId: z.string().uuid().optional(),
+    /**
+     * The brand-level daily budget — byte-identical to what
+     * GET /internal/brands/{brandId}/daily-budget serves (null when never set).
+     * The campaigns below add up to it.
+     */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** One entry per (offer, leg, channel). Empty when nothing is funded per campaign or funnel. */
+    campaigns: z.array(CampaignDailyBudgetSchema),
+  })
+  .openapi("ReadCampaignDailyBudgets");
+
+export const ReadCampaignDailyBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    /** Present on the user-facing read only. */
+    orgId: z.string().uuid().optional(),
+    offerId: z.string().uuid(),
+    legKey: z.string(),
+    featureSlug: z.string(),
+    /**
+     * This campaign's ceiling. `null` when nothing funds it — a different
+     * answer from 0 (funded at nothing), and never derived from it.
+     */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    updatedAt: z.string().nullable(),
+  })
+  .openapi("ReadCampaignDailyBudget");
+
+export const SetCampaignDailyBudgetRequestSchema = z
+  .object({
+    /** brand-service offer UUID. */
+    offerId: z.string().uuid(),
+    /** features-service's canonical leg id (legs[].legKey on GET /public/channels). */
+    legKey: z.string().min(1),
+    /** The acquisition channel's features-service feature slug. */
+    featureSlug: z.string().min(1),
+    /** Non-negative cents. 0 = not funding this campaign right now. */
+    dailyBudgetCents: z.union([z.string(), z.number()]),
+  })
+  .openapi("SetCampaignDailyBudgetRequest");
+
+export const SetCampaignDailyBudgetResponseSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    offerId: z.string().uuid(),
+    legKey: z.string(),
+    featureSlug: z.string(),
+    /** This campaign's ceiling after the write. */
+    dailyBudgetCents: CentsStringSchema,
+    updatedAt: z.string(),
+    /** The brand-level daily budget after the write = the sum of every ceiling. */
+    brandDailyBudgetCents: CentsStringSchema,
+    /** Every campaign ceiling of the brand after the write. */
+    campaigns: z.array(CampaignDailyBudgetSchema),
+  })
+  .openapi("SetCampaignDailyBudgetResponse");
+
 export const BrandFunnelDailyBudgetsSchema = z
   .object({
     brandId: z.string().uuid(),
@@ -2909,6 +2993,148 @@ registry.registerPath({
     },
     502: {
       description: "stripe-service unavailable, or a promise could not be settled",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+const campaignQuery = z.object({
+  offerId: z.string().uuid(),
+  legKey: z.string().min(1),
+  featureSlug: z.string().min(1),
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/campaign-budgets",
+  summary: "Read every campaign daily ceiling of a brand, with no sales funnel",
+  description:
+    "One entry per campaign — (offer, leg, acquisition channel) — with the sales " +
+    "funnel dropped: ceilings the funnel used to split are summed. The entries add " +
+    "up to `dailyBudgetCents`, which is byte-identical to the brand-level read. " +
+    "Service-to-service read with x-api-key plus x-org-id.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Every campaign ceiling + the brand total",
+      content: { "application/json": { schema: ReadCampaignDailyBudgetsSchema } },
+    },
+    400: {
+      description: "Invalid brandId or x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/campaign-budgets",
+  summary: "Read every campaign daily ceiling of a brand (user, via the gateway)",
+  description: "Same answer as the internal read, for the user's own org.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Every campaign ceiling + the brand total",
+      content: { "application/json": { schema: ReadCampaignDailyBudgetsSchema } },
+    },
+    400: {
+      description: "Invalid brandId or missing org headers",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/campaign-budget",
+  summary: "Read ONE campaign's daily ceiling, with no sales funnel",
+  description:
+    "A campaign is (offer x leg x acquisition channel); all three are required. " +
+    "Answers the SUM of the ceilings that are this campaign's money under any funnel " +
+    "or none. A ceiling written before offers (or legs) existed counts only while " +
+    "the brand names no other offer (the channel no other leg). Nothing funds it -> " +
+    "dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    query: campaignQuery,
+  },
+  responses: {
+    200: {
+      description: "This campaign's ceiling (null when nothing funds it)",
+      content: { "application/json": { schema: ReadCampaignDailyBudgetSchema } },
+    },
+    400: {
+      description: "Invalid brandId / x-org-id, or a missing offerId, legKey or featureSlug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/campaign-budget",
+  summary: "Read ONE campaign's daily ceiling (user, via the gateway)",
+  description: "Same answer as the internal read, for the user's own org.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    query: campaignQuery,
+  },
+  responses: {
+    200: {
+      description: "This campaign's ceiling (null when nothing funds it)",
+      content: { "application/json": { schema: ReadCampaignDailyBudgetSchema } },
+    },
+    400: {
+      description: "Invalid brandId, missing org headers, or an incomplete campaign address",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/brands/{brandId}/campaign-budget",
+  summary: "Set ONE campaign's daily ceiling, with no sales funnel",
+  description:
+    "States the ceiling of one campaign — (offer, leg, acquisition channel) — and " +
+    "leaves every other campaign untouched. Ceilings that were this campaign's money " +
+    "under one or several funnels are CONSOLIDATED into one row carrying the new " +
+    "amount (a funnel-keyed row is kept when there is one, so funnel-grain reads keep " +
+    "showing it); when none exists a funnel-less ceiling is opened. 0 is legal. A " +
+    "funded channel below its published daily floor is refused (400), judged on the " +
+    "channel's total across the brand and grandfathered exactly as on the " +
+    "funnel-keyed write. The brand's daily budget is the SUM of every ceiling.",
+  request: {
+    headers: protectedHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    body: {
+      content: {
+        "application/json": { schema: SetCampaignDailyBudgetRequestSchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "This campaign's ceiling + every campaign ceiling + the brand total",
+      content: {
+        "application/json": { schema: SetCampaignDailyBudgetResponseSchema },
+      },
+    },
+    400: {
+      description:
+        "Invalid address or amount, an unknown acquisition channel, or a funded channel below its floor",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "The acquisition channels' published terms could not be read",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

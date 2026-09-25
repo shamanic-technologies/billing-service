@@ -190,7 +190,7 @@ beforeAll(async () => {
     CREATE TABLE IF NOT EXISTS "brand_funnel_daily_budgets" (
       "org_id" uuid NOT NULL,
       "brand_id" uuid NOT NULL,
-      "funnel_key" text NOT NULL,
+      "funnel_key" text,
       "feature_slug" text NOT NULL,
       "offer_id" uuid,
       "leg_key" text,

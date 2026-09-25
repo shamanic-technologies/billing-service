@@ -1,0 +1,21 @@
+-- A daily ceiling can be funded per CAMPAIGN with no sales funnel at all.
+--
+-- The fleet is retiring the sales-funnel concept: a campaign is
+-- (offer x leg x acquisition channel), and one leg belongs to several funnels, so
+-- the funnel can no longer be part of a ceiling's identity. This is the ADDITIVE
+-- half: funnel_key becomes NULLABLE, and a NULL means "this ceiling was stated per
+-- campaign, with no funnel". Every existing row keeps its funnel, so every
+-- funnel-keyed read answers exactly what it answered before.
+--
+-- NO row is written, moved or re-keyed. Measured in production at ship time: 28
+-- ceilings over 24 (org, brand) pairs, $260.00/day in total, and ZERO pairs of rows
+-- sharing (org, brand, offer, leg, channel) under different funnels - so there is
+-- nothing to consolidate.
+--
+-- The unique constraint is already NULLS NOT DISTINCT, so two funnel-less ceilings
+-- for one campaign stay unrepresentable with no constraint change.
+--
+-- Idempotent (DROP NOT NULL on an already-nullable column is a no-op).
+-- Reverse (only valid while no funnel-less row exists):
+--   ALTER TABLE "brand_funnel_daily_budgets" ALTER COLUMN "funnel_key" SET NOT NULL;
+ALTER TABLE "brand_funnel_daily_budgets" ALTER COLUMN "funnel_key" DROP NOT NULL;
