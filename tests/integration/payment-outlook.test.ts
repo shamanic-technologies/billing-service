@@ -245,6 +245,63 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
     expect(res.body.nextChargeAttemptAt).toBeNull();
   });
 
+  it("no chargeable card on file is charge_blocked / no_chargeable_card — auto-topup or not", async () => {
+    // Owner rule 2026-09-27: an org with no chargeable payment method must stop
+    // every campaign. campaign-service stops on charge_blocked, so this is the
+    // verdict — never no_autopay, which reads as "fine, just not automatic".
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue(null);
+    await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
+
+    const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe("charge_blocked");
+    expect(res.body.blockedReason).toBe("no_chargeable_card");
+    expect(res.body.nextChargeAttemptAt).toBeNull();
+    expect(res.body.trigger).toBeNull();
+  });
+
+  it("no chargeable card is blocked even when auto-topup was configured (card removed)", async () => {
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue(null);
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
+
+    const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+
+    expect(res.body.state).toBe("charge_blocked");
+    expect(res.body.blockedReason).toBe("no_chargeable_card");
+    expect(res.body.floorCents).toBe("0");
+  });
+
+  it("an org with NO Stripe customer at all (never added a card) is blocked", async () => {
+    ssMocks.fetchOrgCustomerOrNull.mockResolvedValue(null);
+    await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
+
+    const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe("charge_blocked");
+    expect(res.body.blockedReason).toBe("no_chargeable_card");
+  });
+
+  it("mid card-change (new card attached, old detached) is NOT blocked, and adding a card clears it", async () => {
+    // The verdict is the CURRENT state. The card-change flow attaches the new
+    // card and then detaches the old one, so a chargeable method is on file
+    // throughout and the org reads exactly as before.
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    const before = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+    expect(before.body.blockedReason).toBe("no_chargeable_card");
+
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    const after = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+
+    expect(after.body.state).toBe("will_charge");
+    expect(after.body.blockedReason).toBeNull();
+    expect(after.body.floorCents).toBe(FLOOR);
+  });
+
   it("a card whose country cannot be charged off-session is blocked, not no_autopay", async () => {
     // India / RBI: the configuration exists and the card exists; what is
     // impossible is the off-session charge. That is a different sentence to the
