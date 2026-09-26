@@ -303,6 +303,23 @@ export async function getPaymentOutlook(
 
   const noDate = { nextChargeAttemptAt: null, trigger: null } as const;
 
+  // No chargeable payment method on file RIGHT NOW: nothing can ever be charged,
+  // so every campaign of this org must stop (campaign-service stops on
+  // `charge_blocked`). Read from the CURRENT state, never from a detach event —
+  // the card-change flow attaches the new card before detaching the old one, so
+  // that customer still reads as holding a card, and adding a card back clears
+  // this on the next read with nothing to reset. It outranks the refused-card
+  // family below because a retry rung for a card that is gone is a date nobody
+  // will act on.
+  if (!snapshot.hasCardPm) {
+    return {
+      ...base,
+      ...noDate,
+      state: "charge_blocked",
+      blockedReason: "no_chargeable_card",
+    };
+  }
+
   // A card the issuer called lost, stolen or closed may never be re-presented,
   // at any interval — that outranks every schedule below it.
   if (streak?.cardUnusableAt != null) {
@@ -336,11 +353,9 @@ export async function getPaymentOutlook(
   // No credit line means nothing can be reloaded, and `resolvePostpaidTier`
   // grants one only to an org that can actually be charged — so a null tier is
   // either no configuration, no chargeable card, or a blocked issuing country.
-  // Those are three different sentences to a customer, so they are three reasons.
+  // Those are three different sentences to a customer, so they are three reasons
+  // (no chargeable card was answered above).
   if (block.tier === null) {
-    if (!snapshot.hasCardPm) {
-      return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
-    }
     if (!snapshot.autoReloadSupported) {
       return {
         ...base,

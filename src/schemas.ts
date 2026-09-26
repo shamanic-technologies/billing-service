@@ -885,8 +885,11 @@ export const PaymentOutlookResponseSchema = z
     /**
      * What billing expects next, money-wise.
      *
-     * `no_autopay` is not a failure — it means this org will never be charged
-     * automatically and will simply run out and stop. Half the orgs that were
+     * `no_autopay` is not a failure — it means this org holds a chargeable card
+     * but no auto-topup, so it will never be charged automatically and will
+     * simply run out and stop. An org with NO chargeable payment method is
+     * `charge_blocked` / `no_chargeable_card` instead: nothing can be charged
+     * at all, so its campaigns must stop. Half the orgs that were
      * spending anything in the fortnight to 2026-09-18 were in that state, so a
      * consumer that renders a date for every org will be wrong about half of
      * them. `unknown` means spend is happening but cannot be measured honestly
@@ -2126,7 +2129,10 @@ registry.registerPath({
     "floor are typically the ones whose card is being refused. (2) state no_autopay carries " +
     "NO date, because such an org is never charged automatically — it runs out and stops; " +
     "that was half the spending orgs when this shipped, so rendering a date for every org is " +
-    "wrong about half of them. (3) realizedDailyBurnCents is measured spend and " +
+    "wrong about half of them. An org with NO chargeable payment method (never added one, " +
+    "or removed it) is charge_blocked with blockedReason no_chargeable_card, read from the " +
+    "CURRENT state: a card change (new card attached, old detached) is not blocked, and " +
+    "adding a card clears it on the next read. (3) realizedDailyBurnCents is measured spend and " +
     "configuredDailyBudgetCents is a permission; measured utilisation ran 4% to 146%, so the " +
     "ceiling is not even an upper bound and must not be substituted for the burn. " +
     "A figure that cannot be established honestly is null with a named reason, never zero. " +
