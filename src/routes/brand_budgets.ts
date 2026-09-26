@@ -3,8 +3,6 @@ import { Router } from "express";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import {
   SetBrandDailyBudgetRequestSchema,
-  SetBrandFunnelDailyBudgetRequestSchema,
-  SetBrandFunnelDailyBudgetSetRequestSchema,
   SetCampaignDailyBudgetRequestSchema,
 } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
@@ -20,44 +18,29 @@ import {
   parseUtcDay,
   utcDaySpan,
 } from "../lib/utc-day.js";
-import {
-  BrandBudgetManagedByFunnelsError,
-  ChannelTermsUnavailableError,
-  ChannelSplitAcrossOffersError,
-  OfferSplitAcrossLegsError,
-  FunnelBudgetBelowMinimumError,
-  UnknownAcquisitionChannelError,
-  FunnelSplitAcrossChannelsError,
-  InvalidFunnelSetError,
-  aggregateChannelTotals,
-  aggregateFunnelTotals,
-  aggregateOfferBudget,
-  aggregateLegBudget,
-  aggregateOfferTotals,
-  getBrandCeilings,
-  isFunnelRow,
-  parseFunnelBudgetSet,
-  setBrandFunnelDailyBudgets,
-  sumFunnelBudgets,
-  type ChannelBudgetTotal,
-  type FunnelBudgetTotal,
-  type OfferBudgetTotal,
-  type ParsedFunnelBudget,
-} from "../lib/brand-funnel-budgets.js";
 import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
 import {
-  aggregateCampaignTotals,
+  BrandBudgetManagedByCampaignsError,
+  CeilingBelowMinimumError,
+  ChannelTermsUnavailableError,
+  InvalidCeilingError,
+  UnknownAcquisitionChannelError,
+  aggregateLegBudget,
+  aggregateOfferBudget,
   campaignBudgetOf,
+  campaignTotalsOf,
+  getBrandCeilings,
   parseCampaignKey,
   setCampaignDailyBudget,
+  sumCeilings,
   type CampaignBudgetTotal,
   type CampaignKey,
+  type CeilingSubtotal,
 } from "../lib/campaign-budgets.js";
 import {
   brandGrainChange,
   ceilingChangesBetween,
 } from "../lib/brand-running-budget.js";
-import type { BrandFunnelDailyBudget } from "../db/schema.js";
 
 const router = Router();
 
@@ -87,109 +70,32 @@ function requireInternalOrgId(req: Request, res: Response): string | null {
   return orgId;
 }
 
-/**
- * The per-FUNNEL figures — unchanged in shape and meaning for every consumer
- * that reads them today. Each is the SUM of the acquisition channels funding
- * that funnel, so a brand that has never split anything renders byte-identically
- * to what this service served before migration 0036.
- */
-function renderFunnels(totals: FunnelBudgetTotal[]) {
+function renderCampaigns(totals: CampaignBudgetTotal[]) {
   return totals.map((total) => ({
-    funnelKey: total.funnelKey,
-    dailyBudgetCents: total.dailyBudgetCents,
-    updatedAt: total.updatedAt.toISOString(),
-  }));
-}
-
-/**
- * The finer grain, ADDITIVE: one entry per (funnel, acquisition-channel feature
- * slug). The dashboard and campaign-service move onto it on their own schedule —
- * nothing they read today needs it.
- */
-function renderChannels(totals: ChannelBudgetTotal[]) {
-  return totals.map((total) => ({
-    funnelKey: total.funnelKey,
-    featureSlug: total.featureSlug,
-    dailyBudgetCents: total.dailyBudgetCents,
-    updatedAt: total.updatedAt.toISOString(),
-  }));
-}
-
-/**
- * The per-OFFER grain, ADDITIVE: one entry per (funnel, acquisition-channel
- * feature, offer). Each is the SUM of the funnel LEGS funding that triple, so a
- * brand that has never stated a leg renders byte-identically to what this
- * service served before migration 0039 - when this WAS the stored grain.
- */
-function renderOffers(totals: OfferBudgetTotal[]) {
-  return totals.map((total) => ({
-    funnelKey: total.funnelKey,
-    featureSlug: total.featureSlug,
     offerId: total.offerId,
+    legKey: total.legKey,
+    featureSlug: total.featureSlug,
     dailyBudgetCents: total.dailyBudgetCents,
     updatedAt: total.updatedAt.toISOString(),
   }));
 }
 
-/**
- * The STORED grain, ADDITIVE: one entry per (funnel, acquisition-channel
- * feature, offer, LEG) - i.e. one per campaign, since a campaign is
- * (brand, offer, acquisition channel, leg). `offers` above is its per-triple
- * sum, `channels` the per-pair one and `funnels` the per-funnel one, so a
- * consumer that wants any of those figures never has to add these up.
- *
- * `legKey` is features-service's canonical leg id, carried opaque. `null` means
- * the ceiling is not scoped to a leg - every ceiling written before legs existed
- * carries it, and it is a permanent value rather than a placeholder.
- */
-function renderLegs(rows: BrandFunnelDailyBudget[]) {
-  return rows.map((row) => ({
-    funnelKey: row.funnelKey,
-    featureSlug: row.featureSlug,
-    offerId: row.offerId,
-    legKey: row.legKey,
-    dailyBudgetCents: row.dailyBudgetCents,
-    updatedAt: row.updatedAt.toISOString(),
-  }));
-}
-
-/**
- * The per-funnel view of a brand, plus the brand-level total the existing
- * daily-budget read serves. `dailyBudgetCents` is the SUM of the ceilings when
- * the brand is funnel-funded; otherwise it is the brand's own scalar (or null
- * when nothing has ever been set), so this surface can never disagree with
- * GET /internal/brands/:brandId/daily-budget.
- */
-async function composeFunnelBudgetsView(orgId: string, brandId: string) {
-  // The TOTAL is every ceiling's; the arrays render the funnel-keyed ones only
-  // (a funnel-less ceiling, migration 0047, has no funnel to be listed under).
-  const all = await getBrandCeilings(orgId, brandId);
-  const stored = all.filter(isFunnelRow);
-  if (all.length > 0) {
-    return {
-      dailyBudgetCents: sumFunnelBudgets(all),
-      funnels: renderFunnels(aggregateFunnelTotals(stored)),
-      channels: renderChannels(aggregateChannelTotals(stored)),
-      offers: renderOffers(aggregateOfferTotals(stored)),
-      legs: renderLegs(stored),
-    };
+/** An offer's or a leg's ceiling, or the explicit "nothing funds it" answer. */
+function renderSubtotal(subtotal: CeilingSubtotal | null) {
+  if (!subtotal) {
+    return { dailyBudgetCents: null, updatedAt: null, campaigns: [] };
   }
-  const brandLevel = await getBrandDailyBudget(orgId, brandId);
   return {
-    dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
-    funnels: [],
-    channels: [],
-    offers: [],
-    legs: [],
+    dailyBudgetCents: subtotal.dailyBudgetCents,
+    updatedAt: subtotal.updatedAt.toISOString(),
+    campaigns: renderCampaigns(subtotal.campaigns),
   };
 }
 
 /**
  * One OFFER's ceiling, for a screen that paces that one proposition: the SUM of
- * the ceilings funding it, plus the same per-funnel and per-(funnel, channel)
- * figures this service already serves, restricted to it. An offer with no
- * ceiling answers null — nothing stated is not a ceiling of zero, and neither is
- * ever derived from the other.
+ * the campaign ceilings funding it, plus those ceilings. An offer with no
+ * ceiling answers null — nothing stated is not a ceiling of zero.
  */
 async function composeOfferBudgetView(
   orgId: string,
@@ -197,37 +103,12 @@ async function composeOfferBudgetView(
   offerId: string
 ) {
   const stored = await getBrandCeilings(orgId, brandId);
-  const offer = aggregateOfferBudget(stored, offerId);
-  if (!offer) {
-    return {
-      offerId,
-      dailyBudgetCents: null,
-      updatedAt: null,
-      funnels: [],
-      channels: [],
-      offers: [],
-      legs: [],
-    };
-  }
-  return {
-    offerId,
-    dailyBudgetCents: offer.dailyBudgetCents,
-    updatedAt: offer.updatedAt.toISOString(),
-    funnels: renderFunnels(offer.funnels),
-    channels: renderChannels(offer.channels),
-    offers: renderOffers(offer.offers),
-    legs: renderLegs(offer.legs),
-  };
+  return { offerId, ...renderSubtotal(aggregateOfferBudget(stored, offerId)) };
 }
 
 /**
- * One LEG's ceiling, for the money that paces one campaign: a campaign is
- * (brand, offer, acquisition channel, leg), so this reads the ceiling on the
- * same key the campaign itself is keyed on. The SUM of the ceilings funding it,
- * plus every finer figure this service already serves restricted to it, so a
- * caller never enumerates anything nor adds anything up. A leg with no ceiling
- * answers null - nothing stated is not a ceiling of zero, and neither is ever
- * derived from the other.
+ * One LEG's ceiling: the SUM of the campaign ceilings funding it, plus those
+ * ceilings. A leg with no ceiling answers null.
  */
 async function composeLegBudgetView(
   orgId: string,
@@ -235,48 +116,17 @@ async function composeLegBudgetView(
   legKey: string
 ) {
   const stored = await getBrandCeilings(orgId, brandId);
-  const leg = aggregateLegBudget(stored, legKey);
-  if (!leg) {
-    return {
-      legKey,
-      dailyBudgetCents: null,
-      updatedAt: null,
-      funnels: [],
-      channels: [],
-      offers: [],
-      legs: [],
-    };
-  }
-  return {
-    legKey,
-    dailyBudgetCents: leg.dailyBudgetCents,
-    updatedAt: leg.updatedAt.toISOString(),
-    funnels: renderFunnels(leg.funnels),
-    channels: renderChannels(leg.channels),
-    offers: renderOffers(leg.offers),
-    legs: renderLegs(leg.legs),
-  };
+  return { legKey, ...renderSubtotal(aggregateLegBudget(stored, legKey)) };
 }
 
-/** Map a funnel-set validation failure onto its status. Rethrows anything else. */
-function respondToFunnelWriteError(err: unknown, res: Response): void {
+/** Map a ceiling-write validation failure onto its status. Rethrows anything else. */
+function respondToCeilingWriteError(err: unknown, res: Response): void {
   if (
-    err instanceof FunnelBudgetBelowMinimumError ||
+    err instanceof CeilingBelowMinimumError ||
     err instanceof UnknownAcquisitionChannelError ||
-    err instanceof InvalidFunnelSetError
+    err instanceof InvalidCeilingError
   ) {
     res.status(400).json({ error: err.message });
-    return;
-  }
-  // A funnel-grain write against a funnel split across channels: same shape of
-  // refusal as a brand-grain write against a funnel-funded brand — the figure
-  // the caller is addressing is derived one level down.
-  if (
-    err instanceof FunnelSplitAcrossChannelsError ||
-    err instanceof ChannelSplitAcrossOffersError ||
-    err instanceof OfferSplitAcrossLegsError
-  ) {
-    res.status(409).json({ error: err.message });
     return;
   }
   // The acquisition channels' published terms could not be read, so no daily
@@ -288,85 +138,6 @@ function respondToFunnelWriteError(err: unknown, res: Response): void {
     return;
   }
   throw err;
-}
-
-/**
- * Apply a validated per-funnel write and answer with the resulting view.
- *
- * Every write reports the brand-level TOTAL to the staff notification, because
- * that total is the number the rest of the fleet reads — a per-funnel change
- * that moved the brand's spend must not show staff a figure no other surface
- * serves. Strictly fire-and-forget, as on the brand-level write.
- *
- * The funded-minimum check runs INSIDE that write (it needs each funnel's own
- * stored ceiling under the write lock, because a sub-minimum ceiling predating
- * the minimum may be kept or raised), so its refusal surfaces here as the same
- * readable 400 the shape validation gives.
- */
-async function applyFunnelWrite(
-  req: Request,
-  res: Response,
-  orgId: string,
-  brandId: string,
-  entries: ParsedFunnelBudget[],
-  mode: "replace" | "merge"
-): Promise<void> {
-  let written;
-  try {
-    written = await setBrandFunnelDailyBudgets(orgId, brandId, entries, mode);
-  } catch (err) {
-    respondToFunnelWriteError(err, res);
-    return;
-  }
-  const {
-    legs,
-    ceilings,
-    offers,
-    previousLegs,
-    channels,
-    funnels,
-    previousBrandDailyBudgetCents,
-    brandDailyBudgetCents,
-  } = written;
-
-  console.log(
-    `[billing-service] brand funnel budgets ${mode}: brand=${brandId} org=${orgId} total=${brandDailyBudgetCents} funnels=${entries
-      .map(
-        (e) =>
-          `${e.funnelKey}${e.featureSlug ? `/${e.featureSlug}` : ""}${e.offerId ? `/${e.offerId}` : ""}${e.legKey ? `/${e.legKey}` : ""}=${e.dailyBudgetCents}`
-      )
-      .join(",")}`
-  );
-
-  // Per-ceiling before/after, so the notification can state the RUNNING figure
-  // on both sides. A brand's FIRST per-funnel write also retires its brand-grain
-  // scalar (deleted in the same transaction), which no stored ceiling can
-  // express — it enters the diff as that grain going to zero.
-  const changes = ceilingChangesBetween(previousLegs, ceilings);
-  if (previousLegs.length === 0 && previousBrandDailyBudgetCents !== null) {
-    changes.push(...brandGrainChange(previousBrandDailyBudgetCents, "0"));
-  }
-
-  void notifyBrandDailyBudgetChanged({
-    orgId,
-    userId: req.headers["x-user-id"] as string,
-    runId: req.headers["x-run-id"] as string,
-    brandId,
-    previousDailyBudgetCents: previousBrandDailyBudgetCents,
-    newDailyBudgetCents: brandDailyBudgetCents,
-    changes,
-    actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
-  });
-
-  res.json({
-    brandId,
-    orgId,
-    dailyBudgetCents: brandDailyBudgetCents,
-    funnels: renderFunnels(funnels),
-    channels: renderChannels(channels),
-    offers: renderOffers(offers),
-    legs: renderLegs(legs),
-  });
 }
 
 // GET /internal/brands/:brandId/daily-budget — read this org's current daily
@@ -465,8 +236,8 @@ router.get(
 // keep independent per-org answers.
 //
 // GRAIN: the BRAND total. brand_daily_budget_changes carries the brand-level
-// figure on EVERY write (per-funnel / per-channel / per-offer / per-leg writes
-// included), so the replay is complete at that grain. The finer ceilings are
+// figure on EVERY write (per-campaign writes included), so the replay is
+// complete at that grain. The campaign ceilings are
 // upserted in place with no change log of their own, so a past-day answer
 // there would be invented — hence no finer read.
 //
@@ -586,7 +357,7 @@ router.patch(
         dailyBudgetCents
       ));
     } catch (err) {
-      if (err instanceof BrandBudgetManagedByFunnelsError) {
+      if (err instanceof BrandBudgetManagedByCampaignsError) {
         res.status(409).json({ error: err.message });
         return;
       }
@@ -619,53 +390,6 @@ router.patch(
   }
 );
 
-// --- Per-funnel daily ceilings -------------------------------------------
-//
-// A brand sells through several SALES FUNNELS (brand-service's vocabulary), whose
-// economics differ by orders of magnitude, so each carries its own daily ceiling.
-// The brand-level read is unchanged and answers their SUM — see
-// lib/brand-funnel-budgets.ts.
-
-// GET /internal/brands/:brandId/funnel-budgets — service-to-service read of this
-// org's per-funnel ceilings for a brand.
-//
-// Auth: x-api-key + x-org-id (same as the current-value read). Resp:
-// { brandId, dailyBudgetCents, funnels: [{ funnelKey, dailyBudgetCents, updatedAt }] }.
-// A brand with no per-funnel ceilings returns funnels: [] and its brand-level
-// value (null when nothing was ever set) — a legitimate state, never a
-// fabricated split. 400 on a non-UUID brandId.
-router.get("/internal/brands/:brandId/funnel-budgets", async (req, res) => {
-  const { brandId } = req.params;
-  if (!UUID_RE.test(brandId)) {
-    res.status(400).json({ error: "brandId must be a valid UUID" });
-    return;
-  }
-
-  const orgId = requireInternalOrgId(req, res);
-  if (!orgId) return;
-
-  const view = await composeFunnelBudgetsView(orgId, brandId);
-  res.json({ brandId, ...view });
-});
-
-// GET /v1/brands/:brandId/funnel-budgets — the same view for the user, via the
-// gateway (brand Settings reads its ceilings back). Auth: org headers.
-router.get(
-  "/v1/brands/:brandId/funnel-budgets",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    const view = await composeFunnelBudgetsView(orgId, brandId);
-    res.json({ brandId, orgId, ...view });
-  }
-);
-
 // --- One offer's daily ceiling ------------------------------------------
 //
 // An offer-scoped screen shows a fraction: that offer's spend today over the
@@ -683,10 +407,10 @@ router.get(
 // read of ONE offer's daily ceiling for a brand.
 //
 // Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
-// Resp: { brandId, offerId, dailyBudgetCents, updatedAt, funnels, channels }.
-// `dailyBudgetCents` is the SUM of the ceilings funding this offer; `funnels` and
-// `channels` are the figures this service already serves, restricted to it — so a
-// caller never enumerates the offer's channels nor adds anything up.
+// Resp: { brandId, offerId, dailyBudgetCents, updatedAt, campaigns }.
+// `dailyBudgetCents` is the SUM of the campaign ceilings funding this offer;
+// `campaigns` lists them — so a caller never enumerates the offer's campaigns
+// nor adds anything up.
 // An offer with NO ceiling answers dailyBudgetCents: null (nothing stated), which
 // is a different answer from a ceiling of 0 (funded at nothing). 400 on a
 // non-UUID brandId or offerId.
@@ -741,31 +465,29 @@ router.get(
   }
 );
 
-// --- One funnel LEG's daily ceiling --------------------------------------
+// --- One LEG's daily ceiling ---------------------------------------------
 //
-// A campaign is (brand, offer, acquisition channel, LEG) — the leg is the thing
-// the customer buys, and the sales funnel is becoming a way of READING legs
-// rather than the unit anything is keyed on (one leg belongs to several
-// funnels). So this is the money that paces one campaign, read on the same key
-// the campaign is keyed on.
+// A campaign is (offer, leg, acquisition channel) — the leg is the thing the
+// customer buys. So this is the money that paces the campaigns buying one leg,
+// read on the key they are keyed on.
 //
 // `:legKey` is features-service's canonical leg id (it mints the vocabulary and
 // publishes it on GET /public/channels as legs[].legKey; campaign-service
 // carries the same value on the campaign row). It is carried OPAQUE here and
 // never parsed — the two steps a leg connects ride beside it on that catalogue.
 //
-// This is its own answer, not a widening of any existing read: the brand-wide,
-// per-funnel, per-channel and per-offer figures are what several consumers pace
-// and gate real spend on, and every one of them is untouched.
+// This is its own answer, not a widening of any existing read: the brand-wide
+// and per-offer figures are what several consumers pace and gate real spend on,
+// and both are untouched.
 
 // GET /internal/brands/:brandId/legs/:legKey/daily-budget — service-to-service
 // read of ONE leg's daily ceiling for a brand.
 //
 // Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
-// Resp: { brandId, legKey, dailyBudgetCents, updatedAt, funnels, channels,
-// offers, legs }. `dailyBudgetCents` is the SUM of the ceilings funding this
-// leg; the arrays are the figures this service already serves, restricted to it,
-// so a caller never enumerates anything nor adds anything up.
+// Resp: { brandId, legKey, dailyBudgetCents, updatedAt, campaigns }.
+// `dailyBudgetCents` is the SUM of the campaign ceilings funding this leg;
+// `campaigns` lists them, so a caller never enumerates anything nor adds
+// anything up.
 // A leg with NO ceiling answers dailyBudgetCents: null (nothing stated), which
 // is a different answer from a ceiling of 0 (funded at nothing). 400 on a
 // non-UUID brandId or an empty legKey.
@@ -778,7 +500,7 @@ router.get(
       return;
     }
     if (!legKey.trim()) {
-      res.status(400).json({ error: "legKey must be a non-empty funnel leg id" });
+      res.status(400).json({ error: "legKey must be a non-empty leg id" });
       return;
     }
 
@@ -803,7 +525,7 @@ router.get(
       return;
     }
     if (!legKey.trim()) {
-      res.status(400).json({ error: "legKey must be a non-empty funnel leg id" });
+      res.status(400).json({ error: "legKey must be a non-empty leg id" });
       return;
     }
 
@@ -813,123 +535,13 @@ router.get(
   }
 );
 
-// PUT /v1/brands/:brandId/funnel-budgets — write the WHOLE set at once (signup
-// checkout). Auth: org headers.
-// Body: { funnels: [{ funnelKey, featureSlug?, dailyBudgetCents }] }.
+// --- One CAMPAIGN's daily ceiling ---------------------------------------
 //
-// Each entry is one (funnel, acquisition-channel feature) pair; `featureSlug` is
-// optional and resolves exactly as on the PATCH above.
-//
-// ATOMIC: the whole set is validated before the transaction opens and written
-// inside it, so a rejected set leaves nothing half-applied. Pairs absent from
-// the body are removed, so the stored set is exactly what was sent. A ceiling of
-// 0 means "not funding that funnel right now" and is accepted — including a set
-// where EVERY funnel is 0 (a brand in pause). A FUNDED funnel below its product
-// minimum is refused with a readable reason (400), UNLESS that funnel's own
-// stored ceiling already sits below the minimum and the write keeps or raises it
-// (a ceiling predating the minimum is grandfathered — see
-// lib/brand-funnel-budgets.ts). Each funnel is judged against its own ceiling.
-router.put(
-  "/v1/brands/:brandId/funnel-budgets",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-
-    const parsedBody = SetBrandFunnelDailyBudgetSetRequestSchema.safeParse(
-      req.body
-    );
-    if (!parsedBody.success) {
-      res.status(400).json({ error: parsedBody.error.issues[0].message });
-      return;
-    }
-
-    let entries: ParsedFunnelBudget[];
-    try {
-      entries = parseFunnelBudgetSet(parsedBody.data.funnels);
-    } catch (err) {
-      respondToFunnelWriteError(err, res);
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    await applyFunnelWrite(req, res, orgId, brandId, entries, "replace");
-  }
-);
-
-// PATCH /v1/brands/:brandId/funnel-budgets/:funnelKey — set ONE ceiling (brand
-// Settings). Auth: org headers. Body: { dailyBudgetCents, featureSlug? }.
-//
-// `featureSlug` names the ACQUISITION CHANNEL being funded, so one pair can be
-// stated without disturbing its siblings. Omitted (every caller before migration
-// 0036), it addresses the funnel as a whole: its single channel when it funds
-// one, the default channel when it funds none, and a 409 when it is split across
-// two — there is no honest way to guess which campaign the money is for.
-//
-// Untouched pairs keep their ceiling. Same 0-is-legal, funded-minimum and
-// grandfathered-ceiling rules as the whole-set write, all judged on the FUNNEL
-// TOTAL rather than on one channel.
-router.patch(
-  "/v1/brands/:brandId/funnel-budgets/:funnelKey",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId, funnelKey } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-
-    const parsedBody = SetBrandFunnelDailyBudgetRequestSchema.safeParse(
-      req.body
-    );
-    if (!parsedBody.success) {
-      res.status(400).json({ error: parsedBody.error.issues[0].message });
-      return;
-    }
-
-    let entries: ParsedFunnelBudget[];
-    try {
-      entries = parseFunnelBudgetSet([
-        {
-          funnelKey,
-          featureSlug: parsedBody.data.featureSlug,
-          offerId: parsedBody.data.offerId,
-          legKey: parsedBody.data.legKey,
-          dailyBudgetCents: parsedBody.data.dailyBudgetCents,
-        },
-      ]);
-    } catch (err) {
-      respondToFunnelWriteError(err, res);
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    await applyFunnelWrite(req, res, orgId, brandId, entries, "merge");
-  }
-);
-
-// --- One CAMPAIGN's daily ceiling, with no sales funnel -------------------
-//
-// A campaign is (offer x leg x acquisition channel). The sales funnel is being
-// retired, and one leg belongs to several funnels, so these routes address a
-// ceiling by the campaign alone — see lib/campaign-budgets.ts. Every
-// funnel-keyed route above keeps working unchanged until its consumers move.
-
-function renderCampaigns(totals: CampaignBudgetTotal[]) {
-  return totals.map((total) => ({
-    offerId: total.offerId,
-    legKey: total.legKey,
-    featureSlug: total.featureSlug,
-    dailyBudgetCents: total.dailyBudgetCents,
-    updatedAt: total.updatedAt.toISOString(),
-  }));
-}
+// A campaign is (offer x leg x acquisition channel), so these routes address a
+// ceiling by the campaign — see lib/campaign-budgets.ts.
 
 /**
- * Every campaign ceiling of a brand, the funnel dropped, plus the brand total
+ * Every campaign ceiling of a brand, plus the brand total
  * (null when nothing was ever configured — the same answer as the brand-level
  * read). The entries add up to the total by construction.
  */
@@ -937,8 +549,8 @@ async function composeCampaignBudgetsView(orgId: string, brandId: string) {
   const all = await getBrandCeilings(orgId, brandId);
   if (all.length > 0) {
     return {
-      dailyBudgetCents: sumFunnelBudgets(all),
-      campaigns: renderCampaigns(aggregateCampaignTotals(all)),
+      dailyBudgetCents: sumCeilings(all),
+      campaigns: renderCampaigns(campaignTotalsOf(all)),
     };
   }
   const brandLevel = await getBrandDailyBudget(orgId, brandId);
@@ -972,7 +584,7 @@ function campaignKeyFromQuery(req: Request, res: Response): CampaignKey | null {
 }
 
 // GET /internal/brands/:brandId/campaign-budgets — every campaign ceiling of a
-// brand, no funnel. Auth: x-api-key + x-org-id.
+// brand. Auth: x-api-key + x-org-id.
 router.get("/internal/brands/:brandId/campaign-budgets", async (req, res) => {
   const { brandId } = req.params;
   if (!UUID_RE.test(brandId)) {
@@ -1042,11 +654,11 @@ router.get(
   }
 );
 
-// PUT /v1/brands/:brandId/campaign-budget — state ONE campaign's ceiling, no
-// funnel (the dashboard's budget controls). Body: { offerId, legKey,
-// featureSlug, dailyBudgetCents }. Other campaigns untouched. 0 is legal; a
-// funded channel below its published floor is a 400 (grandfathered as on the
-// funnel-keyed write). Auth: org headers.
+// PUT /v1/brands/:brandId/campaign-budget — state ONE campaign's ceiling (the
+// dashboard's budget controls). Body: { offerId, legKey, featureSlug,
+// dailyBudgetCents }. Other campaigns untouched. 0 is legal; a funded channel
+// below its published floor is a 400 (a channel already below it may be kept or
+// raised). Auth: org headers.
 router.put(
   "/v1/brands/:brandId/campaign-budget",
   requireOrgHeaders,
@@ -1066,7 +678,7 @@ router.put(
     try {
       key = parseCampaignKey(parsedBody.data);
     } catch (err) {
-      respondToFunnelWriteError(err, res);
+      respondToCeilingWriteError(err, res);
       return;
     }
 
@@ -1080,7 +692,7 @@ router.put(
         parsedBody.data.dailyBudgetCents
       );
     } catch (err) {
-      respondToFunnelWriteError(err, res);
+      respondToCeilingWriteError(err, res);
       return;
     }
 
@@ -1118,7 +730,7 @@ router.put(
       dailyBudgetCents: written.campaign.dailyBudgetCents,
       updatedAt: written.campaign.updatedAt.toISOString(),
       brandDailyBudgetCents: written.brandDailyBudgetCents,
-      campaigns: renderCampaigns(aggregateCampaignTotals(written.ceilings)),
+      campaigns: renderCampaigns(campaignTotalsOf(written.ceilings)),
     });
   }
 );

@@ -136,7 +136,7 @@ export interface PaymentOutlook {
 async function fundedBrandIds(orgId: string): Promise<string[]> {
   const rows = await db.execute<{ brand_id: string }>(sql`
     SELECT DISTINCT brand_id
-      FROM brand_funnel_daily_budgets
+      FROM campaign_daily_budgets
      WHERE org_id = ${orgId}
      UNION
     SELECT DISTINCT brand_id

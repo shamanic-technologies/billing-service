@@ -652,87 +652,49 @@ export const brandDailyBudgetChanges = pgTable(
   ]
 );
 
-// brand_funnel_daily_budgets: ONE daily spend ceiling per (org, brand, funnel).
-// A brand sells through several SALES FUNNELS (brand-service's vocabulary:
-// reply_meeting, visit_meeting, visit_signup, visit_form) whose economics differ
-// by orders of magnitude, so they must be fundable independently.
+// campaign_daily_budgets: ONE daily spend ceiling per CAMPAIGN of an org+brand.
+// A campaign is (offer x leg x acquisition channel), so a ceiling is keyed on
+// exactly that. The brand-level value is DERIVED from these rows (their sum) once
+// any exist - see lib/campaign-budgets.ts. A brand that has never set a ceiling
+// keeps its brand_daily_budgets row as the authoritative value (no backfill).
 //
-// The brand-level value is DERIVED from these rows (their sum) once any exist —
-// see lib/brand-funnel-budgets.ts. A brand that has never set per-funnel ceilings
-// keeps its brand_daily_budgets row as the authoritative value (no backfill), so
-// every existing consumer of the brand-level read is unaffected.
+// Until migration 0048 this table was `brand_funnel_daily_budgets` and carried a
+// `funnel_key` in its identity. The sales funnel was retired fleet-wide (one leg
+// belongs to several funnels, so the funnel never identified what was bought),
+// and 0048 dropped it after snapshotting the column in production.
 //
-// 0 is a legal value ("not funding that funnel right now"), including a set where
-// every funnel is 0 (a brand in pause). The per-funnel product MINIMUM applies
-// only to a funded (> 0) funnel and lives in the service layer, not in a CHECK —
-// the minimums are product figures that move.
-export const brandFunnelDailyBudgets = pgTable(
-  "brand_funnel_daily_budgets",
+// 0 is a legal value ("not funding this campaign right now"), including a brand
+// whose every ceiling is 0 (a brand in pause). The acquisition channel's daily
+// minimum applies only to a funded (> 0) channel and lives in the service layer,
+// not in a CHECK - the minimums are published figures that move.
+export const campaignDailyBudgets = pgTable(
+  "campaign_daily_budgets",
   {
     orgId: uuid("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
     /**
-     * A brand-service sales-funnel key. Validated in the service layer.
-     *
-     * NULLABLE since migration 0047: NULL is a ceiling stated per CAMPAIGN
-     * (offer x leg x acquisition channel) with no funnel, which is the model the
-     * fleet is moving to. Such a row counts in every TOTAL and is never rendered
-     * in a funnel-grain array, so no consumer that parses a funnel key ever sees
-     * a null one. See `lib/campaign-budgets.ts`.
-     */
-    funnelKey: text("funnel_key"),
-    /**
      * The ACQUISITION CHANNEL this ceiling funds, as a features-service feature
-     * slug (migration 0036). A channel IS a feature slug — there is no separate
-     * channel vocabulary — so the same funnel worked through two offers holds
-     * two rows, each paced and priced on its own money. Deliberately NOT
-     * validated against a list of slugs: which feature may be sold through which
-     * funnel is features-service's statement, not this service's.
+     * slug. A channel IS a feature slug - there is no separate channel
+     * vocabulary. Deliberately NOT validated against a list of slugs.
      */
     featureSlug: text("feature_slug").notNull(),
     /**
-     * The OFFER this ceiling funds — one distinct thing the brand sells
-     * (migration 0037). brand-service owns the entity and exposes it as a UUID;
-     * billing defines none of its semantics and, exactly as with the channel
-     * slug, never validates it against another service.
+     * The OFFER this ceiling funds - one distinct thing the brand sells.
+     * brand-service owns the entity and exposes it as a UUID; billing defines
+     * none of its semantics and never validates it against another service.
      *
      * NULLABLE, and the NULL is a first-class permanent value: "this ceiling is
-     * not scoped to an offer". Every ceiling written before 0037 carries it and
-     * there is no backfill — only brand-service knows which offer a live ceiling
-     * belongs to, and guessing would move real money onto the wrong campaign.
-     * That is why the key below is a UNIQUE ... NULLS NOT DISTINCT constraint
-     * rather than a primary key: a primary key cannot hold a nullable column,
-     * and NULLS NOT DISTINCT still makes two unscoped ceilings for one
-     * (funnel, channel) pair unrepresentable.
+     * not scoped to an offer" (written before offers existed). There is no
+     * backfill - guessing would move real money onto the wrong campaign. That is
+     * why the key below is a UNIQUE ... NULLS NOT DISTINCT constraint rather than
+     * a primary key.
      */
     offerId: uuid("offer_id"),
     /**
-     * The funnel LEG this ceiling funds — features-service's canonical leg id
-     * (migration 0039).
-     *
-     * A sales funnel is a chain of steps and the thing a customer BUYS is one of
-     * its LEGS: the leg that takes a lead sitting at one step and moves it to
-     * the next. A campaign is (brand, offer, acquisition channel, leg), so this
-     * is the grain the money that paces a campaign is keyed on.
-     *
-     * features-service OWNS the vocabulary and MINTS the identifier (its
-     * `lib/funnel-legs.ts`, published on `GET /public/channels` as
-     * `legs[].legKey`); campaign-service carries the same value on the campaign
-     * row. This column carries it and nothing else — no leg vocabulary, enum or
-     * list exists here and none is to be introduced, exactly as for the channel
-     * slug and the offer id. OPAQUE, and never PARSED: the two steps a leg
-     * connects ride BESIDE the identifier on that catalogue (`fromStep` /
-     * `toStep`), so a consumer that wants them reads them there. `text`, because
-     * that is the shape features-service mints.
-     *
-     * NULLABLE, and the NULL is a first-class permanent value: "this ceiling is
-     * not scoped to a leg". Every ceiling written before 0039 carries it and
-     * there is no backfill — a funnel has several legs and a leg belongs to
-     * several funnels, so nothing here can derive one, and guessing would move
-     * real money onto the wrong campaign.
-     *
-     * The FUNNEL stays in the key beside it: this is the additive half, and a
-     * later ship removes the funnel once every consumer has moved.
+     * The LEG this ceiling funds - features-service's canonical leg id, carried
+     * OPAQUE and never parsed (the two steps a leg connects ride beside it on
+     * features-service's catalogue). NULLABLE with the same meaning as the offer:
+     * "written before legs existed", a permanent value, never backfilled.
      */
     legKey: text("leg_key"),
     dailyBudgetCents: numeric("daily_budget_cents", {
@@ -744,54 +706,25 @@ export const brandFunnelDailyBudgets = pgTable(
       .defaultNow(),
   },
   (table) => [
-    unique("brand_funnel_daily_budgets_leg_key")
+    unique("campaign_daily_budgets_campaign_key")
       .on(
         table.orgId,
         table.brandId,
-        table.funnelKey,
         table.featureSlug,
         table.offerId,
         table.legKey
       )
       .nullsNotDistinct(),
-    index("brand_funnel_daily_budgets_org_brand_idx").on(
+    index("campaign_daily_budgets_org_brand_idx").on(
       table.orgId,
       table.brandId
-    ),
-    index("brand_funnel_daily_budgets_org_brand_funnel_idx").on(
-      table.orgId,
-      table.brandId,
-      table.funnelKey
-    ),
-    index("brand_funnel_daily_budgets_org_brand_funnel_channel_idx").on(
-      table.orgId,
-      table.brandId,
-      table.funnelKey,
-      table.featureSlug
-    ),
-    index("brand_funnel_daily_budgets_org_brand_funnel_channel_offer_idx").on(
-      table.orgId,
-      table.brandId,
-      table.funnelKey,
-      table.featureSlug,
-      table.offerId
     ),
   ]
 );
 
-/**
- * Any stored ceiling, funnel-keyed or not (migration 0047). Totals are always
- * composed over THIS type, so a funnel-less ceiling is never left out of one.
- */
-export type CeilingRow = typeof brandFunnelDailyBudgets.$inferSelect;
-
-/**
- * A ceiling that carries a sales funnel — the only kind a funnel-grain read
- * renders. Narrow with `isFunnelRow`.
- */
-export type BrandFunnelDailyBudget = CeilingRow & { funnelKey: string };
-export type NewBrandFunnelDailyBudget =
-  typeof brandFunnelDailyBudgets.$inferInsert;
+/** One stored campaign ceiling. */
+export type CeilingRow = typeof campaignDailyBudgets.$inferSelect;
+export type NewCeilingRow = typeof campaignDailyBudgets.$inferInsert;
 
 export type BrandDailyBudgetChange = typeof brandDailyBudgetChanges.$inferSelect;
 export type NewBrandDailyBudgetChange =

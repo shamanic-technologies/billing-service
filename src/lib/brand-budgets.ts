@@ -14,14 +14,14 @@ import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
-  brandFunnelDailyBudgets,
+  campaignDailyBudgets,
   type BrandDailyBudget,
   type BrandDailyBudgetChange,
 } from "../db/schema.js";
 import {
-  BrandBudgetManagedByFunnelsError,
-  sumFunnelBudgets,
-} from "./brand-funnel-budgets.js";
+  BrandBudgetManagedByCampaignsError,
+  sumCeilings,
+} from "./campaign-budgets.js";
 import {
   enumerateUtcDays,
   formatUtcDay,
@@ -62,23 +62,23 @@ export async function upsertBrandDailyBudget(
   return db.transaction(async (tx) => {
     const changedAt = new Date();
 
-    // A funnel-funded brand derives this value from its per-funnel ceilings
-    // (lib/brand-funnel-budgets.ts). Accepting a brand-level write would leave
-    // two numbers claiming to be the same thing, so refuse it — the caller
-    // surfaces a 409 pointing at the per-funnel routes.
-    const funnelRows = await tx
-      .select({ funnelKey: brandFunnelDailyBudgets.funnelKey })
-      .from(brandFunnelDailyBudgets)
+    // A brand funded per campaign derives this value from its campaign
+    // ceilings (lib/campaign-budgets.ts). Accepting a brand-level write would
+    // leave two numbers claiming to be the same thing, so refuse it — the caller
+    // surfaces a 409 pointing at the per-campaign routes.
+    const ceilingRows = await tx
+      .select({ featureSlug: campaignDailyBudgets.featureSlug })
+      .from(campaignDailyBudgets)
       .where(
         and(
-          eq(brandFunnelDailyBudgets.orgId, orgId),
-          eq(brandFunnelDailyBudgets.brandId, brandId)
+          eq(campaignDailyBudgets.orgId, orgId),
+          eq(campaignDailyBudgets.brandId, brandId)
         )
       )
       .limit(1);
-    if (funnelRows.length > 0) {
-      throw new BrandBudgetManagedByFunnelsError(
-        "This brand's daily budget is set per sales funnel. Change the per-funnel ceilings instead — the brand's daily budget is their total."
+    if (ceilingRows.length > 0) {
+      throw new BrandBudgetManagedByCampaignsError(
+        "This brand's daily budget is set per campaign. Change the campaign ceilings instead — the brand's daily budget is their total."
       );
     }
 
@@ -152,38 +152,37 @@ export async function getBrandDailyBudgetHistory(
 /**
  * Read one org's current daily budget for a brand, or null if none set.
  *
- * SHAPE AND MEANING ARE UNCHANGED for every consumer. Once the brand carries
- * per-funnel ceilings, this answers their SUM — the one number the launch gate,
- * the runway warnings, the credit alerts, the Overview tile and campaign-service
- * all keep reading. No consumer re-composes that sum itself.
+ * Once the brand carries campaign ceilings, this answers their SUM — the one
+ * number the launch gate, the runway warnings, the credit alerts, the Overview
+ * tile and campaign-service all read. No consumer re-composes that sum itself.
  *
- * A brand that has never set per-funnel ceilings reads its own brand-level row,
- * exactly as before (no backfill). The two states are mutually exclusive: the
- * first per-funnel write drops the brand-level row, and a brand-level write
- * against a funnel-funded brand is refused.
+ * A brand that has never set a campaign ceiling reads its own brand-level row
+ * (no backfill). The two states are mutually exclusive: the first ceiling write
+ * drops the brand-level row, and a brand-level write against a ceiling-funded
+ * brand is refused.
  */
 export async function getBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
-  const funnelRows = await db
+  const ceilingRows = await db
     .select()
-    .from(brandFunnelDailyBudgets)
+    .from(campaignDailyBudgets)
     .where(
       and(
-        eq(brandFunnelDailyBudgets.orgId, orgId),
-        eq(brandFunnelDailyBudgets.brandId, brandId)
+        eq(campaignDailyBudgets.orgId, orgId),
+        eq(campaignDailyBudgets.brandId, brandId)
       )
     );
-  if (funnelRows.length > 0) {
-    const updatedAt = funnelRows.reduce(
+  if (ceilingRows.length > 0) {
+    const updatedAt = ceilingRows.reduce(
       (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
-      funnelRows[0].updatedAt
+      ceilingRows[0].updatedAt
     );
     return {
       brandId,
       orgId,
-      dailyBudgetCents: sumFunnelBudgets(funnelRows),
+      dailyBudgetCents: sumCeilings(ceilingRows),
       updatedAt,
     };
   }
@@ -241,9 +240,9 @@ export interface BrandDailyBudgetByDay {
  *
  * GRAIN: the BRAND total, which is the finest grain billing genuinely records
  * over time. `brand_daily_budget_changes` carries the brand-level figure on
- * EVERY write, per-funnel / per-channel / per-offer / per-leg writes included
- * (see setBrandFunnelDailyBudgets), so the replay is complete for the brand.
- * The finer ceilings are upserted in place with NO change log of their own, so
+ * EVERY write, per-campaign writes included (see setCampaignDailyBudget), so
+ * the replay is complete for the brand. The campaign ceilings are upserted in
+ * place with NO change log of their own, so
  * a past-day answer at that grain would be invented — we do not offer one.
  *
  * The amount in force for a day is the LAST change strictly before the next

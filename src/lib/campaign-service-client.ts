@@ -11,13 +11,11 @@
  * churn as a smaller one.
  *
  * WE DO NOT RE-DERIVE THE JOIN. `GET /brands/:brandId/spendable-budget` already
- * answers exactly this, and its matching rules already handle the two traps this
- * data hits: billing still emits the pre-rename funnel spellings
- * (`reply_meeting`) while campaign-service stores the canonical ones
- * (`sales_meetings_from_conversation`), and production carries ceilings written
- * before offers existed (`offer_id IS NULL`) while every running campaign names
- * an offer. A second copy of that matching in this repo would drift from the
- * first one within a release.
+ * answers exactly this, and its matching rules already handle the trap this data
+ * hits: production carries ceilings written before offers existed
+ * (`offer_id IS NULL`) while every running campaign names an offer. A second
+ * copy of that matching in this repo would drift from the first one within a
+ * release.
  *
  * NEW EDGE IN THE SERVICE GRAPH. campaign-service's spendable-budget reads
  * billing's own budgets back, so this is billing → campaign-service → billing.
@@ -39,14 +37,9 @@ const SPENDABLE_TIMEOUT_MS = 5_000;
 
 /** One stored ceiling, with whether a campaign is standing behind it. */
 export interface SpendableBudgetRow {
-  funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
-  /**
-   * The funnel LEG this stored ceiling names, echoed back. `null` for every
-   * ceiling written before legs existed — which is what the leg backfill reads
-   * to find the ceilings still missing one.
-   */
+  /** The leg this stored ceiling names, echoed back; null when it names none. */
   legKey: string | null;
   resolvedOfferId: string | null;
   dailyBudgetCents: number;
@@ -60,13 +53,12 @@ export interface SpendableBudgetCampaign {
   campaignId: string;
   status: string;
   running: boolean;
-  funnelKey: string | null;
   featureSlug: string | null;
   offerId: string | null;
   /**
-   * The funnel LEG this campaign is bought for — features-service's canonical
-   * leg id, minted there and carried on the campaign row. OPAQUE: billing never
-   * parses it and holds no leg vocabulary. `null` when the campaign names none.
+   * The leg this campaign is bought for — features-service's canonical leg id,
+   * carried on the campaign row. OPAQUE: billing never parses it and holds no
+   * leg vocabulary. `null` when the campaign names none.
    */
   legKey: string | null;
   configuredDailyBudgetCents: number;
@@ -80,7 +72,8 @@ export interface SpendableBudgetCampaign {
 export interface SpendableBudget {
   orgId: string;
   brandId: string;
-  grain: "offer" | "channel" | "funnel" | "brand" | "none";
+  /** campaign-service's own label for the grain it answered at; not interpreted here. */
+  grain: string;
   configuredDailyBudgetCents: number;
   runningDailyBudgetCents: number;
   campaigns: SpendableBudgetCampaign[];

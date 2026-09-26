@@ -9,7 +9,7 @@ import {
 import {
   billingAccounts,
   brandDailyBudgets,
-  brandFunnelDailyBudgets,
+  campaignDailyBudgets,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
   creditDepletionEpisodes,
@@ -103,11 +103,11 @@ async function deleteBillingStateByOrg(
       .where(eq(brandDailyBudgets.orgId, orgId))
       .returning({ brandId: brandDailyBudgets.brandId });
 
-    // Per-funnel ceilings are this org's own pacing config for the same brands.
-    const deletedFunnelBudgets = await tx
-      .delete(brandFunnelDailyBudgets)
-      .where(eq(brandFunnelDailyBudgets.orgId, orgId))
-      .returning({ funnelKey: brandFunnelDailyBudgets.funnelKey });
+    // Campaign ceilings are this org's own pacing config for the same brands.
+    const deletedCampaignBudgets = await tx
+      .delete(campaignDailyBudgets)
+      .where(eq(campaignDailyBudgets.orgId, orgId))
+      .returning({ brandId: campaignDailyBudgets.brandId });
 
     // This org's OWN promises. A promise held by ANOTHER org that merely REFERENCES
     // this one (an inviter's promise naming this org as the referral that converted)
@@ -130,7 +130,7 @@ async function deleteBillingStateByOrg(
       campaignAuthorizeCosts: deletedCampaignCosts.length,
       campaignReloadSweepAttempts: deletedSweepAttempts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
-      brandFunnelDailyBudgets: deletedFunnelBudgets.length,
+      campaignDailyBudgets: deletedCampaignBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
     };
@@ -718,8 +718,8 @@ router.get("/internal/accounts/by-org/:orgId/payment-outlook", async (req, res) 
 // ordinary topup.
 //
 // Consumer: the api-service gateway, for the rebuilt sell-first onboarding.
-// Funnel 1 is paid via hosted Checkout (which saves the card); funnels 2..N
-// are paid one call at a time here, with no second redirect.
+// The first purchase is paid via hosted Checkout (which saves the card); later
+// ones are paid one call at a time here, with no second redirect.
 //
 // No second Stripe integration: the charge is the existing reloadOffSession
 // path, so a succeeded charge is mirrored by stripe-service on the same

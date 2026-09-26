@@ -699,7 +699,7 @@
           "brandDailyBudgets": {
             "type": "integer"
           },
-          "brandFunnelDailyBudgets": {
+          "campaignDailyBudgets": {
             "type": "integer"
           },
           "welcomeCreditClaims": {
@@ -715,7 +715,7 @@
           "creditDepletionEpisodes",
           "campaignAuthorizeCosts",
           "brandDailyBudgets",
-          "brandFunnelDailyBudgets",
+          "campaignDailyBudgets",
           "welcomeCreditClaims",
           "freeCreditPromises"
         ]
@@ -1377,95 +1377,9 @@
           "dailyBudgetCents"
         ]
       },
-      "BrandFunnelKey": {
-        "type": "string",
-        "enum": [
-          "reply_meeting",
-          "visit_meeting",
-          "visit_signup",
-          "visit_form"
-        ]
-      },
-      "BrandFunnelDailyBudget": {
+      "CampaignDailyBudget": {
         "type": "object",
         "properties": {
-          "funnelKey": {
-            "$ref": "#/components/schemas/BrandFunnelKey"
-          },
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "funnelKey",
-          "dailyBudgetCents",
-          "updatedAt"
-        ]
-      },
-      "BrandFunnelChannelDailyBudget": {
-        "type": "object",
-        "properties": {
-          "funnelKey": {
-            "$ref": "#/components/schemas/BrandFunnelKey"
-          },
-          "featureSlug": {
-            "type": "string"
-          },
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "funnelKey",
-          "featureSlug",
-          "dailyBudgetCents",
-          "updatedAt"
-        ]
-      },
-      "BrandFunnelOfferDailyBudget": {
-        "type": "object",
-        "properties": {
-          "funnelKey": {
-            "$ref": "#/components/schemas/BrandFunnelKey"
-          },
-          "featureSlug": {
-            "type": "string"
-          },
-          "offerId": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid"
-          },
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "funnelKey",
-          "featureSlug",
-          "offerId",
-          "dailyBudgetCents",
-          "updatedAt"
-        ]
-      },
-      "BrandFunnelLegDailyBudget": {
-        "type": "object",
-        "properties": {
-          "funnelKey": {
-            "$ref": "#/components/schemas/BrandFunnelKey"
-          },
-          "featureSlug": {
-            "type": "string"
-          },
           "offerId": {
             "type": "string",
             "nullable": true,
@@ -1475,6 +1389,9 @@
             "type": "string",
             "nullable": true
           },
+          "featureSlug": {
+            "type": "string"
+          },
           "dailyBudgetCents": {
             "type": "string"
           },
@@ -1483,57 +1400,11 @@
           }
         },
         "required": [
-          "funnelKey",
-          "featureSlug",
           "offerId",
           "legKey",
+          "featureSlug",
           "dailyBudgetCents",
           "updatedAt"
-        ]
-      },
-      "ReadBrandFunnelDailyBudgets": {
-        "type": "object",
-        "properties": {
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "dailyBudgetCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "funnels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
-            }
-          },
-          "channels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
-            }
-          },
-          "offers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
-            }
-          },
-          "legs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
-            }
-          }
-        },
-        "required": [
-          "brandId",
-          "dailyBudgetCents",
-          "funnels",
-          "channels",
-          "offers",
-          "legs"
         ]
       },
       "ReadBrandOfferDailyBudget": {
@@ -1559,28 +1430,10 @@
             "type": "string",
             "nullable": true
           },
-          "funnels": {
+          "campaigns": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
-            }
-          },
-          "channels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
-            }
-          },
-          "offers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
-            }
-          },
-          "legs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+              "$ref": "#/components/schemas/CampaignDailyBudget"
             }
           }
         },
@@ -1589,10 +1442,7 @@
           "offerId",
           "dailyBudgetCents",
           "updatedAt",
-          "funnels",
-          "channels",
-          "offers",
-          "legs"
+          "campaigns"
         ]
       },
       "ReadBrandLegDailyBudget": {
@@ -1617,28 +1467,10 @@
             "type": "string",
             "nullable": true
           },
-          "funnels": {
+          "campaigns": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
-            }
-          },
-          "channels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
-            }
-          },
-          "offers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
-            }
-          },
-          "legs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
+              "$ref": "#/components/schemas/CampaignDailyBudget"
             }
           }
         },
@@ -1647,135 +1479,7 @@
           "legKey",
           "dailyBudgetCents",
           "updatedAt",
-          "funnels",
-          "channels",
-          "offers",
-          "legs"
-        ]
-      },
-      "BrandFunnelDailyBudgets": {
-        "type": "object",
-        "properties": {
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "orgId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "funnels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelDailyBudget"
-            }
-          },
-          "channels": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelChannelDailyBudget"
-            }
-          },
-          "offers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelOfferDailyBudget"
-            }
-          },
-          "legs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/BrandFunnelLegDailyBudget"
-            }
-          }
-        },
-        "required": [
-          "brandId",
-          "orgId",
-          "dailyBudgetCents",
-          "funnels",
-          "channels",
-          "offers",
-          "legs"
-        ]
-      },
-      "SetBrandFunnelDailyBudgetSetRequest": {
-        "type": "object",
-        "properties": {
-          "funnels": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "funnelKey": {
-                  "type": "string"
-                },
-                "featureSlug": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "offerId": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "legKey": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "dailyBudgetCents": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "number"
-                    }
-                  ]
-                }
-              },
-              "required": [
-                "funnelKey",
-                "dailyBudgetCents"
-              ]
-            },
-            "minItems": 1
-          }
-        },
-        "required": [
-          "funnels"
-        ]
-      },
-      "SetBrandFunnelDailyBudgetRequest": {
-        "type": "object",
-        "properties": {
-          "dailyBudgetCents": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "number"
-              }
-            ]
-          },
-          "featureSlug": {
-            "type": "string",
-            "minLength": 1
-          },
-          "offerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "legKey": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "dailyBudgetCents"
+          "campaigns"
         ]
       },
       "TransferBrandTableResult": {
@@ -2007,36 +1711,6 @@
           "paid_topups_cents",
           "outstanding_total_cents",
           "promises"
-        ]
-      },
-      "CampaignDailyBudget": {
-        "type": "object",
-        "properties": {
-          "offerId": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid"
-          },
-          "legKey": {
-            "type": "string",
-            "nullable": true
-          },
-          "featureSlug": {
-            "type": "string"
-          },
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "updatedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "offerId",
-          "legKey",
-          "featureSlug",
-          "dailyBudgetCents",
-          "updatedAt"
         ]
       },
       "ReadCampaignDailyBudgets": {
@@ -4989,7 +4663,7 @@
     "/internal/brands/{brandId}/daily-budget/by-day": {
       "get": {
         "summary": "What daily amount was in force for this brand on each past UTC day",
-        "description": "Replays the caller org's append-only daily-budget change log to answer what amount was IN FORCE for this brand on each UTC day of a range, oldest day first. The amount for a day is the last change strictly before the next day's 00:00Z, i.e. the value the day finished on. Service-to-service read with x-api-key plus x-org-id, same auth as the current-value and history reads. GRAIN: the BRAND total, the finest grain billing genuinely records over time — the change log carries the brand-level figure on every write (per-funnel, per-channel, per-offer and per-leg writes included), while the finer ceilings are upserted in place with no change log of their own, so a past-day answer there would be invented. A day before the first recorded change is state not_recorded with a null amount — never 0, and never the current value back-dated; a recorded \"0\" is a brand the customer deliberately defunded and is a different fact. Today is allowed (it answers with the amount in force right now); a future day is refused.",
+        "description": "Replays the caller org's append-only daily-budget change log to answer what amount was IN FORCE for this brand on each UTC day of a range, oldest day first. The amount for a day is the last change strictly before the next day's 00:00Z, i.e. the value the day finished on. Service-to-service read with x-api-key plus x-org-id, same auth as the current-value and history reads. GRAIN: the BRAND total, the finest grain billing genuinely records over time — the change log carries the brand-level figure on every write (per-campaign writes included), while the campaign ceilings are upserted in place with no change log of their own, so a past-day answer there would be invented. A day before the first recorded change is state not_recorded with a null amount — never 0, and never the current value back-dated; a recorded \"0\" is a brand the customer deliberately defunded and is a different fact. Today is allowed (it answers with the amount in force right now); a future day is refused.",
         "parameters": [
           {
             "schema": {
@@ -5187,320 +4861,7 @@
             }
           },
           "409": {
-            "description": "This brand is funded per sales funnel, so its daily budget is DERIVED (the sum of the per-funnel ceilings). Write the per-funnel routes instead.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/internal/brands/{brandId}/funnel-budgets": {
-      "get": {
-        "summary": "Read this org's per-funnel daily ceilings for a brand",
-        "description": "Returns the caller org's per-SALES-FUNNEL daily spend ceilings for this brand (brand-service's funnel vocabulary: reply_meeting, visit_meeting, visit_signup, visit_form), plus the brand-level total. Service-to-service read with x-api-key plus x-org-id. A brand that has never set per-funnel ceilings returns funnels: [] and its brand-level value — never a fabricated split. dailyBudgetCents is exactly what GET /internal/brands/{brandId}/daily-budget serves, so no consumer needs to recompose the sum itself.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "brandId",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Per-funnel ceilings (empty when none set) + brand total",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadBrandFunnelDailyBudgets"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "brandId or x-org-id is not a valid UUID, or x-org-id is missing",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/brands/{brandId}/funnel-budgets": {
-      "get": {
-        "summary": "Read a brand's per-funnel daily ceilings (user, via the gateway)",
-        "description": "Same view as the internal read, for the user's own org — brand Settings reads its ceilings back. A brand with no per-funnel ceilings returns funnels: [] and its brand-level value.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "brandId",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
-              "example": "uuid1,uuid2,uuid3"
-            },
-            "required": false,
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking"
-            },
-            "required": false,
-            "name": "x-feature-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
-            },
-            "required": false,
-            "name": "x-audience-id",
-            "in": "header"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Per-funnel ceilings (empty when none set) + brand total",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadBrandFunnelDailyBudgets"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid brandId or missing org headers",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Set a brand's WHOLE per-funnel ceiling set at once (atomic)",
-        "description": "Writes every per-funnel daily ceiling for this org+brand in ONE transaction — signup checkout uses this. Funnels absent from the body are removed. A rejected set leaves nothing half-applied. A ceiling of 0 means 'not funding that funnel right now' and is accepted, INCLUDING a set where every funnel is 0 (a brand in pause). A FUNDED ceiling below its product minimum — the channel's own floor when it states one, else the funnel's — is refused with a readable reason: $1/day for visit_signup and visit_form, $24/day for reply_meeting and visit_meeting. Once ceilings exist, the brand's daily budget is their SUM and the brand-level write is refused (409).",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "brandId",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
-              "example": "uuid1,uuid2,uuid3"
-            },
-            "required": false,
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking"
-            },
-            "required": false,
-            "name": "x-feature-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
-            },
-            "required": false,
-            "name": "x-audience-id",
-            "in": "header"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetBrandFunnelDailyBudgetSetRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Stored ceilings + the resulting brand-level total",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BrandFunnelDailyBudgets"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid brandId, unknown or duplicated funnel key, unknown acquisition channel, or a funded ceiling below its minimum",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "An entry named no acquisition channel for a funnel that is funded through several",
+            "description": "This brand is funded per campaign, so its daily budget is DERIVED (the sum of the campaign ceilings). Write the per-campaign route instead.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5515,7 +4876,7 @@
     "/internal/brands/{brandId}/offers/{offerId}/daily-budget": {
       "get": {
         "summary": "Read ONE offer's daily ceiling for a brand",
-        "description": "Returns what the caller org has funded ONE offer at — the SUM of the ceilings covering it across every sales funnel and acquisition channel it is sold through — plus that offer's own per-funnel and per-(funnel, channel) figures, so a caller never enumerates the offer's channels nor adds anything up. An offer-scoped screen paces spend against THIS number: the brand-wide total is about a different thing the moment a brand states a second offer. A ceiling written before offers existed (offerId null) counts towards this offer only while it is the brand's SOLE named one, which is why an offer that is a brand's only one answers exactly the brand-wide total. An offer with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
+        "description": "Returns what the caller org has funded ONE offer at — the SUM of the campaign ceilings covering it across every leg and acquisition channel it is sold through — plus those campaign ceilings, so a caller never enumerates the offer's campaigns nor adds anything up. An offer-scoped screen paces spend against THIS number: the brand-wide total is about a different thing the moment a brand states a second offer. A ceiling written before offers existed (offerId null) counts towards this offer only while it is the brand's SOLE named one, which is why an offer that is a brand's only one answers exactly the brand-wide total. An offer with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
         "parameters": [
           {
             "schema": {
@@ -5708,8 +5069,8 @@
     },
     "/internal/brands/{brandId}/legs/{legKey}/daily-budget": {
       "get": {
-        "summary": "Read ONE funnel leg's daily ceiling for a brand",
-        "description": "Returns what the caller org has funded ONE funnel LEG at — the SUM of the ceilings covering it across every sales funnel, acquisition channel and offer it is sold through — plus that leg's own per-funnel, per-(funnel, channel) and per-(funnel, channel, offer) figures, so a caller never enumerates anything nor adds anything up. A campaign is (brand, offer, acquisition channel, LEG), so this is the money that paces one campaign, read on the same key the campaign is keyed on. `legKey` is features-service's canonical leg id (published on its GET /public/channels as legs[].legKey) and is carried OPAQUE — billing never validates or parses it. A ceiling written before legs existed (legKey null) counts towards this leg only while it is the brand's SOLE named one, which is why a leg that is a brand's only one answers exactly the brand-wide total. A leg with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
+        "summary": "Read ONE leg's daily ceiling for a brand",
+        "description": "Returns what the caller org has funded ONE LEG at — the SUM of the campaign ceilings covering it across every acquisition channel and offer it is sold through — plus those campaign ceilings, so a caller never enumerates anything nor adds anything up. A campaign is (offer, leg, acquisition channel), so this is the money that paces one campaign, read on the same key the campaign is keyed on. `legKey` is features-service's canonical leg id (published on its GET /public/channels as legs[].legKey) and is carried OPAQUE — billing never validates or parses it. A ceiling written before legs existed (legKey null) counts towards this leg only while it is the brand's SOLE named one, which is why a leg that is a brand's only one answers exactly the brand-wide total. A leg with NO ceiling returns dailyBudgetCents: null — a different answer from a ceiling of 0, and never derived from it. Service-to-service read with x-api-key plus x-org-id.",
         "parameters": [
           {
             "schema": {
@@ -5773,7 +5134,7 @@
     },
     "/v1/brands/{brandId}/legs/{legKey}/daily-budget": {
       "get": {
-        "summary": "Read one funnel leg's daily ceiling (user, via the gateway)",
+        "summary": "Read one leg's daily ceiling (user, via the gateway)",
         "description": "Same answer as the internal read, for the user's own org — a campaign screen reads the ceiling it paces its spend against. A leg with no ceiling returns dailyBudgetCents: null.",
         "parameters": [
           {
@@ -5889,153 +5250,6 @@
           },
           "400": {
             "description": "Invalid brandId, empty legKey, or missing org headers",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/brands/{brandId}/funnel-budgets/{funnelKey}": {
-      "patch": {
-        "summary": "Set ONE funnel's daily ceiling for a brand",
-        "description": "Sets a single sales funnel's daily spend ceiling — brand Settings changes them one at a time. Untouched funnels keep their ceiling. Same rules as the whole-set write: 0 is legal (not funding that funnel), a funded ceiling below its product minimum is refused with a readable reason.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "brandId",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "$ref": "#/components/schemas/BrandFunnelKey"
-            },
-            "required": true,
-            "name": "funnelKey",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "x-api-key",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-org-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-user-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "x-run-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Campaign ID injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-campaign-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
-              "example": "uuid1,uuid2,uuid3"
-            },
-            "required": false,
-            "name": "x-brand-id",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Workflow slug injected by workflow-service"
-            },
-            "required": false,
-            "name": "x-workflow-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Feature slug for tracking"
-            },
-            "required": false,
-            "name": "x-feature-slug",
-            "in": "header"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
-            },
-            "required": false,
-            "name": "x-audience-id",
-            "in": "header"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetBrandFunnelDailyBudgetRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Stored ceilings + the resulting brand-level total",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BrandFunnelDailyBudgets"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid brandId, unknown funnel key, unknown acquisition channel, or a funded ceiling below its minimum",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "No acquisition channel named for a funnel that is funded through several",
             "content": {
               "application/json": {
                 "schema": {
@@ -6239,8 +5453,8 @@
     },
     "/internal/brands/{brandId}/campaign-budgets": {
       "get": {
-        "summary": "Read every campaign daily ceiling of a brand, with no sales funnel",
-        "description": "One entry per campaign — (offer, leg, acquisition channel) — with the sales funnel dropped: ceilings the funnel used to split are summed. The entries add up to `dailyBudgetCents`, which is byte-identical to the brand-level read. Service-to-service read with x-api-key plus x-org-id.",
+        "summary": "Read every campaign daily ceiling of a brand",
+        "description": "One entry per campaign — (offer, leg, acquisition channel). The entries add up to `dailyBudgetCents`, which is byte-identical to the brand-level read. Service-to-service read with x-api-key plus x-org-id.",
         "parameters": [
           {
             "schema": {
@@ -6415,8 +5629,8 @@
     },
     "/internal/brands/{brandId}/campaign-budget": {
       "get": {
-        "summary": "Read ONE campaign's daily ceiling, with no sales funnel",
-        "description": "A campaign is (offer x leg x acquisition channel); all three are required. Answers the SUM of the ceilings that are this campaign's money under any funnel or none. A ceiling written before offers (or legs) existed counts only while the brand names no other offer (the channel no other leg). Nothing funds it -> dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
+        "summary": "Read ONE campaign's daily ceiling",
+        "description": "A campaign is (offer x leg x acquisition channel); all three are required. Answers the SUM of the ceilings that are this campaign's money. A ceiling written before offers (or legs) existed counts only while the brand names no other offer (the channel no other leg). Nothing funds it -> dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
         "parameters": [
           {
             "schema": {
@@ -6643,8 +5857,8 @@
         }
       },
       "put": {
-        "summary": "Set ONE campaign's daily ceiling, with no sales funnel",
-        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money under one or several funnels are CONSOLIDATED into one row carrying the new amount (a funnel-keyed row is kept when there is one, so funnel-grain reads keep showing it); when none exists a funnel-less ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand and grandfathered exactly as on the funnel-keyed write. The brand's daily budget is the SUM of every ceiling.",
+        "summary": "Set ONE campaign's daily ceiling",
+        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money (including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand; a channel already funded below its floor may be kept or raised. The brand's daily budget is the SUM of every ceiling.",
         "parameters": [
           {
             "schema": {
