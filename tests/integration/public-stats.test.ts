@@ -367,7 +367,7 @@ describe("GET /public/stats/billing", () => {
       expect(res.status).toBe(502);
     });
 
-    // The console's funnel states "Paid users" over three windows: since
+    // The console's acquisition view states "Paid users" over three windows: since
     // inception, the last 90 days, the last 30. Only the first was answerable
     // and the other two rendered a dash, which a reader takes to mean nobody
     // paid. This is the field that answers the other two.
@@ -491,7 +491,7 @@ describe("GET /public/stats/billing", () => {
         expect(res.body.first_payment_times).toEqual(firstPaymentTimes);
       });
 
-      // An array only the admin funnel needs must not be a hard dependency for
+      // An array only the admin console needs must not be a hard dependency for
       // every money figure beside it, nor for the PUBLIC investor page whose
       // reader throws on a non-ok response.
       it("still serves every other figure when the instants are absent", async () => {

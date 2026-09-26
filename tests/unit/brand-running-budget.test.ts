@@ -15,22 +15,26 @@ import type {
 //   org b645207b-…, brand 75d7e3e8-…
 //   reply_meeting / feedback-request-cold-email-outreach : $10/day, STOPPED
 //   reply_meeting / sales-cold-email-outreach            : $200/day, ONGOING
-// Note both traps: billing's pre-rename funnel spelling (`reply_meeting`, not
-// `sales_meetings_from_conversation`) and ceilings written before offers existed
-// (offerId null) while a running campaign names one.
-const PAUSED = {
-  funnelKey: "reply_meeting",
+// Note the trap: ceilings written before offers existed (offerId null) while a
+// running campaign names one.
+type Grain = {
+  featureSlug: string | null;
+  offerId: string | null;
+  legKey: string | null;
+};
+const PAUSED: Grain = {
   featureSlug: "feedback-request-cold-email-outreach",
   offerId: null,
+  legKey: null,
 };
-const RUNNING = {
-  funnelKey: "reply_meeting",
+const RUNNING: Grain = {
   featureSlug: "sales-cold-email-outreach",
   offerId: null,
+  legKey: null,
 };
 
 function row(
-  grain: { funnelKey: string | null; featureSlug: string | null; offerId: string | null },
+  grain: Grain,
   dailyBudgetCents: number,
   running: boolean
 ): SpendableBudgetRow {
@@ -45,7 +49,7 @@ function row(
 }
 
 function campaign(
-  grain: { funnelKey: string | null; featureSlug: string | null; offerId: string | null },
+  grain: Grain,
   dailyBudgetCents: number,
   running: boolean
 ): SpendableBudgetCampaign {
@@ -132,27 +136,33 @@ describe("running daily budget for a brand-budget change", () => {
     expect(dollars(totals.runningNowCents)).toBe(50);
   });
 
-  it("matches on billing's pre-rename funnel spelling, not the canonical one", () => {
-    // campaign-service builds `rows` from billing's own read, so the spelling on
-    // both sides is billing's. A change keyed on the canonical spelling must NOT
-    // match — it would silently read a funded funnel as unfunded.
-    const after = spendable([row(RUNNING, 21000, true)]);
+  it("matches a stored ceiling on its leg: another leg's row is not its verdict", () => {
+    // campaign-service builds `rows` from billing's own ceilings, one per
+    // (channel, offer, leg). A change on one leg must read THAT row's verdict.
+    const after = spendable([
+      row({ ...RUNNING, legKey: "first_touch" }, 21000, true),
+      row({ ...RUNNING, legKey: "follow_up" }, 1000, false),
+    ]);
 
-    const canonical = runningTotalsFor(after, [
+    const running = runningTotalsFor(after, [
       {
-        funnelKey: "sales_meetings_from_conversation",
-        featureSlug: RUNNING.featureSlug,
-        offerId: null,
+        ...RUNNING,
+        legKey: "first_touch",
         previousDailyBudgetCents: "20000",
         newDailyBudgetCents: "21000",
       },
     ]);
-    expect(dollars(canonical.runningBeforeCents)).toBe(210); // unmatched → no delta
+    expect(dollars(running.runningBeforeCents)).toBe(200);
 
-    const stored = runningTotalsFor(after, [
-      { ...RUNNING, previousDailyBudgetCents: "20000", newDailyBudgetCents: "21000" },
+    const paused = runningTotalsFor(after, [
+      {
+        ...RUNNING,
+        legKey: "follow_up",
+        previousDailyBudgetCents: "500",
+        newDailyBudgetCents: "1000",
+      },
     ]);
-    expect(dollars(stored.runningBeforeCents)).toBe(200);
+    expect(dollars(paused.runningBeforeCents)).toBe(210); // stopped leg → no delta
   });
 
   it("resolves a DELETED ceiling against the campaigns the same response names", () => {
@@ -206,24 +216,27 @@ describe("running daily budget for a brand-budget change", () => {
   });
 });
 
+const RUNNING_STORED = { featureSlug: "sales-cold-email-outreach", offerId: null };
+const PAUSED_STORED = {
+  featureSlug: "feedback-request-cold-email-outreach",
+  offerId: null,
+};
+
 describe("ceilingChangesBetween", () => {
   const stored = (
-    grain: { funnelKey: string; featureSlug: string; offerId: string | null },
+    grain: { featureSlug: string; offerId: string | null; legKey?: string | null },
     cents: string
-  ) => ({ ...grain, dailyBudgetCents: cents });
+  ) => ({ legKey: null, ...grain, dailyBudgetCents: cents });
 
   it("reports opened, moved and deleted ceilings, and skips unchanged ones", () => {
     const changes = ceilingChangesBetween(
       [
-        stored({ ...RUNNING, funnelKey: "reply_meeting" }, "20000.0000000000"),
-        stored({ ...PAUSED, funnelKey: "reply_meeting" }, "1000.0000000000"),
+        stored(RUNNING_STORED, "20000.0000000000"),
+        stored(PAUSED_STORED, "1000.0000000000"),
       ],
       [
-        stored({ ...RUNNING, funnelKey: "reply_meeting" }, "21000.0000000000"),
-        stored(
-          { funnelKey: "visit_signup", featureSlug: "google-ads", offerId: null },
-          "500.0000000000"
-        ),
+        stored(RUNNING_STORED, "21000.0000000000"),
+        stored({ featureSlug: "google-ads", offerId: null }, "500.0000000000"),
       ]
     );
 
@@ -245,19 +258,17 @@ describe("ceilingChangesBetween", () => {
   it("treats a re-save of the same value as no change", () => {
     expect(
       ceilingChangesBetween(
-        [stored({ ...RUNNING, funnelKey: "reply_meeting" }, "5000.0000000000")],
-        [stored({ ...RUNNING, funnelKey: "reply_meeting" }, "5000")]
+        [stored(RUNNING_STORED, "5000.0000000000")],
+        [stored(RUNNING_STORED, "5000")]
       )
     ).toEqual([]);
   });
 
-  it("diffs two LEGS of one triple apart, and both count against its verdict", () => {
-    // Billing stores one ceiling per leg (migration 0039); campaign-service
-    // answers at the (funnel, channel, offer) triple. Two legs must not collapse
-    // into one change, and both deltas apply to that triple's running verdict.
+  it("diffs two LEGS of one (channel, offer) apart", () => {
+    // Billing stores one ceiling per campaign, so two legs must not collapse into
+    // one change, and each delta applies to its own leg's running verdict.
     const leg = (legKey: string, cents: string) => ({
-      ...RUNNING,
-      funnelKey: "reply_meeting",
+      ...RUNNING_STORED,
       legKey,
       dailyBudgetCents: cents,
     });
@@ -268,9 +279,9 @@ describe("ceilingChangesBetween", () => {
     );
     expect(changes).toHaveLength(1);
     expect(changes[0]).toMatchObject({
-      funnelKey: "reply_meeting",
       featureSlug: RUNNING.featureSlug,
       offerId: null,
+      legKey: "first_touch",
       previousDailyBudgetCents: "12000",
       newDailyBudgetCents: "13000",
     });
@@ -280,20 +291,18 @@ describe("ceilingChangesBetween", () => {
       [leg("first_touch", "13000"), leg("follow_up", "9000")]
     );
     expect(both).toHaveLength(2);
-    const after = spendable([row(RUNNING, 22000, true)]);
+    const after = spendable([
+      row({ ...RUNNING, legKey: "first_touch" }, 13000, true),
+      row({ ...RUNNING, legKey: "follow_up" }, 9000, true),
+    ]);
     expect(dollars(runningTotalsFor(after, both).runningBeforeCents)).toBe(200);
   });
 
   it("distinguishes an offer-scoped ceiling from the unscoped one", () => {
     const offerId = "d5ecba00-0000-4000-8000-000000000001";
     const changes = ceilingChangesBetween(
-      [stored({ ...RUNNING, funnelKey: "reply_meeting" }, "4000")],
-      [
-        stored(
-          { ...RUNNING, funnelKey: "reply_meeting", offerId },
-          "4000"
-        ),
-      ]
+      [stored(RUNNING_STORED, "4000")],
+      [stored({ ...RUNNING_STORED, offerId }, "4000")]
     );
 
     expect(changes).toHaveLength(2);
@@ -305,9 +314,9 @@ describe("brandGrainChange", () => {
   it("names every grain field null, the way campaign-service names that ceiling", () => {
     expect(brandGrainChange("5000", "9900")).toEqual([
       {
-        funnelKey: null,
         featureSlug: null,
         offerId: null,
+        legKey: null,
         previousDailyBudgetCents: "5000",
         newDailyBudgetCents: "9900",
       },
@@ -320,7 +329,7 @@ describe("brandGrainChange", () => {
   });
 
   it("carries the brand-grain running verdict through to the figure", () => {
-    const grain = { funnelKey: null, featureSlug: null, offerId: null };
+    const grain: Grain = { featureSlug: null, offerId: null, legKey: null };
     const after = spendable([row(grain, 9900, true)]);
 
     const totals = runningTotalsFor(after, brandGrainChange("5000", "9900"));

@@ -2,13 +2,10 @@
  * The daily minimum a funded ceiling must clear, READ from the acquisition
  * channel's own published commercial terms.
  *
- * WHAT DECIDES A FLOOR. A campaign is (brand, offer, funnel, channel, leg), and
- * what a day of it costs is a property of the CHANNEL: cold email costs what
- * cold email costs, whoever runs it and whatever funnel the leads later travel.
- * So two campaigns on the same channel have the same floor even when their
- * funnels differ — which is exactly what a per-FUNNEL minimum could not express,
- * and why the funnel no longer decides this. The funnel still identifies the
- * ceiling; it just does not price it.
+ * WHAT DECIDES A FLOOR. A campaign is (offer, leg, channel), and what a day of
+ * it costs is a property of the CHANNEL: cold email costs what cold email costs,
+ * whoever runs it and whatever leg it moves leads along. So two campaigns on the
+ * same channel have the same floor.
  *
  * WHERE THE FIGURE LIVES. features-service publishes every channel's commercial
  * terms on `GET /public/channels`, including `terms.dailyOperatingCostCents` —
@@ -29,9 +26,9 @@
  * no default minimum: a channel funded at a number nobody chose for it is money
  * already spent, while a refusal is a deploy away from fixed.
  *
- * THIS IS NOT THE PRODUCT TAXONOMY. billing still never asks whether a feature
- * may be SOLD through a funnel — that stays features-service's statement, and
- * nothing here validates the pair.
+ * THIS IS NOT THE PRODUCT TAXONOMY. billing never asks whether a feature may
+ * perform a given leg — that stays features-service's statement, and nothing
+ * here validates the pair.
  */
 
 import { fetchWithRetry } from "./fetch-retry.js";

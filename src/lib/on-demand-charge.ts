@@ -3,9 +3,9 @@
  * right now and credit the org balance exactly like an ordinary topup.
  *
  * Consumer: the api-service gateway, on behalf of the rebuilt sell-first
- * onboarding. Funnel 1 is paid through hosted Checkout (which also saves the
- * card); funnels 2..N are paid one call at a time through this, without a
- * second redirect.
+ * onboarding. The first purchase is paid through hosted Checkout (which also
+ * saves the card); later ones are paid one call at a time through this, without
+ * a second redirect.
  *
  * NO second Stripe integration: the charge itself is the existing
  * `reloadOffSession` path — the same `POST /internal/charges/by-org/{orgId}`
@@ -23,7 +23,7 @@
  * The charge going through still runs via `coalesceReload`, so it shares the
  * per-org coalescing + post-failure backoff with the auto-reload paths — a
  * card that just declined to the sweep is not hammered again seconds later by
- * a funnel payment.
+ * an onboarding payment.
  *
  * Fail-loud and DISTINGUISHABLE: every outcome carries a stable `code` the
  * caller can branch on (see OnDemandChargeCode). A decline is never a silent
