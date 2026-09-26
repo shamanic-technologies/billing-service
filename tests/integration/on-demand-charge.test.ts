@@ -1,8 +1,8 @@
 /**
  * On-demand off-session charge (`POST /internal/accounts/by-org/:orgId/charge`).
  *
- * The rebuilt sell-first onboarding pays funnel 1 through hosted Checkout
- * (which saves the card) and funnels 2..N one call at a time here. The pins:
+ * The rebuilt sell-first onboarding pays the first purchase through hosted
+ * Checkout (which saves the card) and later ones one call at a time here. The pins:
  * a success charges the stated amount through the existing reload path
  * (mirrored → credited rises like an ordinary topup), and every non-success
  * is DISTINGUISHABLE on the wire — a decline is never a silent no-op, never a
@@ -114,11 +114,11 @@ describe("POST /internal/accounts/by-org/:orgId/charge", () => {
     const res = await request(app)
       .post(PATH)
       .set(getAuthHeaders(orgId))
-      .send({ amountCents: 5000, idempotencyKey: "funnel-2-payment-1" });
+      .send({ amountCents: 5000, idempotencyKey: "onboarding-payment-2" });
 
     expect(res.status).toBe(200);
     const [, , forwardedKey] = ssMocks.reloadOffSession.mock.calls[0];
-    expect(forwardedKey).toBe("funnel-2-payment-1");
+    expect(forwardedKey).toBe("onboarding-payment-2");
   });
 
   it("402 charge_declined when the card declines — distinguishable from success and from outages", async () => {

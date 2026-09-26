@@ -47,8 +47,8 @@ export const PUBLISHED_CHANNEL_DAILY_OPERATING_COST_CENTS: Record<
   "organic-x-publishing": 8000,
   "organic-reddit-publishing": 8000,
   "organic-youtube-publishing": 12000,
-  // Conversion — these do not open a funnel, they move a lead already on one to
-  // its next step. The customer-operated ones spend none of our money: 0 is a
+  // Conversion — these do not bring a new lead in, they move one already in
+  // hand to its next step. The customer-operated ones spend none of our money: 0 is a
   // STATED floor, not an absent one.
   "ai-meeting-booking": 100,
   "agency-meeting-booking": 0,

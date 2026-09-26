@@ -9,7 +9,7 @@ import {
   campaignReloadSweepAttempts,
   brandDailyBudgets,
   brandDailyBudgetChanges,
-  brandFunnelDailyBudgets,
+  campaignDailyBudgets,
   orgUsageDiscounts,
   freeCreditPromises,
   WELCOME_PROMO_CODE,
@@ -45,7 +45,7 @@ export async function cleanTestData() {
   await db.delete(campaignReloadSweepAttempts);
   await db.delete(campaignAuthorizeCosts);
   await db.delete(brandDailyBudgetChanges);
-  await db.delete(brandFunnelDailyBudgets);
+  await db.delete(campaignDailyBudgets);
   await db.delete(brandDailyBudgets);
   await db.delete(orgUsageDiscounts);
   await db.delete(localPromos);

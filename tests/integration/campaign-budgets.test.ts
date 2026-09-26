@@ -1,15 +1,18 @@
 /**
- * A daily ceiling is stated and read per CAMPAIGN — (offer x leg x channel) —
- * with no sales funnel (migration 0047). Additive: every funnel-keyed read keeps
- * answering what it answered, and a funnel-less ceiling counts in every total
- * while never appearing in a funnel-grain array.
+ * A daily ceiling is stated and read per CAMPAIGN — (offer x leg x channel).
+ * The sales funnel is gone from this service (migration 0048): no route
+ * accepts one, no row carries one, and every total is the sum of the campaigns.
  */
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
-import { brandFunnelDailyBudgets } from "../../src/db/schema.js";
+import {
+  brandDailyBudgetChanges,
+  brandDailyBudgets,
+  campaignDailyBudgets,
+} from "../../src/db/schema.js";
 
 const orgId = "00000000-0000-0000-0000-0000000047e1";
 const userId = "00000000-0000-0000-0000-0000000047e9";
@@ -28,21 +31,18 @@ const campaignPath = `/v1/brands/${brandId}/campaign-budget`;
 const campaignsPath = `/internal/brands/${brandId}/campaign-budgets`;
 const internalCampaignPath = `/internal/brands/${brandId}/campaign-budget`;
 const brandTotalPath = `/internal/brands/${brandId}/daily-budget`;
-const funnelReadPath = `/internal/brands/${brandId}/funnel-budgets`;
 
 const app = createTestApp();
 
 async function seed(
-  funnelKey: string | null,
   featureSlug: string,
   offerId: string | null,
   legKey: string | null,
   cents: string
 ) {
-  await db.insert(brandFunnelDailyBudgets).values({
+  await db.insert(campaignDailyBudgets).values({
     orgId,
     brandId,
-    funnelKey,
     featureSlug,
     offerId,
     legKey,
@@ -73,12 +73,12 @@ async function brandTotal() {
 }
 
 async function storedRows() {
-  return (await db.select().from(brandFunnelDailyBudgets)).filter(
+  return (await db.select().from(campaignDailyBudgets)).filter(
     (r) => r.brandId === brandId
   );
 }
 
-describe("a daily ceiling per campaign, with no sales funnel", () => {
+describe("a daily ceiling per campaign", () => {
   beforeEach(async () => {
     await cleanTestData();
   });
@@ -88,7 +88,7 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
     await closeDb();
   });
 
-  it("writes then reads a ceiling by (offer, leg, channel) with no funnel", async () => {
+  it("writes then reads a ceiling by (offer, leg, channel)", async () => {
     const res = await put({
       offerId: OFFER_A,
       legKey: LEG_REPLY,
@@ -110,35 +110,28 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
 
     const rows = await storedRows();
     expect(rows).toHaveLength(1);
-    expect(rows[0].funnelKey).toBeNull();
+    expect(rows[0]).not.toHaveProperty("funnelKey");
 
-    // Counts in every total; never rendered in a funnel-grain array.
     expect(await brandTotal()).toBe("2500.0000000000");
-    const funnels = await request(app).get(funnelReadPath).set(internalHeaders);
-    expect(funnels.body).toEqual({
-      brandId,
-      dailyBudgetCents: "2500.0000000000",
-      funnels: [],
-      channels: [],
-      offers: [],
-      legs: [],
-    });
 
     const list = await request(app).get(campaignsPath).set(internalHeaders);
-    expect(list.body.dailyBudgetCents).toBe("2500.0000000000");
-    expect(list.body.campaigns).toEqual([
-      {
-        offerId: OFFER_A,
-        legKey: LEG_REPLY,
-        featureSlug: COLD,
-        dailyBudgetCents: "2500.0000000000",
-        updatedAt: expect.any(String),
-      },
-    ]);
+    expect(list.body).toEqual({
+      brandId,
+      dailyBudgetCents: "2500.0000000000",
+      campaigns: [
+        {
+          offerId: OFFER_A,
+          legKey: LEG_REPLY,
+          featureSlug: COLD,
+          dailyBudgetCents: "2500.0000000000",
+          updatedAt: expect.any(String),
+        },
+      ],
+    });
   });
 
-  it("re-stating a funnel-keyed campaign updates that row in place (funnel reads unchanged in shape)", async () => {
-    await seed("reply_meeting", COLD, OFFER_A, LEG_REPLY, "1000");
+  it("re-stating a campaign updates its row in place", async () => {
+    await seed(COLD, OFFER_A, LEG_REPLY, "1000");
     expect(await readOne(OFFER_A, LEG_REPLY, COLD)).toBe("1000.0000000000");
 
     const res = await put({
@@ -151,33 +144,12 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
 
     const rows = await storedRows();
     expect(rows).toHaveLength(1);
-    expect(rows[0].funnelKey).toBe("reply_meeting");
     expect(rows[0].dailyBudgetCents).toBe("3000.0000000000");
     expect(await brandTotal()).toBe("3000.0000000000");
   });
 
-  it("consolidates one campaign held under several funnels into one row", async () => {
-    await seed("visit_signup", COLD, OFFER_A, LEG_VISIT, "900");
-    await seed("visit_form", COLD, OFFER_A, LEG_VISIT, "600");
-    // The read sums them, so it agrees with the brand total counting both.
-    expect(await readOne(OFFER_A, LEG_VISIT, COLD)).toBe("1500.0000000000");
-    expect(await brandTotal()).toBe("1500.0000000000");
-
-    await put({
-      offerId: OFFER_A,
-      legKey: LEG_VISIT,
-      featureSlug: COLD,
-      dailyBudgetCents: 1200,
-    });
-    const rows = await storedRows();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].funnelKey).toBe("visit_signup");
-    expect(await readOne(OFFER_A, LEG_VISIT, COLD)).toBe("1200.0000000000");
-    expect(await brandTotal()).toBe("1200.0000000000");
-  });
-
   it("adopts a pre-offer / pre-leg ceiling instead of opening a second one beside it", async () => {
-    await seed("reply_meeting", COLD, null, null, "800");
+    await seed(COLD, null, null, "800");
     expect(await readOne(OFFER_A, LEG_REPLY, COLD)).toBe("800.0000000000");
 
     await put({
@@ -189,7 +161,6 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
     const rows = await storedRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      funnelKey: "reply_meeting",
       offerId: OFFER_A,
       legKey: LEG_REPLY,
       dailyBudgetCents: "1000.0000000000",
@@ -198,8 +169,8 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
   });
 
   it("does not claim an unscoped ceiling when the brand names another offer", async () => {
-    await seed("reply_meeting", COLD, OFFER_B, LEG_REPLY, "800");
-    await seed("visit_form", COLD, null, LEG_VISIT, "900");
+    await seed(COLD, OFFER_B, LEG_REPLY, "800");
+    await seed(COLD, null, LEG_VISIT, "900");
     expect(await readOne(OFFER_A, LEG_VISIT, COLD)).toBeNull();
 
     await put({
@@ -212,30 +183,7 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
     expect(await brandTotal()).toBe("2500.0000000000");
   });
 
-  it("a funnel-keyed write naming the same campaign adopts the funnel-less ceiling", async () => {
-    await put({
-      offerId: OFFER_A,
-      legKey: LEG_REPLY,
-      featureSlug: COLD,
-      dailyBudgetCents: 1000,
-    });
-    const res = await request(app)
-      .patch(`/v1/brands/${brandId}/funnel-budgets/reply_meeting`)
-      .set(getAuthHeaders(orgId, userId, runId))
-      .send({
-        dailyBudgetCents: 1500,
-        featureSlug: COLD,
-        offerId: OFFER_A,
-        legKey: LEG_REPLY,
-      });
-    expect(res.status).toBe(200);
-    const rows = await storedRows();
-    expect(rows).toHaveLength(1);
-    expect(rows[0].funnelKey).toBe("reply_meeting");
-    expect(await brandTotal()).toBe("1500.0000000000");
-  });
-
-  it("a whole-set funnel write leaves an unrelated funnel-less ceiling alone", async () => {
+  it("leaves other campaigns untouched", async () => {
     await put({
       offerId: OFFER_A,
       legKey: LEG_REPLY,
@@ -248,24 +196,59 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
       featureSlug: COLD,
       dailyBudgetCents: 1000,
     });
-    const res = await request(app)
-      .put(`/v1/brands/${brandId}/funnel-budgets`)
-      .set(getAuthHeaders(orgId, userId, runId))
-      .send({
-        funnels: [
-          {
-            funnelKey: "visit_signup",
-            featureSlug: COLD,
-            offerId: OFFER_A,
-            legKey: LEG_VISIT,
-            dailyBudgetCents: 800,
-          },
-        ],
-      });
+    const res = await put({
+      offerId: OFFER_A,
+      legKey: LEG_VISIT,
+      featureSlug: COLD,
+      dailyBudgetCents: 800,
+    });
     expect(res.status).toBe(200);
-    expect(res.body.dailyBudgetCents).toBe("1800.0000000000");
-    expect(res.body.legs).toHaveLength(1);
+    expect(res.body.brandDailyBudgetCents).toBe("1800.0000000000");
+    expect(res.body.campaigns).toHaveLength(3);
     expect(await readOne(OFFER_A, LEG_REPLY, COLD)).toBe("1000.0000000000");
+  });
+
+  it("judges the channel floor on the channel TOTAL, with the grandfather", async () => {
+    // $4 + $4 on an $8/day channel: the channel clears its floor.
+    expect(
+      (await put({ offerId: OFFER_A, legKey: LEG_REPLY, featureSlug: COLD, dailyBudgetCents: 0 })).status
+    ).toBe(200);
+    await seed(COLD, OFFER_A, LEG_VISIT, "400");
+    const split = await put({
+      offerId: OFFER_A,
+      legKey: LEG_REPLY,
+      featureSlug: COLD,
+      dailyBudgetCents: 400,
+    });
+    expect(split.status).toBe(200);
+
+    // A channel stored at $8 cannot be lowered to a funded $5.
+    const lowered = await put({
+      offerId: OFFER_A,
+      legKey: LEG_REPLY,
+      featureSlug: COLD,
+      dailyBudgetCents: 100,
+    });
+    expect(lowered.status).toBe(400);
+    expect(lowered.body.error).toContain("$8/day");
+
+    // A channel ALREADY below its floor ($5) may be kept or raised, not lowered.
+    await cleanTestData();
+    await seed(COLD, OFFER_A, LEG_REPLY, "500");
+    for (const [cents, status] of [
+      [500, 200],
+      [600, 200],
+      [400, 400],
+      [0, 200],
+    ] as const) {
+      const res = await put({
+        offerId: OFFER_A,
+        legKey: LEG_REPLY,
+        featureSlug: COLD,
+        dailyBudgetCents: cents,
+      });
+      expect(res.status).toBe(status);
+    }
   });
 
   it("refuses a funded channel below its published floor, and an incomplete address", async () => {
@@ -277,6 +260,14 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
     });
     expect(low.status).toBe(400);
     expect(low.body.error).toContain("$8/day");
+
+    const unknown = await put({
+      offerId: OFFER_A,
+      legKey: LEG_REPLY,
+      featureSlug: "carrier-pigeon-outreach",
+      dailyBudgetCents: 1000,
+    });
+    expect(unknown.status).toBe(400);
 
     const noLeg = await put({
       offerId: OFFER_A,
@@ -291,6 +282,38 @@ describe("a daily ceiling per campaign, with no sales funnel", () => {
       .set(internalHeaders);
     expect(badQuery.status).toBe(400);
     expect(await storedRows()).toHaveLength(0);
+  });
+
+  it("retires the brand-level scalar on the first ceiling, then refuses a brand-level write (409)", async () => {
+    await db.insert(brandDailyBudgets).values({
+      orgId,
+      brandId,
+      dailyBudgetCents: "7000",
+    });
+    expect(await brandTotal()).toBe("7000.0000000000");
+
+    await put({
+      offerId: OFFER_A,
+      legKey: LEG_REPLY,
+      featureSlug: COLD,
+      dailyBudgetCents: 1000,
+    });
+    expect(
+      (await db.select().from(brandDailyBudgets)).filter((r) => r.brandId === brandId)
+    ).toHaveLength(0);
+    expect(await brandTotal()).toBe("1000.0000000000");
+
+    const history = (await db.select().from(brandDailyBudgetChanges)).filter(
+      (r) => r.brandId === brandId
+    );
+    expect(history.map((h) => h.dailyBudgetCents)).toEqual(["1000.0000000000"]);
+
+    const scalar = await request(app)
+      .patch(`/v1/brands/${brandId}/daily-budget`)
+      .set(getAuthHeaders(orgId, userId, runId))
+      .send({ dailyBudgetCents: 5000 });
+    expect(scalar.status).toBe(409);
+    expect(scalar.body.error).toContain("per campaign");
   });
 
   it("reads null campaigns and the brand scalar total for a brand never funded per campaign", async () => {
