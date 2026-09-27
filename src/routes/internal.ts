@@ -15,6 +15,7 @@ import {
   creditDepletionEpisodes,
   freeCreditPromises,
   welcomeRecipients,
+  staffDebits,
   localPromos,
   ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
@@ -131,6 +132,13 @@ async function deleteBillingStateByOrg(
       .where(eq(freeCreditPromises.orgId, orgId))
       .returning({ id: freeCreditPromises.id });
 
+    // Staff debits on this org (migration 0053) go with it: they only ever adjust
+    // this org's own balance.
+    const deletedStaffDebits = await tx
+      .delete(staffDebits)
+      .where(eq(staffDebits.orgId, orgId))
+      .returning({ id: staffDebits.id });
+
     const deletedBillingAccounts = await tx
       .delete(billingAccounts)
       .where(eq(billingAccounts.orgId, orgId))
@@ -146,6 +154,7 @@ async function deleteBillingStateByOrg(
       campaignDailyBudgets: deletedCampaignBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
+      staffDebits: deletedStaffDebits.length,
     };
   });
 }

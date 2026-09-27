@@ -845,6 +845,37 @@ export const brandTransfers = pgTable(
 
 export type BrandTransfer = typeof brandTransfers.$inferSelect;
 
+// staff_debits: a staff member takes credit OFF an org's balance, with a mandatory
+// note and the staff email behind it (migration 0053). The mirror of the staff
+// grant, deliberately NOT a negative local_promos row: that ledger feeds the
+// welcome remainder, the entitlement, the referral ladder and credited_gifted_cents,
+// and a negative gift would reach all of them. Balance composition adds these rows
+// to the org's USAGE instead (lib/transfer-usage.ts), so a debit lowers the
+// spendable and displayed balance exactly like spend does. Never charges a card.
+export const staffDebits = pgTable(
+  "staff_debits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    amountCents: numeric("amount_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    note: text("note").notNull(),
+    debitedBy: text("debited_by").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("staff_debits_org_idempotency_key").on(table.orgId, table.idempotencyKey),
+    index("idx_staff_debits_org").on(table.orgId),
+  ]
+);
+
+export type StaffDebit = typeof staffDebits.$inferSelect;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 /**

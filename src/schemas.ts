@@ -56,7 +56,12 @@ export const BillingAccountSchema = z
     }),
     /** Lifetime platform usage from runs-service /internal/org-usage-total. */
     usage_cents: UsageCentsSchema,
-    /** Spendable funds = credited_cents − usage_cents. Use this for depletion/budget gates. */
+    /** Credit staff took off this org's balance (POST /v1/credits/debit). Never part of usage_cents. */
+    debited_cents: CentsStringSchema.openapi({
+      description:
+        "Total credit staff removed from this org's balance with an explanatory note (POST /v1/credits/debit; see GET /v1/credits/debits for each line). Lowers balance_cents and actual_balance_cents exactly like spend, but is NOT campaign usage and is not included in usage_cents: balance_cents === credited_cents − usage_cents − debited_cents. \"0\" when none.",
+    }),
+    /** Spendable funds = credited_cents − usage_cents − debited_cents. Use this for depletion/budget gates. */
     balance_cents: SpendableBalanceCentsSchema,
     /** User-facing balance = credited_cents − actualized usage only. */
     actual_balance_cents: ActualBalanceCentsSchema,
@@ -516,6 +521,54 @@ export const CreditGrantsListResponseSchema = z
   })
   .openapi("CreditGrantsListResponse");
 
+// --- Staff debits (the mirror of the staff grant: take credit OFF a balance) ---
+
+export const StaffDebitRequestSchema = z
+  .object({
+    /** Amount to take off the org's balance, positive integer cents. */
+    amountCents: z.number().int().positive(),
+    /** Why — mandatory, human-readable, stored on the debit row. */
+    note: z.string().trim().min(1, "note is required"),
+    /**
+     * Caller-supplied key. The same key retried never debits twice; the same key
+     * with a different amount is refused (409). Required — no silent default.
+     */
+    idempotencyKey: z.string().min(1),
+  })
+  .openapi("StaffDebitRequest");
+
+export const StaffDebitItemSchema = z
+  .object({
+    id: z.string(),
+    orgId: z.string(),
+    /** Debited amount, decimal string (numeric(16,10)), positive. */
+    amountCents: CentsStringSchema,
+    /** Staff note explaining the debit. */
+    note: z.string(),
+    /** Staff email behind the debit (x-email). */
+    debitedBy: z.string(),
+    idempotencyKey: z.string(),
+    createdAt: z.string(),
+  })
+  .openapi("StaffDebitItem");
+
+export const StaffDebitResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    debit: StaffDebitItemSchema,
+    /** True when this idempotencyKey had already debited the org: nothing new was taken. */
+    alreadyDebited: z.boolean(),
+    /** Spendable funds after the debit (credited_cents − usage_cents − debited_cents). */
+    newBalanceCents: CentsStringSchema,
+  })
+  .openapi("StaffDebitResponse");
+
+export const StaffDebitsListResponseSchema = z
+  .object({
+    debits: z.array(StaffDebitItemSchema),
+  })
+  .openapi("StaffDebitsListResponse");
+
 // --- Per-org usage discount (staff-managed, single replaceable value) ---
 
 export const SetUsageDiscountRequestSchema = z
@@ -568,6 +621,7 @@ export const InternalAccountTeardownDeletedRowsSchema = z
     campaignDailyBudgets: z.number().int(),
     welcomeCreditClaims: z.number().int(),
     freeCreditPromises: z.number().int(),
+    staffDebits: z.number().int(),
   })
   .openapi("InternalAccountTeardownDeletedRows");
 
@@ -2059,6 +2113,84 @@ registry.registerPath({
     400: {
       description: "Missing or invalid x-org-id",
       content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/credits/debit",
+  summary: "Staff debit: take credit off an org's balance, with a note",
+  description:
+    "The mirror of POST /v1/credits/grant. Records a staff debit for x-org-id with a " +
+    "mandatory note; x-email (required) is recorded as debitedBy. The debit lowers the " +
+    "spendable and displayed balance exactly like spend, and is shown as its own line " +
+    "(debited_cents on GET /v1/accounts, GET /v1/credits/debits), never as campaign usage. " +
+    "Never charges a card. The same idempotencyKey retried debits once; the same key with " +
+    "a different amount is refused (409).",
+  request: {
+    headers: z.object({
+      "x-api-key": z.string(),
+      "x-org-id": z.string().uuid(),
+      "x-email": z.string().openapi({
+        description: "Staff email behind the debit; recorded as debitedBy. Required.",
+      }),
+    }),
+    body: { content: { "application/json": { schema: StaffDebitRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "Debit recorded (or already recorded for this idempotencyKey)",
+      content: { "application/json": { schema: StaffDebitResponseSchema } },
+    },
+    400: {
+      description: "Invalid body, missing note, missing x-email, or missing/invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "idempotencyKey already used for a different amount on this org",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Debit recorded but stripe-service or runs-service unavailable (balance compose failed)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/credits/debits",
+  summary: "List this org's staff debits",
+  description: "Every staff debit for x-org-id, newest first, with note and debitedBy.",
+  request: {
+    headers: z.object({
+      "x-api-key": z.string(),
+      "x-org-id": z.string().uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Org debits",
+      content: { "application/json": { schema: StaffDebitsListResponseSchema } },
+    },
+    400: {
+      description: "Missing or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/credits/debits",
+  summary: "List every org's staff debits (platform oversight ledger)",
+  description: "All staff debits across orgs, newest first. x-api-key only.",
+  request: { headers: z.object({ "x-api-key": z.string() }) },
+  responses: {
+    200: {
+      description: "All debits",
+      content: { "application/json": { schema: StaffDebitsListResponseSchema } },
     },
   },
 });

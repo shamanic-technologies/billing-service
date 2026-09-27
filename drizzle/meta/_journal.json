@@ -372,6 +372,13 @@
       "when": 1792663200000,
       "tag": "0052_org_creation_bonus",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1792749600000,
+      "tag": "0053_staff_debits",
+      "breakpoints": true
     }
   ]
 }

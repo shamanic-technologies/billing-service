@@ -152,6 +152,10 @@
             "type": "string",
             "description": "Platform usage from runs-service, including actualized costs and provisioned holds. Already NET of any per-org usage discount (applied once at cost-write in runs-service). Use with balance_cents for spend authorization."
           },
+          "debited_cents": {
+            "type": "string",
+            "description": "Total credit staff removed from this org's balance with an explanatory note (POST /v1/credits/debit; see GET /v1/credits/debits for each line). Lowers balance_cents and actual_balance_cents exactly like spend, but is NOT campaign usage and is not included in usage_cents: balance_cents === credited_cents − usage_cents − debited_cents. \"0\" when none."
+          },
           "balance_cents": {
             "type": "string",
             "description": "Spendable funds: credited_cents minus usage_cents. Includes provisioned holds, so this is the safety value for authorization, depletion, runway, and top-up checks."
@@ -208,6 +212,7 @@
           "credited_paid_cents",
           "credited_gifted_cents",
           "usage_cents",
+          "debited_cents",
           "balance_cents",
           "actual_balance_cents",
           "free_credit_spendable_cents",
@@ -769,6 +774,9 @@
           },
           "freeCreditPromises": {
             "type": "integer"
+          },
+          "staffDebits": {
+            "type": "integer"
           }
         },
         "required": [
@@ -779,7 +787,8 @@
           "brandDailyBudgets",
           "campaignDailyBudgets",
           "welcomeCreditClaims",
-          "freeCreditPromises"
+          "freeCreditPromises",
+          "staffDebits"
         ]
       },
       "InternalAccountTeardownResponse": {
@@ -980,6 +989,104 @@
         },
         "required": [
           "grants"
+        ]
+      },
+      "StaffDebitItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "debitedBy": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "orgId",
+          "amountCents",
+          "note",
+          "debitedBy",
+          "idempotencyKey",
+          "createdAt"
+        ]
+      },
+      "StaffDebitResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "debit": {
+            "$ref": "#/components/schemas/StaffDebitItem"
+          },
+          "alreadyDebited": {
+            "type": "boolean"
+          },
+          "newBalanceCents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "debit",
+          "alreadyDebited",
+          "newBalanceCents"
+        ]
+      },
+      "StaffDebitRequest": {
+        "type": "object",
+        "properties": {
+          "amountCents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "amountCents",
+          "note",
+          "idempotencyKey"
+        ]
+      },
+      "StaffDebitsListResponse": {
+        "type": "object",
+        "properties": {
+          "debits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaffDebitItem"
+            }
+          }
+        },
+        "required": [
+          "debits"
         ]
       },
       "UsageDiscountResponse": {
@@ -4150,6 +4257,166 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/debit": {
+      "post": {
+        "summary": "Staff debit: take credit off an org's balance, with a note",
+        "description": "The mirror of POST /v1/credits/grant. Records a staff debit for x-org-id with a mandatory note; x-email (required) is recorded as debitedBy. The debit lowers the spendable and displayed balance exactly like spend, and is shown as its own line (debited_cents on GET /v1/accounts, GET /v1/credits/debits), never as campaign usage. Never charges a card. The same idempotencyKey retried debits once; the same key with a different amount is refused (409).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Staff email behind the debit; recorded as debitedBy. Required."
+            },
+            "required": true,
+            "name": "x-email",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffDebitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Debit recorded (or already recorded for this idempotencyKey)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffDebitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, missing note, missing x-email, or missing/invalid x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotencyKey already used for a different amount on this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Debit recorded but stripe-service or runs-service unavailable (balance compose failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits/debits": {
+      "get": {
+        "summary": "List this org's staff debits",
+        "description": "Every staff debit for x-org-id, newest first, with note and debitedBy.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Org debits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffDebitsListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/credits/debits": {
+      "get": {
+        "summary": "List every org's staff debits (platform oversight ledger)",
+        "description": "All staff debits across orgs, newest first. x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All debits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffDebitsListResponse"
                 }
               }
             }
