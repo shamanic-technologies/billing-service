@@ -532,9 +532,30 @@ export const InternalAccountTeardownResponseSchema = z
   .object({
     ok: z.literal(true),
     orgId: z.string().uuid(),
+    /**
+     * False when billing never held an account for this org. The teardown then
+     * created nothing (no account, no Stripe customer, no welcome evaluation) and
+     * only removed whatever org-keyed rows existed.
+     */
+    billingAccountExisted: z.boolean(),
     deletedRows: InternalAccountTeardownDeletedRowsSchema,
   })
   .openapi("InternalAccountTeardownResponse");
+
+// --- Organization-creation bonus (migration 0052) ---
+
+export const OrgCreationBonusResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    orgId: z.string().uuid(),
+    /** Ledger reason the row carries in GET /v1/credits/grants. Always `org_creation_bonus`. */
+    reason: z.literal("org_creation_bonus"),
+    /** What this org received, in cents ($5 = 500). On a retry: the original amount. */
+    grantedCents: z.number().int(),
+    /** True when the bonus had already been granted — nothing new was paid. */
+    alreadyGranted: z.boolean(),
+  })
+  .openapi("OrgCreationBonusResponse");
 
 // --- Trial seed (migration 0046) ---
 
@@ -1825,7 +1846,10 @@ registry.registerPath({
     "billing-service-owned org-scoped rows that can keep active billing effects " +
     "alive: account topup config, local promo credits, dunning episodes, campaign " +
     "affordability estimates, brand daily budgets, and welcome-credit claims. " +
-    "No cross-service fan-out. Idempotent: no rows for the org is still success.",
+    "No cross-service fan-out. Idempotent: no rows for the org is still success. " +
+    "Deleting an org billing never held an account for is a pure no-op reported as " +
+    "billingAccountExisted=false: it never creates a billing account, a Stripe " +
+    "customer, or runs a welcome evaluation.",
   request: {
     headers: internalHeaders,
     params: z.object({ orgId: z.string().uuid() }),
@@ -1847,6 +1871,42 @@ registry.registerPath({
     },
     502: {
       description: "Database operation failed",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/accounts/by-org/{orgId}/org-creation-bonus",
+  summary: "Grant a newly created organization its one-time creation bonus",
+  description:
+    "Every newly created organization receives a small free credit ONCE ($5 today; " +
+    "billing owns the amount), so its first setup steps can run. Not tied to the " +
+    "welcome gift: granted even when the person who created the org already received " +
+    "a welcome on another org, and never counted against the welcome offer. It appears " +
+    "in the org's grants ledger (GET /v1/credits/grants) under reason=org_creation_bonus. " +
+    "Idempotent per org: a retry grants nothing and returns alreadyGranted=true. No " +
+    "body. Creates no billing account and no Stripe customer.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Bonus granted (or already granted — idempotent)",
+      content: { "application/json": { schema: OrgCreationBonusResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "org_creation_bonus seed missing or database failure",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

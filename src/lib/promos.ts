@@ -9,6 +9,7 @@ import {
   ADMIN_GRANT_CODE,
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
+  ORG_CREATION_BONUS_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
@@ -117,8 +118,9 @@ export async function sumLocalPromoCreditsForOrg(orgId: string): Promise<string>
  * gifted`, which is what keeps it correct across cohorts and re-prices. Referral
  * rewards are additional money on top of the welcome offer, never a replacement for
  * it (a $500 referral must not swallow a $400 welcome remainder), so they are the one
- * grant kind excluded here. For an org that was never referred this is byte-identical
- * to `sumLocalPromoCreditsForOrg` — there are no referral rows to exclude.
+ * grant kind excluded here. The org-creation bonus is excluded for the same reason: it
+ * is not part of the welcome offer and must never shrink a welcome remainder. For an
+ * org holding neither this is byte-identical to `sumLocalPromoCreditsForOrg`.
  */
 export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string> {
   const [row] = await db
@@ -130,7 +132,7 @@ export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string>
     .where(
       and(
         eq(localPromos.orgId, orgId),
-        rawSql`${localPromoCodes.code} <> ${REFERRAL_REWARD_CODE}`
+        rawSql`${localPromoCodes.code} NOT IN (${REFERRAL_REWARD_CODE}, ${ORG_CREATION_BONUS_CODE})`
       )
     );
   return row?.total ?? "0.0000000000";
@@ -310,6 +312,62 @@ export async function grantCredit(
       alreadyGranted: true,
     };
   });
+}
+
+export interface OrgCreationBonusResult {
+  grantedCents: number;
+  alreadyGranted: boolean;
+}
+
+/**
+ * Grant the organization-creation bonus ONCE per org (see ORG_CREATION_BONUS_CODE).
+ *
+ * The amount is billing's: the live `org_creation_bonus` code row. Idempotent on the
+ * partial unique (org, promo_code) index — a retry returns `alreadyGranted: true` and
+ * the amount the org actually received, never a second row.
+ *
+ * Deliberately does NOT create the billing account row, the Stripe customer, or
+ * evaluate the welcome: a new org's first billing touch (findOrCreateAccount) must
+ * still run its fresh-create branch (person-scoped welcome, Stripe customer). A
+ * ledger row needs no account row to count toward the balance.
+ *
+ * Fails loud (GrantPromoCodeMissingError) if the seed is absent.
+ */
+export async function grantOrgCreationBonus(
+  orgId: string
+): Promise<OrgCreationBonusResult> {
+  const [code] = await db
+    .select()
+    .from(localPromoCodes)
+    .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
+    .limit(1);
+  if (!code) throw new GrantPromoCodeMissingError(ORG_CREATION_BONUS_CODE);
+
+  const inserted = await db
+    .insert(localPromos)
+    .values({
+      orgId,
+      userId: SYSTEM_USER_ID,
+      amountCents: String(code.amountCents),
+      promoCodeId: code.id,
+      description: `Organization creation bonus: $${(code.amountCents / 100).toFixed(2)}`,
+    })
+    .onConflictDoNothing({
+      target: [localPromos.orgId, localPromos.promoCodeId],
+      where: rawSql`idempotency_key IS NULL`,
+    })
+    .returning({ amountCents: localPromos.amountCents });
+
+  if (inserted.length > 0) {
+    return { grantedCents: Number(inserted[0].amountCents), alreadyGranted: false };
+  }
+
+  const [existing] = await db
+    .select({ amountCents: localPromos.amountCents })
+    .from(localPromos)
+    .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, code.id)))
+    .limit(1);
+  return { grantedCents: Number(existing.amountCents), alreadyGranted: true };
 }
 
 /** Re-export billing_accounts table for callers that need it alongside promo helpers. */

@@ -434,6 +434,30 @@ export const ADMIN_GRANT_CODE = "admin_grant";
 export const PRODUCT_TASK_REWARD_CODE = "product_task_completed";
 
 /**
+ * Ledger key for the organization-creation bonus (migration 0052).
+ *
+ * Every newly created organization receives a small free credit ONCE, so its very
+ * first setup steps (reading the brand's website, drafting its offer and audiences)
+ * can run. It exists because the welcome gift is once per PERSON: a person creating a
+ * second organization gets no welcome there, so the new org would start at $0 and
+ * every metered setup call would be refused.
+ *
+ * Deliberately NOT tied to the welcome logic: it is granted whether or not the
+ * person already received a welcome elsewhere, it is not counted against the
+ * welcome entitlement (lib/promos sumEntitlementGrantsForOrg), and it is listed in
+ * the grants ledger under its own reason.
+ *
+ * ONE-SHOT per org: idempotent on (org_id, promo_code) — the partial unique index
+ * `idx_local_promos_org_promo` — so a retry never pays twice. Billing owns the
+ * amount: it is this code row's `amount_cents` (seeded at 500, re-priceable at
+ * runtime via PATCH /internal/promo-codes/org_creation_bonus), never a caller figure.
+ */
+export const ORG_CREATION_BONUS_CODE = "org_creation_bonus";
+
+/** Seed default of the org-creation bonus (migration 0052). The live figure is the code row. */
+export const ORG_CREATION_BONUS_AMOUNT_CENTS = 500;
+
+/**
  * Grant reasons a SERVICE may name on POST /internal/credits/grant. Closed set —
  * a caller can never supply an arbitrary reason.
  *

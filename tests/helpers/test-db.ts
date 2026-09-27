@@ -22,6 +22,8 @@ import {
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
   TRIAL_SEED_CODE,
+  ORG_CREATION_BONUS_CODE,
+  ORG_CREATION_BONUS_AMOUNT_CENTS,
   WELCOME_PROMO_AMOUNT_CENTS,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
@@ -39,6 +41,7 @@ const SEEDED_PROMO_CODES = [
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
   TRIAL_SEED_CODE,
+  ORG_CREATION_BONUS_CODE,
 ];
 
 export async function cleanTestData() {
@@ -113,6 +116,20 @@ export async function cleanTestData() {
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: 0 },
+    });
+  // The org-creation bonus amount IS the code row (billing owns it, $5), so a suite
+  // that re-priced or removed it must not leak that into the next one.
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: ORG_CREATION_BONUS_CODE,
+      amountCents: ORG_CREATION_BONUS_AMOUNT_CENTS,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: ORG_CREATION_BONUS_AMOUNT_CENTS },
     });
   // The welcome amount is the live figure BOTH the trial seed and the signup
   // remainder are derived from, so a suite that re-priced it must not leak that
