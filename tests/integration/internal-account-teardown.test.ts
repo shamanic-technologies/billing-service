@@ -147,6 +147,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
     expect(res.body).toEqual({
       ok: true,
       orgId: targetOrgId,
+      billingAccountExisted: true,
       deletedRows: {
         billingAccounts: 1,
         localPromos: 1,

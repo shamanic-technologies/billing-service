@@ -291,7 +291,7 @@ beforeAll(async () => {
   await sql`CREATE INDEX IF NOT EXISTS "idx_brand_transfers_source_org" ON "brand_transfers" ("source_org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_brand_transfers_target_org" ON "brand_transfers" ("target_org_id")`;
 
-  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045).
+  // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045 + 0052).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.
   await sql`
@@ -302,7 +302,8 @@ beforeAll(async () => {
            ('welcome_completion', 0, NULL, NULL),
            ('referral_reward', 50000, NULL, NULL),
            ('product_task_completed', 0, NULL, NULL),
-           ('trial_seed', 0, NULL, NULL)
+           ('trial_seed', 0, NULL, NULL),
+           ('org_creation_bonus', 500, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

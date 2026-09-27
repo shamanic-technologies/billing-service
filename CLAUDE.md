@@ -262,6 +262,15 @@ It used to be redeemed per ORG on the org's first billing touch, so one person c
 - **Nothing granted is ever clawed back.** The amount is unchanged.
 - **`free_credit_spendable_cents`** on `GET /v1/accounts` = `max(0, min(credited_gifted_cents, balance_cents))`: the dashboard's "can this org skip payment" answer, ready-made (no browser money arithmetic).
 
+## Organization-creation bonus — $5 once per ORG (`grantOrgCreationBonus`, migration 0052)
+
+The welcome is once per PERSON, so a person's second org started at $0 and its first setup calls (site read, offer/audience drafts) were refused. `POST /internal/accounts/by-org/:orgId/org-creation-bonus` (service-auth, orgId in PATH, no body) grants the `org_creation_bonus` ledger key: amount = the code row (500, re-priceable via `PATCH /internal/promo-codes/org_creation_bonus`), one-shot on `(org, promo_code)`, → `{ok, orgId, reason, grantedCents, alreadyGranted}`. Listed in `GET /v1/credits/grants` as `reason: "org_creation_bonus"`.
+
+- **Not the welcome.** Granted even when the person's welcome lives elsewhere; excluded from `sumEntitlementGrantsForOrg` (like `referral_reward`), so it never shrinks a welcome remainder.
+- **Creates NO billing account and NO Stripe customer.** Pre-creating the row (as `grantCredit` does) would make the org's first `/v1` touch take `findOrCreateAccount`'s existing-row branch and skip the person-scoped welcome decision + customer creation. A ledger row needs no account row.
+
+**Teardown creates nothing.** `DELETE /internal/accounts/by-org/:orgId` only deletes, and reports `billingAccountExisted` (false = nothing was here). Pinned by `tests/integration/teardown-creates-nothing.test.ts`. The 2026-09-27 report of "the delete created an account + Stripe customer" was a misread: both were made at ORG CREATION (billing log 13:58:30 / 14:00:34, Stripe `created`), and 14:04:33 was only stripe-service's mirror `synced_at` as the customer was deleted (Stripe says `deleted: true`; the mirror row lingers — stripe-service's concern).
+
 ## Welcome-completion gift — "$N in free credits", automatic (`src/lib/welcome-completion.ts`)
 
 Onboarding promises every new customer **$N of free credits**. Under a MATCH offer signup granted only the `welcome` row ($5) and the remainder was earned by paying, so for months it was granted BY HAND (staff `admin_grant` rows described "Welcome credits (2/2)"); `welcome_completion` (migration 0029) automates it.
