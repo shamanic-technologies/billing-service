@@ -5,6 +5,8 @@ import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 
 export interface StripeServiceMocks {
   ensureCustomer: ReturnType<typeof vi.fn>;
+  /** Which acquirer charges the org. Defaults to "stripe" (an org with no pin). */
+  getOrgAcquirer: ReturnType<typeof vi.fn>;
   getCustomerByOrg: ReturnType<typeof vi.fn>;
   /**
    * Customer-or-null twin, read by composeAccountFunds and the auto-topup PM
@@ -80,6 +82,7 @@ export function setupStripeMocks(): StripeServiceMocks {
 
   const mocks: StripeServiceMocks = {
     ensureCustomer: vi.fn().mockResolvedValue({ customer_id: MOCK_CUSTOMER_ID }),
+    getOrgAcquirer: vi.fn().mockResolvedValue("stripe"),
     getCustomerByOrg: vi.fn().mockResolvedValue(buildMockCustomer()),
     getCustomerByOrgOrNull: vi.fn(),
     createPaymentIntent: vi.fn().mockResolvedValue({
@@ -199,6 +202,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   );
 
   vi.spyOn(ssClient, "ensureCustomer").mockImplementation(mocks.ensureCustomer);
+  vi.spyOn(ssClient, "getOrgAcquirer").mockImplementation(mocks.getOrgAcquirer);
   vi.spyOn(ssClient, "getCustomerByOrg").mockImplementation(mocks.getCustomerByOrg);
   vi.spyOn(ssClient, "getCustomerByOrgOrNull").mockImplementation(mocks.getCustomerByOrgOrNull);
   vi.spyOn(ssClient, "createPaymentIntent").mockImplementation(mocks.createPaymentIntent);

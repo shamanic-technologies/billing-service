@@ -243,7 +243,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
     const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
     const identity = buildIdentity(orgId, userId, runId, wfHeaders);
 
-    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
+    const account = await findOrCreateAccount(orgId, userId);
 
     let funds;
     try {

@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
+import { requireOrgHeaders } from "../middleware/auth.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import {
   getPaymentMode,
@@ -52,7 +52,7 @@ router.get("/v1/accounts/payment_mode", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
     const userId = req.headers["x-user-id"] as string;
-    const account = await findOrCreateAccount(orgId, userId, forwardWorkflowHeaders(getWorkflowHeaders(req)));
+    const account = await findOrCreateAccount(orgId, userId);
     res.json({ org_id: orgId, payment_mode: account.paymentMode });
   } catch (err) {
     console.error("[billing-service] Error reading payment mode:", err);
@@ -66,7 +66,7 @@ router.put("/v1/accounts/payment_mode", requireOrgHeaders, async (req, res) => {
     const userId = req.headers["x-user-id"] as string;
     // Onboarding may choose before any other billing touch, so the account is
     // created here exactly as every other /v1 read creates it.
-    await findOrCreateAccount(orgId, userId, forwardWorkflowHeaders(getWorkflowHeaders(req)));
+    await findOrCreateAccount(orgId, userId);
     await applySwitch(orgId, req, res);
   } catch (err) {
     console.error("[billing-service] Error switching payment mode:", err);

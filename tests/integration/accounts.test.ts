@@ -68,7 +68,8 @@ describe("Accounts endpoints", () => {
       expect(res.body.actual_balance_cents).toBe("500.0000000000");
       expect(res.body.has_payment_method).toBe(false);
       expect(res.body.has_auto_topup).toBe(false);
-      expect(ssMocks.ensureCustomer).toHaveBeenCalled();
+      // Creating the account never creates a Stripe customer.
+      expect(ssMocks.ensureCustomer).not.toHaveBeenCalled();
     });
 
     it("composes credited = paid topups + local credits, balance = credited − usage", async () => {

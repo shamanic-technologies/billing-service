@@ -101,7 +101,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       await upsertCampaignAuthorizeCost(wf.campaignId, orgId, requiredCents);
     }
 
-    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
+    const account = await findOrCreateAccount(orgId, userId);
 
     let snapshot;
     try {
@@ -354,7 +354,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
 
     traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.start", data: { spent_total_cents: spentTotalCents } }, req.headers);
 
-    const account = await findOrCreateAccount(orgId, userId, wfHeaders);
+    const account = await findOrCreateAccount(orgId, userId);
 
     if (!account.topupAmountCents || account.topupThresholdCents == null) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup-config" }, req.headers);

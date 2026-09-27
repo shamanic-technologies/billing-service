@@ -1,8 +1,6 @@
 import { Router } from "express";
 import {
   requireOrgHeaders,
-  getWorkflowHeaders,
-  forwardWorkflowHeaders,
 } from "../middleware/auth.js";
 import { RedeemPromotionCodeRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
@@ -25,7 +23,6 @@ router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) =>
   const orgId = req.headers["x-org-id"] as string;
   const userId = req.headers["x-user-id"] as string;
   const runId = req.headers["x-run-id"] as string;
-  const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
 
   const parsed = RedeemPromotionCodeRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -36,7 +33,7 @@ router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) =>
 
   traceEvent(runId, { service: "billing-service", event: "promotion_codes.redeem.start", data: { code } }, req.headers);
 
-  await findOrCreateAccount(orgId, userId, wfHeaders);
+  await findOrCreateAccount(orgId, userId);
 
   let result;
   try {
