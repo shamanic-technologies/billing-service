@@ -153,6 +153,10 @@
             "type": "string",
             "description": "User-facing credit balance: credited funds minus actualized platform usage only. Provisioned holds are not subtracted here because they may later actualize or cancel."
           },
+          "free_credit_spendable_cents": {
+            "type": "string",
+            "description": "Free credit this org can still spend right now: the smaller of credited_gifted_cents and balance_cents, never below 0. Positive means the org can run on gifted credit without paying first (e.g. a 'skip payment' option); 0 means it holds none — including a second org whose person already received the welcome gift on another org (the welcome is once per person)."
+          },
           "usage_discount_pct": {
             "type": "integer",
             "nullable": true
@@ -198,6 +202,7 @@
           "usage_cents",
           "balance_cents",
           "actual_balance_cents",
+          "free_credit_spendable_cents",
           "usage_discount_pct",
           "topup_amount_cents",
           "topup_threshold_cents",
@@ -670,6 +675,9 @@
           },
           "alreadySettled": {
             "type": "boolean"
+          },
+          "welcomeReceivedElsewhere": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -678,7 +686,8 @@
           "trialSeedCents",
           "welcomeGrantedCents",
           "totalFreeCreditCents",
-          "alreadySettled"
+          "alreadySettled",
+          "welcomeReceivedElsewhere"
         ]
       },
       "InternalAccountTeardownDeletedRows": {
@@ -3480,7 +3489,7 @@
     "/internal/accounts/by-org/{orgId}/signup": {
       "post": {
         "summary": "Land an organisation's free credit on exactly the welcome amount",
-        "description": "Called when an org signs up. An org with no trial seed receives the whole welcome offer, exactly as it always has. A seeded org receives the REMAINDER (welcome − seeded), so its TOTAL free credit is the welcome amount rather than the welcome amount plus its seed; unspent seed is never clawed back. Idempotent — a replay grants nothing.",
+        "description": "Called when an org signs up. An org with no trial seed receives the whole welcome offer, exactly as it always has. A seeded org receives the REMAINDER (welcome − seeded), so its TOTAL free credit is the welcome amount rather than the welcome amount plus its seed; unspent seed is never clawed back. Idempotent — a replay grants nothing. The welcome is once per PERSON: send the person who signed up as `x-user-id` (client-service internal user id). When that person already received the welcome on another org, this org gets none, its own free-credit offer is zero and `welcomeReceivedElsewhere` is true. Without `x-user-id` the welcome is checked per org only (historical behaviour).",
         "parameters": [
           {
             "schema": {
@@ -3498,6 +3507,16 @@
             "required": true,
             "name": "x-api-key",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The person who signed up (client-service internal user id). Makes the welcome once per person."
+            },
+            "required": false,
+            "name": "x-user-id",
+            "in": "header"
           }
         ],
         "responses": {
@@ -3512,7 +3531,7 @@
             }
           },
           "400": {
-            "description": "orgId is not a valid UUID",
+            "description": "orgId (or x-user-id when sent) is not a valid UUID",
             "content": {
               "application/json": {
                 "schema": {

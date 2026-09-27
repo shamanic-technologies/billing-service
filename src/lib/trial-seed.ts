@@ -9,6 +9,10 @@ import {
   TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../db/schema.js";
+import {
+  claimWelcomeForPerson,
+  withdrawFreeCreditOffer,
+} from "./welcome-recipient.js";
 
 /**
  * Trial seed — free credit for an org that has NOT signed up yet, and the settlement
@@ -185,26 +189,38 @@ export interface SignupWelcomeResult {
   welcomeGrantedCents: number;
   totalFreeCreditCents: number;
   alreadySettled: boolean;
+  /**
+   * True when the person signing up already received the welcome on ANOTHER org, so
+   * this org got none and its own free-credit offer is zero. Its trial seed, if any,
+   * is kept (never clawed back).
+   */
+  welcomeReceivedElsewhere: boolean;
 }
 
 /**
- * Land this org's free credit on exactly the welcome amount, at signup.
+ * Land this org's free credit on exactly the welcome amount, at signup — once per
+ * PERSON.
  *
- * An org with NO trial seed is byte-for-byte what it has always been: it receives the
- * whole welcome offer, granted under the same `welcome` code, at the same live amount
- * `findOrCreateAccount` would have used. So a caller may run this for every signup.
+ * An org with NO trial seed receives the whole welcome offer, granted under the same
+ * `welcome` code, at the same live amount `findOrCreateAccount` would have used. So a
+ * caller may run this for every signup.
  *
  * A seeded org receives `welcome − seeded`, which is what makes the total the welcome
  * amount rather than the welcome amount plus the seed. A remainder of zero (only
  * reachable when the welcome offer is priced at or below the seed) grants nothing —
  * the org already holds exactly the welcome amount, so there is nothing to add.
  *
+ * `personId` is who signed up (lib/welcome-recipient). When that person's welcome
+ * already lives on another org, this org gets NO welcome and its offer goes to zero;
+ * its seed stays. Without a person (a caller that has not learned to send one) the
+ * historical per-org behaviour applies — billing cannot tell whose org it is.
+ *
  * Idempotent: the org's welcome row (partial unique on (org, promo_code)) is the
  * marker, so a replay is a no-op and can never grant twice.
  */
 export async function settleSignupWelcome(
   orgId: string,
-  userId: string
+  personId: string | null
 ): Promise<SignupWelcomeResult> {
   const welcome = await requirePromoCode(WELCOME_PROMO_CODE);
   const trialSeedCents = await sumTrialSeedGrantsForOrg(orgId);
@@ -216,29 +232,30 @@ export async function settleSignupWelcome(
       welcomeGrantedCents: 0,
       totalFreeCreditCents: welcome.amountCents,
       alreadySettled: true,
+      welcomeReceivedElsewhere: false,
     };
   }
 
   const remainderCents = Math.max(0, welcome.amountCents - trialSeedCents);
 
-  if (remainderCents === 0) {
-    return {
-      orgId,
-      trialSeedCents,
-      welcomeGrantedCents: 0,
-      totalFreeCreditCents: trialSeedCents,
-      alreadySettled: true,
-    };
-  }
-
-  const inserted = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
     await tx.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
 
-    return tx
+    if (personId) {
+      const claim = await claimWelcomeForPerson(tx, personId, orgId);
+      if (claim.kind === "other_org") {
+        await withdrawFreeCreditOffer(tx, orgId);
+        return { elsewhere: true as const, inserted: 0 };
+      }
+    }
+
+    if (remainderCents === 0) return { elsewhere: false as const, inserted: 0 };
+
+    const inserted = await tx
       .insert(localPromos)
       .values({
         orgId,
-        userId,
+        userId: personId ?? PLATFORM_USER_ID,
         amountCents: String(remainderCents),
         promoCodeId: welcome.id,
         description: `Trial gift: $${(remainderCents / 100).toFixed(2)}`,
@@ -248,13 +265,37 @@ export async function settleSignupWelcome(
         where: rawSql`idempotency_key IS NULL`,
       })
       .returning();
+    return { elsewhere: false as const, inserted: inserted.length };
   });
+
+  if (outcome.elsewhere) {
+    return {
+      orgId,
+      trialSeedCents,
+      welcomeGrantedCents: 0,
+      totalFreeCreditCents: trialSeedCents,
+      alreadySettled: false,
+      welcomeReceivedElsewhere: true,
+    };
+  }
+
+  if (remainderCents === 0) {
+    return {
+      orgId,
+      trialSeedCents,
+      welcomeGrantedCents: 0,
+      totalFreeCreditCents: trialSeedCents,
+      alreadySettled: true,
+      welcomeReceivedElsewhere: false,
+    };
+  }
 
   return {
     orgId,
     trialSeedCents,
-    welcomeGrantedCents: inserted.length > 0 ? remainderCents : 0,
+    welcomeGrantedCents: outcome.inserted > 0 ? remainderCents : 0,
     totalFreeCreditCents: trialSeedCents + remainderCents,
-    alreadySettled: inserted.length === 0,
+    alreadySettled: outcome.inserted === 0,
+    welcomeReceivedElsewhere: false,
   };
 }

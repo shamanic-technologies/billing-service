@@ -5,7 +5,7 @@ import { billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
-import { addCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
+import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
 import { tierFor } from "../lib/topup-tier.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
@@ -28,6 +28,16 @@ import {
   authorizeRecurringCharges,
   LEGACY_PM_GATE_ACQUIRER,
 } from "../lib/stripe-service-client.js";
+
+/**
+ * Free credit this org can still spend: the smaller of what it was gifted and what it
+ * can spend at all, never below zero. Gifted credit spent first or last, the org
+ * cannot have more free credit left than either figure.
+ */
+export function spendableFreeCreditCents(giftedCents: string, balanceCents: string): string {
+  const smaller = cmpCents(giftedCents, balanceCents) <= 0 ? giftedCents : balanceCents;
+  return cmpCents(smaller, ZERO_CENTS) > 0 ? addCents(smaller, ZERO_CENTS) : ZERO_CENTS;
+}
 
 const router = Router();
 
@@ -172,6 +182,12 @@ function buildAccountResponse(
     usage_cents: funds.usageCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
+    // Free credit the org can still spend, ready-made so the dashboard decides a
+    // "skip payment" option without doing money arithmetic in the browser.
+    free_credit_spendable_cents: spendableFreeCreditCents(
+      funds.giftedCreditsCents,
+      funds.balanceCents
+    ),
     // Per-org platform-usage discount percentage (0–100), or null when none. This
     // is EXPOSED for the customer dashboard banner only — it does NOT affect the
     // balance figures above. The discount is applied ONCE, at cost-write time, in

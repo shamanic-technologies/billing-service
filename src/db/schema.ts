@@ -223,6 +223,27 @@ export const TRIAL_SEED_CODE = "trial_seed";
  */
 export const TRIAL_SEED_TARGET_CENTS = 500;
 
+// --- The welcome gift is once per PERSON (migration 0049) ---
+//
+// One row per person: the org where that person's welcome lives. The primary key on
+// the person is the guarantee — a second org the same person creates gets no welcome
+// and an account whose own free-credit offer is zero (see lib/welcome-recipient.ts).
+// A person is the client-service internal user id carried as `x-user-id`; the
+// all-zeros PLATFORM_USER_ID sentinel is never a person and is never written here.
+export const welcomeRecipients = pgTable(
+  "welcome_recipients",
+  {
+    userId: uuid("user_id").primaryKey(),
+    orgId: uuid("org_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("idx_welcome_recipients_org").on(table.orgId)]
+);
+
+export type WelcomeRecipient = typeof welcomeRecipients.$inferSelect;
+
 // Platform-issued grant codes (DIS-64 Wave 0.5 invite-only gate).
 // Backed by migration 0017. Both are purely ADDITIVE: `invite_welcome` used to
 // DELETE the org's `welcome` row so the two could not stack, which is exactly the
