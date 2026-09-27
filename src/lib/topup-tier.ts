@@ -1,4 +1,5 @@
 import { Decimal } from "decimal.js";
+import type { PaymentMode } from "./payment-mode-types.js";
 
 /**
  * Threshold-based postpaid top-up tiers (Google/Meta-Ads billing cadence).
@@ -66,11 +67,40 @@ export function resolvePostpaidTier(params: {
   hasCardPm: boolean;
   autoReloadSupported: boolean;
   paidTopupsCents: string;
+  /**
+   * The org's chosen payment mode (lib/payment-mode). Absent = postpaid, which is
+   * every org that has not chosen otherwise.
+   */
+  paymentMode?: PaymentMode;
 }): { tier: TopupTier | null; thresholdCents: string } {
   const canReload =
     params.topupEnabled && params.hasCardPm && params.autoReloadSupported;
-  const tier = canReload ? tierFor(params.paidTopupsCents) : null;
-  return { tier, thresholdCents: tier ? String(tier.thresholdCents) : "0" };
+  if (!canReload) return { tier: null, thresholdCents: "0" };
+  const ladder = tierFor(params.paidTopupsCents);
+  // PREPAID extends no credit: the floor is ZERO whatever the org has paid. Auto
+  // top-up still reloads the ladder's amount, but only once the next run would
+  // take the balance below zero — so a prepaid org never spends money it has not
+  // paid in first.
+  const tier =
+    params.paymentMode === "prepaid"
+      ? { thresholdCents: 0, amountCents: ladder.amountCents }
+      : ladder;
+  return { tier, thresholdCents: String(tier.thresholdCents) };
+}
+
+/**
+ * The reload tier for an org whose auto top-up is known to be able to fire (the
+ * caller already checked config + card + country). Postpaid → the credit-line
+ * ladder; prepaid → the same reload amount at a zero floor.
+ */
+export function reloadTierFor(
+  paidTopupsCents: string,
+  paymentMode: PaymentMode
+): TopupTier {
+  const ladder = tierFor(paidTopupsCents);
+  return paymentMode === "prepaid"
+    ? { thresholdCents: 0, amountCents: ladder.amountCents }
+    : ladder;
 }
 
 /**

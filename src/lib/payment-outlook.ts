@@ -58,6 +58,7 @@ import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
+import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
 
 /** What billing expects to happen next, money-wise, for this org. */
 export type PaymentOutlookState =
@@ -98,6 +99,13 @@ export type PaymentChargeTrigger =
 
 export interface PaymentOutlook {
   orgId: string;
+  /**
+   * How this org pays (lib/payment-mode). A PREPAID org is never
+   * `charge_blocked`: it spends only money already paid in, so a missing,
+   * refused or unsupported card simply means no automatic charge (`no_autopay`)
+   * and spend stops at zero through the affordability check.
+   */
+  paymentMode: PaymentMode;
   state: PaymentOutlookState;
   /**
    * When billing expects to PRESENT the card next (ISO 8601), or null when it
@@ -276,7 +284,7 @@ export async function getPaymentOutlook(
   now: Date = new Date()
 ): Promise<PaymentOutlook | null> {
   const [account] = await db
-    .select({ orgId: billingAccounts.orgId })
+    .select({ orgId: billingAccounts.orgId, paymentMode: billingAccounts.paymentMode })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
@@ -290,8 +298,10 @@ export async function getPaymentOutlook(
     openStreak(orgId, snapshot.creditedCents),
   ]);
 
+  const paymentMode = asPaymentMode(account.paymentMode);
   const base = {
     orgId,
+    paymentMode,
     balanceCents: snapshot.balanceCents,
     floorCents: block.floorCents,
     realizedDailyBurnCents: burn.dailyCents,
@@ -302,6 +312,38 @@ export async function getPaymentOutlook(
   };
 
   const noDate = { nextChargeAttemptAt: null, trigger: null } as const;
+
+  // PREPAID: the card rules below exist because a postpaid org spends on credit
+  // we must be able to collect. A prepaid org spends only what it already paid,
+  // so no card, a refused card, an unusable card or an unsupported country never
+  // blocks it — they only mean no automatic top-up will happen, and its spend
+  // stops when the balance reaches zero. A live refusal streak still has a real
+  // next attempt, so that date is stated; everything else falls through to the
+  // ordinary floor / month-end projection, whose floor is zero for this org.
+  if (paymentMode === "prepaid") {
+    if (
+      !snapshot.hasCardPm ||
+      block.tier === null ||
+      streak?.cardUnusableAt != null
+    ) {
+      return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+    }
+    if (streak && streak.firstFailedAt != null) {
+      const dueAt = nextRetryDueAt(streak.attemptCount, streak.firstFailedAt);
+      if (dueAt === null) {
+        return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+      }
+      return {
+        ...base,
+        state: "will_charge",
+        blockedReason: null,
+        nextChargeAttemptAt: new Date(
+          Math.max(dueAt.getTime(), now.getTime())
+        ).toISOString(),
+        trigger: "retry_rung",
+      };
+    }
+  }
 
   // No chargeable payment method on file RIGHT NOW: nothing can ever be charged,
   // so every campaign of this org must stop (campaign-service stops on

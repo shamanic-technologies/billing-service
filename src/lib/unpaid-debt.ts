@@ -75,7 +75,13 @@ export type UnpaidDebtState =
    * The org has no Stripe customer at all, so there is no debt to flag and
    * nobody to tell. Not a failure and not a skip — see the guard below.
    */
-  | "no_customer";
+  | "no_customer"
+  /**
+   * The org is PREPAID: it chose to pay in advance with no card required, so a
+   * small overshoot below zero is covered by its next credit, never a reason to
+   * demand a card. Not flagged. See lib/payment-mode.
+   */
+  | "prepaid";
 
 export interface UnpaidDebtOutcome {
   state: UnpaidDebtState;
@@ -140,6 +146,20 @@ export async function flagUncollectableDebt(params: {
         `its credit with no Stripe customer — never a paying customer, nothing to flag`
     );
     return { state: "no_customer", owedCents };
+  }
+
+  const [modeRow] = await db
+    .select({ paymentMode: billingAccounts.paymentMode })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, params.orgId))
+    .limit(1);
+  if (modeRow?.paymentMode === "prepaid") {
+    // A prepaid org holds no credit line and needs no card. Its spend stops at
+    // zero through the affordability check; what a last run overshot is covered
+    // by the next credit it adds. Telling it to "add a card" would contradict the
+    // mode it chose, and flagging it would surface a debt nobody extended.
+    await clearUncollectableFlag(params.orgId);
+    return { state: "prepaid", owedCents };
   }
 
   if (snapshot.hasCardPm) {
