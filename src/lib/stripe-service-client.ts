@@ -188,12 +188,36 @@ export interface CustomerEnsureResult {
   customer_id: string;
 }
 
+/**
+ * What stripe-service answers for a checkout. Two shapes, and the field that
+ * tells them apart is `presentation`, never the acquirer:
+ *   - a Stripe Checkout Session: `url` (hosted) or `client_secret` (embedded),
+ *     plus `session_id`, and NO `presentation`;
+ *   - an acquirer with no Session object (stripe-service v0.55.0):
+ *     `presentation: "hosted_redirect" | "embedded_widget"`, `id`, and for the
+ *     embedded one a `widget` block byte-identical to card_setup's
+ *     `embedded_widget` descriptor.
+ */
 export interface CheckoutSessionResult {
   /** Present for hosted (redirect) sessions; absent for embedded. */
-  url?: string;
+  url?: string | null;
   /** Present for embedded (ui_mode:"embedded") sessions; absent for hosted. */
   client_secret?: string;
-  session_id: string;
+  /** Stripe sessions only. */
+  session_id?: string;
+  /** Non-Stripe acquirers only: the order id. */
+  id?: string;
+  /** Non-Stripe acquirers only: how the buyer pays. */
+  presentation?: "hosted_redirect" | "embedded_widget";
+  /** `embedded_widget` only. */
+  widget?: {
+    script_url: string;
+    environment: "prod" | "sandbox";
+    token: string;
+    save_payment_method_for: "merchant";
+  };
+  amount?: number;
+  currency?: string;
 }
 
 export interface PortalSessionResult {
@@ -1000,6 +1024,50 @@ export async function getCardSetup(
       ...(uiMode ? { ui_mode: uiMode } : {}),
     }
   );
+}
+
+// --- Declaring how a NEW org pays (stripe-service v0.55.0) ---
+
+/**
+ * `PUT /internal/acquirer/by-org/{orgId}` — pin a freshly created org to an
+ * acquirer, before any card or payment exists. stripe-service creates the
+ * acquirer-side customer (named after the creator) and records the pin.
+ *
+ *   - `200` → `{ pinned: true }`;
+ *   - `409` → `{ pinned: false, error }`: the org already holds a chargeable card
+ *             on another acquirer, and a saved card cannot move — a definite NO;
+ *   - anything else → THROWS. We could not ask, which is neither answer.
+ *
+ * X-API-Key only (org in the path). Nothing here branches on the acquirer.
+ */
+export interface OrgAcquirerPin {
+  pinned: boolean;
+  acquirer?: string;
+  /** Present only on a refusal: stripe-service's own explanation. */
+  error?: string;
+}
+
+export async function pinOrgAcquirer(
+  orgId: string,
+  body: { acquirer: string; email?: string; full_name?: string }
+): Promise<OrgAcquirerPin> {
+  const { url, apiKey } = getConfig();
+  const path = `/internal/acquirer/by-org/${encodeURIComponent(orgId)}`;
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method: "PUT",
+    headers: buildHeaders({}, apiKey),
+    body: JSON.stringify(body),
+  });
+  if (res.ok) {
+    const out = (await res.json()) as { acquirer: string };
+    return { pinned: true, acquirer: out.acquirer };
+  }
+  if (res.status === 409) {
+    const out = (await res.json().catch(() => ({}))) as { error?: string };
+    return { pinned: false, error: out.error ?? "org holds a chargeable card on another acquirer" };
+  }
+  const text = await res.text();
+  throw new Error(`stripe-service PUT ${path} failed: ${res.status} ${text}`);
 }
 
 // --- Card setup / saved-card confirmation (acquirer-neutral, stripe-service v0.48.0) ---

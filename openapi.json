@@ -497,6 +497,37 @@
           },
           "session_id": {
             "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "embedded_widget"
+            ]
+          },
+          "script_url": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "prod",
+              "sandbox"
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "save_payment_method_for": {
+            "type": "string",
+            "enum": [
+              "merchant"
+            ]
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
           }
         },
         "required": [
@@ -1153,6 +1184,61 @@
           "orgId",
           "recordBeginsAt",
           "periods"
+        ]
+      },
+      "DeclareAcquirerResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "acquirer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "acquirer"
+        ]
+      },
+      "DeclareAcquirerRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "chargeable_card_on_other_acquirer"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ]
+      },
+      "DeclareAcquirerRequest": {
+        "type": "object",
+        "properties": {
+          "acquirer": {
+            "type": "string",
+            "enum": [
+              "revolut"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "full_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "acquirer"
         ]
       },
       "PaymentModeResponse": {
@@ -4560,6 +4646,146 @@
           },
           "502": {
             "description": "Read failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/acquirer": {
+      "put": {
+        "summary": "Declare that this NEW org pays through Revolut",
+        "description": "Call right after the org is created and BEFORE any card setup or checkout. Pins the org to Revolut and creates its Revolut customer from the creator's email and name. Afterwards POST /v1/accounts/card_setup answers `mode: embedded_widget`, and POST /v1/checkout-sessions with ui_mode='embedded' answers the Revolut widget (`mode: embedded_widget`) instead of a Stripe client_secret. Idempotent (declaring again is a no-op). 409 when the org already holds a chargeable card on another acquirer: a saved card cannot move. Orgs that never call this stay on Stripe, unchanged.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclareAcquirerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The org is pinned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclareAcquirerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The org already holds a chargeable card on another acquirer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclareAcquirerRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service could not be asked",
             "content": {
               "application/json": {
                 "schema": {
