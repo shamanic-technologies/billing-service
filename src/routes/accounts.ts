@@ -63,6 +63,7 @@ async function composeAccountFunds(
 ): Promise<{
   creditedCents: string;
   usageCents: string;
+  debitedCents: string;
   balanceCents: string;
   actualBalanceCents: string;
   discountPct: number | null;
@@ -124,7 +125,11 @@ async function composeAccountFunds(
   const actualBalanceCents = subCents(creditedCents, actualRunsUsage.spent_cents);
   return {
     creditedCents,
-    usageCents: runsUsage.spent_cents,
+    // Staff debits are included in the usage figure the balances subtract (they
+    // lower the balance like spend), but they are NOT campaign usage: taken back out
+    // here and shown as their own line, debited_cents. See lib/staff-debits.
+    usageCents: subCents(runsUsage.spent_cents, runsUsage.staff_debits_cents),
+    debitedCents: runsUsage.staff_debits_cents,
     balanceCents,
     actualBalanceCents,
     discountPct,
@@ -145,6 +150,7 @@ function buildAccountResponse(
   funds: {
     creditedCents: string;
     usageCents: string;
+    debitedCents: string;
     balanceCents: string;
     actualBalanceCents: string;
     discountPct: number | null;
@@ -184,6 +190,10 @@ function buildAccountResponse(
     credited_paid_cents: funds.paidTopupsCents,
     credited_gifted_cents: funds.giftedCreditsCents,
     usage_cents: funds.usageCents,
+    // Credit staff took OFF this org's balance (POST /v1/credits/debit), its own
+    // line, never folded into usage_cents. Invariant:
+    //   balance_cents === credited_cents − usage_cents − debited_cents
+    debited_cents: funds.debitedCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
     // Free credit the org can still spend, ready-made so the dashboard decides a
