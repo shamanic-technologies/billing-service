@@ -227,7 +227,7 @@ describe("trial seed → signup", () => {
 
     const { findOrCreateAccount } = await import("../../src/lib/account.js");
     await db.delete(billingAccounts).where(eq(billingAccounts.orgId, seededOrg));
-    await findOrCreateAccount(seededOrg, plainOrg, {});
+    await findOrCreateAccount(seededOrg, plainOrg);
 
     expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 500 });
     vi.restoreAllMocks();

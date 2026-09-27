@@ -116,8 +116,8 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     const secondLedger = await grants(secondOrg);
     const reasons = secondLedger.body.grants.map((g: { reason: string }) => g.reason);
     expect(reasons).toEqual([ORG_CREATION_BONUS_CODE]);
-    // Its first touch still ran the fresh-create branch (Stripe customer made).
-    expect(ssMocks.ensureCustomer).toHaveBeenCalledTimes(2);
+    // Neither org's first touch created a Stripe customer.
+    expect(ssMocks.ensureCustomer).not.toHaveBeenCalled();
   });
 
   it("never counts against the welcome entitlement", async () => {

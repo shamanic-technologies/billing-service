@@ -527,7 +527,8 @@ export interface CheckoutSessionBody {
   /** Required for hosted checkout; omitted for embedded (redirect_on_completion:"never"). */
   success_url?: string;
   cancel_url?: string;
-  customer: string;
+  /** The Stripe customer; absent for an org whose acquirer is not Stripe (it has none). */
+  customer?: string;
   metadata: Record<string, string>;
   /** Payment-mode charge config; omitted for setup mode (no PaymentIntent created). */
   payment_intent_data?: {
@@ -1068,6 +1069,30 @@ export async function pinOrgAcquirer(
   }
   const text = await res.text();
   throw new Error(`stripe-service PUT ${path} failed: ${res.status} ${text}`);
+}
+
+/**
+ * `GET /internal/acquirer/by-org/{orgId}` — which acquirer charges this org
+ * (stripe-service owns the pin; an org with no pin answers the default).
+ * X-API-Key only. Read by ensureOrgStripeCustomer to decide whether a flow may
+ * create a Stripe customer at all. Fail loud on any non-2xx or a missing field.
+ */
+export async function getOrgAcquirer(orgId: string): Promise<string> {
+  const { url, apiKey } = getConfig();
+  const path = `/internal/acquirer/by-org/${encodeURIComponent(orgId)}`;
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method: "GET",
+    headers: buildHeaders({}, apiKey),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`stripe-service GET ${path} failed: ${res.status} ${text}`);
+  }
+  const out = (await res.json()) as { acquirer?: string };
+  if (typeof out.acquirer !== "string" || out.acquirer.length === 0) {
+    throw new Error(`stripe-service GET ${path} answered no acquirer`);
+  }
+  return out.acquirer;
 }
 
 // --- Card setup / saved-card confirmation (acquirer-neutral, stripe-service v0.48.0) ---
