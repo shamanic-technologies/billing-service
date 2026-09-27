@@ -33,6 +33,7 @@ import { billingAccounts } from "../db/schema.js";
 import { isDepleted, subCents, gte as gteCents } from "./cents.js";
 import { resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
 import type { BalanceSnapshot } from "./balance.js";
+import { asPaymentMode } from "./payment-mode-types.js";
 
 /**
  * True when this org cannot pay for its next run of `requiredCents`.
@@ -83,7 +84,10 @@ export async function resolveOrgFloor(
   snapshot: BalanceSnapshot
 ): Promise<OrgFloor> {
   const [account] = await db
-    .select({ topupAmountCents: billingAccounts.topupAmountCents })
+    .select({
+      topupAmountCents: billingAccounts.topupAmountCents,
+      paymentMode: billingAccounts.paymentMode,
+    })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
@@ -92,6 +96,7 @@ export async function resolveOrgFloor(
     hasCardPm: snapshot.hasCardPm,
     autoReloadSupported: snapshot.autoReloadSupported,
     paidTopupsCents: snapshot.paidTopupsCents,
+    paymentMode: account ? asPaymentMode(account.paymentMode) : "postpaid",
   });
   return { tier, floorCents: thresholdCents };
 }

@@ -130,6 +130,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ]
+          },
           "credited_cents": {
             "type": "string"
           },
@@ -196,6 +203,7 @@
         "required": [
           "id",
           "org_id",
+          "payment_mode",
           "credited_cents",
           "credited_paid_cents",
           "credited_gifted_cents",
@@ -1109,12 +1117,110 @@
           "periods"
         ]
       },
+      "PaymentModeResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+          }
+        },
+        "required": [
+          "org_id",
+          "payment_mode"
+        ]
+      },
+      "SetPaymentModeResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+          },
+          "settled_cents": {
+            "type": "string"
+          },
+          "auto_topup_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "org_id",
+          "payment_mode",
+          "settled_cents",
+          "auto_topup_enabled"
+        ]
+      },
+      "PaymentModeRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "outstanding_balance_no_card",
+              "outstanding_balance_charge_declined",
+              "outstanding_balance_below_minimum_charge"
+            ]
+          },
+          "owed_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "owed_cents"
+        ]
+      },
+      "SetPaymentModeRequest": {
+        "type": "object",
+        "properties": {
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+          }
+        },
+        "required": [
+          "payment_mode"
+        ]
+      },
       "PaymentOutlookResponse": {
         "type": "object",
         "properties": {
           "orgId": {
             "type": "string",
             "format": "uuid"
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
           },
           "state": {
             "type": "string",
@@ -1181,6 +1287,7 @@
         },
         "required": [
           "orgId",
+          "paymentMode",
           "state",
           "nextChargeAttemptAt",
           "trigger",
@@ -4322,6 +4429,384 @@
           },
           "502": {
             "description": "Read failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/payment_mode": {
+      "get": {
+        "summary": "Read this org's payment mode (prepaid | postpaid)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current payment mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentModeResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Choose how this org pays (prepaid | postpaid)",
+        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPaymentModeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment mode after the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetPaymentModeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Switch to prepaid refused: the outstanding balance could not be settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentModeRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Could not read the balance or reach the card acquirer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/payment-mode": {
+      "get": {
+        "summary": "Staff/service read of an org's payment mode",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current payment mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentModeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Staff/service: set an org's payment mode",
+        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPaymentModeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment mode after the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetPaymentModeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Switch to prepaid refused: the outstanding balance could not be settled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentModeRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Could not read the balance or reach the card acquirer",
             "content": {
               "application/json": {
                 "schema": {
