@@ -138,7 +138,8 @@ describe("POST /v1/checkout-sessions", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(ssMocks.ensureCustomer).toHaveBeenCalled();
+    const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect(account).toBeDefined();
   });
 
   it("payment-mode: does NOT write auto-topup config without an explicit threshold", async () => {
@@ -363,7 +364,8 @@ describe("POST /v1/checkout-sessions", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(ssMocks.ensureCustomer).toHaveBeenCalled();
+    const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect(account).toBeDefined();
   });
 
   it("embedded-mode: requires topup_amount_cents (400 when absent)", async () => {

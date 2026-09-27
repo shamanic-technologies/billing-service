@@ -44,7 +44,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { mode: isSetup ? "setup" : "payment", ui_mode: isEmbedded ? "embedded" : "hosted", topup_amount_cents } }, req.headers);
 
-    await findOrCreateAccount(orgId, userId, wfHeaders);
+    await findOrCreateAccount(orgId, userId);
 
     const identity = {
       "x-org-id": orgId,
@@ -55,9 +55,11 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     let session;
     try {
-      // A claimed org that started anonymous has a billing row but no Stripe
-      // customer yet (see ensureOrgStripeCustomer) — create it here, idempotently.
+      // A new org has a billing row but no Stripe customer yet: create it here,
+      // idempotently — unless the org pays through another acquirer, which then
+      // gets none (null) and stripe-service checks out on that acquirer's customer.
       const customer = await ensureOrgStripeCustomer(identity);
+      const customerField = customer ? { customer: customer.id } : {};
       let body: CheckoutSessionBody;
       if (isSetup) {
         // No-charge card capture: saves a reusable off-session card (Stripe
@@ -68,7 +70,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           currency: CHECKOUT_CURRENCY,
           success_url,
           cancel_url,
-          customer: customer.id,
+          ...customerField,
           metadata: { org_id: orgId },
         };
       } else {
@@ -101,7 +103,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
               quantity: 1,
             },
           ],
-          customer: customer.id,
+          ...customerField,
           metadata: { org_id: orgId },
           payment_intent_data: {
             metadata: { org_id: orgId },
