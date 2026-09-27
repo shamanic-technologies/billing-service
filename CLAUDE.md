@@ -402,6 +402,13 @@ The saved-method read happens BEFORE either gate, so a stripe-service that canno
 
 Nothing about the balance, the checkout or the top-up flows changed, and no org is on the second acquirer today, so this ships inert.
 
+## A NEW org can be declared as paying through Revolut (`src/routes/acquirer.ts`, stripe-service v0.55.0)
+
+Dashboard v2 "New organization" orgs pay through Revolut, prepaid or postpaid, inside the page. Two relays, no billing state:
+
+- **`PUT /v1/accounts/acquirer`** `{acquirer:"revolut", email?, full_name?}` → stripe-service `PUT /internal/acquirer/by-org/{orgId}` (creates the Revolut customer, pins the org). `200 {org_id, acquirer}`; stripe-service's 409 (the org already holds a chargeable card on another acquirer) → **409** `{error, code:"chargeable_card_on_other_acquirer"}`; anything else → 502. Called right after org creation, BEFORE any card setup or checkout. The body accepts only `"revolut"`, so this surface can never move an existing org around. It writes no billing row (the account + welcome decision still come from the org's first ordinary `/v1` read).
+- **`POST /v1/checkout-sessions` `ui_mode:"embedded"`**: when stripe-service answers `presentation:"embedded_widget"`, billing returns card_setup's vocabulary flattened: `{mode:"embedded_widget", script_url, environment, token, save_payment_method_for, amount, currency, session_id}` (`session_id` = the order id). A widget answer missing its `widget` block → 502. A Stripe org still gets exactly `{client_secret, session_id}` (pinned byte-for-byte in `tests/integration/revolut-org.test.ts`). The body billing sends is unchanged; stripe-service ignores the Stripe-only fields for Revolut.
+
 ## A brand transfer moves HISTORY, never MONEY (`src/lib/brand-transfer.ts`, `src/lib/transfer-usage.ts`, migration 0051)
 
 `POST /internal/transfer-brand` (LOCKED fleet contract, fanned out IN PARALLEL by brand-service) moves the brand's daily budget, its change history and its per-campaign ceilings to the target org in one transaction (brand id rewritten when `targetBrandId` is given). Owner rule: the agency already paid for the brand's spend, so after a transfer **both orgs read exactly the balance they read before**.

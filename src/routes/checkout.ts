@@ -142,7 +142,32 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id } }, req.headers);
+    traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id ?? session.id } }, req.headers);
+
+    if (isEmbedded && session.presentation === "embedded_widget") {
+      // An acquirer with no embedded Checkout Session (stripe-service v0.55.0)
+      // takes the payment through a widget the page mounts itself. Relayed in
+      // card_setup's own `embedded_widget` vocabulary, so the page switches on
+      // `mode` for both surfaces. The token is a per-order PUBLIC id, not a key.
+      // A widget answer without its widget cannot be mounted: fail loud here
+      // rather than in the customer's browser.
+      if (!session.widget) {
+        console.error("[billing-service] stripe-service answered embedded_widget without a widget block");
+        res.status(502).json({ error: "Failed to create checkout session via stripe-service" });
+        return;
+      }
+      res.json({
+        mode: "embedded_widget",
+        script_url: session.widget.script_url,
+        environment: session.widget.environment,
+        token: session.widget.token,
+        save_payment_method_for: session.widget.save_payment_method_for,
+        amount: session.amount,
+        currency: session.currency,
+        session_id: session.id,
+      });
+      return;
+    }
 
     if (isEmbedded) {
       res.json({

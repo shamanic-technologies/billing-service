@@ -182,6 +182,31 @@ export const CreateCheckoutRequestSchema = z
   )
   .openapi("CreateCheckoutRequest");
 
+export const DeclareAcquirerRequestSchema = z
+  .object({
+    /** The only declaration this surface accepts: this new org pays through Revolut. */
+    acquirer: z.literal("revolut"),
+    /** The creator's email, used to create the acquirer-side customer. */
+    email: z.string().email().optional(),
+    /** The creator's name, used to create the acquirer-side customer. */
+    full_name: z.string().min(1).optional(),
+  })
+  .openapi("DeclareAcquirerRequest");
+
+export const DeclareAcquirerResponseSchema = z
+  .object({
+    org_id: z.string(),
+    acquirer: z.string(),
+  })
+  .openapi("DeclareAcquirerResponse");
+
+export const DeclareAcquirerRefusalSchema = z
+  .object({
+    error: z.string(),
+    code: z.literal("chargeable_card_on_other_acquirer"),
+  })
+  .openapi("DeclareAcquirerRefusal");
+
 export const CheckoutResponseSchema = z
   .object({
     /** Present for HOSTED checkout (the redirect URL); absent in embedded mode. */
@@ -189,6 +214,24 @@ export const CheckoutResponseSchema = z
     /** Present for EMBEDDED checkout (mounted in the in-app modal iframe); absent for hosted. */
     client_secret: z.string().optional(),
     session_id: z.string(),
+    /**
+     * EMBEDDED only, and only when the org's acquirer takes the payment through a
+     * widget the page mounts itself: `"embedded_widget"`, same vocabulary as
+     * card_setup's `mode`. Absent = a Stripe embedded session (use `client_secret`).
+     */
+    mode: z.literal("embedded_widget").optional(),
+    /** embedded_widget only. The acquirer's browser SDK to load. */
+    script_url: z.string().optional(),
+    /** embedded_widget only. The SDK's environment argument. */
+    environment: z.enum(["prod", "sandbox"]).optional(),
+    /** embedded_widget only. Per-order PUBLIC token the SDK is initialised with. */
+    token: z.string().optional(),
+    /** embedded_widget only. Pass to the widget so the card is saved for later top-ups. */
+    save_payment_method_for: z.literal("merchant").optional(),
+    /** embedded_widget only. What the buyer is charged, minor units. */
+    amount: z.number().int().optional(),
+    /** embedded_widget only. */
+    currency: z.string().optional(),
   })
   .openapi("CheckoutResponse");
 
@@ -2294,6 +2337,35 @@ registry.registerPath({
       description: "Read failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/accounts/acquirer",
+  summary: "Declare that this NEW org pays through Revolut",
+  description:
+    "Call right after the org is created and BEFORE any card setup or checkout. Pins the org to Revolut and " +
+    "creates its Revolut customer from the creator's email and name. Afterwards POST /v1/accounts/card_setup " +
+    "answers `mode: embedded_widget`, and POST /v1/checkout-sessions with ui_mode='embedded' answers the Revolut " +
+    "widget (`mode: embedded_widget`) instead of a Stripe client_secret. Idempotent (declaring again is a no-op). " +
+    "409 when the org already holds a chargeable card on another acquirer: a saved card cannot move. " +
+    "Orgs that never call this stay on Stripe, unchanged.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: DeclareAcquirerRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "The org is pinned",
+      content: { "application/json": { schema: DeclareAcquirerResponseSchema } },
+    },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: {
+      description: "The org already holds a chargeable card on another acquirer",
+      content: { "application/json": { schema: DeclareAcquirerRefusalSchema } },
+    },
+    502: { description: "stripe-service could not be asked", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
