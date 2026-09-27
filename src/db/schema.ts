@@ -778,6 +778,49 @@ export const orgUsageDiscounts = pgTable("org_usage_discounts", {
 export type OrgUsageDiscount = typeof orgUsageDiscounts.$inferSelect;
 export type NewOrgUsageDiscount = typeof orgUsageDiscounts.$inferInsert;
 
+// brand_transfers: a brand transfer moves HISTORY, not MONEY (migration 0051).
+// runs-service moves the brand's cost rows to the target org, so billing records
+// here what moved — net PROJECTED (platform actual + provisioned) and net
+// ACTUALIZED — and balance composition adds it back to the source org and takes
+// it off the target org (lib/transfer-usage.ts). Both orgs therefore read the
+// balance they read before the transfer. Also the audit trail staff read to see
+// that a balance correction came from a transfer: which brand, which orgs, when.
+export const brandTransfers = pgTable(
+  "brand_transfers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceOrgId: uuid("source_org_id").notNull(),
+    sourceBrandId: uuid("source_brand_id").notNull(),
+    targetOrgId: uuid("target_org_id").notNull(),
+    targetBrandId: uuid("target_brand_id"),
+    movedUsageNetCents: numeric("moved_usage_net_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    movedActualNetCents: numeric("moved_actual_net_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    transferredAt: timestamp("transferred_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("brand_transfers_source_target_key").on(
+      table.sourceOrgId,
+      table.sourceBrandId,
+      table.targetOrgId
+    ),
+    index("idx_brand_transfers_source_org").on(table.sourceOrgId),
+    index("idx_brand_transfers_target_org").on(table.targetOrgId),
+  ]
+);
+
+export type BrandTransfer = typeof brandTransfers.$inferSelect;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 /**

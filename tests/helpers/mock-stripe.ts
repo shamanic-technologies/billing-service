@@ -36,8 +36,6 @@ export interface StripeServiceMocks {
   sumSucceededTopupsForOrg: ReturnType<typeof vi.fn>;
   hasChargeablePmForOrg: ReturnType<typeof vi.fn>;
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
-  listAllCustomersForOrg: ReturnType<typeof vi.fn>;
-  setCustomerMetadata: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getCardSetup: ReturnType<typeof vi.fn>;
@@ -172,10 +170,6 @@ export function setupStripeMocks(): StripeServiceMocks {
       detached: ["pm_mock"],
       already_detached: [],
     }),
-    listAllCustomersForOrg: vi.fn().mockResolvedValue([]),
-    setCustomerMetadata: vi.fn().mockImplementation((id: string) =>
-      Promise.resolve(buildMockCustomer({ id }))
-    ),
     getStats: vi.fn().mockResolvedValue({
       total_paid_cents: "0.0000000000",
       total_returned_cents: "0.0000000000",
@@ -238,8 +232,6 @@ export function setupStripeMocks(): StripeServiceMocks {
     mocks.removeSavedPaymentMethods as never
   );
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
-  vi.spyOn(ssClient, "listAllCustomersForOrg").mockImplementation(mocks.listAllCustomersForOrg);
-  vi.spyOn(ssClient, "setCustomerMetadata").mockImplementation(mocks.setCustomerMetadata);
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
   vi.spyOn(reload, "reloadOffSession").mockImplementation(mocks.reloadOffSession);
 

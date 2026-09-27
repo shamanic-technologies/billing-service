@@ -18,15 +18,16 @@ import {
   localPromos,
 } from "../db/schema.js";
 import {
-  listAllCustomersForOrg,
-  setCustomerMetadata,
-  type StripeCustomer,
-} from "../lib/stripe-service-client.js";
+  BrandTransferConflictError,
+  BrandTransferUpstreamError,
+  transferBrand,
+  type BrandTransferResult,
+} from "../lib/brand-transfer.js";
 import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { cannotSpend, resolveOrgFloor } from "../lib/spend-block.js";
-import { fetchRunsOrgActualUsageTotal } from "../lib/runs-client.js";
+import { fetchOrgActualUsageTotal } from "../lib/transfer-usage.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
@@ -147,34 +148,6 @@ async function deleteBillingStateByOrg(
   });
 }
 
-/**
- * Parse a Stripe customer's `metadata.brand_id` value. We store it as a
- * comma-separated string (Stripe metadata values are strings, max 500 chars).
- * Empty/missing → []. Trims whitespace.
- */
-function parseBrandIds(metadata: Record<string, string>): string[] {
-  const raw = metadata.brand_id;
-  if (!raw || raw.trim().length === 0) return [];
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-/**
- * Decide whether a Stripe customer is safe to repoint to the target org.
- *
- * Mirrors the local_promos solo-brand semantics: a customer is in scope only
- * if its `brand_id` metadata holds exactly one brand AND that brand is the
- * source brand. Multi-brand customers are skipped — moving them would orphan
- * the other brands. Customers with no `brand_id` are skipped (org-wide
- * artifact, not brand-scoped).
- */
-function isSoloBrandMatch(customer: StripeCustomer, sourceBrandId: string): boolean {
-  const brandIds = parseBrandIds(customer.metadata ?? {});
-  return brandIds.length === 1 && brandIds[0] === sourceBrandId;
-}
-
 // DELETE /internal/accounts/by-org/:orgId — billing-service leg of org teardown.
 //
 // Local-only cleanup: removes billing-owned org rows that can keep active money,
@@ -197,17 +170,31 @@ router.delete("/internal/accounts/by-org/:orgId", async (req, res) => {
   }
 });
 
-// POST /internal/transfer-brand — re-assigns solo-brand rows between orgs.
+// POST /internal/transfer-brand — a brand moves to another org with its HISTORY,
+// never its MONEY (fleet contract, called by brand-service's transfer fan-out).
 //
-// Two-sided:
-//   - billing-local `local_promos` (per-org promo credits) — UPDATE here
-//   - stripe-service customers — list EVERY customer mirrored for the source
-//     org (user-less service-auth route, org in the path), patch metadata for
-//     the subset whose metadata.brand_id is the source brand (solo-brand only —
-//     multi-brand customers stay put, moving them would orphan the co-brands).
+// Moves, in one transaction, every row billing holds per (org, brand):
+//   - brand_daily_budgets          (the brand's current daily budget)
+//   - brand_daily_budget_changes   (its dated history)
+//   - campaign_daily_budgets       (one ceiling per campaign of the brand)
+// and rewrites the brand id when `targetBrandId` is given.
 //
-// The solo-brand policy is billing's, not stripe-service's: stripe-service hands
-// over the customers and performs the write, this repo decides which ones.
+// Money stays where it is. Nothing in local_promos and no Stripe customer moves:
+// a credit, a payment or a card belongs to the org that holds it, whatever brand
+// it was bought for. runs-service moves the brand's COST rows to the target org,
+// so billing records what moved in `brand_transfers` and balance composition
+// leaves it on the org that paid for it (lib/transfer-usage.ts): both orgs read
+// the exact balance they read before. The row is also the audit trail.
+//
+// Org-level state (depletion episodes, reload-retry state, payment mode, promises,
+// discount) stays with the org: it describes the org's money, not the brand.
+// campaign_authorize_costs is keyed by campaign; its stored org heals on the
+// campaign's next authorize, and the affordability read takes the campaign's org
+// from its caller (campaign-service), so a moved campaign is gated on the target.
+//
+// Idempotent: a re-run finds nothing left under the source org, and the moved
+// figures are overwritten with runs-service's cumulative answer (unchanged when
+// nothing more moved).
 router.post("/internal/transfer-brand", async (req, res) => {
   const parsed = TransferBrandRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -215,82 +202,23 @@ router.post("/internal/transfer-brand", async (req, res) => {
     return;
   }
 
-  const { sourceBrandId, sourceOrgId, targetOrgId, targetBrandId } = parsed.data;
-
-  const localStep1 = await db.execute(sql`
-    UPDATE local_promos
-    SET org_id = ${targetOrgId}
-    WHERE org_id = ${sourceOrgId}
-      AND array_length(brand_ids, 1) = 1
-      AND brand_ids[1] = ${sourceBrandId}
-  `);
-  let localCount = Number(localStep1.count ?? 0);
-
-  if (targetBrandId) {
-    const localStep2 = await db.execute(sql`
-      UPDATE local_promos
-      SET brand_ids = ARRAY[${targetBrandId}]
-      WHERE array_length(brand_ids, 1) = 1
-        AND brand_ids[1] = ${sourceBrandId}
-    `);
-    localCount = Math.max(localCount, Number(localStep2.count ?? 0));
-  }
-
-  let candidates: StripeCustomer[];
+  let result: BrandTransferResult;
   try {
-    candidates = await listAllCustomersForOrg(sourceOrgId);
+    result = await transferBrand(parsed.data);
   } catch (err) {
-    console.error("[billing-service] stripe-service customer list failed:", err);
-    res.status(502).json({ error: "Failed to list customers from stripe-service" });
-    return;
-  }
-
-  const targets = candidates.filter((c) => isSoloBrandMatch(c, sourceBrandId));
-  const skippedMultiBrand = candidates.filter((c) => {
-    const ids = parseBrandIds(c.metadata ?? {});
-    return ids.length > 1 && ids.includes(sourceBrandId);
-  });
-
-  if (skippedMultiBrand.length > 0) {
-    console.warn(
-      `[billing-service] transfer-brand: skipping ${skippedMultiBrand.length} multi-brand customer(s) tagged with sourceBrandId=${sourceBrandId} ` +
-      `(would orphan co-brands). Customer ids: ${skippedMultiBrand.map((c) => c.id).join(",")}`
-    );
-  }
-
-  let ssCount = 0;
-  for (const customer of targets) {
-    const newMetadata: Record<string, string> = {
-      ...(customer.metadata ?? {}),
-      org_id: targetOrgId,
-    };
-    if (targetBrandId) {
-      newMetadata.brand_id = targetBrandId;
-    }
-    try {
-      await setCustomerMetadata(customer.id, newMetadata);
-      ssCount += 1;
-    } catch (err) {
-      console.error(`[billing-service] stripe-service customer-metadata write ${customer.id} failed:`, err);
-      res.status(502).json({
-        error: "Failed to update customer metadata in stripe-service",
-        partial: { stripe_service_customers_patched: ssCount, total_targets: targets.length },
-      });
+    if (err instanceof BrandTransferConflictError) {
+      res.status(409).json({ error: err.message });
       return;
     }
+    if (err instanceof BrandTransferUpstreamError) {
+      console.error("[billing-service] transfer-brand: runs-service read failed:", err);
+      res.status(502).json({ error: err.message });
+      return;
+    }
+    throw err;
   }
 
-  console.log(
-    `[billing-service] transfer-brand: sourceBrandId=${sourceBrandId} targetBrandId=${targetBrandId ?? "none"} from=${sourceOrgId} to=${targetOrgId} ` +
-    `local_promos=${localCount} stripe_customers_patched=${ssCount} stripe_candidates_scanned=${candidates.length} stripe_skipped_multibrand=${skippedMultiBrand.length}`
-  );
-
-  res.json({
-    updatedTables: [
-      { tableName: "local_promos", count: localCount },
-      { tableName: "stripe_service_customers", count: ssCount },
-    ],
-  });
+  res.json({ updatedTables: result.updatedTables, balanceAdjustment: result.balanceAdjustment });
 });
 
 // GET /internal/campaigns/:campaignId/affordability
@@ -344,15 +272,24 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     return;
   }
 
+  // Whose balance gates this campaign: the org campaign-service names on the
+  // request (x-org-id — it owns which org a campaign belongs to), else the org
+  // stored with the estimate. They differ only for a campaign whose brand moved
+  // to another org since its last authorize (POST /internal/transfer-brand); the
+  // stored org heals on that campaign's next authorize.
+  const headerOrg = req.headers["x-org-id"];
+  const orgId =
+    typeof headerOrg === "string" && UUID_RE.test(headerOrg) ? headerOrg : stored.orgId;
+
   // No end-user on this read-only pre-flight. computeBalance reads stripe-service
   // via the user-less /internal/*/by-org/{orgId} routes (X-API-Key + org only) —
   // no x-user-id, no sentinel.
   let snapshot;
   try {
-    snapshot = await computeBalance(stored.orgId);
+    snapshot = await computeBalance(orgId);
   } catch (err) {
     console.error(
-      `[billing-service] affordability: balance compose failed for campaign ${campaignId} (org ${stored.orgId}):`,
+      `[billing-service] affordability: balance compose failed for campaign ${campaignId} (org ${orgId}):`,
       err
     );
     res.status(502).json({ error: "Failed to compute balance" });
@@ -363,7 +300,7 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
   // and the dunning tick decide on, applied to THIS campaign's own estimate: a
   // reload-capable org is affordable while its (possibly negative) balance stays
   // within the line, and flips only when the next run would cross past the floor.
-  const { floorCents } = await resolveOrgFloor(stored.orgId, snapshot);
+  const { floorCents } = await resolveOrgFloor(orgId, snapshot);
   const lastRequiredCents = stored.lastAuthorizeRequiredCents;
 
   res.json({
@@ -485,7 +422,7 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
   try {
     [snapshot, actualUsage] = await Promise.all([
       computeBalance(orgId),
-      fetchRunsOrgActualUsageTotal(orgId, {}),
+      fetchOrgActualUsageTotal(orgId, {}),
     ]);
   } catch (err) {
     console.error(

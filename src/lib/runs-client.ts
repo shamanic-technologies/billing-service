@@ -245,3 +245,79 @@ export async function fetchRunsOrgActualUsageTotal(
   }
   return { spent_cents: body.net_total_expected_cents };
 }
+
+export interface RunsBrandTransferMoved {
+  /** Net projected platform usage (actual + provisioned) runs-service moved with the brand. */
+  usageNetCents: string;
+  /** Net actualized platform usage runs-service moved with the brand. */
+  actualNetCents: string;
+}
+
+export interface RunsBrandTransferParams {
+  sourceOrgId: string;
+  sourceBrandId: string;
+  targetOrgId: string;
+  targetBrandId?: string;
+}
+
+/**
+ * Make sure runs-service has moved the brand's runs BEFORE billing reads what
+ * moved. brand-service calls every service's transfer in parallel, and
+ * runs-service's moved-usage ledger only answers for moves already made. Its
+ * transfer is idempotent and concurrency-safe (each chunk re-checks the source
+ * org under the row lock), so this call either moves the brand or finds it
+ * already moved by brand-service's own call. Fail-loud.
+ */
+export async function runRunsBrandTransfer(params: RunsBrandTransferParams): Promise<void> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
+  const body: Record<string, string> = {
+    sourceBrandId: params.sourceBrandId,
+    sourceOrgId: params.sourceOrgId,
+    targetOrgId: params.targetOrgId,
+  };
+  if (params.targetBrandId) body.targetBrandId = params.targetBrandId;
+  const res = await fetchWithRetry(`${config.url}/internal/transfer-brand`, {
+    method: "POST",
+    headers: { "x-api-key": config.apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`runs-service transfer-brand failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+/**
+ * What runs-service's brand transfers moved from the source org to the target
+ * org, in the two figures billing subtracts from a balance
+ * (`GET /internal/brand-transfers/moved-usage`): `projectedNetCents` is what
+ * /internal/org-usage-total's net_spent_cents counted, `actualNetCents` what
+ * /internal/org-actual-total's net counted. Frozen at each move and cumulative
+ * across re-runs. Fail-loud: any error or missing field throws.
+ */
+export async function fetchRunsBrandTransferMoved(
+  params: RunsBrandTransferParams
+): Promise<RunsBrandTransferMoved> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
+  const q = new URLSearchParams({
+    sourceOrgId: params.sourceOrgId,
+    sourceBrandId: params.sourceBrandId,
+    targetOrgId: params.targetOrgId,
+  });
+  const res = await fetchWithRetry(`${config.url}/internal/brand-transfers/moved-usage?${q}`, {
+    headers: { "x-api-key": config.apiKey },
+  });
+  if (!res.ok) {
+    throw new Error(`runs-service brand-transfers/moved-usage failed: ${res.status} ${await res.text()}`);
+  }
+  const body = (await res.json()) as { projectedNetCents?: string; actualNetCents?: string };
+  if (body.projectedNetCents == null || body.actualNetCents == null) {
+    throw new Error("runs-service brand-transfers/moved-usage is missing projectedNetCents/actualNetCents");
+  }
+  return { usageNetCents: body.projectedNetCents, actualNetCents: body.actualNetCents };
+}

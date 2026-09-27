@@ -741,6 +741,16 @@ export const TransferBrandTableResultSchema = z
 export const TransferBrandResponseSchema = z
   .object({
     updatedTables: z.array(TransferBrandTableResultSchema),
+    balanceAdjustment: z
+      .object({
+        transferId: z.string().uuid(),
+        movedUsageNetCents: z.string(),
+        movedActualNetCents: z.string(),
+        transferredAt: z.string(),
+      })
+      .describe(
+        "The brand_transfers record: the spend runs-service moved with the brand, left on the source org and taken off the target org so neither balance moves."
+      ),
   })
   .openapi("TransferBrandResponse");
 
@@ -2746,10 +2756,15 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/internal/transfer-brand",
-  summary: "Transfer all solo-brand rows from one org to another (billing + stripe-service)",
+  summary: "Move a brand's billing history to another org; its money stays",
   description:
-    "Updates local_promos in billing AND proxies to stripe-service for ledger rows. " +
-    "Skips co-branding rows. Idempotent.",
+    "Moves the brand's daily budget, its change history and its per-campaign ceilings from sourceOrgId " +
+    "to targetOrgId (rewriting the brand id when targetBrandId is given). Moves NO money: credits and " +
+    "Stripe customers stay with the org that holds them. runs-service moves the brand's cost rows in the " +
+    "same fan-out, so billing first drives runs-service's own (idempotent) transfer, reads what it moved, " +
+    "and records it in brand_transfers; balance composition leaves that spend on the source org and off the " +
+    "target org, so BOTH balances (spendable and displayed) are unchanged to the cent. balanceAdjustment is " +
+    "that audit record. Idempotent: a re-run moves nothing and leaves the record as is.",
   request: {
     headers: internalHeaders,
     body: {
@@ -2765,8 +2780,12 @@ registry.registerPath({
       description: "Invalid request body",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    409: {
+      description: "The target org already holds a budget or ceiling for the brand, or source == target. Nothing moved.",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
     502: {
-      description: "stripe-service unavailable",
+      description: "runs-service could not move the brand or say what it moved. Nothing written.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
