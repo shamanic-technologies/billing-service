@@ -48,6 +48,7 @@ describe("POST /v1/portal-sessions", () => {
       orgId,
       "https://example.com/return",
       undefined,
+      undefined,
       undefined
     );
   });
@@ -100,7 +101,8 @@ describe("POST /v1/portal-sessions", () => {
       orgId,
       "https://example.com/return",
       50000,
-      "USD"
+      "USD",
+      undefined
     );
   });
 
