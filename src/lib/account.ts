@@ -9,14 +9,28 @@ import {
   type StripeCustomer,
 } from "./stripe-service-client.js";
 import { hasTrialSeed } from "./trial-seed.js";
+import {
+  claimWelcomeForPerson,
+  personIdOrNull,
+  withdrawFreeCreditOffer,
+} from "./welcome-recipient.js";
 
 /**
  * Find or atomically create a billing account for an org.
  *
  * On fresh-create the winner:
- *   1. INSERT billing_accounts via ON CONFLICT DO NOTHING
+ *   1. INSERT billing_accounts via ON CONFLICT DO NOTHING and, in the SAME
+ *      transaction, binds the calling person's welcome to this org — or, when that
+ *      person's welcome already lives on another org, sets this account's own
+ *      free-credit offer to zero (lib/welcome-recipient). One transaction, so a
+ *      concurrent reader of the new row never sees the offer before it is decided.
  *   2. Ensures Stripe customer exists in stripe-service (idempotent SS-side)
- *   3. Redeems the welcome promo (UNIQUE (org_id, promo_code_id) makes this idempotent)
+ *   3. Redeems the welcome promo only when this org holds the person's welcome
+ *      (UNIQUE (org_id, promo_code_id) makes the redeem idempotent)
+ *
+ * The welcome is once per PERSON: a second org the same person creates gets none.
+ * A caller carrying no person (the platform sentinel) keeps the historical per-org
+ * behaviour, loudly logged — billing cannot tell whose org it is.
  *
  * Lost-race readers refetch and return the existing row with no side effects.
  */
@@ -33,13 +47,34 @@ export async function findOrCreateAccount(
 
   if (existing) return existing;
 
-  const [inserted] = await db
-    .insert(billingAccounts)
-    .values({ orgId })
-    .onConflictDoNothing()
-    .returning();
+  const personId = personIdOrNull(userId);
 
-  if (!inserted) {
+  const created = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(billingAccounts)
+      .values({ orgId })
+      .onConflictDoNothing()
+      .returning();
+    if (!inserted) return null;
+
+    if (!personId) return { account: inserted, welcomeHere: true };
+
+    const claim = await claimWelcomeForPerson(tx, personId, orgId);
+    if (claim.kind === "this_org") return { account: inserted, welcomeHere: true };
+
+    await withdrawFreeCreditOffer(tx, orgId);
+    const [withdrawn] = await tx
+      .select()
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+    console.log(
+      `[billing-service] org ${orgId}: person ${personId} already received the welcome on org ${claim.welcomeOrgId} — no welcome here, free-credit offer 0`
+    );
+    return { account: withdrawn, welcomeHere: false };
+  });
+
+  if (!created) {
     const [refetched] = await db
       .select()
       .from(billingAccounts)
@@ -54,12 +89,18 @@ export async function findOrCreateAccount(
     ...wfHeaders,
   });
 
+  if (!personId) {
+    console.warn(
+      `[billing-service] org ${orgId} created by a caller with no person (x-user-id ${userId}) — welcome granted per org, cannot be checked against a person`
+    );
+  }
+
   // An org seeded for the unauthenticated trial gets its welcome at SIGNUP, as the
   // REMAINDER (welcome − seeded) — see lib/trial-seed.ts. Normally the seed created
   // the account, so this branch is not reached for one; the check closes the race
   // where a first spend and the seed arrive together, in the only safe direction
   // (never grant a full welcome on top of a seed).
-  if (!(await hasTrialSeed(orgId))) {
+  if (created.welcomeHere && !(await hasTrialSeed(orgId))) {
     try {
       await redeemPromoCode(orgId, userId, WELCOME_PROMO_CODE);
     } catch (err) {
@@ -67,7 +108,7 @@ export async function findOrCreateAccount(
     }
   }
 
-  return inserted;
+  return created.account;
 }
 
 /**

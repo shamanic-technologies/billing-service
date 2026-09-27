@@ -12,6 +12,7 @@ import {
   campaignDailyBudgets,
   orgUsageDiscounts,
   freeCreditPromises,
+  welcomeRecipients,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -41,6 +42,7 @@ const SEEDED_PROMO_CODES = [
 
 export async function cleanTestData() {
   await db.delete(freeCreditPromises);
+  await db.delete(welcomeRecipients);
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignReloadSweepAttempts);
   await db.delete(campaignAuthorizeCosts);

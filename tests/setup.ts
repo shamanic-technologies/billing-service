@@ -261,6 +261,16 @@ beforeAll(async () => {
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "opened_notified_at" timestamp with time zone`;
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "granted_notified_at" timestamp with time zone`;
 
+  // welcome_recipients (the welcome is once per PERSON, migration 0049).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "welcome_recipients" (
+      "user_id" uuid PRIMARY KEY NOT NULL,
+      "org_id" uuid NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_welcome_recipients_org" ON "welcome_recipients" ("org_id")`;
+
   // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.

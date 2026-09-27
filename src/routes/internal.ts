@@ -14,8 +14,8 @@ import {
   campaignReloadSweepAttempts,
   creditDepletionEpisodes,
   freeCreditPromises,
+  welcomeRecipients,
   localPromos,
-  PLATFORM_USER_ID,
 } from "../db/schema.js";
 import {
   listAllCustomersForOrg,
@@ -37,6 +37,7 @@ import {
   settleSignupWelcome,
   TrialSeedWelcomeAlreadyGrantedError,
 } from "../lib/trial-seed.js";
+import { personIdOrNull } from "../lib/welcome-recipient.js";
 import {
   chargeOrgOnDemand,
   OnDemandChargeError,
@@ -76,7 +77,16 @@ async function deleteBillingStateByOrg(
   orgId: string
 ): Promise<InternalAccountTeardownResponse["deletedRows"]> {
   return db.transaction(async (tx) => {
-    const deletedWelcomeClaims = await deleteWelcomeCreditClaimsIfPresent(tx, orgId);
+    // The person whose welcome lived on this org (welcome_recipients, migration
+    // 0049) is freed with it, counted under the same "welcome credit claims" figure:
+    // a staff teardown frees the email to sign up again, welcome included.
+    const deletedWelcomeRecipients = await tx
+      .delete(welcomeRecipients)
+      .where(eq(welcomeRecipients.orgId, orgId))
+      .returning({ userId: welcomeRecipients.userId });
+    const deletedWelcomeClaims =
+      (await deleteWelcomeCreditClaimsIfPresent(tx, orgId)) +
+      deletedWelcomeRecipients.length;
 
     const deletedLocalPromos = await tx
       .delete(localPromos)
@@ -408,7 +418,22 @@ router.post("/internal/accounts/by-org/:orgId/signup", async (req, res) => {
   }
 
   try {
-    const result = await settleSignupWelcome(orgId, PLATFORM_USER_ID);
+    // Who signed up: the person's internal user id as `x-user-id`. It is what makes
+    // the welcome once per PERSON (lib/welcome-recipient). Optional so a caller that
+    // has not learned to send it keeps working — loudly, because without it billing
+    // cannot tell whether this person already received the welcome elsewhere.
+    const rawUserId = req.header("x-user-id");
+    if (rawUserId !== undefined && !UUID_RE.test(rawUserId)) {
+      res.status(400).json({ error: "x-user-id must be a valid UUID" });
+      return;
+    }
+    const personId = personIdOrNull(rawUserId);
+    if (!personId) {
+      console.warn(
+        `[billing-service] signup settle for org ${orgId} carries no person (x-user-id) — welcome checked per org only`
+      );
+    }
+    const result = await settleSignupWelcome(orgId, personId);
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error(
