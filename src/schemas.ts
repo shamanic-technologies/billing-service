@@ -59,6 +59,15 @@ export const BillingAccountSchema = z
     /** User-facing balance = credited_cents − actualized usage only. */
     actual_balance_cents: ActualBalanceCentsSchema,
     /**
+     * Free credit this org can still spend: min(credited_gifted_cents, balance_cents),
+     * floored at 0. "0.0000000000" for an org holding no free credit — e.g. a second
+     * org whose person already received the welcome elsewhere.
+     */
+    free_credit_spendable_cents: CentsStringSchema.openapi({
+      description:
+        "Free credit this org can still spend right now: the smaller of credited_gifted_cents and balance_cents, never below 0. Positive means the org can run on gifted credit without paying first (e.g. a 'skip payment' option); 0 means it holds none — including a second org whose person already received the welcome gift on another org (the welcome is once per person).",
+    }),
+    /**
      * Per-org platform-usage discount percentage (0–100), or null when none.
      * EXPOSED for the customer dashboard banner only — it does NOT affect the
      * balance figures. The discount is applied ONCE, at cost-write time, inside
@@ -514,6 +523,12 @@ export const SignupWelcomeResponseSchema = z
     totalFreeCreditCents: z.number().int(),
     /** true when the org had already been settled — a replay grants nothing. */
     alreadySettled: z.boolean(),
+    /**
+     * true when the person signing up (x-user-id) already received the welcome on
+     * ANOTHER org: this org got none and its own free-credit offer is zero. Any trial
+     * seed it holds is kept (never clawed back).
+     */
+    welcomeReceivedElsewhere: z.boolean(),
   })
   .openapi("SignupWelcomeResponse");
 
@@ -1668,9 +1683,22 @@ registry.registerPath({
     "welcome offer, exactly as it always has. A seeded org receives the REMAINDER " +
     "(welcome − seeded), so its TOTAL free credit is the welcome amount rather than " +
     "the welcome amount plus its seed; unspent seed is never clawed back. Idempotent " +
-    "— a replay grants nothing.",
+    "— a replay grants nothing. The welcome is once per PERSON: send the person who " +
+    "signed up as `x-user-id` (client-service internal user id). When that person " +
+    "already received the welcome on another org, this org gets none, its own " +
+    "free-credit offer is zero and `welcomeReceivedElsewhere` is true. Without " +
+    "`x-user-id` the welcome is checked per org only (historical behaviour).",
   request: {
-    headers: internalHeaders,
+    headers: internalHeaders.extend({
+      "x-user-id": z
+        .string()
+        .uuid()
+        .optional()
+        .openapi({
+          description:
+            "The person who signed up (client-service internal user id). Makes the welcome once per person.",
+        }),
+    }),
     params: z.object({ orgId: z.string().uuid() }),
   },
   responses: {
@@ -1679,7 +1707,7 @@ registry.registerPath({
       content: { "application/json": { schema: SignupWelcomeResponseSchema } },
     },
     400: {
-      description: "orgId is not a valid UUID",
+      description: "orgId (or x-user-id when sent) is not a valid UUID",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     401: {
