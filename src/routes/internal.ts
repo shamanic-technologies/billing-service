@@ -16,6 +16,7 @@ import {
   freeCreditPromises,
   welcomeRecipients,
   localPromos,
+  ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
 import {
   BrandTransferConflictError,
@@ -39,6 +40,7 @@ import {
   TrialSeedWelcomeAlreadyGrantedError,
 } from "../lib/trial-seed.js";
 import { personIdOrNull } from "../lib/welcome-recipient.js";
+import { grantOrgCreationBonus } from "../lib/promos.js";
 import {
   chargeOrgOnDemand,
   OnDemandChargeError,
@@ -163,7 +165,17 @@ router.delete("/internal/accounts/by-org/:orgId", async (req, res) => {
 
   try {
     const deletedRows = await deleteBillingStateByOrg(orgId);
-    res.json({ ok: true, orgId, deletedRows });
+    // Reported so the caller can tell "there was nothing here" from "we removed it".
+    // Deleting an org billing never saw is a pure no-op: this route only DELETEs, so
+    // it can never create a billing account, a Stripe customer, or run a welcome
+    // evaluation (pinned by tests/integration/internal-account-teardown.test.ts).
+    const billingAccountExisted = deletedRows.billingAccounts > 0;
+    if (!billingAccountExisted) {
+      console.log(
+        `[billing-service] teardown org ${orgId}: no billing account — nothing created, ${deletedRows.localPromos} ledger row(s) removed`
+      );
+    }
+    res.json({ ok: true, orgId, billingAccountExisted, deletedRows });
   } catch (err) {
     console.error(`[billing-service] account teardown failed for org ${orgId}:`, err);
     res.status(502).json({ error: "Failed to delete billing account state" });
@@ -339,6 +351,39 @@ router.post("/internal/accounts/by-org/:orgId/trial-seed", async (req, res) => {
       err
     );
     res.status(500).json({ error: "Failed to seed trial credit" });
+  }
+});
+
+// POST /internal/accounts/by-org/:orgId/org-creation-bonus
+//
+// Every newly created organization receives a small free credit ONCE, so its first
+// setup steps (site read, offer + audience drafts) can run — the welcome gift is once
+// per PERSON, so a person's second org otherwise starts at $0. Billing owns the
+// amount (the `org_creation_bonus` code row). Not tied to the welcome: granted even
+// when the person's welcome lives elsewhere. Idempotent per org. Service-auth + the
+// orgId in the PATH only; no body. Creates no billing account and no Stripe customer.
+router.post("/internal/accounts/by-org/:orgId/org-creation-bonus", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+
+  try {
+    const result = await grantOrgCreationBonus(orgId);
+    console.log(
+      `[billing-service] org-creation bonus: org=${orgId} granted=${result.grantedCents} alreadyGranted=${result.alreadyGranted}`
+    );
+    res.json({
+      ok: true,
+      orgId,
+      reason: ORG_CREATION_BONUS_CODE,
+      grantedCents: result.grantedCents,
+      alreadyGranted: result.alreadyGranted,
+    });
+  } catch (err) {
+    console.error(`[billing-service] org-creation bonus failed for org ${orgId}:`, err);
+    res.status(500).json({ error: "Failed to grant the organization creation bonus" });
   }
 });
 

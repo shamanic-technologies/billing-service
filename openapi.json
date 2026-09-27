@@ -764,6 +764,9 @@
             "type": "string",
             "format": "uuid"
           },
+          "billingAccountExisted": {
+            "type": "boolean"
+          },
           "deletedRows": {
             "$ref": "#/components/schemas/InternalAccountTeardownDeletedRows"
           }
@@ -771,7 +774,42 @@
         "required": [
           "ok",
           "orgId",
+          "billingAccountExisted",
           "deletedRows"
+        ]
+      },
+      "OrgCreationBonusResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "org_creation_bonus"
+            ]
+          },
+          "grantedCents": {
+            "type": "integer"
+          },
+          "alreadyGranted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "orgId",
+          "reason",
+          "grantedCents",
+          "alreadyGranted"
         ]
       },
       "CreditGrantResponse": {
@@ -3713,7 +3751,7 @@
     "/internal/accounts/by-org/{orgId}": {
       "delete": {
         "summary": "Remove billing-owned state for a deleted org",
-        "description": "Client-service cascade teardown leg for an internal org UUID. Removes only billing-service-owned org-scoped rows that can keep active billing effects alive: account topup config, local promo credits, dunning episodes, campaign affordability estimates, brand daily budgets, and welcome-credit claims. No cross-service fan-out. Idempotent: no rows for the org is still success.",
+        "description": "Client-service cascade teardown leg for an internal org UUID. Removes only billing-service-owned org-scoped rows that can keep active billing effects alive: account topup config, local promo credits, dunning episodes, campaign affordability estimates, brand daily budgets, and welcome-credit claims. No cross-service fan-out. Idempotent: no rows for the org is still success. Deleting an org billing never held an account for is a pure no-op reported as billingAccountExisted=false: it never creates a billing account, a Stripe customer, or runs a welcome evaluation.",
         "parameters": [
           {
             "schema": {
@@ -3766,6 +3804,73 @@
           },
           "502": {
             "description": "Database operation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/org-creation-bonus": {
+      "post": {
+        "summary": "Grant a newly created organization its one-time creation bonus",
+        "description": "Every newly created organization receives a small free credit ONCE ($5 today; billing owns the amount), so its first setup steps can run. Not tied to the welcome gift: granted even when the person who created the org already received a welcome on another org, and never counted against the welcome offer. It appears in the org's grants ledger (GET /v1/credits/grants) under reason=org_creation_bonus. Idempotent per org: a retry grants nothing and returns alreadyGranted=true. No body. Creates no billing account and no Stripe customer.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bonus granted (or already granted — idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgCreationBonusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "org_creation_bonus seed missing or database failure",
             "content": {
               "application/json": {
                 "schema": {
