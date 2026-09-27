@@ -2,53 +2,58 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
-import { localPromos, localPromoCodes } from "../../src/db/schema.js";
+import {
+  brandDailyBudgetChanges,
+  brandDailyBudgets,
+  brandTransfers,
+  campaignAuthorizeCosts,
+  campaignDailyBudgets,
+  localPromoCodes,
+  localPromos,
+} from "../../src/db/schema.js";
 import { createTestApp } from "../helpers/test-app.js";
-import { cleanTestData, insertTestAccount, insertTestPromoCode, closeDb } from "../helpers/test-db.js";
+import {
+  cleanTestData,
+  closeDb,
+  insertTestAccount,
+  insertTestPromoCode,
+} from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
-import type { StripeCustomer } from "../../src/lib/stripe-service-client.js";
 
+// A brand moves to another org with its HISTORY, never its MONEY: budgets and
+// ceilings follow the brand, credits and payments stay, and both orgs read the
+// exact balance they read before — even though runs-service moves the brand's
+// cost rows to the target org during the same transfer.
 describe("POST /internal/transfer-brand", () => {
   const app = createTestApp();
-  const sourceOrgId = "00000000-0000-0000-0000-000000000001";
-  const targetOrgId = "00000000-0000-0000-0000-000000000002";
+  const sourceOrgId = "00000000-0000-0000-0000-00000000a001";
+  const targetOrgId = "00000000-0000-0000-0000-00000000a002";
   const sourceBrandId = "00000000-0000-0000-0000-00000000b001";
-  const targetBrandId = "00000000-0000-0000-0000-00000000b003";
   const otherBrandId = "00000000-0000-0000-0000-00000000b002";
+  const targetBrandId = "00000000-0000-0000-0000-00000000b003";
   const userId = "00000000-0000-0000-0000-000000000099";
+  const headers = { "X-API-Key": "test-api-key", "Content-Type": "application/json" };
 
-  const internalHeaders = {
-    "X-API-Key": "test-api-key",
-    "Content-Type": "application/json",
-  };
-
+  // What runs-service holds per org (net projected, net actualized) and what it
+  // reports its transfer moved. A "runs move" shifts the brand's share between orgs.
+  let runsUsage: Record<string, { projected: string; actual: string }>;
+  let runsMoved: { usageNetCents: string; actualNetCents: string };
   let ssMocks: ReturnType<typeof setupStripeMocks>;
+  let movedSpy: ReturnType<typeof vi.fn>;
+  let runsTransferSpy: ReturnType<typeof vi.fn>;
 
-  function makeCustomer(id: string, metadata: Record<string, string>): StripeCustomer {
-    return {
-      id,
-      object: "customer",
-      balance: 0,
-      metadata,
-      invoice_settings: { default_payment_method: null },
-    };
+  const BRAND_PROJECTED = "559963.3800000000"; // actual + stuck provisioned holds
+  const BRAND_ACTUAL = "552795.4400000000";
+
+  function runsMovesTheBrand() {
+    runsUsage[sourceOrgId] = { projected: "1000.0000000000", actual: "900.0000000000" };
+    runsUsage[targetOrgId] = { projected: BRAND_PROJECTED, actual: BRAND_ACTUAL };
   }
 
-  async function insertPromoGrantWithBrand(brandIds: string[] | null) {
-    await insertTestPromoCode({ code: `p-${Math.random()}`, amountCents: 100 });
-    const [codeRow] = await db.select().from(localPromoCodes).limit(1);
-    const [row] = await db
-      .insert(localPromos)
-      .values({
-        orgId: sourceOrgId,
-        userId,
-        amountCents: "100",
-        promoCodeId: codeRow.id,
-        description: "test",
-        brandIds,
-      })
-      .returning();
-    return row;
+  async function balances(orgId: string) {
+    const res = await request(app).get(`/internal/accounts/by-org/${orgId}/balance`).set(headers);
+    expect(res.status).toBe(200);
+    return { balance: res.body.balance_cents, actual: res.body.actual_balance_cents };
   }
 
   beforeEach(async () => {
@@ -57,6 +62,30 @@ describe("POST /internal/transfer-brand", () => {
     await cleanTestData();
     await insertTestAccount({ orgId: sourceOrgId });
     await insertTestAccount({ orgId: targetOrgId });
+
+    // Source: $6,000 paid, the brand's spend plus $10 of other spend on it.
+    ssMocks.sumSucceededTopupsForOrg.mockImplementation(async (orgId: string) =>
+      orgId === sourceOrgId ? "600000.0000000000" : "0.0000000000"
+    );
+    runsUsage = {
+      [sourceOrgId]: { projected: "560963.3800000000", actual: "553695.4400000000" },
+      [targetOrgId]: { projected: "0", actual: "0" },
+    };
+    runsMoved = { usageNetCents: BRAND_PROJECTED, actualNetCents: BRAND_ACTUAL };
+
+    const runsClient = await import("../../src/lib/runs-client.js");
+    vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockImplementation(async (orgId: string) => ({
+      org_id: orgId,
+      spent_cents: runsUsage[orgId]?.projected ?? "0",
+      as_of: "2026-09-27T00:00:00.000Z",
+    }));
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(async (orgId: string) => ({
+      spent_cents: runsUsage[orgId]?.actual ?? "0",
+    }));
+    movedSpy = vi.fn(async () => runsMoved);
+    vi.spyOn(runsClient, "fetchRunsBrandTransferMoved").mockImplementation(movedSpy);
+    runsTransferSpy = vi.fn(async () => undefined);
+    vi.spyOn(runsClient, "runRunsBrandTransfer").mockImplementation(runsTransferSpy);
   });
 
   afterAll(async () => {
@@ -64,224 +93,222 @@ describe("POST /internal/transfer-brand", () => {
     await closeDb();
   });
 
-  it("patches solo-brand SS customers + transfers solo-brand local_promos rows", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_solo_match", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ]
-    );
-    await insertPromoGrantWithBrand([sourceBrandId]);
+  async function seedBrandRows(orgId: string, brandId: string) {
+    await db.insert(brandDailyBudgets).values({ orgId, brandId, dailyBudgetCents: "11900" });
+    await db.insert(brandDailyBudgetChanges).values([
+      { orgId, brandId, dailyBudgetCents: "5000" },
+      { orgId, brandId, dailyBudgetCents: "11900" },
+    ]);
+    await db.insert(campaignDailyBudgets).values([
+      { orgId, brandId, featureSlug: "sales-cold-email-outreach", offerId: "00000000-0000-0000-0000-0000000000f1", legKey: "start_to_conversation", dailyBudgetCents: "10700" },
+      { orgId, brandId, featureSlug: "ai-meeting-booking", offerId: null, legKey: null, dailyBudgetCents: "200" },
+    ]);
+  }
 
+  it("keeps BOTH orgs' balances unchanged to the cent, whichever order runs-service moves in", async () => {
+    const sourceBefore = await balances(sourceOrgId);
+    const targetBefore = await balances(targetOrgId);
+
+    // runs-service moved first (brand-service fans out in parallel).
+    runsMovesTheBrand();
     const res = await request(app)
       .post("/internal/transfer-brand")
-      .set(internalHeaders)
+      .set(headers)
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
     expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toEqual([
-      { tableName: "local_promos", count: 1 },
-      { tableName: "stripe_service_customers", count: 1 },
-    ]);
-    // The org is named in the path and nothing else is sent: no fabricated
-    // x-org-id, no zero-uuid x-user-id. One argument, and it is the org id.
-    expect(ssMocks.listAllCustomersForOrg).toHaveBeenCalledWith(sourceOrgId);
-    expect(ssMocks.listAllCustomersForOrg.mock.calls[0]).toHaveLength(1);
-    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledWith(
-      "cus_solo_match",
-      expect.objectContaining({ org_id: targetOrgId })
-    );
-    expect(ssMocks.setCustomerMetadata.mock.calls[0]).toHaveLength(2);
+
+    expect(await balances(sourceOrgId)).toEqual(sourceBefore);
+    expect(await balances(targetOrgId)).toEqual(targetBefore);
+    expect(targetBefore).toEqual({ balance: "0.0000000000", actual: "0.0000000000" });
+    expect(res.body.balanceAdjustment).toMatchObject({
+      movedUsageNetCents: BRAND_PROJECTED,
+      movedActualNetCents: BRAND_ACTUAL,
+    });
   });
 
-  it("patches brand_id when targetBrandId provided", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_solo_rename", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ]
-    );
-    const row = await insertPromoGrantWithBrand([sourceBrandId]);
-
-    const res = await request(app)
+  it("records an auditable ledger row: which brand, from and to which org, when, how much", async () => {
+    runsMovesTheBrand();
+    await request(app)
       .post("/internal/transfer-brand")
-      .set(internalHeaders)
+      .set(headers)
       .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
 
-    expect(res.status).toBe(200);
-    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledWith(
-      "cus_solo_rename",
-      expect.objectContaining({
-        org_id: targetOrgId,
-        brand_id: targetBrandId,
-      })
-    );
-
-    const [updated] = await db.select().from(localPromos).where(eq(localPromos.id, row.id));
-    expect(updated.orgId).toBe(targetOrgId);
-    expect(updated.brandIds).toEqual([targetBrandId]);
-  });
-
-  it("skips multi-brand customers (CSV brand_id with multiple entries)", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_multi", {
-          org_id: sourceOrgId,
-          brand_id: `${sourceBrandId},${otherBrandId}`,
-        }),
-      ]
-    );
-
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toContainEqual({
-      tableName: "stripe_service_customers",
-      count: 0,
+    const rows = await db.select().from(brandTransfers);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      sourceOrgId,
+      sourceBrandId,
+      targetOrgId,
+      targetBrandId,
+      movedUsageNetCents: BRAND_PROJECTED,
+      movedActualNetCents: BRAND_ACTUAL,
     });
-    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
+    expect(rows[0].transferredAt).toBeInstanceOf(Date);
+    expect(movedSpy).toHaveBeenCalledWith({ sourceOrgId, sourceBrandId, targetOrgId, targetBrandId });
+    // runs-service's own move is driven to completion BEFORE its ledger is read.
+    expect(runsTransferSpy).toHaveBeenCalledWith({ sourceOrgId, sourceBrandId, targetOrgId, targetBrandId });
+    expect(runsTransferSpy.mock.invocationCallOrder[0]).toBeLessThan(movedSpy.mock.invocationCallOrder[0]);
   });
 
-  it("skips customers with non-matching brand_id", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_other", { org_id: sourceOrgId, brand_id: otherBrandId }),
-      ]
-    );
+  it("moves the brand's budget, its history and its per-campaign ceilings, and only that brand's", async () => {
+    await seedBrandRows(sourceOrgId, sourceBrandId);
+    await seedBrandRows(sourceOrgId, otherBrandId);
 
     const res = await request(app)
       .post("/internal/transfer-brand")
-      .set(internalHeaders)
+      .set(headers)
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
     expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toContainEqual({
-      tableName: "stripe_service_customers",
-      count: 0,
-    });
-    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
-  });
-
-  it("skips customers with no brand_id metadata", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [makeCustomer("cus_no_brand", { org_id: sourceOrgId })]
-    );
-
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(200);
-    expect(res.body.updatedTables).toContainEqual({
-      tableName: "stripe_service_customers",
-      count: 0,
-    });
-    expect(ssMocks.setCustomerMetadata).not.toHaveBeenCalled();
-  });
-
-  it("trims whitespace inside CSV brand_id", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_ws", { org_id: sourceOrgId, brand_id: ` ${sourceBrandId} ` }),
-      ]
-    );
-
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(200);
-    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledTimes(1);
-  });
-
-  it("considers EVERY customer the org holds, not just the newest", async () => {
-    // 4 prod orgs hold more than one Stripe customer. The read returns the whole
-    // set in one call, so a transfer can never strand the ones it never listed.
-    ssMocks.listAllCustomersForOrg.mockResolvedValue([
-      makeCustomer("cus_first", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      makeCustomer("cus_second", { org_id: sourceOrgId, brand_id: sourceBrandId }),
+    expect(res.body.updatedTables).toEqual([
+      { tableName: "brand_daily_budgets", count: 1 },
+      { tableName: "brand_daily_budget_changes", count: 2 },
+      { tableName: "campaign_daily_budgets", count: 2 },
+      { tableName: "brand_transfers", count: 1 },
     ]);
 
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
+    const budgets = await db.select().from(brandDailyBudgets);
+    expect(budgets.filter((b) => b.brandId === sourceBrandId).map((b) => b.orgId)).toEqual([targetOrgId]);
+    expect(budgets.filter((b) => b.brandId === otherBrandId).map((b) => b.orgId)).toEqual([sourceOrgId]);
+    const changes = await db.select().from(brandDailyBudgetChanges).where(eq(brandDailyBudgetChanges.brandId, sourceBrandId));
+    expect(changes.map((c) => c.orgId)).toEqual([targetOrgId, targetOrgId]);
+    const ceilings = await db.select().from(campaignDailyBudgets).where(eq(campaignDailyBudgets.brandId, sourceBrandId));
+    expect(ceilings.map((c) => c.orgId)).toEqual([targetOrgId, targetOrgId]);
+    // Nothing of the brand is left under the source org.
+    const leftover = await db.select().from(campaignDailyBudgets).where(eq(campaignDailyBudgets.orgId, sourceOrgId));
+    expect(leftover.every((c) => c.brandId === otherBrandId)).toBe(true);
+  });
 
+  it("rewrites the brand id when targetBrandId is given", async () => {
+    await seedBrandRows(sourceOrgId, sourceBrandId);
+    await request(app)
+      .post("/internal/transfer-brand")
+      .set(headers)
+      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
+
+    const [budget] = await db.select().from(brandDailyBudgets);
+    expect(budget).toMatchObject({ orgId: targetOrgId, brandId: targetBrandId });
+    const ceilings = await db.select().from(campaignDailyBudgets);
+    expect(ceilings.every((c) => c.orgId === targetOrgId && c.brandId === targetBrandId)).toBe(true);
+    const changes = await db.select().from(brandDailyBudgetChanges);
+    expect(changes.every((c) => c.orgId === targetOrgId && c.brandId === targetBrandId)).toBe(true);
+  });
+
+  it("re-running is a no-op: nothing moves again, the ledger and both balances stay put", async () => {
+    await seedBrandRows(sourceOrgId, sourceBrandId);
+    runsMovesTheBrand();
+    const body = { sourceBrandId, sourceOrgId, targetOrgId };
+    await request(app).post("/internal/transfer-brand").set(headers).send(body);
+    const sourceAfterFirst = await balances(sourceOrgId);
+    const targetAfterFirst = await balances(targetOrgId);
+
+    const res = await request(app).post("/internal/transfer-brand").set(headers).send(body);
     expect(res.status).toBe(200);
-    expect(ssMocks.listAllCustomersForOrg).toHaveBeenCalledTimes(1);
-    expect(ssMocks.setCustomerMetadata).toHaveBeenCalledTimes(2);
-    expect(res.body.updatedTables).toContainEqual({
-      tableName: "stripe_service_customers",
-      count: 2,
-    });
+    expect(res.body.updatedTables).toEqual([
+      { tableName: "brand_daily_budgets", count: 0 },
+      { tableName: "brand_daily_budget_changes", count: 0 },
+      { tableName: "campaign_daily_budgets", count: 0 },
+      { tableName: "brand_transfers", count: 0 },
+    ]);
+    expect(await db.select().from(brandTransfers)).toHaveLength(1);
+    expect(await balances(sourceOrgId)).toEqual(sourceAfterFirst);
+    expect(await balances(targetOrgId)).toEqual(targetAfterFirst);
   });
 
-  it("skips co-branding local_promos rows", async () => {
-    await insertPromoGrantWithBrand([sourceBrandId, otherBrandId]);
+  it("a re-run that moved MORE (spend made on the source in between) raises the recorded figure", async () => {
+    runsMovesTheBrand();
+    const body = { sourceBrandId, sourceOrgId, targetOrgId };
+    await request(app).post("/internal/transfer-brand").set(headers).send(body);
+
+    runsMoved = { usageNetCents: "560000.0000000000", actualNetCents: "553000.0000000000" };
+    const res = await request(app).post("/internal/transfer-brand").set(headers).send(body);
+    expect(res.body.updatedTables).toContainEqual({ tableName: "brand_transfers", count: 1 });
+    const [row] = await db.select().from(brandTransfers);
+    expect(row.movedUsageNetCents).toBe("560000.0000000000");
+    expect(row.movedActualNetCents).toBe("553000.0000000000");
+  });
+
+  it("moves NO money: credits and Stripe customers stay with the org that holds them", async () => {
+    await insertTestPromoCode({ code: "brand-gift", amountCents: 2500 });
+    const [code] = await db.select().from(localPromoCodes).where(eq(localPromoCodes.code, "brand-gift"));
+    await db.insert(localPromos).values({
+      orgId: sourceOrgId,
+      userId,
+      amountCents: "2500",
+      promoCodeId: code.id,
+      description: "brand-scoped gift",
+      brandIds: [sourceBrandId],
+    });
 
     const res = await request(app)
       .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
+      .set(headers)
+      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
     expect(res.status).toBe(200);
-    expect(res.body.updatedTables[0]).toEqual({ tableName: "local_promos", count: 0 });
+
+    const promos = await db.select().from(localPromos);
+    expect(promos).toHaveLength(1);
+    expect(promos[0]).toMatchObject({ orgId: sourceOrgId, brandIds: [sourceBrandId] });
+    expect(res.body.updatedTables.map((t: { tableName: string }) => t.tableName)).not.toContain("local_promos");
+    expect(res.body.updatedTables.map((t: { tableName: string }) => t.tableName)).not.toContain("stripe_service_customers");
   });
 
-  it("returns 502 when stripe-service list fails", async () => {
-    ssMocks.listAllCustomersForOrg.mockRejectedValue(new Error("SS down"));
-    await insertPromoGrantWithBrand([sourceBrandId]);
+  it("502 and nothing written when runs-service cannot say what it moved", async () => {
+    await seedBrandRows(sourceOrgId, sourceBrandId);
+    movedSpy.mockRejectedValue(new Error("runs down"));
 
     const res = await request(app)
       .post("/internal/transfer-brand")
-      .set(internalHeaders)
+      .set(headers)
       .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
     expect(res.status).toBe(502);
+    expect(await db.select().from(brandTransfers)).toHaveLength(0);
+    const [budget] = await db.select().from(brandDailyBudgets);
+    expect(budget.orgId).toBe(sourceOrgId);
   });
 
-  it("returns 502 with partial counts when an update fails mid-loop", async () => {
-    ssMocks.listAllCustomersForOrg.mockResolvedValue(
-      [
-        makeCustomer("cus_ok", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-        makeCustomer("cus_fail", { org_id: sourceOrgId, brand_id: sourceBrandId }),
-      ]
-    );
-    ssMocks.setCustomerMetadata.mockImplementation((id: string) => {
-      if (id === "cus_fail") return Promise.reject(new Error("SS update failed"));
-      return Promise.resolve(makeCustomer(id, {}));
+  it("409 and nothing moved when the target already holds the brand's budget", async () => {
+    await seedBrandRows(sourceOrgId, sourceBrandId);
+    await db.insert(brandDailyBudgets).values({ orgId: targetOrgId, brandId: targetBrandId, dailyBudgetCents: "100" });
+
+    const res = await request(app)
+      .post("/internal/transfer-brand")
+      .set(headers)
+      .send({ sourceBrandId, sourceOrgId, targetOrgId, targetBrandId });
+    expect(res.status).toBe(409);
+    // Refused before runs-service was asked to move any cost row.
+    expect(runsTransferSpy).not.toHaveBeenCalled();
+    expect(await db.select().from(brandTransfers)).toHaveLength(0);
+    const ceilings = await db.select().from(campaignDailyBudgets);
+    expect(ceilings.every((c) => c.orgId === sourceOrgId)).toBe(true);
+  });
+
+  it("400 on a malformed body and on source == target", async () => {
+    const bad = await request(app).post("/internal/transfer-brand").set(headers).send({ sourceBrandId });
+    expect(bad.status).toBe(400);
+    const same = await request(app)
+      .post("/internal/transfer-brand")
+      .set(headers)
+      .send({ sourceBrandId, sourceOrgId, targetOrgId: sourceOrgId });
+    expect(same.status).toBe(409);
+  });
+
+  it("affordability gates a moved campaign on the org campaign-service names, not the stored one", async () => {
+    const campaignId = "00000000-0000-0000-0000-0000000c0001";
+    await db.insert(campaignAuthorizeCosts).values({
+      campaignId,
+      orgId: sourceOrgId,
+      lastAuthorizeRequiredCents: "50",
     });
+    // Source is funded, target holds nothing: the verdict must be the target's.
+    runsUsage[sourceOrgId] = { projected: "0", actual: "0" };
 
     const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
+      .get(`/internal/campaigns/${campaignId}/affordability`)
+      .set({ ...headers, "x-org-id": targetOrgId });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ affordable: false, balanceCents: "0.0000000000" });
 
-    expect(res.status).toBe(502);
-    expect(res.body.partial).toEqual({
-      stripe_service_customers_patched: 1,
-      total_targets: 2,
-    });
-  });
-
-  it("returns 400 for invalid body", async () => {
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set(internalHeaders)
-      .send({ sourceBrandId: "not-a-uuid" });
-
-    expect(res.status).toBe(400);
-  });
-
-  it("returns 401 without api key", async () => {
-    const res = await request(app)
-      .post("/internal/transfer-brand")
-      .set({ "Content-Type": "application/json" })
-      .send({ sourceBrandId, sourceOrgId, targetOrgId });
-
-    expect(res.status).toBe(401);
+    const stored = await request(app).get(`/internal/campaigns/${campaignId}/affordability`).set(headers);
+    expect(stored.body.affordable).toBe(true);
   });
 });
