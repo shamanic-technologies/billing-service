@@ -291,6 +291,22 @@ beforeAll(async () => {
   await sql`CREATE INDEX IF NOT EXISTS "idx_brand_transfers_source_org" ON "brand_transfers" ("source_org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_brand_transfers_target_org" ON "brand_transfers" ("target_org_id")`;
 
+  // staff_debits (staff takes credit off a balance, with a note — migration 0053).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "staff_debits" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "org_id" uuid NOT NULL,
+      "amount_cents" numeric(16, 10) NOT NULL,
+      "note" text NOT NULL,
+      "debited_by" text NOT NULL,
+      "idempotency_key" text NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "staff_debits_amount_positive" CHECK ("amount_cents" > 0),
+      CONSTRAINT "staff_debits_org_idempotency_key" UNIQUE ("org_id", "idempotency_key")
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_staff_debits_org" ON "staff_debits" ("org_id")`;
+
   // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045 + 0052).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.

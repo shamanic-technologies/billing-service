@@ -21,6 +21,12 @@
  *
  * Usage stays what it was on both sides, so `usage_cents`, `balance_cents` and
  * `actual_balance_cents` are unchanged to the cent on both orgs.
+ *
+ * Staff debits (lib/staff-debits.ts, migration 0053) ride the SAME choke point, for
+ * the same reason: a debit must lower both balances exactly like spend, and must
+ * not be a `local_promos` row. Both usage figures below therefore include the org's
+ * staff debits, and carry them separately as `staff_debits_cents` so a display can
+ * show the debit as its own line rather than as campaign usage.
  */
 
 import { eq, or, sql } from "drizzle-orm";
@@ -33,6 +39,7 @@ import {
   type RunsOrgActualUsageTotalResult,
   type RunsOrgUsageTotalResult,
 } from "./runs-client.js";
+import { sumStaffDebitsForOrg } from "./staff-debits.js";
 
 export interface TransferUsageAdjustment {
   /** Added to the org's net PROJECTED usage (actual + provisioned). */
@@ -69,32 +76,46 @@ function adjusted(runsCents: string, adjustmentCents: string): string {
   return cmpCents(adjustmentCents, "0") === 0 ? runsCents : addCents(runsCents, adjustmentCents);
 }
 
+/** Staff debits the org carries — already INCLUDED in `spent_cents`, not on top of it. */
+export interface StaffDebitsPart {
+  staff_debits_cents: string;
+}
+
 /**
  * The org's net projected usage (what the spendable balance subtracts), with any
- * brand transfer's history left on the org that paid for it.
+ * brand transfer's history left on the org that paid for it, plus its staff debits.
  */
 export async function fetchOrgUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
-): Promise<RunsOrgUsageTotalResult> {
-  const [runs, adj] = await Promise.all([
+): Promise<RunsOrgUsageTotalResult & StaffDebitsPart> {
+  const [runs, adj, debits] = await Promise.all([
     fetchRunsOrgUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
+    sumStaffDebitsForOrg(orgId),
   ]);
-  return { ...runs, spent_cents: adjusted(runs.spent_cents, adj.usageCents) };
+  return {
+    ...runs,
+    spent_cents: adjusted(adjusted(runs.spent_cents, adj.usageCents), debits),
+    staff_debits_cents: debits,
+  };
 }
 
 /**
  * The org's net actualized usage (what the displayed balance subtracts), with any
- * brand transfer's history left on the org that paid for it.
+ * brand transfer's history left on the org that paid for it, plus its staff debits.
  */
 export async function fetchOrgActualUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
-): Promise<RunsOrgActualUsageTotalResult> {
-  const [runs, adj] = await Promise.all([
+): Promise<RunsOrgActualUsageTotalResult & StaffDebitsPart> {
+  const [runs, adj, debits] = await Promise.all([
     fetchRunsOrgActualUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
+    sumStaffDebitsForOrg(orgId),
   ]);
-  return { spent_cents: adjusted(runs.spent_cents, adj.actualCents) };
+  return {
+    spent_cents: adjusted(adjusted(runs.spent_cents, adj.actualCents), debits),
+    staff_debits_cents: debits,
+  };
 }

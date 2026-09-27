@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   CreditGrantRequestSchema,
   AdminCreditGrantRequestSchema,
+  StaffDebitRequestSchema,
 } from "../schemas.js";
 import {
   grantCredit,
@@ -20,6 +21,12 @@ import {
 import { fetchOrgUsageTotal } from "../lib/transfer-usage.js";
 import { computeBalance } from "../lib/balance.js";
 import { PRODUCT_TASK_REWARD_CODE } from "../db/schema.js";
+import {
+  debitOrg,
+  listAllDebits,
+  listDebitsForOrg,
+  StaffDebitKeyConflictError,
+} from "../lib/staff-debits.js";
 
 const router = Router();
 
@@ -202,6 +209,85 @@ router.get("/v1/credits/grants", async (req, res) => {
 router.get("/internal/credits/grants", async (_req, res) => {
   const grants = await listAllGrants();
   res.json({ grants });
+});
+
+// POST /v1/credits/debit — staff debit: take credit OFF an org's balance, with a
+// mandatory note. The mirror of POST /v1/credits/grant (same auth: x-api-key +
+// x-org-id; x-email = the staff member, REQUIRED here so every debit names who
+// did it). Body: { amountCents, note, idempotencyKey }.
+//
+// The debit lands on the usage side of the balance (lib/staff-debits.ts), so it
+// lowers the spendable and displayed balance exactly like spend. Never charges a
+// card. Same key retried → no-op; same key, different amount → 409.
+//
+// Resp: { ok: true, debit, alreadyDebited, newBalanceCents }.
+router.post("/v1/credits/debit", async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string | undefined;
+  if (!orgId || !UUID_RE.test(orgId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: missing/invalid x-org-id="${orgId}"`);
+    res.status(400).json({ error: "x-org-id header is required and must be a valid UUID" });
+    return;
+  }
+  const debitedBy = (req.headers["x-email"] as string | undefined)?.trim();
+  if (!debitedBy) {
+    console.error(`[billing-400] ${req.method} ${req.path}: missing x-email`);
+    res.status(400).json({ error: "x-email header (the staff member) is required" });
+    return;
+  }
+
+  const parsed = StaffDebitRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0].message });
+    return;
+  }
+  const { amountCents, note, idempotencyKey } = parsed.data;
+
+  let result;
+  try {
+    result = await debitOrg({ orgId, amountCents, note, debitedBy, idempotencyKey });
+  } catch (err) {
+    if (err instanceof StaffDebitKeyConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+
+  let newBalanceCents: string;
+  try {
+    newBalanceCents = (await computeBalance(orgId)).balanceCents;
+  } catch (err) {
+    console.error("[billing-service] credits/debit compose balance failed:", err);
+    res.status(502).json({ error: "Debit recorded but failed to compose new balance" });
+    return;
+  }
+
+  console.log(
+    `[billing-service] staff debit: org=${orgId} amount=${amountCents} by=${debitedBy} key=${idempotencyKey} already=${result.alreadyDebited} balance=${newBalanceCents}`
+  );
+
+  res.json({
+    ok: true as const,
+    debit: result.debit,
+    alreadyDebited: result.alreadyDebited,
+    newBalanceCents,
+  });
+});
+
+// GET /v1/credits/debits — this org's staff debits, newest first.
+router.get("/v1/credits/debits", async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string | undefined;
+  if (!orgId || !UUID_RE.test(orgId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: missing/invalid x-org-id="${orgId}"`);
+    res.status(400).json({ error: "x-org-id header is required and must be a valid UUID" });
+    return;
+  }
+  res.json({ debits: await listDebitsForOrg(orgId) });
+});
+
+// GET /internal/credits/debits — every org's staff debits (platform oversight ledger).
+router.get("/internal/credits/debits", async (_req, res) => {
+  res.json({ debits: await listAllDebits() });
 });
 
 export default router;
