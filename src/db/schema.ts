@@ -100,6 +100,10 @@ export const billingAccounts = pgTable(
     freeCreditPaidTriggerCents: integer("free_credit_paid_trigger_cents")
       .notNull()
       .default(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS),
+    // How this org pays — the customer's explicit choice (migration 0050). Every
+    // existing row and every new account is 'postpaid' until someone chooses
+    // otherwise. See lib/payment-mode.
+    paymentMode: text("payment_mode").notNull().default("postpaid"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

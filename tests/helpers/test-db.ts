@@ -272,6 +272,7 @@ export async function insertTestAccount(data: {
   createdAt?: Date;
   freeCreditEntitlementCents?: number;
   freeCreditPaidTriggerCents?: number;
+  paymentMode?: "prepaid" | "postpaid";
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -287,6 +288,7 @@ export async function insertTestAccount(data: {
         data.freeCreditPaidTriggerCents ??
         GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
+      ...(data.paymentMode ? { paymentMode: data.paymentMode } : {}),
     })
     .returning();
   return account;

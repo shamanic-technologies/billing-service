@@ -37,6 +37,8 @@ export const BillingAccountSchema = z
   .object({
     id: z.string().uuid(),
     org_id: z.string().uuid(),
+    /** How this org pays (prepaid | postpaid). See PUT /v1/accounts/payment_mode. */
+    payment_mode: z.enum(["prepaid", "postpaid"]),
     /** Lifetime credits added: stripe-service paid topups + sum(local_promos). */
     credited_cents: CentsStringSchema,
     /**
@@ -928,11 +930,58 @@ export const PaymentStoppedPeriodsResponseSchema = z
   })
   .openapi("PaymentStoppedPeriodsResponse");
 
+// --- Payment mode (prepaid / postpaid) ---
+
+export const PaymentModeSchema = z.enum(["prepaid", "postpaid"]).openapi({
+  description:
+    "How this org pays — the customer's explicit choice. postpaid (default for every org): a " +
+    "credit line the balance may run below zero into, a card required, and no chargeable card is " +
+    "charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never " +
+    "charge_blocked; spend stops at zero through the affordability check.",
+});
+
+export const SetPaymentModeRequestSchema = z
+  .object({ payment_mode: PaymentModeSchema })
+  .openapi("SetPaymentModeRequest");
+
+export const PaymentModeResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    payment_mode: PaymentModeSchema,
+  })
+  .openapi("PaymentModeResponse");
+
+export const SetPaymentModeResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    payment_mode: PaymentModeSchema,
+    /** Cents collected by this switch to settle what was owed ("0" when nothing). */
+    settled_cents: z.string(),
+    /** Whether auto top-up is configured on after the switch (ON by default when becoming prepaid). */
+    auto_topup_enabled: z.boolean(),
+  })
+  .openapi("SetPaymentModeResponse");
+
+export const PaymentModeRefusalSchema = z
+  .object({
+    error: z.string(),
+    code: z.enum([
+      "outstanding_balance_no_card",
+      "outstanding_balance_charge_declined",
+      "outstanding_balance_below_minimum_charge",
+    ]),
+    /** What the org owes, positive cents. */
+    owed_cents: z.string(),
+  })
+  .openapi("PaymentModeRefusal");
+
 // --- Payment outlook (when will this org next be charged) ---
 
 export const PaymentOutlookResponseSchema = z
   .object({
     orgId: z.string().uuid(),
+    /** How this org pays. A prepaid org is never charge_blocked. */
+    paymentMode: PaymentModeSchema,
     /**
      * What billing expects next, money-wise.
      *
@@ -2175,6 +2224,97 @@ registry.registerPath({
       description: "Read failed",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/payment_mode",
+  summary: "Read this org's payment mode (prepaid | postpaid)",
+  request: {
+    headers: protectedHeaders,
+  },
+  responses: {
+    200: {
+      description: "Current payment mode",
+      content: { "application/json": { schema: PaymentModeResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/accounts/payment_mode",
+  summary: "Choose how this org pays (prepaid | postpaid)",
+  description:
+    "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). " +
+    "POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; " +
+    "if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and " +
+    "409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). " +
+    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: SetPaymentModeRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "Payment mode after the switch",
+      content: { "application/json": { schema: SetPaymentModeResponseSchema } },
+    },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: {
+      description: "Switch to prepaid refused: the outstanding balance could not be settled",
+      content: { "application/json": { schema: PaymentModeRefusalSchema } },
+    },
+    502: { description: "Could not read the balance or reach the card acquirer", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/payment-mode",
+  summary: "Staff/service read of an org's payment mode",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: {
+      description: "Current payment mode",
+      content: { "application/json": { schema: PaymentModeResponseSchema } },
+    },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No billing account for this org", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/accounts/by-org/{orgId}/payment-mode",
+  summary: "Staff/service: set an org's payment mode",
+  description:
+    "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). " +
+    "POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; " +
+    "if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and " +
+    "409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). " +
+    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+    body: { content: { "application/json": { schema: SetPaymentModeRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "Payment mode after the switch",
+      content: { "application/json": { schema: SetPaymentModeResponseSchema } },
+    },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: {
+      description: "Switch to prepaid refused: the outstanding balance could not be settled",
+      content: { "application/json": { schema: PaymentModeRefusalSchema } },
+    },
+    502: { description: "Could not read the balance or reach the card acquirer", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No billing account for this org", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

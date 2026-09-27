@@ -9,7 +9,8 @@ import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { applyUsageDiscount, getUsageDiscountPct } from "../lib/usage-discount.js";
 import { computeBalance } from "../lib/balance.js";
-import { tierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
+import { reloadTierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
+import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { reloadOffSession } from "../lib/reload.js";
@@ -123,6 +124,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       hasCardPm: snapshot.hasCardPm,
       autoReloadSupported: snapshot.autoReloadSupported,
       paidTopupsCents: snapshot.paidTopupsCents,
+      paymentMode: asPaymentMode(account.paymentMode),
     });
 
     // Sufficient (no reload) when running this cost keeps the balance at/above
@@ -393,7 +395,8 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     // derived tier (a function of cumulative paid topups), NOT the stored daily
     // columns. The floor is NEGATIVE, so a reload only fires once the NET balance
     // crosses the credit line — not every day.
-    const tier = tierFor(snapshot.paidTopupsCents);
+    // A PREPAID org reloads at a zero floor (no credit line) — see lib/payment-mode.
+    const tier = reloadTierFor(snapshot.paidTopupsCents, asPaymentMode(account.paymentMode));
     const thresholdCents = String(tier.thresholdCents);
 
     if (gteCents(snapshot.balanceCents, thresholdCents)) {

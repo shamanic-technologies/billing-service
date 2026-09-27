@@ -351,6 +351,13 @@
       "when": 1792404000000,
       "tag": "0049_welcome_once_per_person",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1792490400000,
+      "tag": "0050_payment_mode",
+      "breakpoints": true
     }
   ]
 }

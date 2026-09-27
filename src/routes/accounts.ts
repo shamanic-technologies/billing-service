@@ -6,7 +6,8 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
 import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
-import { tierFor } from "../lib/topup-tier.js";
+import { reloadTierFor } from "../lib/topup-tier.js";
+import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
@@ -165,10 +166,13 @@ function buildAccountResponse(
   // both fields are null (no top-up). See lib/topup-tier.
   const enabled =
     account.topupAmountCents != null && account.topupThresholdCents != null;
-  const tier = enabled ? tierFor(funds.paidTopupsCents) : null;
+  const paymentMode = asPaymentMode(account.paymentMode);
+  const tier = enabled ? reloadTierFor(funds.paidTopupsCents, paymentMode) : null;
   return {
     id: account.id,
     org_id: account.orgId,
+    // How this org pays — the customer's explicit choice. See lib/payment-mode.
+    payment_mode: paymentMode,
     credited_cents: funds.creditedCents,
     // Decomposition of credited_cents into the two things it is made of, so the
     // dashboard can render "money you paid" vs "credits we gave you" without doing
