@@ -11,6 +11,7 @@
 
 import { Decimal } from "decimal.js";
 import { fetchWithRetry } from "./fetch-retry.js";
+import { PLATFORM_USER_ID } from "../db/schema.js";
 
 export type IdentityHeaders = Record<string, string>;
 
@@ -945,6 +946,30 @@ export async function removeSavedPaymentMethods(
   );
 }
 
+const CARD_SETUP_PERSON_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The `x-user-id` to name on a card-setup call: the real person setting the
+ * card up, or nothing.
+ *
+ * stripe-service (v0.54.0) makes the person who saves a card the Stripe
+ * customer's contact email, so receipts reach the client and not whoever
+ * created the org for them (staff, an agency). That only works if the person is
+ * NAMED — and naming the platform sentinel would hand the customer's email to
+ * nobody. So the sentinel, an empty value and anything that is not a user id
+ * are dropped, and the call then says nothing about who: stripe-service leaves
+ * the customer untouched. Never invented.
+ */
+export function cardSetupPersonHeaders(
+  userId: string | undefined
+): Record<string, string> {
+  if (typeof userId !== "string") return {};
+  if (!CARD_SETUP_PERSON_RE.test(userId)) return {};
+  if (userId === PLATFORM_USER_ID) return {};
+  return { "x-user-id": userId };
+}
+
 /**
  * How this org's customer adds a card, as stripe-service describes it.
  *
@@ -953,18 +978,22 @@ export async function removeSavedPaymentMethods(
  * through a browser widget the page mounts itself. stripe-service names the
  * mechanism and hands over what it needs; this repo passes that through without
  * interpreting it. Nothing here names an acquirer.
+ *
+ * `settingUpUserId` is the person doing it, forwarded as `x-user-id` only when
+ * it is a real user (see `cardSetupPersonHeaders`).
  */
 export async function getCardSetup(
   orgId: string,
   returnUrl: string | undefined,
   amount?: number,
   currency?: string,
-  uiMode?: "hosted" | "embedded"
+  uiMode?: "hosted" | "embedded",
+  settingUpUserId?: string
 ): Promise<Record<string, unknown>> {
   return call<Record<string, unknown>>(
     "POST",
     `/internal/card_setup/by-org/${encodeURIComponent(orgId)}`,
-    {},
+    cardSetupPersonHeaders(settingUpUserId),
     {
       ...(returnUrl ? { return_url: returnUrl } : {}),
       ...(amount ? { amount, currency } : {}),
