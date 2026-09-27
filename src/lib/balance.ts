@@ -8,7 +8,7 @@
 
 import { addCents, subCents, ZERO_CENTS } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
-import { fetchRunsOrgUsageTotal } from "./runs-client.js";
+import { fetchOrgUsageTotal } from "./transfer-usage.js";
 import {
   fetchOrgCustomerOrNull,
   sumSucceededTopupsForOrg,
@@ -120,7 +120,7 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   const hasStripeCustomer = customer !== null;
   const [credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
     composeCreditedCents(orgId, { hasStripeCustomer }),
-    fetchRunsOrgUsageTotal(orgId, {}),
+    fetchOrgUsageTotal(orgId, {}),
     hasStripeCustomer ? hasChargeablePmForOrg(orgId) : Promise.resolve(false),
     hasStripeCustomer ? getOrgCardCountryByOrg(orgId) : Promise.resolve(null),
   ]);

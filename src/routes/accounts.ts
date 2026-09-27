@@ -8,7 +8,7 @@ import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js"
 import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
 import { reloadTierFor } from "../lib/topup-tier.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
-import { fetchRunsOrgActualUsageTotal, fetchRunsOrgUsageTotal } from "../lib/runs-client.js";
+import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "../lib/transfer-usage.js";
 import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
@@ -101,8 +101,8 @@ async function composeAccountFunds(
     await Promise.all([
       stripeP,
       sumLocalPromoCreditsForOrg(orgId),
-      fetchRunsOrgUsageTotal(orgId, identity),
-      fetchRunsOrgActualUsageTotal(orgId, identity),
+      fetchOrgUsageTotal(orgId, identity),
+      fetchOrgActualUsageTotal(orgId, identity),
       getUsageDiscountPct(orgId),
     ]);
   // Free-credit promises (welcome + referral): paid topups are the trigger for all
