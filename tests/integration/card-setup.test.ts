@@ -81,7 +81,8 @@ describe("card setup + saved-card confirmation", () => {
       "https://example.com/return",
       undefined,
       undefined,
-      undefined
+      undefined,
+      "00000000-0000-0000-0000-000000000099"
     );
   });
 
@@ -101,7 +102,8 @@ describe("card setup + saved-card confirmation", () => {
       "https://example.com/return",
       undefined,
       "USD",
-      undefined
+      undefined,
+      "00000000-0000-0000-0000-000000000099"
     );
   });
 
@@ -144,7 +146,8 @@ describe("card setup + saved-card confirmation", () => {
         undefined,
         undefined,
         undefined,
-        "embedded"
+        "embedded",
+        "00000000-0000-0000-0000-000000000099"
       );
     }
   });

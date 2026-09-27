@@ -49,7 +49,8 @@ describe("POST /v1/portal-sessions", () => {
       "https://example.com/return",
       undefined,
       undefined,
-      undefined
+      undefined,
+      "00000000-0000-0000-0000-000000000099"
     );
   });
 
@@ -102,7 +103,8 @@ describe("POST /v1/portal-sessions", () => {
       "https://example.com/return",
       50000,
       "USD",
-      undefined
+      undefined,
+      "00000000-0000-0000-0000-000000000099"
     );
   });
 

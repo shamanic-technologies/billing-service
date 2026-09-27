@@ -65,7 +65,14 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
       ...forwardWorkflowHeaders(getWorkflowHeaders(req)),
     });
 
-    const setup = await getCardSetup(orgId, return_url, amount, currency, ui_mode);
+    const setup = await getCardSetup(
+      orgId,
+      return_url,
+      amount,
+      currency,
+      ui_mode,
+      req.headers["x-user-id"] as string
+    );
     res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
