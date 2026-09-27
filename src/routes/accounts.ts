@@ -312,7 +312,7 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const { return_url, currency } = parsed.data;
+    const { return_url, currency, ui_mode } = parsed.data;
 
     const [account] = await db
       .select()
@@ -340,7 +340,7 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
       ...forwardWorkflowHeaders(getWorkflowHeaders(req)),
     });
 
-    const setup = await getCardSetup(orgId, return_url, undefined, currency);
+    const setup = await getCardSetup(orgId, return_url, undefined, currency, ui_mode);
     res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

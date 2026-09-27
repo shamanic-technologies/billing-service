@@ -192,21 +192,51 @@ export const CheckoutResponseSchema = z
 
 // --- Portal Sessions ---
 
+/**
+ * How the card form is shown. `hosted` (the default, every existing caller) is the
+ * acquirer's own page reached by redirect; `embedded` asks for a form the calling
+ * page mounts in place, charging nothing — for a surface that must not lose its
+ * state to a redirect (the New organization modal). An acquirer whose only form is
+ * already in-page answers the same way for both. `return_url` is only needed when
+ * something redirects, so it is optional for `embedded`.
+ */
+const CardUiModeSchema = z.enum(["hosted", "embedded"]).optional().openapi({
+  description:
+    "`hosted` (default): the acquirer's page, reached by redirect. `embedded`: a form the page mounts in place, charging nothing (Stripe answers `embedded_checkout` + `client_secret`). return_url is optional only for `embedded`.",
+});
+
+const returnUrlUnlessEmbedded = (
+  body: { return_url?: string; ui_mode?: "hosted" | "embedded" },
+  ctx: z.RefinementCtx
+) => {
+  if (body.ui_mode !== "embedded" && !body.return_url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["return_url"],
+      message: "return_url is required unless ui_mode is \"embedded\"",
+    });
+  }
+};
+
 export const CreatePortalSessionRequestSchema = z
   .object({
-    return_url: z.string().url(),
+    return_url: z.string().url().optional(),
     amount: z.number().int().positive().optional(),
     currency: z.string().min(3).optional(),
+    ui_mode: CardUiModeSchema,
   })
+  .superRefine(returnUrlUnlessEmbedded)
   .openapi("CreatePortalSessionRequest");
 
 // --- Card setup (acquirer-neutral descriptor, stripe-service v0.48.0) ---
 
 export const CardSetupRequestSchema = z
   .object({
-    return_url: z.string().url(),
+    return_url: z.string().url().optional(),
     currency: z.string().min(3).optional(),
+    ui_mode: CardUiModeSchema,
   })
+  .superRefine(returnUrlUnlessEmbedded)
   .openapi("CardSetupRequest");
 
 /**
@@ -251,8 +281,14 @@ const SettleOutcomeFields = {
 export const CardSetupResponseSchema = z
   .object({
     object: z.literal("card_setup"),
-    mode: z.enum(["hosted_redirect", "embedded_widget"]),
+    mode: z.enum(["hosted_redirect", "embedded_widget", "embedded_checkout"]),
     url: z.string().optional(),
+    /**
+     * `embedded_checkout` only: the secret the page hands to the acquirer's own
+     * embedded form (Stripe `initEmbeddedCheckout({ clientSecret })`). Scoped to
+     * this one no-charge setup session; not a merchant key.
+     */
+    client_secret: z.string().optional(),
     script_url: z.string().optional(),
     environment: z.enum(["prod", "sandbox"]).optional(),
     token: z.string().optional(),

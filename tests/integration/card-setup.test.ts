@@ -80,6 +80,7 @@ describe("card setup + saved-card confirmation", () => {
       orgId,
       "https://example.com/return",
       undefined,
+      undefined,
       undefined
     );
   });
@@ -99,7 +100,8 @@ describe("card setup + saved-card confirmation", () => {
       orgId,
       "https://example.com/return",
       undefined,
-      "USD"
+      "USD",
+      undefined
     );
   });
 
@@ -117,6 +119,50 @@ describe("card setup + saved-card confirmation", () => {
       .set(getAuthHeaders(other))
       .send({ return_url: "https://example.com/return" });
     expect(missing.status).toBe(404);
+  });
+
+  it("embedded: relays ui_mode, needs no return_url, passes client_secret through (both routes)", async () => {
+    await insertTestAccount({ orgId });
+    ssMocks.getCardSetup.mockResolvedValue({
+      object: "card_setup",
+      mode: "embedded_checkout",
+      client_secret: "cs_test_secret_abc",
+    });
+
+    for (const path of ["/v1/accounts/card_setup", "/v1/portal-sessions"]) {
+      ssMocks.getCardSetup.mockClear();
+      const res = await request(app)
+        .post(path)
+        .set(getAuthHeaders(orgId))
+        .send({ ui_mode: "embedded" });
+
+      expect(res.status).toBe(200);
+      expect(res.body.mode).toBe("embedded_checkout");
+      expect(res.body.client_secret).toBe("cs_test_secret_abc");
+      expect(ssMocks.getCardSetup).toHaveBeenCalledWith(
+        orgId,
+        undefined,
+        undefined,
+        undefined,
+        "embedded"
+      );
+    }
+  });
+
+  it("hosted (explicit or default) still requires a return_url", async () => {
+    await insertTestAccount({ orgId });
+    for (const body of [{ ui_mode: "hosted" }, {}]) {
+      const res = await request(app)
+        .post("/v1/accounts/card_setup")
+        .set(getAuthHeaders(orgId))
+        .send(body);
+      expect(res.status).toBe(400);
+    }
+    const bogus = await request(app)
+      .post("/v1/accounts/card_setup")
+      .set(getAuthHeaders(orgId))
+      .send({ ui_mode: "popup", return_url: "https://example.com/return" });
+    expect(bogus.status).toBe(400);
   });
 
   it("502s when the acquirer could not be asked how to add a card", async () => {

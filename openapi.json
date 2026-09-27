@@ -267,10 +267,14 @@
             "type": "string",
             "enum": [
               "hosted_redirect",
-              "embedded_widget"
+              "embedded_widget",
+              "embedded_checkout"
             ]
           },
           "url": {
+            "type": "string"
+          },
+          "client_secret": {
             "type": "string"
           },
           "script_url": {
@@ -337,11 +341,16 @@
           "currency": {
             "type": "string",
             "minLength": 3
+          },
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ],
+            "description": "`hosted` (default): the acquirer's page, reached by redirect. `embedded`: a form the page mounts in place, charging nothing (Stripe answers `embedded_checkout` + `client_secret`). return_url is optional only for `embedded`."
           }
-        },
-        "required": [
-          "return_url"
-        ]
+        }
       },
       "CardSetupRequest": {
         "type": "object",
@@ -353,11 +362,16 @@
           "currency": {
             "type": "string",
             "minLength": 3
+          },
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ],
+            "description": "`hosted` (default): the acquirer's page, reached by redirect. `embedded`: a form the page mounts in place, charging nothing (Stripe answers `embedded_checkout` + `client_secret`). return_url is optional only for `embedded`."
           }
-        },
-        "required": [
-          "return_url"
-        ]
+        }
       },
       "SavedPaymentMethodResponse": {
         "type": "object",
