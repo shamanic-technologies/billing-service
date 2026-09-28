@@ -177,6 +177,16 @@ export const CreateCheckoutRequestSchema = z
      * loud with 400 when absent). Omitted for hosted setup-mode (no charge).
      */
     topup_amount_cents: z.number().int().positive().optional(),
+    /**
+     * ONBOARDING checkout only. true → topup_amount_cents is the FULL daily budget and
+     * billing deducts the welcome gift the org holds as a real discount (the page shows
+     * the budget, the gift as a discount line, and the total). Absent/false → the
+     * checkout charges topup_amount_cents exactly, no discount (unchanged behaviour).
+     * Payment mode only (400 with mode='setup'). 409 when the org has already paid
+     * (`welcome_discount_not_first_payment`) or the gift covers the whole budget
+     * (`welcome_gift_covers_budget` → open a setup-mode checkout instead).
+     */
+    apply_welcome_gift: z.boolean().optional(),
   })
   .refine(
     (data) => data.ui_mode === "embedded" || (!!data.success_url && !!data.cancel_url),
@@ -186,6 +196,15 @@ export const CreateCheckoutRequestSchema = z
     }
   )
   .openapi("CreateCheckoutRequest");
+
+export const WelcomeDiscountRefusalSchema = z
+  .object({
+    error: z.string(),
+    code: z.enum(["welcome_discount_not_first_payment", "welcome_gift_covers_budget"]),
+    /** The welcome gift this org holds, in cents. */
+    welcome_gift_cents: z.number().int(),
+  })
+  .openapi("WelcomeDiscountRefusal");
 
 export const DeclareAcquirerRequestSchema = z
   .object({
@@ -219,6 +238,10 @@ export const CheckoutResponseSchema = z
     /** Present for EMBEDDED checkout (mounted in the in-app modal iframe); absent for hosted. */
     client_secret: z.string().optional(),
     session_id: z.string(),
+    /** Only when the request set apply_welcome_gift: what came off the budget (0 = this org holds no welcome gift). */
+    welcome_discount_cents: z.number().int().optional(),
+    /** Only when the request set apply_welcome_gift: what the buyer pays (budget − welcome_discount_cents). */
+    amount_due_cents: z.number().int().optional(),
     /**
      * EMBEDDED only, and only when the org's acquirer takes the payment through a
      * widget the page mounts itself: `"embedded_widget"`, same vocabulary as
@@ -1734,8 +1757,9 @@ registry.registerPath({
     "mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. " +
     "EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). " +
     "Credit + first-load match land via the existing checkout.session.completed webhook in all modes. " +
-    "FREE CREDITS: payment-mode checkouts carry the '$25 in free credits' offer. On an org's FIRST-EVER payment of at least $50 the whole $25 is advanced as a visible pre-applied Stripe discount (buyer pays $50 minus $25, and the credit that lands is still the full $50). Otherwise the page shows a notice that the remainder arrives once cumulative payments reach $25. " +
-    "User-entered promotion codes are NOT offered (allow_promotion_codes is never set) — they are mutually exclusive with the pre-applied discount.",
+    "WELCOME GIFT (onboarding): send the FULL daily budget as topup_amount_cents with apply_welcome_gift=true and billing takes the welcome gift the org holds off it as a standard discount line (e.g. $68 budget, -$30 gift, $38 due). The credit that lands is what is actually paid; the gift was granted at signup, so spendable = budget. Without apply_welcome_gift the charge is exactly topup_amount_cents and carries no discount. 409 `welcome_discount_not_first_payment` when the org has already paid; 409 `welcome_gift_covers_budget` when budget <= gift (use mode='setup'); 502 `welcome_discount_not_applied` when the acquirer did not charge exactly budget - gift. " +
+    "MATCH-cohort orgs whose free credit is not yet fully granted see a notice that the rest is coming. " +
+    "User-entered promotion codes are NOT offered (allow_promotion_codes is never set).",
   request: {
     headers: protectedHeaders,
     body: {
@@ -1749,8 +1773,12 @@ registry.registerPath({
       description: "Checkout session URL",
       content: { "application/json": { schema: CheckoutResponseSchema } },
     },
+    409: {
+      description: "apply_welcome_gift refused: `welcome_discount_not_first_payment` or `welcome_gift_covers_budget` (body carries `code` + `welcome_gift_cents`)",
+      content: { "application/json": { schema: WelcomeDiscountRefusalSchema } },
+    },
     502: {
-      description: "stripe-service unavailable",
+      description: "stripe-service unavailable, or `welcome_discount_not_applied`",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },

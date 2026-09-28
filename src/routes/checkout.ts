@@ -10,6 +10,11 @@ import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js"
 import { decideCheckoutWelcomeNotice } from "../lib/welcome-completion.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { traceEvent } from "../lib/trace-event.js";
+import {
+  decideOnboardingWelcomeDiscount,
+  WelcomeDiscountRefusedError,
+  type OnboardingWelcomeDiscount,
+} from "../lib/onboarding-welcome-discount.js";
 
 const CHECKOUT_PRODUCT_NAME = "Distribute credit top-up";
 const CHECKOUT_CURRENCY = "usd";
@@ -34,6 +39,14 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     // Embedded is payment-only (always charges topup_amount_cents); hosted "setup" is
     // a no-charge card capture. Embedded therefore never takes the setup branch.
     const isSetup = !isEmbedded && parsed.data.mode === "setup";
+    const applyWelcomeGift = parsed.data.apply_welcome_gift === true;
+
+    // The welcome gift is a PAYMENT-mode deduction. Asking for it on a no-charge
+    // card capture is a caller bug, not something to ignore.
+    if (applyWelcomeGift && isSetup) {
+      res.status(400).json({ error: "apply_welcome_gift applies to payment-mode checkout only" });
+      return;
+    }
 
     // Payment-mode (absent mode or "payment") AND embedded mode require an explicit
     // amount. Fail loud rather than defaulting — a charge with no amount is malformed.
@@ -54,6 +67,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     };
 
     let session;
+    let welcomeDiscount: OnboardingWelcomeDiscount | null = null;
     try {
       // A new org has a billing row but no Stripe customer yet: create it here,
       // idempotently — unless the org pays through another acquirer, which then
@@ -87,6 +101,16 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         const paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
         await settleFreeCreditPromises(orgId, paidTopupsCents);
         const welcomeNotice = await decideCheckoutWelcomeNotice(orgId);
+        // Opt-in only: the caller hands billing the FULL budget and the deduction
+        // with it. Without the flag nothing below changes (see
+        // lib/onboarding-welcome-discount).
+        if (applyWelcomeGift) {
+          welcomeDiscount = await decideOnboardingWelcomeDiscount({
+            orgId,
+            budgetCents: topup_amount_cents!,
+            paidTopupsCents,
+          });
+        }
 
         // payment mode (hosted or embedded) — topup_amount_cents is guaranteed present
         // by the 400 guard above (non-setup + undefined already returned). The `!`
@@ -115,6 +139,9 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
           // PaymentIntents and are NOT invoiced by this — separate future work.
           invoice_creation: { enabled: true },
         };
+        if (welcomeDiscount?.couponId) {
+          body.discounts = [{ coupon: welcomeDiscount.couponId }];
+        }
         if (welcomeNotice) {
           // Nothing comes off the price here: onboarding has already subtracted the
           // gift from the amount it sends (see lib/welcome-completion). This only
@@ -139,10 +166,36 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       }
       session = await createCheckoutSession(identity, body);
     } catch (err) {
+      if (err instanceof WelcomeDiscountRefusedError) {
+        res.status(409).json({ error: err.message, code: err.code, welcome_gift_cents: err.giftCents });
+        return;
+      }
       console.error("[billing-service] stripe-service createCheckoutSession failed:", err);
       res.status(502).json({ error: "Failed to create checkout session via stripe-service" });
       return;
     }
+
+    // The acquirer must have charged exactly budget − gift. Anything else means the
+    // coupon did not land as decided (wrong value, ignored): refuse to hand the
+    // buyer a page that charges them the wrong amount.
+    if (welcomeDiscount) {
+      const due = welcomeDiscount.amountDueCents;
+      const ok =
+        session.presentation !== undefined
+          ? session.amount === due
+          : session.amount_total === due &&
+            (session.total_details?.amount_discount ?? 0) === welcomeDiscount.giftCents;
+      if (!ok) {
+        console.error(
+          `[billing-service] welcome discount not applied as decided for org ${orgId}: expected due=${due} gift=${welcomeDiscount.giftCents}, got amount=${session.amount} amount_total=${session.amount_total} discount=${session.total_details?.amount_discount}`
+        );
+        res.status(502).json({ error: "The welcome gift could not be applied to this checkout", code: "welcome_discount_not_applied" });
+        return;
+      }
+    }
+    const welcomeFields = welcomeDiscount
+      ? { welcome_discount_cents: welcomeDiscount.giftCents, amount_due_cents: welcomeDiscount.amountDueCents }
+      : {};
 
     traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id ?? session.id } }, req.headers);
 
@@ -167,6 +220,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         amount: session.amount,
         currency: session.currency,
         session_id: session.id,
+        ...welcomeFields,
       });
       return;
     }
@@ -175,6 +229,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
       res.json({
         client_secret: session.client_secret,
         session_id: session.session_id,
+        ...welcomeFields,
       });
       return;
     }
@@ -182,6 +237,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     res.json({
       url: session.url,
       session_id: session.session_id,
+      ...welcomeFields,
     });
   } catch (err) {
     console.error("[billing-service] Error creating checkout session:", err);
