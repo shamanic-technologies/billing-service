@@ -276,12 +276,46 @@ async function openStreak(orgId: string, creditedCents: string) {
 }
 
 /**
+ * The inputs the outlook was decided on, for a reader that must project FROM the
+ * same decision (lib/charge-schedule) rather than re-derive it and risk a second
+ * answer for one org.
+ */
+export interface PaymentOutlookInputs {
+  balanceCents: string;
+  paidTopupsCents: string;
+  /** The largest stored campaign estimate ("0" when none). */
+  requiredCents: string;
+  /** Null when the org has no credit line (nothing can be reloaded). */
+  tierAmountCents: number | null;
+}
+
+/**
  * Everything billing expects, money-wise, for one org. Pure read: it opens no
  * episode, charges nothing and changes no retry state.
  */
 export async function getPaymentOutlook(
   orgId: string,
   now: Date = new Date()
+): Promise<PaymentOutlook | null> {
+  const resolved = await resolvePaymentOutlook(orgId, now);
+  return resolved ? resolved.outlook : null;
+}
+
+/** The outlook plus the inputs it was decided on. Same pure read. */
+export async function resolvePaymentOutlook(
+  orgId: string,
+  now: Date = new Date()
+): Promise<{ outlook: PaymentOutlook; inputs: PaymentOutlookInputs } | null> {
+  const outlookInputs = { current: null as PaymentOutlookInputs | null };
+  const outlook = await decideOutlook(orgId, now, outlookInputs);
+  if (!outlook || !outlookInputs.current) return null;
+  return { outlook, inputs: outlookInputs.current };
+}
+
+async function decideOutlook(
+  orgId: string,
+  now: Date,
+  inputsOut: { current: PaymentOutlookInputs | null }
 ): Promise<PaymentOutlook | null> {
   const [account] = await db
     .select({ orgId: billingAccounts.orgId, paymentMode: billingAccounts.paymentMode })
@@ -297,6 +331,13 @@ export async function getPaymentOutlook(
     resolveBudgets(orgId),
     openStreak(orgId, snapshot.creditedCents),
   ]);
+
+  inputsOut.current = {
+    balanceCents: snapshot.balanceCents,
+    paidTopupsCents: snapshot.paidTopupsCents,
+    requiredCents: block.requiredCents,
+    tierAmountCents: block.tier ? block.tier.amountCents : null,
+  };
 
   const paymentMode = asPaymentMode(account.paymentMode);
   const base = {
