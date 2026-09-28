@@ -268,7 +268,8 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
   // lib/onboarding-charge.ts). So billing must NOT discount on top: a coupon here
   // would take the $30 off a figure the $30 has already been taken off, and a
   // $50/day signup would be charged $20 minus $30 = nothing and walk away with a
-  // $50 gift. These guards pin that no checkout body ever carries `discounts`.
+  // $50 gift. These guards pin that a checkout WITHOUT `apply_welcome_gift` never
+  // carries `discounts` (the opt-in path lives in onboarding-welcome-discount.test.ts).
 
   it("carries NO discount on the checkout the dashboard has already netted", async () => {
     await signupWithFlatGift(orgId);

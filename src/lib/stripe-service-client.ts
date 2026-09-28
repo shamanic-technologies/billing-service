@@ -218,6 +218,12 @@ export interface CheckoutSessionResult {
   };
   amount?: number;
   currency?: string;
+  /** Stripe sessions only: the line items before discounts, in minor units. */
+  amount_subtotal?: number | null;
+  /** Stripe sessions only: what the buyer is asked to pay, in minor units. */
+  amount_total?: number | null;
+  /** Stripe sessions only. */
+  total_details?: { amount_discount?: number } | null;
 }
 
 export interface PortalSessionResult {
@@ -546,11 +552,15 @@ export interface CheckoutSessionBody {
    * (Stripe caps `message` at 1200 chars). Used to tell a buyer the free credits are
    * still coming, on a cohort whose entitlement is not yet fully gifted.
    *
-   * Note there is deliberately no `discounts` field: onboarding already subtracts
-   * the welcome gift from the amount it sends, so a coupon here would deduct it a
-   * second time. Nothing in this service discounts a charge.
    */
   custom_text?: { submit: { message: string } };
+  /**
+   * Payment-mode only, and ONLY on an onboarding checkout whose caller set
+   * `apply_welcome_gift` (see lib/onboarding-welcome-discount). A caller that does
+   * not opt in never gets this field, which is what keeps a consumer that still
+   * subtracts the gift itself from being discounted twice.
+   */
+  discounts?: Array<{ coupon: string }>;
 }
 
 export async function createCheckoutSession(
