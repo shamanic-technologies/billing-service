@@ -4,7 +4,13 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import { flagUncollectableDebt } from "../../src/lib/unpaid-debt.js";
-import { TRIAL_SEED_TARGET_CENTS } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
+import {
+  localPromoCodes,
+  TRIAL_SEED_TARGET_CENTS,
+  WELCOME_PROMO_CODE,
+} from "../../src/db/schema.js";
 
 /**
  * An org that holds credit and has NO Stripe customer can spend that credit.
@@ -37,6 +43,12 @@ describe("an org with credit and no Stripe customer", () => {
     ssMocks.fetchOrgCustomerOrNull.mockResolvedValue(null);
     ssMocks.getCustomerByOrgOrNull.mockResolvedValue(null);
     await cleanTestData();
+    // The live welcome price (flat $30 offer). The seed is clamped to it, and the
+    // test DB's smaller default would clamp the seed below its target.
+    await db
+      .update(localPromoCodes)
+      .set({ amountCents: 3000 })
+      .where(eq(localPromoCodes.code, WELCOME_PROMO_CODE));
 
     const costsClient = await import("../../src/lib/costs-client.js");
     let required = "10.0000000000";

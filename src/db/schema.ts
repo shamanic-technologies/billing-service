@@ -225,7 +225,10 @@ export const TRIAL_SEED_CODE = "trial_seed";
  * welcome price, with nobody having to remember this rule. Re-pricing the welcome
  * offer therefore cannot leave the two summing to anything else.
  */
-export const TRIAL_SEED_TARGET_CENTS = 500;
+// $12: enough for the signed-out walk's worst-case HOLDS (the audience suggestion
+// alone holds ~8 × $2.25 of model calls before spending ~$2.25 in total), which a
+// $5 seed refused at step 3. Owner-approved 2026-09-28.
+export const TRIAL_SEED_TARGET_CENTS = 1200;
 
 // --- The welcome gift is once per PERSON (migration 0049) ---
 //
