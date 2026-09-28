@@ -1201,6 +1201,64 @@ export const PaymentOutlookResponseSchema = z
   })
   .openapi("PaymentOutlookResponse");
 
+// --- Charge schedule (every charge expected over a horizon) ---
+
+export const ExpectedChargeSchema = z
+  .object({
+    /** When billing expects to PRESENT the card (ISO 8601). An attempt, never a payment. */
+    at: z.string(),
+    trigger: z.enum(["floor", "month_end", "retry_rung"]),
+    /**
+     * Integer cents billing would ask for. Null only when the amount cannot be
+     * established (the burn is unmeasured) — never 0 as a stand-in.
+     */
+    expectedAmountCents: z.string().nullable(),
+    /** Projected balance just before the charge. Null when the burn is unmeasured. */
+    projectedBalanceBeforeCents: z.string().nullable(),
+    /** Projected balance just after the charge lands. Null when unmeasured. */
+    projectedBalanceAfterCents: z.string().nullable(),
+  })
+  .openapi("ExpectedCharge");
+
+export const ChargeScheduleResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    paymentMode: PaymentModeSchema,
+    /** The payment outlook's state, decided at the same instant. */
+    state: z.enum([
+      "will_charge",
+      "charge_due_now",
+      "charge_blocked",
+      "no_autopay",
+      "idle",
+      "unknown",
+    ]),
+    blockedReason: z
+      .enum([
+        "card_declined",
+        "card_unusable",
+        "retries_exhausted",
+        "no_chargeable_card",
+        "card_country_unsupported",
+      ])
+      .nullable(),
+    asOf: z.string(),
+    horizonDays: z.number().int(),
+    horizonEndsAt: z.string(),
+    balanceCents: z.string(),
+    floorCents: z.string(),
+    realizedDailyBurnCents: z.string().nullable(),
+    burnUnavailableReason: z
+      .enum(["platform_only_dated_spend_not_served"])
+      .nullable(),
+    burnWindowDays: z.number(),
+    /** Oldest first. Empty when billing expects no automatic charge. */
+    events: z.array(ExpectedChargeSchema),
+    /** Sum of the event amounts (integer cents); null when any amount is unknown. */
+    expectedTotalCents: z.string().nullable(),
+  })
+  .openapi("ChargeScheduleResponse");
+
 // --- Daily ceilings per campaign (offer x leg x acquisition channel) ---
 
 /** One campaign's ceiling: one stored row per (offer, leg, channel). */
@@ -2617,6 +2675,49 @@ registry.registerPath({
     },
     502: { description: "Could not read the balance or reach the card acquirer", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: { description: "No billing account for this org", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/charge-schedule",
+  summary: "Every automatic charge billing expects for this org over a horizon",
+  description:
+    "Replays billing's own charging rules forward from the payment outlook's decision: a " +
+    "floor reload when balance minus the next run's estimate falls below the credit-line " +
+    "floor (one tier unit), and the month-end settle of a NEGATIVE balance to exactly zero " +
+    "(below the 50-cent acquirer minimum it rolls), whichever comes first, re-deriving the " +
+    "tier after each charge. The projection carries the MEASURED realized burn forward at a " +
+    "constant rate, never the configured ceiling. Same states as the payment outlook: " +
+    "no_autopay and charge_blocked (without a retry date) return no events; a refused card " +
+    "returns ONE event at its next retry rung and nothing after it, because whether the bank " +
+    "says yes is not billing's to predict; unknown (unmeasured burn) returns the month-end " +
+    "settle only when the org already owes, with a null amount. Every date is a charge " +
+    "ATTEMPT, never a payment. horizonDays defaults to 90 (1 to 366). " +
+    "Service-to-service read with x-api-key only, orgId in the path. Pure read: charges " +
+    "nothing, reserves nothing, writes nothing.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+    query: z.object({ horizonDays: z.string().optional() }),
+  },
+  responses: {
+    200: {
+      description: "The expected charges, oldest first",
+      content: { "application/json": { schema: ChargeScheduleResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a UUID, or horizonDays is not an integer from 1 to 366",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No billing account for this org",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service or runs-service unreachable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
   },
 });
 

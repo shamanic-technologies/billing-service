@@ -1470,6 +1470,135 @@
           "payment_mode"
         ]
       },
+      "ExpectedCharge": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "floor",
+              "month_end",
+              "retry_rung"
+            ]
+          },
+          "expectedAmountCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectedBalanceBeforeCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectedBalanceAfterCents": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "at",
+          "trigger",
+          "expectedAmountCents",
+          "projectedBalanceBeforeCents",
+          "projectedBalanceAfterCents"
+        ]
+      },
+      "ChargeScheduleResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "will_charge",
+              "charge_due_now",
+              "charge_blocked",
+              "no_autopay",
+              "idle",
+              "unknown"
+            ]
+          },
+          "blockedReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "card_declined",
+              "card_unusable",
+              "retries_exhausted",
+              "no_chargeable_card",
+              "card_country_unsupported"
+            ]
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "horizonDays": {
+            "type": "integer"
+          },
+          "horizonEndsAt": {
+            "type": "string"
+          },
+          "balanceCents": {
+            "type": "string"
+          },
+          "floorCents": {
+            "type": "string"
+          },
+          "realizedDailyBurnCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "burnUnavailableReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "platform_only_dated_spend_not_served"
+            ]
+          },
+          "burnWindowDays": {
+            "type": "number"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExpectedCharge"
+            }
+          },
+          "expectedTotalCents": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "orgId",
+          "paymentMode",
+          "state",
+          "blockedReason",
+          "asOf",
+          "horizonDays",
+          "horizonEndsAt",
+          "balanceCents",
+          "floorCents",
+          "realizedDailyBurnCents",
+          "burnUnavailableReason",
+          "burnWindowDays",
+          "events",
+          "expectedTotalCents"
+        ]
+      },
       "PaymentOutlookResponse": {
         "type": "object",
         "properties": {
@@ -5473,6 +5602,81 @@
           },
           "502": {
             "description": "Could not read the balance or reach the card acquirer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/charge-schedule": {
+      "get": {
+        "summary": "Every automatic charge billing expects for this org over a horizon",
+        "description": "Replays billing's own charging rules forward from the payment outlook's decision: a floor reload when balance minus the next run's estimate falls below the credit-line floor (one tier unit), and the month-end settle of a NEGATIVE balance to exactly zero (below the 50-cent acquirer minimum it rolls), whichever comes first, re-deriving the tier after each charge. The projection carries the MEASURED realized burn forward at a constant rate, never the configured ceiling. Same states as the payment outlook: no_autopay and charge_blocked (without a retry date) return no events; a refused card returns ONE event at its next retry rung and nothing after it, because whether the bank says yes is not billing's to predict; unknown (unmeasured burn) returns the month-end settle only when the org already owes, with a null amount. Every date is a charge ATTEMPT, never a payment. horizonDays defaults to 90 (1 to 366). Service-to-service read with x-api-key only, orgId in the path. Pure read: charges nothing, reserves nothing, writes nothing.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "horizonDays",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The expected charges, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a UUID, or horizonDays is not an integer from 1 to 366",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service unreachable",
             "content": {
               "application/json": {
                 "schema": {

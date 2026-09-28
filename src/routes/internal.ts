@@ -36,6 +36,11 @@ import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
 import { getPaymentOutlook } from "../lib/payment-outlook.js";
 import {
+  getChargeSchedule,
+  DEFAULT_CHARGE_SCHEDULE_HORIZON_DAYS,
+  MAX_CHARGE_SCHEDULE_HORIZON_DAYS,
+} from "../lib/charge-schedule.js";
+import {
   seedTrialCredit,
   settleSignupWelcome,
   TrialSeedWelcomeAlreadyGrantedError,
@@ -726,6 +731,48 @@ router.get("/internal/accounts/by-org/:orgId/payment-outlook", async (req, res) 
       err
     );
     res.status(502).json({ error: "Failed to read payment outlook" });
+  }
+});
+
+// GET /internal/accounts/by-org/:orgId/charge-schedule?horizonDays=90
+//
+// Every automatic charge billing expects over the horizon, not only the next one
+// (see lib/charge-schedule): the payment outlook's decision, replayed forward
+// through the same floor-reload and month-end-settle rules the live paths use.
+// Consumer: the cash forecast, which must not re-implement those rules. Same
+// auth and same pure-read posture as the payment outlook above.
+router.get("/internal/accounts/by-org/:orgId/charge-schedule", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  const raw = req.query.horizonDays;
+  let horizonDays = DEFAULT_CHARGE_SCHEDULE_HORIZON_DAYS;
+  if (raw !== undefined) {
+    const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > MAX_CHARGE_SCHEDULE_HORIZON_DAYS) {
+      res.status(400).json({
+        error: `horizonDays must be an integer from 1 to ${MAX_CHARGE_SCHEDULE_HORIZON_DAYS}`,
+      });
+      return;
+    }
+    horizonDays = n;
+  }
+
+  try {
+    const schedule = await getChargeSchedule(orgId, horizonDays);
+    if (!schedule) {
+      res.status(404).json({ error: "No billing account for this org" });
+      return;
+    }
+    res.json(schedule);
+  } catch (err) {
+    console.error(
+      `[billing-service] charge-schedule read failed for org ${orgId}:`,
+      err
+    );
+    res.status(502).json({ error: "Failed to read charge schedule" });
   }
 });
 
