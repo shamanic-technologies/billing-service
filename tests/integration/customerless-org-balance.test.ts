@@ -8,7 +8,6 @@ import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
 import {
   localPromoCodes,
-  TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 
@@ -94,7 +93,7 @@ describe("an org with credit and no Stripe customer", () => {
 
   it("authorizes a spend that fits in the seed", async () => {
     const seeded = await seed();
-    expect(seeded).toBe(TRIAL_SEED_TARGET_CENTS);
+    expect(seeded).toBe(3000);
     setRequired("10.0000000000");
 
     const res = await request(app)
