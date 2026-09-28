@@ -772,6 +772,15 @@ Whoever forecasts revenue needs a date per customer, and billing is the only ser
 
 **No discount, ever** — a floor and a ceiling are configuration, and the per-org usage modifier applies to charges only (see "Per-org usage discount"). **Pure read**: it opens no episode, charges nothing and changes no retry state.
 
+### Every charge over a horizon — `GET /internal/accounts/by-org/:orgId/charge-schedule?horizonDays=90` (`src/lib/charge-schedule.ts`)
+
+The outlook answers the NEXT attempt; a cash forecast needs the ones after it. This REPLAYS billing's own rules forward from the outlook's decision (`resolvePaymentOutlook`, so the two can never disagree about an org): a floor reload (one tier unit, `computeTopupCharge`) when `balance − required < floor`, and the month-end settle of a NEGATIVE balance to exactly zero (`computeSettleCharge`), whichever comes first, re-deriving the tier after every charge (`reloadTierFor`). Constant MEASURED burn, never the ceiling. Response: the outlook's state/reason + `events[{at, trigger, expectedAmountCents, projectedBalanceBeforeCents, projectedBalanceAfterCents}]` + `expectedTotalCents`. Horizon 1–366, default 90.
+
+- **No automatic charge = no events**: `no_autopay`, `charge_blocked` without a retry date.
+- **A refused card = ONE event at the next retry rung, nothing after** — a schedule built on the bank saying yes is a prediction billing cannot make.
+- **Unmeasured burn** = the month-end settle only when already owed, amount **null** (total null), never a guess.
+- Why it exists: the consumer's fallback ("burn × 30 on the 1st") showed Shockwavecenters a $204 inflow on 1 Oct against a real ~$33 month-end settle (owed $7.41 + ~3.8 days of $6.81/day), then the $200 floor ~30 Oct. Pure read.
+
 ## Reading a PAST day — what the budget was, and whether payment had stopped
 
 Whoever computes the company's monthly run-rate needs two facts from billing for a past UTC day, and billing already RECORDS both: the budget timeline is append-only and the depletion episodes carry a beginning and a recovery. What was missing is that neither could be replayed for a past day. Two reads fix that; nothing new is stored and no existing surface moved.
