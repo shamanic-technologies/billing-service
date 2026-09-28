@@ -84,7 +84,7 @@ describe("trial seed → signup", () => {
 
     // The ledger shows it as a trial seed. There is no welcome row yet — that lands
     // at signup, and it is the one the customer eventually sees by name.
-    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 500 });
+    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
   });
 
   it("seeding twice does not double the seed", async () => {
@@ -111,14 +111,14 @@ describe("trial seed → signup", () => {
     const res = await signup(seededOrg);
 
     expect(res.status).toBe(200);
-    expect(res.body.trialSeedCents).toBe(500);
-    expect(res.body.welcomeGrantedCents).toBe(2500);
+    expect(res.body.trialSeedCents).toBe(1200);
+    expect(res.body.welcomeGrantedCents).toBe(1800);
     expect(res.body.totalFreeCreditCents).toBe(3000);
 
-    // Verified against the ledger, not the response: $5 trial + $25 welcome = $30.
+    // Verified against the ledger, not the response: $12 trial + $18 welcome = $30.
     expect(await ledger(seededOrg)).toEqual({
-      [TRIAL_SEED_CODE]: 500,
-      [WELCOME_PROMO_CODE]: 2500,
+      [TRIAL_SEED_CODE]: 1200,
+      [WELCOME_PROMO_CODE]: 1800,
     });
     expect(await totalFreeCredit(seededOrg)).toBe(await welcomeAmount());
   });
@@ -163,7 +163,7 @@ describe("trial seed → signup", () => {
           eq(localPromoCodes.code, TRIAL_SEED_CODE)
         )
       );
-    expect(Number(trialRow.amountCents)).toBe(500);
+    expect(Number(trialRow.amountCents)).toBe(TRIAL_SEED_TARGET_CENTS);
 
     // Nothing negative was ever written.
     const rows = await db
@@ -187,12 +187,13 @@ describe("trial seed → signup", () => {
   // else. Nobody re-prices the seed: it is derived from the live welcome figure, and
   // the signup grant is the remainder, so the invariant holds by construction.
   it.each([
-    [3000, 500, 2500],
-    [1000, 500, 500],
-    [10000, 500, 9500],
+    [3000, 1200, 1800],
+    [2000, 1200, 800],
+    [10000, 1200, 8800],
     // Welcome priced at or below the seed: the seed is clamped to it and the
     // remainder is zero — still exactly the welcome amount, never a negative grant.
-    [500, 500, 0],
+    [1200, 1200, 0],
+    [1000, 1000, 0],
     [300, 300, 0],
   ])(
     "welcome at %i cents → seed %i + welcome %i, totalling exactly the welcome amount",
@@ -229,7 +230,7 @@ describe("trial seed → signup", () => {
     await db.delete(billingAccounts).where(eq(billingAccounts.orgId, seededOrg));
     await findOrCreateAccount(seededOrg, plainOrg);
 
-    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 500 });
+    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
     vi.restoreAllMocks();
   });
 
