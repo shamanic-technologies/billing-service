@@ -1936,7 +1936,7 @@ registry.registerPath({
   path: "/internal/accounts/by-org/{orgId}/trial-seed",
   summary: "Seed free credit on an organisation that has not signed up",
   description:
-    "Puts a very small amount of credit on an org that exists but has no " +
+    "Puts the whole live welcome amount of credit on an org that exists but has no " +
     "identity-provider identity yet, so the unauthenticated setup a visitor walks " +
     "through can do its metered work. Recorded under its OWN ledger key (trial_seed), " +
     "never as the welcome gift, and never surfaced to the visitor. What caps the " +
@@ -1944,7 +1944,8 @@ registry.registerPath({
     "— there is no counter and no new threshold. Idempotent: seeding twice does not " +
     "double the seed. 409 when the org already holds the welcome gift (it has signed " +
     "up, or spent before it was seeded), because seeding it would take its free " +
-    "credit past the welcome amount.",
+    "credit past the welcome amount. The later signup settle then grants the " +
+    "remainder (welcome − seeded), which is 0 for an org seeded this way.",
   request: {
     headers: internalHeaders,
     params: z.object({ orgId: z.string().uuid() }),

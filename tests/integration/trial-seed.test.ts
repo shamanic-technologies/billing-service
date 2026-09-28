@@ -9,7 +9,6 @@ import {
   localPromoCodes,
   localPromos,
   TRIAL_SEED_CODE,
-  TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 import { resolveTrialSeedAmountCents } from "../../src/lib/trial-seed.js";
@@ -79,12 +78,12 @@ describe("trial seed → signup", () => {
     const res = await seed(seededOrg);
 
     expect(res.status).toBe(200);
-    expect(res.body.seededCents).toBe(TRIAL_SEED_TARGET_CENTS);
+    expect(res.body.seededCents).toBe(3000);
     expect(res.body.alreadySeeded).toBe(false);
 
     // The ledger shows it as a trial seed. There is no welcome row yet — that lands
     // at signup, and it is the one the customer eventually sees by name.
-    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
+    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 3000 });
   });
 
   it("seeding twice does not double the seed", async () => {
@@ -95,7 +94,7 @@ describe("trial seed → signup", () => {
 
     expect(second.status).toBe(200);
     expect(second.body.alreadySeeded).toBe(true);
-    expect(await totalFreeCredit(seededOrg)).toBe(TRIAL_SEED_TARGET_CENTS);
+    expect(await totalFreeCredit(seededOrg)).toBe(3000);
 
     const rows = await db
       .select({ id: localPromos.id })
@@ -104,23 +103,47 @@ describe("trial seed → signup", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("a seeded org that signs up ends with free credit totalling exactly the welcome amount", async () => {
+  it("a seeded org holds the WHOLE welcome up front, and signup adds nothing on top", async () => {
     await setWelcomeAmount(3000);
     await seed(seededOrg).expect(200);
+    expect(await totalFreeCredit(seededOrg)).toBe(3000);
 
     const res = await signup(seededOrg);
 
     expect(res.status).toBe(200);
-    expect(res.body.trialSeedCents).toBe(1200);
-    expect(res.body.welcomeGrantedCents).toBe(1800);
+    expect(res.body.trialSeedCents).toBe(3000);
+    expect(res.body.welcomeGrantedCents).toBe(0);
     expect(res.body.totalFreeCreditCents).toBe(3000);
 
-    // Verified against the ledger, not the response: $12 trial + $18 welcome = $30.
+    // Verified against the ledger, not the response: the $30 seed and nothing else.
+    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 3000 });
+    expect(await totalFreeCredit(seededOrg)).toBe(await welcomeAmount());
+  });
+
+  // Orgs seeded under the earlier $5 / $12 slices and not yet signed up still get
+  // their own remainder, so their total is the welcome amount too.
+  it("an org seeded under the earlier $12 slice receives its remainder at signup", async () => {
+    await setWelcomeAmount(3000);
+    const [seedCode] = await db
+      .select()
+      .from(localPromoCodes)
+      .where(eq(localPromoCodes.code, TRIAL_SEED_CODE));
+    await db.insert(billingAccounts).values({ orgId: seededOrg }).onConflictDoNothing();
+    await db.insert(localPromos).values({
+      orgId: seededOrg,
+      userId: "00000000-0000-0000-0000-000000000000",
+      amountCents: "1200",
+      promoCodeId: seedCode.id,
+      description: "Trial seed: $12.00",
+    });
+
+    const res = await signup(seededOrg).expect(200);
+
+    expect(res.body.welcomeGrantedCents).toBe(1800);
     expect(await ledger(seededOrg)).toEqual({
       [TRIAL_SEED_CODE]: 1200,
       [WELCOME_PROMO_CODE]: 1800,
     });
-    expect(await totalFreeCredit(seededOrg)).toBe(await welcomeAmount());
   });
 
   it("an unseeded org that signs up receives the WHOLE welcome offer", async () => {
@@ -163,7 +186,7 @@ describe("trial seed → signup", () => {
           eq(localPromoCodes.code, TRIAL_SEED_CODE)
         )
       );
-    expect(Number(trialRow.amountCents)).toBe(TRIAL_SEED_TARGET_CENTS);
+    expect(Number(trialRow.amountCents)).toBe(3000);
 
     // Nothing negative was ever written.
     const rows = await db
@@ -183,17 +206,13 @@ describe("trial seed → signup", () => {
     expect(await totalFreeCredit(seededOrg)).toBe(3000);
   });
 
-  // Moving the welcome amount must not leave the two figures summing to anything
-  // else. Nobody re-prices the seed: it is derived from the live welcome figure, and
-  // the signup grant is the remainder, so the invariant holds by construction.
+  // Moving the welcome amount moves the seed with it: the seed IS the live welcome
+  // figure and the signup grant is the (zero) remainder, so the total holds by
+  // construction at any price.
   it.each([
-    [3000, 1200, 1800],
-    [2000, 1200, 800],
-    [10000, 1200, 8800],
-    // Welcome priced at or below the seed: the seed is clamped to it and the
-    // remainder is zero — still exactly the welcome amount, never a negative grant.
-    [1200, 1200, 0],
-    [1000, 1000, 0],
+    [3000, 3000, 0],
+    [2000, 2000, 0],
+    [10000, 10000, 0],
     [300, 300, 0],
   ])(
     "welcome at %i cents → seed %i + welcome %i, totalling exactly the welcome amount",
@@ -230,7 +249,7 @@ describe("trial seed → signup", () => {
     await db.delete(billingAccounts).where(eq(billingAccounts.orgId, seededOrg));
     await findOrCreateAccount(seededOrg, plainOrg);
 
-    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
+    expect(await ledger(seededOrg)).toEqual({ [TRIAL_SEED_CODE]: 3000 });
     vi.restoreAllMocks();
   });
 
