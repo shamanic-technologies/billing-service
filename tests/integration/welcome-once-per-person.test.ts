@@ -12,6 +12,7 @@ import {
   welcomeRecipients,
   PLATFORM_USER_ID,
   TRIAL_SEED_CODE,
+  TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 
@@ -186,11 +187,11 @@ describe("welcome once per person", () => {
       const settled = await signup(firstOrg, person);
 
       expect(settled.status).toBe(200);
-      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - 500);
+      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - TRIAL_SEED_TARGET_CENTS);
       expect(settled.body.welcomeReceivedElsewhere).toBe(false);
       expect(await ledger(firstOrg)).toEqual({
-        [TRIAL_SEED_CODE]: 500,
-        [WELCOME_PROMO_CODE]: WELCOME - 500,
+        [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS,
+        [WELCOME_PROMO_CODE]: WELCOME - TRIAL_SEED_TARGET_CENTS,
       });
 
       // The welcome row carries the real person now, never the sentinel.
@@ -221,9 +222,9 @@ describe("welcome once per person", () => {
       expect(settled.status).toBe(200);
       expect(settled.body.welcomeGrantedCents).toBe(0);
       expect(settled.body.welcomeReceivedElsewhere).toBe(true);
-      expect(settled.body.totalFreeCreditCents).toBe(500);
+      expect(settled.body.totalFreeCreditCents).toBe(TRIAL_SEED_TARGET_CENTS);
       // The seed is not clawed back; no welcome lands.
-      expect(await ledger(secondOrg)).toEqual({ [TRIAL_SEED_CODE]: 500 });
+      expect(await ledger(secondOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
       expect(await offer(secondOrg)).toEqual({ entitlement: 0, trigger: 0 });
     });
 
@@ -234,7 +235,7 @@ describe("welcome once per person", () => {
       const settled = await signup(secondOrg);
 
       expect(settled.status).toBe(200);
-      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - 500);
+      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - TRIAL_SEED_TARGET_CENTS);
       expect(settled.body.welcomeReceivedElsewhere).toBe(false);
     });
 
