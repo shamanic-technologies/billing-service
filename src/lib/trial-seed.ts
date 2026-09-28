@@ -6,7 +6,6 @@ import {
   localPromos,
   PLATFORM_USER_ID,
   TRIAL_SEED_CODE,
-  TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../db/schema.js";
 import {
@@ -24,10 +23,14 @@ import {
  *      exists so the account can do its work while a visitor walks the product
  *      unauthenticated; it is not an offer and no customer-facing figure states it.
  *
- *   2. At signup the org receives the REMAINDER — `welcome − already seeded` — so its
- *      total is the welcome amount, not the welcome amount PLUS the seed. Nothing is
- *      clawed back: what the visitor already consumed stays consumed, because what is
- *      fixed is the TOTAL, not the remainder.
+ *   2. The seed IS the whole live welcome amount (owner decision 2026-09-28): the
+ *      signed-out walk (company read, competitors, segments, companies, decision
+ *      makers, one written email) provisions worst-case HOLDS before it spends, and
+ *      any slice smaller than the offer the dashboard already promises ran short
+ *      mid-walk. At signup the org receives the REMAINDER — `welcome − already
+ *      seeded` — which is 0 for an org seeded under this rule, so its total stays
+ *      exactly the welcome amount. Orgs seeded under the earlier $5 / $12 slices
+ *      still receive their own remainder. Nothing is clawed back.
  *
  * Both amounts are derived from the LIVE `welcome` promo-code row (the same row
  * `PATCH /internal/promo-codes/welcome` re-prices), so re-pricing the welcome offer
@@ -50,15 +53,12 @@ export class TrialSeedPromoCodeMissingError extends Error {
 }
 
 /**
- * What to seed an org with, clamped to the live welcome amount.
- *
- * The clamp is not cosmetic: it makes the signup remainder non-negative BY
- * CONSTRUCTION at any welcome price, including one below the seed target, so the
- * "totals exactly the welcome amount" invariant holds with no special case and no
- * negative grant. THE one place a seed amount is decided.
+ * What to seed an org with: the whole live welcome amount, never negative. THE one
+ * place a seed amount is decided — it is what keeps the signup remainder
+ * (`welcome − seeded`) at exactly 0 for a freshly seeded org, at any welcome price.
  */
 export function resolveTrialSeedAmountCents(welcomeAmountCents: number): number {
-  return Math.min(TRIAL_SEED_TARGET_CENTS, Math.max(0, welcomeAmountCents));
+  return Math.max(0, welcomeAmountCents);
 }
 
 async function requirePromoCode(code: string) {
@@ -128,7 +128,7 @@ export interface TrialSeedResult {
  *
  * Fails loud (never silently seeds on top) when the org already holds the welcome
  * gift: that org has signed up, or spent before it was seeded, and adding a seed to it
- * is exactly the "welcome amount PLUS five dollars" outcome this exists to prevent.
+ * is exactly the "welcome amount PLUS the seed" outcome this exists to prevent.
  */
 export async function seedTrialCredit(orgId: string): Promise<TrialSeedResult> {
   const welcome = await requirePromoCode(WELCOME_PROMO_CODE);
@@ -206,9 +206,10 @@ export interface SignupWelcomeResult {
  * caller may run this for every signup.
  *
  * A seeded org receives `welcome − seeded`, which is what makes the total the welcome
- * amount rather than the welcome amount plus the seed. A remainder of zero (only
- * reachable when the welcome offer is priced at or below the seed) grants nothing —
- * the org already holds exactly the welcome amount, so there is nothing to add.
+ * amount rather than the welcome amount plus the seed. For an org seeded with the
+ * whole welcome (the rule since 2026-09-28) that remainder is 0 and nothing is
+ * granted — but the person is still bound to this org, so their NEXT org gets no
+ * welcome. Orgs seeded under the earlier smaller slices receive their remainder.
  *
  * `personId` is who signed up (lib/welcome-recipient). When that person's welcome
  * already lives on another org, this org gets NO welcome and its offer goes to zero;

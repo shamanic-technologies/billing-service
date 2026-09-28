@@ -12,7 +12,6 @@ import {
   welcomeRecipients,
   PLATFORM_USER_ID,
   TRIAL_SEED_CODE,
-  TRIAL_SEED_TARGET_CENTS,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
 
@@ -187,20 +186,15 @@ describe("welcome once per person", () => {
       const settled = await signup(firstOrg, person);
 
       expect(settled.status).toBe(200);
-      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - TRIAL_SEED_TARGET_CENTS);
+      // The seed already IS the whole welcome, so signup grants nothing on top…
+      expect(settled.body.welcomeGrantedCents).toBe(0);
       expect(settled.body.welcomeReceivedElsewhere).toBe(false);
-      expect(await ledger(firstOrg)).toEqual({
-        [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS,
-        [WELCOME_PROMO_CODE]: WELCOME - TRIAL_SEED_TARGET_CENTS,
-      });
+      expect(await ledger(firstOrg)).toEqual({ [TRIAL_SEED_CODE]: WELCOME });
 
-      // The welcome row carries the real person now, never the sentinel.
-      const [row] = await db
-        .select({ userId: localPromos.userId })
-        .from(localPromos)
-        .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
-        .where(eq(localPromoCodes.code, WELCOME_PROMO_CODE));
-      expect(row.userId).toBe(person);
+      // …but the person IS bound to this org, which is what closes their next one.
+      const bound = await db.select().from(welcomeRecipients);
+      expect(bound).toHaveLength(1);
+      expect(bound[0].orgId).toBe(firstOrg);
 
       // A replay grants nothing.
       const replay = await signup(firstOrg, person);
@@ -222,9 +216,9 @@ describe("welcome once per person", () => {
       expect(settled.status).toBe(200);
       expect(settled.body.welcomeGrantedCents).toBe(0);
       expect(settled.body.welcomeReceivedElsewhere).toBe(true);
-      expect(settled.body.totalFreeCreditCents).toBe(TRIAL_SEED_TARGET_CENTS);
+      expect(settled.body.totalFreeCreditCents).toBe(WELCOME);
       // The seed is not clawed back; no welcome lands.
-      expect(await ledger(secondOrg)).toEqual({ [TRIAL_SEED_CODE]: TRIAL_SEED_TARGET_CENTS });
+      expect(await ledger(secondOrg)).toEqual({ [TRIAL_SEED_CODE]: WELCOME });
       expect(await offer(secondOrg)).toEqual({ entitlement: 0, trigger: 0 });
     });
 
@@ -235,7 +229,7 @@ describe("welcome once per person", () => {
       const settled = await signup(secondOrg);
 
       expect(settled.status).toBe(200);
-      expect(settled.body.welcomeGrantedCents).toBe(WELCOME - TRIAL_SEED_TARGET_CENTS);
+      expect(settled.body.welcomeGrantedCents).toBe(0);
       expect(settled.body.welcomeReceivedElsewhere).toBe(false);
     });
 

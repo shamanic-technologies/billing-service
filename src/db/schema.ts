@@ -202,8 +202,9 @@ export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 // assembling audiences) against an ordinary org that simply has no identity-provider
 // identity yet. That work is metered, so a stranger typing a URL spends our money.
 //
-// What caps them is CREDIT, not a counter: the org is seeded with a very small amount
-// and the affordability gate this service already enforces refuses the first call it
+// What caps them is CREDIT, not a counter: the org is seeded with the WHOLE live
+// welcome amount (owner decision 2026-09-28, was a $5 then $12 slice) and the
+// affordability gate this service already enforces refuses the first call it
 // cannot afford. No new threshold, no consumer-side spend limit.
 //
 // It is recorded under its OWN ledger key, never as the welcome gift — the two mean
@@ -215,20 +216,6 @@ export const WELCOME_PROMO_AMOUNT_CENTS = 500;
 // lib/trial-seed.ts.
 export const TRIAL_SEED_CODE = "trial_seed";
 
-/**
- * What a trial seed is worth, BEFORE it is capped by the welcome amount.
- *
- * It is never read on its own: `resolveTrialSeedAmountCents` clamps it to the live
- * welcome figure, and the welcome grant at signup is the REMAINDER
- * (`welcome − already seeded`). That subtraction is what pins the two together: a
- * seeded org's TOTAL free credit is the welcome amount for ANY seed value, at any
- * welcome price, with nobody having to remember this rule. Re-pricing the welcome
- * offer therefore cannot leave the two summing to anything else.
- */
-// $12: enough for the signed-out walk's worst-case HOLDS (the audience suggestion
-// alone holds ~8 × $2.25 of model calls before spending ~$2.25 in total), which a
-// $5 seed refused at step 3. Owner-approved 2026-09-28.
-export const TRIAL_SEED_TARGET_CENTS = 1200;
 
 // --- The welcome gift is once per PERSON (migration 0049) ---
 //
