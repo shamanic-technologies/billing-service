@@ -48,6 +48,11 @@ describe("Month-end forced top-up sweep", () => {
         as_of: "2026-01-31T00:00:00.000Z",
       })
     );
+    // Settles charge ACTUAL usage only; with no holds in these fixtures it
+    // equals the projected usage above.
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      async (orgId: string) => ({ spent_cents: usageByOrg.get(orgId) ?? "0.0000000000" })
+    );
   });
 
   afterAll(async () => {
@@ -172,6 +177,14 @@ describe("Month-end forced top-up sweep", () => {
     ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage(orgA, "5000.0000000000"); // deeply negative
+    // The flag needs a real platform run to send its notification; without one
+    // it DEFERS, and a deferred flag is not counted (see money-path-audit).
+    const runsClient = await import("../../src/lib/runs-client.js");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(
+      "00000000-0000-0000-0000-00000000fr01"
+    );
+    const emailClient = await import("../../src/lib/email-client.js");
+    vi.spyOn(emailClient, "sendEmail").mockImplementation(() => {});
 
     const res = await runMonthEndSweep(LAST_DAY);
 
@@ -206,8 +219,11 @@ describe("Month-end forced top-up sweep", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
-  it("AC2: does NOT select an org with no auto-topup config", async () => {
-    await insertTestAccount({ orgId: orgA }); // topupAmountCents null → not enabled
+  it("AC2: does NOT select a PREPAID org with no auto-topup config", async () => {
+    // A POSTPAID org is swept whatever its auto top-up switch says (owner rule:
+    // what a postpaid org owes is collected at month end) — pinned in
+    // money-path-audit.test.ts. A prepaid org with auto top-up off is not.
+    await insertTestAccount({ orgId: orgA, paymentMode: "prepaid" });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage(orgA, "5000.0000000000");
 

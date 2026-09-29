@@ -43,9 +43,9 @@ describe("a customer can stop us holding their card", () => {
         as_of: "2026-01-31T00:00:00.000Z",
       })
     );
-    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockResolvedValue({
-      spent_cents: usageCents,
-    } as never);
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      async () => ({ spent_cents: usageCents }) as never
+    );
   });
 
   afterAll(async () => {

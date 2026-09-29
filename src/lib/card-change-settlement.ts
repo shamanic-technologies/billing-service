@@ -45,7 +45,7 @@
  */
 
 import crypto from "crypto";
-import { computeBalance, type BalanceSnapshot } from "./balance.js";
+import { computeBalance, computeSettleBalanceCents, type BalanceSnapshot } from "./balance.js";
 import { isCardUnusableFor } from "./card-usability.js";
 import { cmpCents } from "./cents.js";
 import { computeSettleCharge, STRIPE_MIN_CHARGE_CENTS } from "./month-end-sweep.js";
@@ -147,7 +147,10 @@ export interface SettlementOutcome {
   declineMessage: string | null;
   /** Cents actually charged (0 when nothing was owed or nothing could be taken). */
   chargedCents: number;
-  /** The balance read before the settle; null when it could not be read. */
+  /**
+   * The balance the settle was decided on — credited minus ACTUAL usage (a
+   * provisioned hold is never charged); null when it could not be read.
+   */
   balanceCents: string | null;
   /** Why nothing was charged. Absent when the settle landed. */
   skipReason?: SettlementSkipReason;
@@ -188,7 +191,9 @@ export async function settleOutstandingBeforeCardChange(
 
 async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcome> {
   const snapshot = await computeBalance(orgId);
-  const balanceCents = snapshot.balanceCents;
+  // What is OWED is actual usage only: a provisioned hold is a reservation that
+  // may yet be cancelled, and a settle must never charge one (owner rule).
+  const balanceCents = await computeSettleBalanceCents(orgId, snapshot);
   const skip = (
     skipReason: SettlementSkipReason,
     result: SettlementResult = "not_attempted",

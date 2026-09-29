@@ -870,35 +870,59 @@ export async function sumPaidTopupsForOrgAsOf(
 }
 
 /**
- * True iff the org's Stripe customer has ≥1 chargeable attached PM (card OR
- * link), via the user-less `/internal/payment_methods/by-org/{orgId}?type=`
- * route. Mirrors `hasAttachedCardPm` (card first, then link fallback) — see its
- * doc for why a saved `type:link` PM is chargeable off_session.
+ * The org's saved payment methods of one type, via the user-less
+ * `/internal/payment_methods/by-org/{orgId}?type=` route, or NULL when
+ * stripe-service says the org has no customer on ANY acquirer.
  *
- * Fail-loud: a stripe-service error (404, timeout, 5xx) propagates. ONLY an
- * empty card AND link list returns false.
+ * stripe-service answers this route from whichever acquirer the org is pinned to
+ * (a Revolut org gets its Revolut customer's methods), so it is the acquirer-
+ * neutral answer to "does this org hold a card". Its 404 is the DEFINITE "no
+ * customer anywhere" — an org still walking onboarding on its trial seed — and is
+ * the only status read as null. Every other non-2xx means we could not ask and
+ * throws (same split as `fetchOrgCustomerOrNull`).
  */
-export async function hasChargeablePmForOrg(orgId: string): Promise<boolean> {
-  const path = `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}`;
-  const cards = await call<StripePaymentMethodList>("GET", `${path}?type=card`, {});
-  if (cards.data.length > 0) return true;
-  const links = await call<StripePaymentMethodList>("GET", `${path}?type=link`, {});
-  return links.data.length > 0;
+async function listOrgPaymentMethodsOrNull(
+  orgId: string,
+  type: "card" | "link"
+): Promise<StripePaymentMethodList | null> {
+  const { url, apiKey } = getConfig();
+  const path = `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}?type=${type}`;
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method: "GET",
+    headers: buildHeaders({}, apiKey),
+  });
+  if (res.ok) return (await res.json()) as StripePaymentMethodList;
+  if (res.status === 404) return null;
+  const text = await res.text();
+  throw new Error(`stripe-service GET ${path} failed: ${res.status} ${text}`);
 }
 
 /**
- * User-less (balance-path) twin of getOrgCardCountry — issuing country of the org's first
- * card PM via the service-authenticated GET /internal/payment_methods/by-org/{orgId}?type=card
- * route (X-API-Key + org only, NO x-user-id). Returns null when the org has no card PM.
- * Fail-loud: a stripe-service error propagates.
+ * True iff the org holds ≥1 chargeable saved method (card OR link), asked of
+ * whichever acquirer holds its cards — NOT only of Stripe. Mirrors
+ * `hasAttachedCardPm` (card first, then link fallback) — see its doc for why a
+ * saved `type:link` PM is chargeable off_session.
+ *
+ * An org with no customer on any acquirer (stripe-service's 404) holds no card:
+ * false. Any other stripe-service failure propagates (fail-loud).
+ */
+export async function hasChargeablePmForOrg(orgId: string): Promise<boolean> {
+  const cards = await listOrgPaymentMethodsOrNull(orgId, "card");
+  if (cards === null) return false;
+  if (cards.data.length > 0) return true;
+  const links = await listOrgPaymentMethodsOrNull(orgId, "link");
+  return links !== null && links.data.length > 0;
+}
+
+/**
+ * User-less (balance-path) twin of getOrgCardCountry — issuing country of the
+ * org's first card, asked of whichever acquirer holds it. Null when the org has
+ * no card (or no customer anywhere), or when the acquirer does not state a
+ * country. Fail-loud on any other stripe-service error.
  */
 export async function getOrgCardCountryByOrg(orgId: string): Promise<string | null> {
-  const cards = await call<StripePaymentMethodList>(
-    "GET",
-    `/internal/payment_methods/by-org/${encodeURIComponent(orgId)}?type=card`,
-    {}
-  );
-  return cards.data[0]?.card?.country ?? null;
+  const cards = await listOrgPaymentMethodsOrNull(orgId, "card");
+  return cards?.data[0]?.card?.country ?? null;
 }
 
 /**

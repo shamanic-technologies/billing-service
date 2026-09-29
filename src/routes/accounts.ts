@@ -21,6 +21,7 @@ import {
   getCustomerByOrgOrNull,
   sumSucceededTopupsForOrg,
   hasAttachedCardPm,
+  hasChargeablePmForOrg,
   getOrgCardCountry,
   getOrgCardDisplay,
   isAutoReloadBlockedCountry,
@@ -77,24 +78,32 @@ async function composeAccountFunds(
   cardExpYear: number | null;
   autoReloadSupported: boolean;
 }> {
-  // An org with NO Stripe customer is an ordinary state, not a failure: the
-  // customer is created at the first payment or saved card, so an org whose only
-  // money is a trial seed or a welcome gift has none. It has no Stripe payments
-  // and no saved card either — neither object can exist without a customer — so
-  // those three reads are answered by derivation rather than issued and 404'd.
-  // Same rule and the same "definite none, never an outage" distinction as
-  // lib/balance's computeBalance; see fetchOrgCustomerOrNull.
+  // An org with NO Stripe customer is an ordinary state, not a failure: an org
+  // whose only money is a trial seed or a welcome gift has none, and neither does
+  // an org paying through another acquirer (Revolut). Same "definite none, never
+  // an outage" distinction as lib/balance's computeBalance; see
+  // fetchOrgCustomerOrNull.
   //
   // Latency: this read sits on every dashboard page, so nothing waits on
   // anything it does not need. The runs-service usage reads, the promo sum and
   // the discount do not depend on the Stripe customer, so they start at once
   // instead of behind the customer lookup; only the three customer-dependent
   // Stripe reads chain on it. Same calls, same figures — only the ordering moved.
+  //
+  // Paid top-ups are ALWAYS asked, customer or not: stripe-service's payment
+  // summary spans every acquirer and answers zero for an org that paid nothing.
+  // An org paying through Revolut has NO Stripe customer by design, so gating
+  // this on one made its completed top-ups vanish from credited_paid and the
+  // balance. For the same reason an org without a Stripe customer asks the
+  // acquirer-neutral card read (hasChargeablePmForOrg), which answers from
+  // whichever acquirer holds the org's card; the Stripe-shaped display read
+  // (brand, last4, expiry) stays Stripe-only — another acquirer does not state
+  // them, and nothing is invented.
   const customerP = getCustomerByOrgOrNull(identity);
   const stripeP = customerP.then((customer) =>
     Promise.all([
-      customer ? sumSucceededTopupsForOrg(orgId) : Promise.resolve(ZERO_CENTS),
-      customer ? hasAttachedCardPm(identity, customer.id) : Promise.resolve(false),
+      sumSucceededTopupsForOrg(orgId),
+      customer ? hasAttachedCardPm(identity, customer.id) : hasChargeablePmForOrg(orgId),
       customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
     ])
   );

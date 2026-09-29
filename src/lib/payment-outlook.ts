@@ -51,11 +51,12 @@ import { Decimal } from "decimal.js";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, campaignReloadSweepAttempts } from "../db/schema.js";
-import { computeBalance } from "./balance.js";
+import { computeBalance, computeSettleBalanceCents } from "./balance.js";
+import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { addCents, cmpCents, subCents } from "./cents.js";
 import { resolveSpendBlock } from "./spend-block.js";
 import { nextRetryDueAt } from "./campaign-reload-sweep.js";
-import { SWEEP_HOUR_UTC } from "./month-end-sweep.js";
+import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
@@ -140,7 +141,12 @@ export interface PaymentOutlook {
   runningDailyBudgetCents: string | null;
 }
 
-/** Every brand of this org that carries a funded ceiling. */
+/**
+ * Every brand of this org that carries a funded ceiling — a campaign ceiling, a
+ * brand-level scalar, or a brand-level "global" sales budget. A brand funded
+ * ONLY by the global sales budget carries neither of the first two, and leaving
+ * it out made its money read as zero.
+ */
 async function fundedBrandIds(orgId: string): Promise<string[]> {
   const rows = await db.execute<{ brand_id: string }>(sql`
     SELECT DISTINCT brand_id
@@ -149,6 +155,10 @@ async function fundedBrandIds(orgId: string): Promise<string[]> {
      UNION
     SELECT DISTINCT brand_id
       FROM brand_daily_budgets
+     WHERE org_id = ${orgId}
+     UNION
+    SELECT DISTINCT brand_id
+      FROM brand_sales_budgets
      WHERE org_id = ${orgId}
   `);
   return (rows as unknown as { brand_id: string }[]).map((r) => r.brand_id);
@@ -174,12 +184,30 @@ async function resolveBudgets(
   if (brandIds.length === 0) return { configuredCents: "0", runningCents: "0" };
 
   const answers = await Promise.all(
-    brandIds.map((brandId) => fetchSpendableBudget(orgId, brandId))
+    brandIds.map(async (brandId) => ({
+      sales: await getBrandSalesBudget(orgId, brandId),
+      answer: await fetchSpendableBudget(orgId, brandId),
+    }))
   );
 
   let configured = "0";
   let running: string | null = "0";
-  for (const answer of answers) {
+  for (const { sales, answer } of answers) {
+    if (sales) {
+      // GLOBAL mode: the brand stated ONE daily sales budget and campaign-service
+      // puts it behind whichever path it picks, so the configured figure is that
+      // amount (billing's own, the same one getBrandDailyBudget serves) — never
+      // the campaign ceilings kept underneath it. It is running when at least one
+      // of the brand's campaigns is; campaign-service's per-ceiling split does not
+      // describe a brand funded this way.
+      configured = addCents(configured, sales.dailyBudgetCents);
+      if (answer === null) {
+        running = null;
+      } else if (running !== null && answer.campaigns.some((c) => c.running)) {
+        running = addCents(running, sales.dailyBudgetCents);
+      }
+      continue;
+    }
     if (answer === null) {
       running = null;
       continue;
@@ -282,6 +310,12 @@ async function openStreak(orgId: string, creditedCents: string) {
  */
 export interface PaymentOutlookInputs {
   balanceCents: string;
+  /**
+   * Credited minus ACTUAL usage — what a month-end settle charges against. The
+   * spendable `balanceCents` also subtracts provisioned holds, which are never
+   * charged (see `computeSettleBalanceCents`).
+   */
+  settleBalanceCents: string;
   paidTopupsCents: string;
   /** The largest stored campaign estimate ("0" when none). */
   requiredCents: string;
@@ -318,22 +352,28 @@ async function decideOutlook(
   inputsOut: { current: PaymentOutlookInputs | null }
 ): Promise<PaymentOutlook | null> {
   const [account] = await db
-    .select({ orgId: billingAccounts.orgId, paymentMode: billingAccounts.paymentMode })
+    .select({
+      orgId: billingAccounts.orgId,
+      paymentMode: billingAccounts.paymentMode,
+      createdAt: billingAccounts.createdAt,
+    })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
   if (!account) return null;
 
   const snapshot = await computeBalance(orgId);
-  const [block, burn, budgets, streak] = await Promise.all([
+  const [block, burn, budgets, streak, settleBalanceCents] = await Promise.all([
     resolveSpendBlock(orgId, snapshot),
-    fetchRealizedDailyBurn(orgId, now),
+    fetchRealizedDailyBurn(orgId, now, account.createdAt),
     resolveBudgets(orgId),
     openStreak(orgId, snapshot.creditedCents),
+    computeSettleBalanceCents(orgId, snapshot),
   ]);
 
   inputsOut.current = {
     balanceCents: snapshot.balanceCents,
+    settleBalanceCents,
     paidTopupsCents: snapshot.paidTopupsCents,
     requiredCents: block.requiredCents,
     tierAmountCents: block.tier ? block.tier.amountCents : null,
@@ -447,6 +487,21 @@ async function decideOutlook(
         blockedReason: "card_country_unsupported",
       };
     }
+    // A POSTPAID org with a chargeable card and auto top-up OFF is still
+    // collected at month end on what it owes (lib/month-end-sweep sweeps every
+    // postpaid org), so when it owes a chargeable amount the month-end settle IS
+    // its next charge — saying `no_autopay` would contradict the sweep about to
+    // charge it. Only what it owes NOW: with no credit line its floor is zero, so
+    // spend stops there and no burn projection can carry it further below.
+    if (paymentMode === "postpaid" && computeSettleCharge(settleBalanceCents) > 0) {
+      return {
+        ...base,
+        state: "will_charge",
+        blockedReason: null,
+        nextChargeAttemptAt: nextMonthEndSweepAt(now).toISOString(),
+        trigger: "month_end",
+      };
+    }
     return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
   }
 
@@ -470,7 +525,7 @@ async function decideOutlook(
   // state says plainly that the floor crossing is unknown rather than implying
   // a projection nobody made.
   if (burn.dailyCents === null) {
-    const owes = cmpCents(snapshot.balanceCents, "0") < 0;
+    const owes = cmpCents(settleBalanceCents, "0") < 0;
     return {
       ...base,
       state: "unknown",
@@ -495,7 +550,10 @@ async function decideOutlook(
   );
   if (crossing !== null) candidates.push({ at: crossing, trigger: "floor" });
 
-  if (settlesAtMonthEnd(snapshot.balanceCents, burn.dailyCents, now, monthEnd)) {
+  // The month-end settle charges ACTUAL usage only, so it is projected from the
+  // settle balance, not from the spendable one (which also holds provisioned
+  // reservations that are never charged).
+  if (settlesAtMonthEnd(settleBalanceCents, burn.dailyCents, now, monthEnd)) {
     candidates.push({ at: monthEnd, trigger: "month_end" });
   }
 

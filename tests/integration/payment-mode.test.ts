@@ -231,7 +231,7 @@ describe("payment mode: prepaid / postpaid", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
-  it("becoming prepaid turns auto top-up ON; back to postpaid charges nothing", async () => {
+  it("becoming prepaid with NO card leaves auto top-up off; back to postpaid charges nothing", async () => {
     await insertTestAccount({ orgId, topupAmountCents: undefined });
     await db
       .update(billingAccounts)
@@ -244,7 +244,10 @@ describe("payment mode: prepaid / postpaid", () => {
       .set(apiKeyHeaders)
       .send({ payment_mode: "prepaid" });
     expect(toPrepaid.status).toBe(200);
-    expect(toPrepaid.body.auto_topup_enabled).toBe(true);
+    // No chargeable card (the suite default), so the flag stays off: a flag set
+    // with nothing to charge is a configuration that lies. With a card it is
+    // armed — see money-path-audit.test.ts.
+    expect(toPrepaid.body.auto_topup_enabled).toBe(false);
     expect(toPrepaid.body.settled_cents).toBe("0");
 
     const again = await request(app)
