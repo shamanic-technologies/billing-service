@@ -3588,3 +3588,198 @@ registry.registerPath({
     400: { description: "Invalid brandId", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+// --- Revenue: recurring (DRR/MRR/ARR), one-off, cash flow (lib/revenue) ---
+
+const RevenueClassSchema = z.enum(["recurring", "one_off", "none"]);
+const RevenueClassReasonSchema = z.enum([
+  "postpaid_chargeable_card",
+  "prepaid_auto_topup",
+  "prepaid_no_auto_topup",
+  "prepaid_no_chargeable_card",
+  "postpaid_no_chargeable_card",
+  "prepaid_balance_spent",
+]);
+const DailyBudgetUnknownReasonSchema = z.enum([
+  "campaign_service_unconfigured",
+  "campaign_service_unavailable",
+  "campaign_recurrence_unknown",
+]);
+
+export const OneOffRevenueSchema = z
+  .object({
+    remainingCents: z.string(),
+    dailyPaceCents: z.string().nullable(),
+    runOutAt: z.string().nullable(),
+    runOutUnknownReason: z
+      .enum([
+        "campaign_service_unconfigured",
+        "campaign_service_unavailable",
+        "campaign_recurrence_unknown",
+        "no_proactive_spend",
+      ])
+      .nullable(),
+  })
+  .openapi("OneOffRevenue");
+
+export const ProjectedRevenueSchema = z
+  .object({
+    horizonDays: z.number().int(),
+    recurringCents: z.string().nullable(),
+    oneOffCents: z.string().nullable(),
+    totalCents: z.string().nullable(),
+  })
+  .openapi("ProjectedRevenue");
+
+export const RevenueBrandLineSchema = z
+  .object({
+    brandId: z.string(),
+    mode: z.enum(["global", "campaigns", "brand_scalar"]),
+    configuredDailyBudgetCents: z.string(),
+    proactiveDailyBudgetCents: z.string().nullable(),
+    unknownReason: DailyBudgetUnknownReasonSchema.nullable(),
+  })
+  .openapi("RevenueBrandLine");
+
+export const RevenueCampaignLineSchema = z
+  .object({
+    campaignId: z.string(),
+    brandId: z.string().nullable(),
+    offerId: z.string().nullable(),
+    legKey: z.string().nullable(),
+    featureSlug: z.string().nullable(),
+    running: z.boolean(),
+    kind: z.enum(["proactive", "reactive"]).nullable(),
+    audience: z.enum(["available", "exhausted", "not_recorded"]),
+    recurring: z.boolean().nullable(),
+    recurringUnknownReason: z.string().nullable(),
+    dailyBudgetCents: z.string().nullable(),
+    counted: z.boolean(),
+  })
+  .openapi("RevenueCampaignLine");
+
+const revenueCore = {
+  orgId: z.string().uuid(),
+  paymentMode: PaymentModeSchema,
+  revenueClass: RevenueClassSchema,
+  classReason: RevenueClassReasonSchema,
+  chargeableCard: z.boolean(),
+  autoTopupEnabled: z.boolean(),
+  balanceCents: z.string(),
+  proactiveDailyBudgetCents: z.string().nullable(),
+  proactiveDailyBudgetUnknownReason: DailyBudgetUnknownReasonSchema.nullable(),
+  /** Recurring orgs: the proactive daily budget; others "0"; null when unknown. */
+  drrCents: z.string().nullable(),
+  mrrCents: z.string().nullable(),
+  arrCents: z.string().nullable(),
+  oneOff: OneOffRevenueSchema.nullable(),
+  projections: z.array(ProjectedRevenueSchema),
+};
+
+export const OrgRevenueResponseSchema = z
+  .object({
+    ...revenueCore,
+    asOf: z.string(),
+    hasPaymentMethod: z.boolean(),
+    cardCountrySupported: z.boolean(),
+    cardUnusable: z.boolean(),
+    cash: ChargeScheduleResponseSchema,
+    brands: z.array(RevenueBrandLineSchema),
+    campaigns: z.array(RevenueCampaignLineSchema),
+  })
+  .openapi("OrgRevenueResponse");
+
+const CashBucketSchema = z
+  .object({
+    start: z.string(),
+    amountCents: z.string(),
+    eventCount: z.number().int(),
+    unknownAmountEventCount: z.number().int(),
+  })
+  .openapi("CashBucket");
+
+export const FleetRevenueResponseSchema = z
+  .object({
+    asOf: z.string(),
+    cashHorizonDays: z.number().int(),
+    accountCount: z.number().int(),
+    classCounts: z.object({ recurring: z.number(), one_off: z.number(), none: z.number() }),
+    totals: z.object({
+      drrCents: z.string(),
+      mrrCents: z.string(),
+      arrCents: z.string(),
+      drrUnknownOrgIds: z.array(z.string()),
+      oneOffRemainingCents: z.string(),
+      windows: z.array(
+        z.object({
+          horizonDays: z.number().int(),
+          projectedRevenueCents: z.string(),
+          recurringCents: z.string(),
+          oneOffCents: z.string(),
+          unknownOrgIds: z.array(z.string()),
+          cashCents: z.string(),
+          cashEventCount: z.number().int(),
+          unknownAmountCashEventCount: z.number().int(),
+        })
+      ),
+    }),
+    cashFlow: z.object({ byDay: z.array(CashBucketSchema), byWeek: z.array(CashBucketSchema) }),
+    orgs: z.array(
+      z.object({
+        ...revenueCore,
+        cashState: ChargeScheduleResponseSchema.shape.state,
+        cashBlockedReason: ChargeScheduleResponseSchema.shape.blockedReason,
+        cashEvents: z.array(ExpectedChargeSchema),
+      })
+    ),
+    unreadableOrgs: z.array(z.object({ orgId: z.string(), error: z.string() })),
+  })
+  .openapi("FleetRevenueResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/revenue/by-org/{orgId}",
+  summary: "One org's recurring revenue, one-off money and expected cash",
+  description:
+    "Class (recurring: postpaid with a chargeable card, or prepaid with auto top-up and a " +
+    "chargeable card; one_off: prepaid otherwise, still holding money; none otherwise, with " +
+    "the reason). DRR = the daily budgets of the org's proactive campaigns (entry legs) that " +
+    "are running and not audience-exhausted, per campaign-service's recurring-status; reactive " +
+    "legs never count. MRR = DRR x 30, ARR = MRR x 12. A one-off org states its remaining " +
+    "spendable money, its pace and its run-out date and contributes no MRR. 30/90-day " +
+    "projections, and the org's charge schedule as its cash. Unknown figures are null with a " +
+    "reason, never 0. x-api-key only; pure read.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+    query: z.object({ cashHorizonDays: z.string().optional() }),
+  },
+  responses: {
+    200: { description: "The org's revenue", content: { "application/json": { schema: OrgRevenueResponseSchema } } },
+    400: { description: "Bad orgId or cashHorizonDays", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No billing account", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "A sibling read failed", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/revenue/fleet",
+  summary: "Every org's revenue row, fleet totals, projections and cash flow by day/week",
+  description:
+    "One row per billing account (same fields as the per-org read, minus the campaign detail), " +
+    "the fleet totals (DRR/MRR/ARR = sum of the known per-org rows; unknown orgs listed, never " +
+    "counted as 0), 30/90-day projected revenue, and the expected cash (sum of every org's " +
+    "charge schedule) in 30/90-day windows and bucketed by UTC day and ISO week. Orgs whose " +
+    "read failed are listed in unreadableOrgs. cashHorizonDays 90 to 366 (default 90). " +
+    "x-api-key only, org-less; pure read.",
+  request: {
+    headers: internalHeaders,
+    query: z.object({ cashHorizonDays: z.string().optional() }),
+  },
+  responses: {
+    200: { description: "Fleet revenue", content: { "application/json": { schema: FleetRevenueResponseSchema } } },
+    400: { description: "Bad cashHorizonDays", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "The account list could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});

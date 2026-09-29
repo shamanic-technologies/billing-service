@@ -154,3 +154,86 @@ export async function fetchSpendableBudget(
     return null;
   }
 }
+
+/**
+ * One campaign of an org, as campaign-service states whether it counts toward
+ * recurring daily spend right now (`GET /internal/campaigns/recurring-status`,
+ * campaign-service v0.73.17). No money in it: amounts are billing's.
+ */
+export interface RecurringCampaignStatus {
+  campaignId: string;
+  orgId: string;
+  brandId: string | null;
+  offerId: string | null;
+  legKey: string | null;
+  /** The acquisition channel, a features-service feature slug. */
+  featureSlug: string | null;
+  status: string;
+  running: boolean;
+  executedByPlatform: boolean;
+  /** proactive = an ENTRY leg (daily spend); reactive = fires from a step. */
+  kind: "proactive" | "reactive" | null;
+  kindUnknownReason?: string;
+  audience: "available" | "exhausted" | "not_recorded";
+  allAudiencesExhausted: boolean | null;
+  /** running AND platform-executed AND proactive AND not exhausted; null when it turns on an unknown. */
+  recurring: boolean | null;
+  recurringUnknownReason?: string;
+}
+
+export type RecurringStatusUnavailableReason =
+  | "campaign_service_unconfigured"
+  | "campaign_service_unavailable";
+
+export type RecurringStatusAnswer =
+  | { ok: true; campaigns: RecurringCampaignStatus[] }
+  | { ok: false; reason: RecurringStatusUnavailableReason };
+
+/**
+ * Every campaign of one org with campaign-service's recurring verdict.
+ *
+ * Fail-soft with a NAMED reason, never a guess: the revenue read turns an
+ * unanswerable org into a null daily revenue carrying that reason — never 0,
+ * which would read as a customer who stopped spending.
+ */
+export async function fetchRecurringCampaignStatuses(
+  orgId: string
+): Promise<RecurringStatusAnswer> {
+  const config = getCampaignServiceConfig();
+  if (!config) {
+    console.error(
+      "[billing-service] CAMPAIGN_SERVICE not configured — recurring revenue cannot be read"
+    );
+    return { ok: false, reason: "campaign_service_unconfigured" };
+  }
+  try {
+    const res = await fetchWithRetry(
+      `${config.url}/internal/campaigns/recurring-status?orgId=${encodeURIComponent(orgId)}`,
+      {
+        method: "GET",
+        headers: { "x-api-key": config.apiKey },
+        signal: AbortSignal.timeout(SPENDABLE_TIMEOUT_MS * 2),
+      }
+    );
+    if (!res.ok) {
+      console.error(
+        `[billing-service] campaign-service recurring-status failed for org=${orgId}: ${res.status} ${await res.text()}`
+      );
+      return { ok: false, reason: "campaign_service_unavailable" };
+    }
+    const body = (await res.json()) as { campaigns?: unknown };
+    if (!Array.isArray(body?.campaigns)) {
+      console.error(
+        `[billing-service] campaign-service recurring-status answered an unusable shape for org=${orgId}`
+      );
+      return { ok: false, reason: "campaign_service_unavailable" };
+    }
+    return { ok: true, campaigns: body.campaigns as RecurringCampaignStatus[] };
+  } catch (err) {
+    console.error(
+      `[billing-service] campaign-service recurring-status unreachable for org=${orgId}:`,
+      err
+    );
+    return { ok: false, reason: "campaign_service_unavailable" };
+  }
+}

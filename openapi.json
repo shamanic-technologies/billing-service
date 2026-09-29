@@ -2595,6 +2595,615 @@
             ]
           }
         ]
+      },
+      "OneOffRevenue": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "remainingCents": {
+            "type": "string"
+          },
+          "dailyPaceCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "runOutAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "runOutUnknownReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "campaign_service_unconfigured",
+              "campaign_service_unavailable",
+              "campaign_recurrence_unknown",
+              "no_proactive_spend"
+            ]
+          }
+        },
+        "required": [
+          "remainingCents",
+          "dailyPaceCents",
+          "runOutAt",
+          "runOutUnknownReason"
+        ]
+      },
+      "ProjectedRevenue": {
+        "type": "object",
+        "properties": {
+          "horizonDays": {
+            "type": "integer"
+          },
+          "recurringCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "oneOffCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "totalCents": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "horizonDays",
+          "recurringCents",
+          "oneOffCents",
+          "totalCents"
+        ]
+      },
+      "RevenueBrandLine": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "global",
+              "campaigns",
+              "brand_scalar"
+            ]
+          },
+          "configuredDailyBudgetCents": {
+            "type": "string"
+          },
+          "proactiveDailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "unknownReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "campaign_service_unconfigured",
+              "campaign_service_unavailable",
+              "campaign_recurrence_unknown"
+            ]
+          }
+        },
+        "required": [
+          "brandId",
+          "mode",
+          "configuredDailyBudgetCents",
+          "proactiveDailyBudgetCents",
+          "unknownReason"
+        ]
+      },
+      "RevenueCampaignLine": {
+        "type": "object",
+        "properties": {
+          "campaignId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string",
+            "nullable": true
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "legKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "featureSlug": {
+            "type": "string",
+            "nullable": true
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "proactive",
+              "reactive"
+            ]
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "available",
+              "exhausted",
+              "not_recorded"
+            ]
+          },
+          "recurring": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "recurringUnknownReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "campaignId",
+          "brandId",
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "running",
+          "kind",
+          "audience",
+          "recurring",
+          "recurringUnknownReason",
+          "dailyBudgetCents",
+          "counted"
+        ]
+      },
+      "OrgRevenueResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+          },
+          "revenueClass": {
+            "type": "string",
+            "enum": [
+              "recurring",
+              "one_off",
+              "none"
+            ]
+          },
+          "classReason": {
+            "type": "string",
+            "enum": [
+              "postpaid_chargeable_card",
+              "prepaid_auto_topup",
+              "prepaid_no_auto_topup",
+              "prepaid_no_chargeable_card",
+              "postpaid_no_chargeable_card",
+              "prepaid_balance_spent"
+            ]
+          },
+          "chargeableCard": {
+            "type": "boolean"
+          },
+          "autoTopupEnabled": {
+            "type": "boolean"
+          },
+          "balanceCents": {
+            "type": "string"
+          },
+          "proactiveDailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "proactiveDailyBudgetUnknownReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "campaign_service_unconfigured",
+              "campaign_service_unavailable",
+              "campaign_recurrence_unknown"
+            ]
+          },
+          "drrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "mrrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "arrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "oneOff": {
+            "$ref": "#/components/schemas/OneOffRevenue"
+          },
+          "projections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectedRevenue"
+            }
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "hasPaymentMethod": {
+            "type": "boolean"
+          },
+          "cardCountrySupported": {
+            "type": "boolean"
+          },
+          "cardUnusable": {
+            "type": "boolean"
+          },
+          "cash": {
+            "$ref": "#/components/schemas/ChargeScheduleResponse"
+          },
+          "brands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueBrandLine"
+            }
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueCampaignLine"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "paymentMode",
+          "revenueClass",
+          "classReason",
+          "chargeableCard",
+          "autoTopupEnabled",
+          "balanceCents",
+          "proactiveDailyBudgetCents",
+          "proactiveDailyBudgetUnknownReason",
+          "drrCents",
+          "mrrCents",
+          "arrCents",
+          "oneOff",
+          "projections",
+          "asOf",
+          "hasPaymentMethod",
+          "cardCountrySupported",
+          "cardUnusable",
+          "cash",
+          "brands",
+          "campaigns"
+        ]
+      },
+      "CashBucket": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "string"
+          },
+          "eventCount": {
+            "type": "integer"
+          },
+          "unknownAmountEventCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "amountCents",
+          "eventCount",
+          "unknownAmountEventCount"
+        ]
+      },
+      "FleetRevenueResponse": {
+        "type": "object",
+        "properties": {
+          "asOf": {
+            "type": "string"
+          },
+          "cashHorizonDays": {
+            "type": "integer"
+          },
+          "accountCount": {
+            "type": "integer"
+          },
+          "classCounts": {
+            "type": "object",
+            "properties": {
+              "recurring": {
+                "type": "number"
+              },
+              "one_off": {
+                "type": "number"
+              },
+              "none": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "recurring",
+              "one_off",
+              "none"
+            ]
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "drrCents": {
+                "type": "string"
+              },
+              "mrrCents": {
+                "type": "string"
+              },
+              "arrCents": {
+                "type": "string"
+              },
+              "drrUnknownOrgIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "oneOffRemainingCents": {
+                "type": "string"
+              },
+              "windows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "horizonDays": {
+                      "type": "integer"
+                    },
+                    "projectedRevenueCents": {
+                      "type": "string"
+                    },
+                    "recurringCents": {
+                      "type": "string"
+                    },
+                    "oneOffCents": {
+                      "type": "string"
+                    },
+                    "unknownOrgIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "cashCents": {
+                      "type": "string"
+                    },
+                    "cashEventCount": {
+                      "type": "integer"
+                    },
+                    "unknownAmountCashEventCount": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "horizonDays",
+                    "projectedRevenueCents",
+                    "recurringCents",
+                    "oneOffCents",
+                    "unknownOrgIds",
+                    "cashCents",
+                    "cashEventCount",
+                    "unknownAmountCashEventCount"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "drrCents",
+              "mrrCents",
+              "arrCents",
+              "drrUnknownOrgIds",
+              "oneOffRemainingCents",
+              "windows"
+            ]
+          },
+          "cashFlow": {
+            "type": "object",
+            "properties": {
+              "byDay": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CashBucket"
+                }
+              },
+              "byWeek": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CashBucket"
+                }
+              }
+            },
+            "required": [
+              "byDay",
+              "byWeek"
+            ]
+          },
+          "orgs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "orgId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "paymentMode": {
+                  "type": "string",
+                  "enum": [
+                    "prepaid",
+                    "postpaid"
+                  ],
+                  "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+                },
+                "revenueClass": {
+                  "type": "string",
+                  "enum": [
+                    "recurring",
+                    "one_off",
+                    "none"
+                  ]
+                },
+                "classReason": {
+                  "type": "string",
+                  "enum": [
+                    "postpaid_chargeable_card",
+                    "prepaid_auto_topup",
+                    "prepaid_no_auto_topup",
+                    "prepaid_no_chargeable_card",
+                    "postpaid_no_chargeable_card",
+                    "prepaid_balance_spent"
+                  ]
+                },
+                "chargeableCard": {
+                  "type": "boolean"
+                },
+                "autoTopupEnabled": {
+                  "type": "boolean"
+                },
+                "balanceCents": {
+                  "type": "string"
+                },
+                "proactiveDailyBudgetCents": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "proactiveDailyBudgetUnknownReason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "campaign_service_unconfigured",
+                    "campaign_service_unavailable",
+                    "campaign_recurrence_unknown"
+                  ]
+                },
+                "drrCents": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "mrrCents": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "arrCents": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "oneOff": {
+                  "$ref": "#/components/schemas/OneOffRevenue"
+                },
+                "projections": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectedRevenue"
+                  }
+                },
+                "cashState": {
+                  "type": "string",
+                  "enum": [
+                    "will_charge",
+                    "charge_due_now",
+                    "charge_blocked",
+                    "no_autopay",
+                    "idle",
+                    "unknown"
+                  ]
+                },
+                "cashBlockedReason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "card_declined",
+                    "card_unusable",
+                    "retries_exhausted",
+                    "no_chargeable_card",
+                    "card_country_unsupported"
+                  ]
+                },
+                "cashEvents": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExpectedCharge"
+                  }
+                }
+              },
+              "required": [
+                "orgId",
+                "paymentMode",
+                "revenueClass",
+                "classReason",
+                "chargeableCard",
+                "autoTopupEnabled",
+                "balanceCents",
+                "proactiveDailyBudgetCents",
+                "proactiveDailyBudgetUnknownReason",
+                "drrCents",
+                "mrrCents",
+                "arrCents",
+                "oneOff",
+                "projections",
+                "cashState",
+                "cashBlockedReason",
+                "cashEvents"
+              ]
+            }
+          },
+          "unreadableOrgs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "orgId": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "orgId",
+                "error"
+              ]
+            }
+          }
+        },
+        "required": [
+          "asOf",
+          "cashHorizonDays",
+          "accountCount",
+          "classCounts",
+          "totals",
+          "cashFlow",
+          "orgs",
+          "unreadableOrgs"
+        ]
       }
     },
     "parameters": {}
@@ -8243,6 +8852,137 @@
           },
           "400": {
             "description": "Invalid brandId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/revenue/by-org/{orgId}": {
+      "get": {
+        "summary": "One org's recurring revenue, one-off money and expected cash",
+        "description": "Class (recurring: postpaid with a chargeable card, or prepaid with auto top-up and a chargeable card; one_off: prepaid otherwise, still holding money; none otherwise, with the reason). DRR = the daily budgets of the org's proactive campaigns (entry legs) that are running and not audience-exhausted, per campaign-service's recurring-status; reactive legs never count. MRR = DRR x 30, ARR = MRR x 12. A one-off org states its remaining spendable money, its pace and its run-out date and contributes no MRR. 30/90-day projections, and the org's charge schedule as its cash. Unknown figures are null with a reason, never 0. x-api-key only; pure read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cashHorizonDays",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The org's revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgRevenueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad orgId or cashHorizonDays",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "A sibling read failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/revenue/fleet": {
+      "get": {
+        "summary": "Every org's revenue row, fleet totals, projections and cash flow by day/week",
+        "description": "One row per billing account (same fields as the per-org read, minus the campaign detail), the fleet totals (DRR/MRR/ARR = sum of the known per-org rows; unknown orgs listed, never counted as 0), 30/90-day projected revenue, and the expected cash (sum of every org's charge schedule) in 30/90-day windows and bucketed by UTC day and ISO week. Orgs whose read failed are listed in unreadableOrgs. cashHorizonDays 90 to 366 (default 90). x-api-key only, org-less; pure read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cashHorizonDays",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fleet revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetRevenueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad cashHorizonDays",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The account list could not be read",
             "content": {
               "application/json": {
                 "schema": {
