@@ -1,31 +1,13 @@
 /**
- * The RUNNING side of a daily-budget change: how much of the brand's money was
- * attached to an ongoing campaign before the write, and how much is after it.
+ * Which ceilings a budget write moved, as (before, after) pairs per mission.
  *
- * WHY BOTH SIDES COME FROM ONE READ. campaign-service answers the running total
- * for the ceilings as they stand NOW — it holds no history, so there is no
- * "running total as of before your write" to ask it for. It does not need one:
- * a budget write changes CEILINGS, never campaign STATUS, so the same
- * running/not-running verdict per ceiling applies to both sides of the change.
- * The previous per-ceiling values are already in hand at the write. So:
- *
- *     runningBefore = runningNow + Σ (previous − new) over RUNNING ceilings
- *
- * `runningNow` is campaign-service's SERVED total, never recomposed here — the
- * same rule billing applies to its own ceiling sums, and for the same reason:
- * two surfaces that add the same rows up separately eventually disagree.
- *
- * A CEILING DELETED BY THE WRITE has no row left for campaign-service to carry a
- * running flag on, because `rows` are built from billing's stored ceilings. It
- * is resolved instead against the `campaigns` list of the SAME response, matched
- * on the campaign the ceiling named — (channel, offer, leg), campaign-service's
- * own attribution of a campaign, not a second copy of that matching here.
- * A deleted ceiling that no campaign names counts as NOT running: it was money
- * with nothing standing behind it, so removing it changed no running figure.
+ * The staff budget-change email reports one line per changed mission; this is
+ * the diff it reads. The previous per-ceiling values come from the write itself
+ * (the locked pre-write read), never from another service. An opened ceiling
+ * reads as 0 -> value, a deleted one as value -> 0.
  */
 
 import { Decimal } from "decimal.js";
-import type { SpendableBudget } from "./campaign-service-client.js";
 
 /**
  * One ceiling this write touched. `previousDailyBudgetCents` is "0" for a
@@ -115,13 +97,6 @@ export function brandGrainChange(
   ];
 }
 
-export interface RunningTotals {
-  /** campaign-service's served figure for the ceilings as they now stand. */
-  runningNowCents: string;
-  /** The same figure for the ceilings as they stood before this write. */
-  runningBeforeCents: string;
-}
-
 function grainKey(
   featureSlug: string | null,
   offerId: string | null,
@@ -130,61 +105,4 @@ function grainKey(
   return [featureSlug ?? "", (offerId ?? "").toLowerCase(), legKey ?? ""].join(
     "\u0000"
   );
-}
-
-/**
- * Is a campaign standing behind this ceiling, and is it ongoing?
- *
- * Prefers the ceiling's own row (campaign-service already decided this for every
- * ceiling billing currently stores). Falls back to a campaign on the same
- * channel — and the same offer / leg when the ceiling names one — which is the
- * only evidence available for a ceiling this write deleted.
- */
-function isRunning(spendable: SpendableBudget, change: CeilingChange): boolean {
-  const key = grainKey(change.featureSlug, change.offerId, change.legKey);
-
-  const row = spendable.rows.find(
-    (r) => grainKey(r.featureSlug, r.offerId, r.legKey) === key
-  );
-  if (row) return row.running;
-
-  // A ceiling that named no offer (or no leg) predates that dimension; the
-  // write that deleted it is the one that adopted it into a campaign, so any
-  // campaign on the channel may stand behind it.
-  return spendable.campaigns.some(
-    (c) =>
-      c.running &&
-      (c.featureSlug ?? "") === (change.featureSlug ?? "") &&
-      (change.offerId === null ||
-        (c.offerId ?? "").toLowerCase() === change.offerId.toLowerCase()) &&
-      (change.legKey === null || c.legKey === change.legKey)
-  );
-}
-
-/**
- * Both sides of the running figure for one budget write.
- *
- * Never negative: a running total is money, and an arithmetic that walked below
- * zero would mean the inputs disagreed, which must not surface to staff as a
- * negative dollar figure.
- */
-export function runningTotalsFor(
-  spendable: SpendableBudget,
-  changes: CeilingChange[]
-): RunningTotals {
-  const now = new Decimal(spendable.runningDailyBudgetCents);
-
-  let before = now;
-  for (const change of changes) {
-    if (!isRunning(spendable, change)) continue;
-    before = before
-      .plus(new Decimal(change.previousDailyBudgetCents))
-      .minus(new Decimal(change.newDailyBudgetCents));
-  }
-  if (before.isNegative()) before = new Decimal(0);
-
-  return {
-    runningNowCents: now.toFixed(10),
-    runningBeforeCents: before.toFixed(10),
-  };
 }

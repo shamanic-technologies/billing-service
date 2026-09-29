@@ -74,8 +74,34 @@ describe("brand budget notification → running headline", () => {
       rows,
     };
 
+    process.env.FEATURES_SERVICE_URL = "http://features.test";
+    const catalogue = {
+      channels: [
+        {
+          slug: RUNNING_CHANNEL,
+          name: "Sales Cold Email Outreach",
+          stepTransitions: [
+            { legKey: LEG, from: null, to: { label: "Positive reply" }, crewName: "Herald" },
+          ],
+        },
+        {
+          slug: PAUSED_CHANNEL,
+          name: "Feedback Request Cold Email Outreach",
+          stepTransitions: [
+            { legKey: LEG, from: null, to: { label: "Positive reply" }, crewName: null },
+          ],
+        },
+      ],
+    };
+
     return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : String(input);
+      if (url === "http://features.test/public/channels") {
+        return new Response(JSON.stringify(catalogue), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       if (url.includes("/spendable-budget")) {
         return new Response(JSON.stringify(body), {
           status: 200,
@@ -108,6 +134,7 @@ describe("brand budget notification → running headline", () => {
     vi.restoreAllMocks();
     delete process.env.CAMPAIGN_SERVICE_URL;
     delete process.env.CAMPAIGN_SERVICE_API_KEY;
+    delete process.env.FEATURES_SERVICE_URL;
     await cleanTestData();
     await spyOnSendEmail();
   });
@@ -120,7 +147,7 @@ describe("brand budget notification → running headline", () => {
     await closeDb();
   });
 
-  it("headlines the running money and states the configured total beside it", async () => {
+  it("names the changed mission and totals only running daily money", async () => {
     await seedBoth();
 
     mockCampaignService([
@@ -131,17 +158,19 @@ describe("brand budget notification → running headline", () => {
     const res = await putCampaign(RUNNING_CHANNEL, 21000);
     expect(res.status).toBe(200);
 
-    const metadata = await sentMetadata();
-    // The headline: only money behind an ongoing campaign.
-    expect(metadata.previousRunningBudget).toBe("$200/day");
-    expect(metadata.newRunningBudget).toBe("$210/day");
-    // The configured totals, which the old email used as the headline.
-    expect(metadata.previousBudget).toBe("$210/day");
-    expect(metadata.newBudget).toBe("$220/day");
-    expect(metadata.runningNote).toContain("ongoing");
+    const { subject, summaryText } = await sentMetadata();
+    expect(subject).toContain("raised Herald: $200/day → $210/day");
+    expect(summaryText).toContain(
+      "Herald · Sales Cold Email Outreach · Positive reply"
+    );
+    expect(summaryText).toContain("$200/day → $210/day (+$10, +5%)");
+    expect(summaryText).toContain("Daily spend now: $210/day");
+    expect(summaryText).toContain("Paused (amount kept, not spending)");
+    expect(summaryText).toMatch(/Unnamed crew · Feedback Request .*: \$10\/day kept/);
+    expect(summaryText).not.toContain("$220");
   });
 
-  it("still sends when only PAUSED money moved, with the headline unchanged", async () => {
+  it("still sends when only PAUSED money moved, with the daily total unchanged", async () => {
     await seedBoth();
 
     mockCampaignService([
@@ -151,16 +180,13 @@ describe("brand budget notification → running headline", () => {
 
     await putCampaign(PAUSED_CHANNEL, 2000);
 
-    const metadata = await sentMetadata();
-    expect(metadata.previousRunningBudget).toBe("$200/day");
-    expect(metadata.newRunningBudget).toBe("$200/day");
-    expect(metadata.previousBudget).toBe("$210/day");
-    expect(metadata.newBudget).toBe("$220/day");
+    const { summaryText } = await sentMetadata();
+    expect(summaryText).toContain("$10/day → $20/day (+$10, +100%)");
+    expect(summaryText).toContain("Daily spend now: $200/day");
+    expect(summaryText).toMatch(/: \$20\/day kept/);
   });
 
-  it("a pre-offer ceiling the write ADOPTED is resolved against the campaigns, not dropped", async () => {
-    // A ceiling written before offers and legs existed: the campaign write
-    // adopts it, so its old key is deleted and no row carries its flag any more.
+  it("a pre-offer ceiling the write ADOPTED shows as moved onto the named mission", async () => {
     await db.insert(campaignDailyBudgets).values({
       orgId,
       brandId,
@@ -177,11 +203,11 @@ describe("brand budget notification → running headline", () => {
     const res = await putCampaign(RUNNING_CHANNEL, 21000);
     expect(res.status).toBe(200);
 
-    const metadata = await sentMetadata();
-    expect(metadata.previousRunningBudget).toBe("$200/day");
-    expect(metadata.newRunningBudget).toBe("$210/day");
-    expect(metadata.previousBudget).toBe("$200/day");
-    expect(metadata.newBudget).toBe("$210/day");
+    const { summaryText } = await sentMetadata();
+    // A leg-less legacy row cannot be classified, so it carries no unit.
+    expect(summaryText).toContain("no leg stated · no offer: $200 → paused ($0)");
+    expect(summaryText).toContain("$0 → $210/day (+$210, new)");
+    expect(summaryText).toContain("Daily spend now: $210/day");
   });
 
   it("an unreachable campaign-service leaves the write and the send intact", async () => {
@@ -196,11 +222,8 @@ describe("brand budget notification → running headline", () => {
     expect(res.status).toBe(200);
     expect(res.body.dailyBudgetCents).toBe("21000.0000000000");
 
-    const metadata = await sentMetadata();
-    expect(metadata.previousRunningBudget).toBe("unavailable");
-    expect(metadata.newRunningBudget).toBe("unavailable");
-    expect(metadata.runningNote).toContain("campaign-service could not be read");
-    expect(metadata.previousBudget).toBe("$200/day");
-    expect(metadata.newBudget).toBe("$210/day");
+    const { summaryText } = await sentMetadata();
+    expect(summaryText).toContain("Daily spend now: unavailable");
+    expect(summaryText).toContain("Campaign statuses could not be read");
   });
 });
