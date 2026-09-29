@@ -213,7 +213,21 @@ export async function getChargeSchedule(
 ): Promise<ChargeSchedule | null> {
   const resolved = await resolvePaymentOutlook(orgId, now);
   if (!resolved) return null;
+  return chargeScheduleFrom(resolved, horizonDays, now);
+}
+
+/**
+ * The schedule built from an outlook the caller already resolved — so a reader
+ * that needs both (lib/revenue) decides the org ONCE and the two can never
+ * disagree about it.
+ */
+export function chargeScheduleFrom(
+  resolved: NonNullable<Awaited<ReturnType<typeof resolvePaymentOutlook>>>,
+  horizonDays: number,
+  now: Date
+): ChargeSchedule {
   const { outlook, inputs } = resolved;
+  const orgId = outlook.orgId;
   const end = new Date(now.getTime() + horizonDays * DAY_MS);
 
   let events: ExpectedCharge[] = [];

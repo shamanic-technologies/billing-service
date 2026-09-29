@@ -53,6 +53,12 @@ import {
   OnDemandChargeError,
 } from "../lib/on-demand-charge.js";
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
+import {
+  getOrgRevenue,
+  getFleetRevenue,
+  DEFAULT_CASH_HORIZON_DAYS,
+  MAX_CASH_HORIZON_DAYS,
+} from "../lib/revenue.js";
 
 const router = Router();
 
@@ -782,6 +788,69 @@ router.get("/internal/accounts/by-org/:orgId/charge-schedule", async (req, res) 
       err
     );
     res.status(502).json({ error: "Failed to read charge schedule" });
+  }
+});
+
+/** Parse `cashHorizonDays` (default 90). Returns the number or an error string. */
+function parseCashHorizon(raw: unknown, min: number): number | string {
+  if (raw === undefined) return DEFAULT_CASH_HORIZON_DAYS;
+  const n = typeof raw === "string" && /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isInteger(n) || n < min || n > MAX_CASH_HORIZON_DAYS) {
+    return `cashHorizonDays must be an integer from ${min} to ${MAX_CASH_HORIZON_DAYS}`;
+  }
+  return n;
+}
+
+// GET /internal/revenue/by-org/:orgId?cashHorizonDays=90
+//
+// The SaaS business for ONE org, in three figures (lib/revenue): its class
+// (recurring / one_off / none, with the reason), its recurring revenue
+// (DRR, MRR = DRR x 30, ARR = MRR x 12), its one-off money and run-out date,
+// the 30/90-day projections, and its charge schedule (the cash). Every input is
+// stated on the row, down to the campaigns counted. Consumers: the staff
+// Revenue page and features-service's agency/self-serve MRR split. Same auth and
+// pure-read posture as the payment outlook: x-api-key, orgId in the PATH.
+router.get("/internal/revenue/by-org/:orgId", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  const horizon = parseCashHorizon(req.query.cashHorizonDays, 1);
+  if (typeof horizon === "string") {
+    res.status(400).json({ error: horizon });
+    return;
+  }
+  try {
+    const revenue = await getOrgRevenue(orgId, horizon);
+    if (!revenue) {
+      res.status(404).json({ error: "No billing account for this org" });
+      return;
+    }
+    res.json(revenue);
+  } catch (err) {
+    console.error(`[billing-service] revenue read failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to read revenue" });
+  }
+});
+
+// GET /internal/revenue/fleet?cashHorizonDays=90
+//
+// Every billing account's revenue row, the fleet totals (each the sum of the
+// rows shown; unknown rows listed beside, never counted as 0), the 30/90-day
+// projections and the cash flow bucketed by day and by ISO week. Org-less:
+// x-api-key only. The horizon is at least 90 so the 90-day window is complete.
+router.get("/internal/revenue/fleet", async (req, res) => {
+  const horizon = parseCashHorizon(req.query.cashHorizonDays, 90);
+  if (typeof horizon === "string") {
+    res.status(400).json({ error: horizon });
+    return;
+  }
+  try {
+    res.json(await getFleetRevenue(horizon));
+  } catch (err) {
+    console.error("[billing-service] fleet revenue read failed:", err);
+    res.status(502).json({ error: "Failed to read fleet revenue" });
   }
 });
 

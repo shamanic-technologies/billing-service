@@ -783,6 +783,15 @@ The outlook answers the NEXT attempt; a cash forecast needs the ones after it. T
 - **Unmeasured burn** = the month-end settle only when already owed, amount **null** (total null), never a guess.
 - Why it exists: the consumer's fallback ("burn × 30 on the 1st") showed Shockwavecenters a $204 inflow on 1 Oct against a real ~$33 month-end settle (owed $7.41 + ~3.8 days of $6.81/day), then the $200 floor ~30 Oct. Pure read.
 
+## Revenue: recurring, one-off, cash — `GET /internal/revenue/by-org/:orgId` + `GET /internal/revenue/fleet` (`src/lib/revenue.ts`)
+
+The staff Revenue page (and features-service's agency/self-serve MRR split) read the business in three figures from here. Pure read, x-api-key only (fleet is org-less).
+
+- **Class, exactly one per org:** `recurring` = postpaid + chargeable card, or prepaid + auto top-up + chargeable card; `one_off` = prepaid otherwise, still holding money; `none` = postpaid without a chargeable card (campaign-service stops it) or prepaid with nothing left. "Chargeable" = card on file + off-session country + not issuer-dead (the outlook's own inputs, now on `PaymentOutlookInputs`).
+- **A day's worth (`proactiveDailyBudgetCents`)** = the ceilings of campaigns campaign-service's `GET /internal/campaigns/recurring-status?orgId=` marks `recurring: true` (running, platform-executed, ENTRY leg, audiences not all exhausted), matched to ceilings with `campaignCeilingRows` (shared rows counted once). Reactive legs never count. A GLOBAL-mode brand (or a legacy brand scalar) counts its one amount when any of its campaigns is recurring. DRR = that figure for a recurring org, `"0"` otherwise; MRR = DRR x 30, ARR = MRR x 12. A one-off org uses it as its pace: `runOutAt = now + balance / pace`.
+- **Unknown stays unknown:** campaign-service unreadable, or a `recurring: null` campaign holding a positive ceiling (prod 2026-09-29: 9 of 18 `ongoing` campaigns had no audience period yet = `not_recorded`) → the org's figure is null with a reason. Fleet totals sum the KNOWN rows and list the unknown org ids beside them, so every total is the sum of the rows shown. Never collapse `not_recorded` to available here: that is campaign-service's call.
+- **Cash = the charge schedule, not a second model:** each row carries `chargeScheduleFrom(resolved, ...)` built from the SAME outlook resolution (decided once per org). Fleet cash windows / day / ISO-week buckets sum those events; an event with an unknown amount is counted apart, never as 0.
+
 ## Reading a PAST day — what the budget was, and whether payment had stopped
 
 Whoever computes the company's monthly run-rate needs two facts from billing for a past UTC day, and billing already RECORDS both: the budget timeline is append-only and the depletion episodes carry a beginning and a recovery. What was missing is that neither could be replayed for a past day. Two reads fix that; nothing new is stored and no existing surface moved.
