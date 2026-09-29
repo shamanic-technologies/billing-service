@@ -38,6 +38,31 @@ import { fetchWithRetry } from "./fetch-retry.js";
 /** How far back the burn is measured. Stated in the response, not implied. */
 export const BURN_WINDOW_DAYS = 14;
 
+/**
+ * The shortest window a burn is divided by. An org a few hours old would
+ * otherwise have its first run extrapolated to a whole day many times over; one
+ * day is the smallest window that is still a daily rate.
+ */
+export const MIN_BURN_WINDOW_DAYS = 1;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The window the burn is actually measured over, in (fractional) days: the
+ * standard BURN_WINDOW_DAYS, cut short for an org that has not existed that
+ * long, and never under MIN_BURN_WINDOW_DAYS.
+ *
+ * Dividing a young org's spend by fourteen days — most of which it did not
+ * exist for — read its burn several times too LOW, which pushed every projected
+ * charge and run-out date out by the same factor. Exported so the tests pin the
+ * same arithmetic the read uses.
+ */
+export function effectiveBurnWindowDays(now: Date, orgCreatedAt: Date | null): number {
+  if (orgCreatedAt === null) return BURN_WINDOW_DAYS;
+  const ageDays = (now.getTime() - orgCreatedAt.getTime()) / DAY_MS;
+  return Math.min(BURN_WINDOW_DAYS, Math.max(MIN_BURN_WINDOW_DAYS, ageDays));
+}
+
 const BURN_TIMEOUT_MS = 10_000;
 
 /**
@@ -61,7 +86,10 @@ export interface RealizedBurn {
   dailyCents: string | null;
   /** Null when `dailyCents` is non-null. */
   unavailableReason: BurnUnavailableReason | null;
-  /** The window this was measured over, in days. */
+  /**
+   * The window this was measured over, in days — BURN_WINDOW_DAYS, or shorter
+   * (possibly fractional) for an org younger than that.
+   */
   windowDays: number;
 }
 
@@ -114,7 +142,7 @@ function getPlatformOnlyFilter(): string | null {
  * restating it.
  */
 export function burnWindowStart(now: Date, windowDays = BURN_WINDOW_DAYS): string {
-  return new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  return new Date(now.getTime() - windowDays * DAY_MS).toISOString();
 }
 
 /**
@@ -125,14 +153,17 @@ export function burnWindowStart(now: Date, windowDays = BURN_WINDOW_DAYS): strin
  */
 export async function fetchRealizedDailyBurn(
   orgId: string,
-  now: Date
+  now: Date,
+  /** When the org's billing account was created; null = assume the full window. */
+  orgCreatedAt: Date | null = null
 ): Promise<RealizedBurn> {
+  const windowDays = effectiveBurnWindowDays(now, orgCreatedAt);
   const filter = getPlatformOnlyFilter();
   if (filter === null) {
     return {
       dailyCents: null,
       unavailableReason: "platform_only_dated_spend_not_served",
-      windowDays: BURN_WINDOW_DAYS,
+      windowDays,
     };
   }
 
@@ -144,7 +175,7 @@ export async function fetchRealizedDailyBurn(
   const query = new URLSearchParams({
     interval: "day",
     orgId,
-    startedAfter: burnWindowStart(now),
+    startedAfter: burnWindowStart(now, windowDays),
   });
 
   const res = await fetchWithRetry(
@@ -183,8 +214,8 @@ export async function fetchRealizedDailyBurn(
   }
 
   return {
-    dailyCents: total.dividedBy(BURN_WINDOW_DAYS).toFixed(10),
+    dailyCents: total.dividedBy(windowDays).toFixed(10),
     unavailableReason: null,
-    windowDays: BURN_WINDOW_DAYS,
+    windowDays,
   };
 }

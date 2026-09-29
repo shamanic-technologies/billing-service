@@ -11,7 +11,8 @@
  *    Having no card, or auto top-up off, never produces `charge_blocked`: spend
  *    simply stops at zero, through the existing affordability check and the
  *    ordinary out-of-credit dunning. Auto top-up stays available and optional,
- *    and is switched ON when an org becomes prepaid (the customer can turn it off).
+ *    and is switched ON when an org becomes prepaid WITH a chargeable card (the
+ *    customer can turn it off; without a card it stays off until they arm it).
  *
  * Every existing org is postpaid (migration 0050 defaults the column), so nothing
  * changes for anyone until someone chooses.
@@ -29,7 +30,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { computeBalance } from "./balance.js";
+import { computeBalance, computeSettleBalanceCents, type BalanceSnapshot } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
 import { chargeOrgOnDemand, OnDemandChargeError } from "./on-demand-charge.js";
@@ -95,12 +96,17 @@ function owedFrom(balanceCents: string): string {
  * with the cents collected; throws `PaymentModeSwitchRefused` when it cannot.
  * Upstream failures (stripe-service / runs-service unreachable) propagate.
  */
-async function settleBeforePrepaid(orgId: string): Promise<string> {
-  const snapshot = await computeBalance(orgId);
-  if (cmpCents(snapshot.balanceCents, "0") >= 0) return "0";
+async function settleBeforePrepaid(
+  orgId: string,
+  snapshot: BalanceSnapshot
+): Promise<string> {
+  // What is OWED is actual usage only: a provisioned hold is a reservation that
+  // may yet be cancelled, and a settle must never charge one (owner rule).
+  const settleBalance = await computeSettleBalanceCents(orgId, snapshot);
+  if (cmpCents(settleBalance, "0") >= 0) return "0";
 
-  const owed = owedFrom(snapshot.balanceCents);
-  const amount = computeSettleCharge(snapshot.balanceCents);
+  const owed = owedFrom(settleBalance);
+  const amount = computeSettleCharge(settleBalance);
   if (amount === 0) {
     throw new PaymentModeSwitchRefused(
       "outstanding_balance_below_minimum_charge",
@@ -171,13 +177,23 @@ export async function setPaymentMode(
   };
 
   if (target === "prepaid") {
-    settledCents = await settleBeforePrepaid(orgId);
-    // Auto top-up is ON by default for a prepaid org. The stored columns are only
-    // the enabled flag (lib/topup-tier derives the effective amount), so an org
-    // that already had it on keeps its row untouched; one that had it off gets the
-    // flag set. Without a chargeable card the flag is inert until one is added —
-    // no card is required for prepaid.
-    if (account.topupAmountCents == null) {
+    const snapshot = await computeBalance(orgId);
+    settledCents = await settleBeforePrepaid(orgId, snapshot);
+    // Auto top-up is ON by default for a prepaid org — but only when there is a
+    // card it could actually charge, the same bar arming it by hand must clear
+    // (PATCH /v1/accounts/auto_topup refuses without a chargeable card, and
+    // refuses a card whose issuing country cannot be charged off_session). A flag
+    // set without one is a configuration that lies: the month-end sweep reads it
+    // as "auto top-up enabled" and the dashboard shows a top-up that can never
+    // fire. No card is required for prepaid itself, so the switch still happens;
+    // the customer arms auto top-up once they add a card. The stored columns are
+    // only the enabled flag (lib/topup-tier derives the effective amount), so an
+    // org that already had it on keeps its row untouched.
+    if (
+      account.topupAmountCents == null &&
+      snapshot.hasCardPm &&
+      snapshot.autoReloadSupported
+    ) {
       patch.topupAmountCents = tierFor("0").amountCents;
       patch.topupThresholdCents = 0;
     }

@@ -77,6 +77,11 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
       spent_cents: usage,
       as_of: "2026-09-18T00:00:00.000Z",
     }));
+    // Settles charge ACTUAL usage only; with no holds in these fixtures it
+    // equals the projected usage above.
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      async () => ({ spent_cents: usage })
+    );
 
     // campaign-service is fail-soft by design; default it to unreachable so the
     // cases below assert the degraded shape unless they say otherwise.
@@ -276,6 +281,11 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
 
   it("an org with NO Stripe customer at all (never added a card) is blocked", async () => {
     ssMocks.fetchOrgCustomerOrNull.mockResolvedValue(null);
+    // No customer on ANY acquirer: stripe-service's payment-method read answers
+    // 404, which the client reads as "no card". The card read is asked, not
+    // derived from the missing Stripe customer (a Revolut org has none either,
+    // and does hold a card).
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
     await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
 
     const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);

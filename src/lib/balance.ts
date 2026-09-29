@@ -6,9 +6,9 @@
  * downstream error (stripe-service / runs-service) propagates to the caller.
  */
 
-import { addCents, subCents, ZERO_CENTS } from "./cents.js";
+import { addCents, subCents } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
-import { fetchOrgUsageTotal } from "./transfer-usage.js";
+import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "./transfer-usage.js";
 import {
   fetchOrgCustomerOrNull,
   sumSucceededTopupsForOrg,
@@ -77,16 +77,14 @@ export interface CreditedCents {
  * Costs one stripe-service read plus one local query; no runs-service hop, so a
  * caller that needs credited but not usage does not pay for usage.
  */
-export async function composeCreditedCents(
-  orgId: string,
-  opts: { hasStripeCustomer?: boolean } = {}
-): Promise<CreditedCents> {
-  // An org with NO Stripe customer has no Stripe payments — a payment cannot
-  // exist without one — so the paid half is a derived zero, not a read we skip
-  // and hope about. Asking anyway would be one more call that can only 404.
-  const hasStripeCustomer = opts.hasStripeCustomer ?? true;
+export async function composeCreditedCents(orgId: string): Promise<CreditedCents> {
+  // ALWAYS asked, customer or not. stripe-service's payment summary spans every
+  // acquirer that has taken money for this org and answers `totals: []` for an
+  // org that has paid nothing, so it never needs a Stripe customer to exist. An
+  // org paying through Revolut has NO Stripe customer by design, and gating this
+  // read on one made its completed top-ups vanish from its balance.
   const [paidTopups, localCredits] = await Promise.all([
-    hasStripeCustomer ? sumSucceededTopupsForOrg(orgId) : Promise.resolve(ZERO_CENTS),
+    sumSucceededTopupsForOrg(orgId),
     sumLocalPromoCreditsForOrg(orgId),
   ]);
   return {
@@ -106,23 +104,23 @@ export async function composeCreditedCents(
  * Fail-loud: any downstream error (stripe-service / runs-service) propagates.
  */
 export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
-  const customer = await fetchOrgCustomerOrNull(orgId);
-  // No Stripe customer → the org has never paid and holds no saved card, because
-  // neither object can exist without one. So the three Stripe reads below are
-  // answered by derivation rather than skipped: paid topups "0", no chargeable
-  // PM, no card country. It leaves the org STRICTLY PREPAID — resolvePostpaidTier
-  // grants no credit line without a chargeable card, so the floor is "0" — which
-  // is exactly right for an org whose only money is a trial seed, and its credit
-  // is spendable down to zero like anyone else's.
+  // The Stripe customer is read for ONE thing: the notification recipient. It
+  // must NOT gate the money reads below. An org paying through Revolut has no
+  // Stripe customer by design, yet it pays and saves a card — stripe-service's
+  // payment summary and payment-method reads answer for whichever acquirer holds
+  // the org, so they are always asked. An org with no customer on ANY acquirer
+  // (an anonymous onboarding on its trial seed) reads as paid "0" and no card,
+  // because those reads say so, not because this code assumes it: strictly
+  // prepaid, floor "0", credit spendable down to zero.
   //
-  // This is NOT a fallback that hides an outage: `fetchOrgCustomerOrNull` returns
-  // null ONLY on stripe-service's definite 404. Any other failure propagates.
-  const hasStripeCustomer = customer !== null;
-  const [credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
-    composeCreditedCents(orgId, { hasStripeCustomer }),
+  // `fetchOrgCustomerOrNull` returns null ONLY on stripe-service's definite 404.
+  // Any other failure propagates.
+  const [customer, credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
+    fetchOrgCustomerOrNull(orgId),
+    composeCreditedCents(orgId),
     fetchOrgUsageTotal(orgId, {}),
-    hasStripeCustomer ? hasChargeablePmForOrg(orgId) : Promise.resolve(false),
-    hasStripeCustomer ? getOrgCardCountryByOrg(orgId) : Promise.resolve(null),
+    hasChargeablePmForOrg(orgId),
+    getOrgCardCountryByOrg(orgId),
   ]);
   const { paidTopupsCents: paidTopups, creditedCents } = credited;
   // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at
@@ -139,4 +137,27 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
     usageCents: runsUsage.spent_cents,
     balanceCents,
   };
+}
+
+/**
+ * The balance a SETTLE charges against: credited − ACTUAL usage only.
+ *
+ * `balanceCents` (the spendable balance) also subtracts PROVISIONED holds — the
+ * worst-case reservation a run takes before it spends. That is right for
+ * deciding whether the next run may START, and wrong for taking money: a hold is
+ * later actualized at its real cost or cancelled outright, and a settle that
+ * charged it would collect money for work that never happened. Owner rule: a
+ * settle charges actual usage only. Every path that settles a balance to zero —
+ * the month-end sweep, the switch to prepaid, the card-change settle, the charge
+ * schedule's month-end event — reads this figure, never `balanceCents`.
+ *
+ * One runs-service read on top of the snapshot the caller already holds.
+ * Fail-loud: a runs-service error propagates.
+ */
+export async function computeSettleBalanceCents(
+  orgId: string,
+  snapshot: Pick<BalanceSnapshot, "creditedCents">
+): Promise<string> {
+  const actual = await fetchOrgActualUsageTotal(orgId, {});
+  return subCents(snapshot.creditedCents, actual.spent_cents);
 }

@@ -41,6 +41,11 @@ describe("an org with credit and no Stripe customer", () => {
     // stripe-service's DEFINITE "this org has no customer" (its 404).
     ssMocks.fetchOrgCustomerOrNull.mockResolvedValue(null);
     ssMocks.getCustomerByOrgOrNull.mockResolvedValue(null);
+    // What stripe-service's acquirer-neutral reads answer for an org with no
+    // customer anywhere: nothing paid (`totals: []`), no card (its 404).
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    ssMocks.getOrgCardCountryByOrg.mockResolvedValue(null);
     await cleanTestData();
     // The live welcome price (flat $30 offer). The seed is clamped to it, and the
     // test DB's smaller default would clamp the seed below its target.
@@ -104,12 +109,11 @@ describe("an org with credit and no Stripe customer", () => {
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(true);
     expect(res.body.balance_cents).toBe(`${seeded}.0000000000`);
-    // No customer → none of the three Stripe reads is even issued. They cannot
-    // answer anything but 404: no payment and no payment method can exist
-    // without a customer.
-    expect(ssMocks.sumSucceededTopupsForOrg).not.toHaveBeenCalled();
-    expect(ssMocks.hasChargeablePmForOrg).not.toHaveBeenCalled();
-    expect(ssMocks.getOrgCardCountryByOrg).not.toHaveBeenCalled();
+    // No STRIPE customer does not mean nothing paid: an org paying through
+    // Revolut has none either. So the acquirer-neutral reads are ASKED, and for
+    // this anonymous org they answer nothing paid, no card.
+    expect(ssMocks.sumSucceededTopupsForOrg).toHaveBeenCalled();
+    expect(ssMocks.hasChargeablePmForOrg).toHaveBeenCalled();
   });
 
   it("refuses the ordinary way once the seed no longer covers the spend", async () => {
