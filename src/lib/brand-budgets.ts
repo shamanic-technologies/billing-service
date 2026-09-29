@@ -14,6 +14,7 @@ import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
+  brandSalesBudgets,
   campaignDailyBudgets,
   type BrandDailyBudget,
   type BrandDailyBudgetChange,
@@ -22,6 +23,10 @@ import {
   BrandBudgetManagedByCampaignsError,
   sumCeilings,
 } from "./campaign-budgets.js";
+import { getBrandSalesBudget } from "./brand-sales-budget.js";
+
+/** A brand-scalar write against a brand that stated a global sales budget. */
+export class BrandBudgetManagedBySalesBudgetError extends Error {}
 import {
   enumerateUtcDays,
   formatUtcDay,
@@ -66,6 +71,25 @@ export async function upsertBrandDailyBudget(
     // ceilings (lib/campaign-budgets.ts). Accepting a brand-level write would
     // leave two numbers claiming to be the same thing, so refuse it — the caller
     // surfaces a 409 pointing at the per-campaign routes.
+    // A brand in GLOBAL mode is funded by its one stated sales budget
+    // (lib/brand-sales-budget.ts). A brand-scalar write would claim to be the
+    // brand's daily budget while it is not, so refuse it (409).
+    const [salesRow] = await tx
+      .select({ orgId: brandSalesBudgets.orgId })
+      .from(brandSalesBudgets)
+      .where(
+        and(
+          eq(brandSalesBudgets.orgId, orgId),
+          eq(brandSalesBudgets.brandId, brandId)
+        )
+      )
+      .limit(1);
+    if (salesRow) {
+      throw new BrandBudgetManagedBySalesBudgetError(
+        "This brand's daily budget is its global sales budget. Change or clear the sales budget instead."
+      );
+    }
+
     const ceilingRows = await tx
       .select({ featureSlug: campaignDailyBudgets.featureSlug })
       .from(campaignDailyBudgets)
@@ -160,11 +184,25 @@ export async function getBrandDailyBudgetHistory(
  * (no backfill). The two states are mutually exclusive: the first ceiling write
  * drops the brand-level row, and a brand-level write against a ceiling-funded
  * brand is refused.
+ *
+ * A brand in GLOBAL mode (it stated one daily sales budget) answers THAT amount:
+ * it is the money the brand allows to be spent per day, whatever its stored
+ * campaign ceilings say. A brand that never stated one reads exactly as before.
  */
 export async function getBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
+  const sales = await getBrandSalesBudget(orgId, brandId);
+  if (sales) {
+    return {
+      brandId,
+      orgId,
+      dailyBudgetCents: sales.dailyBudgetCents,
+      updatedAt: sales.updatedAt,
+    };
+  }
+
   const ceilingRows = await db
     .select()
     .from(campaignDailyBudgets)
