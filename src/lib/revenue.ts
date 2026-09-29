@@ -313,13 +313,46 @@ async function readFunding(orgId: string): Promise<BrandFunding[]> {
   );
 }
 
+/**
+ * campaign-service reads the channel catalogue from features-service on EVERY
+ * recurring-status call, uncached. Measured on prod 2026-09-29: eight concurrent
+ * fleet reads made 9 of 16 recurring orgs answer 502 `catalogue_unavailable`,
+ * while the same calls one at a time answered 200 in ~300 ms. So these calls go
+ * through at most two at a time, and a failed one is asked once more after a
+ * short pause. Still fail-soft with the named reason if it keeps failing.
+ */
+const RECURRING_STATUS_CONCURRENCY = 2;
+const RECURRING_STATUS_RETRY_MS = 750;
+let recurringInFlight = 0;
+const recurringWaiters: Array<() => void> = [];
+
+async function recurringStatusesThrottled(orgId: string) {
+  // A released slot is handed straight to the next waiter, so the count never
+  // exceeds the cap even when a new caller arrives in between.
+  if (recurringInFlight >= RECURRING_STATUS_CONCURRENCY) {
+    await new Promise<void>((resolve) => recurringWaiters.push(resolve));
+  } else {
+    recurringInFlight += 1;
+  }
+  try {
+    const first = await fetchRecurringCampaignStatuses(orgId);
+    if (first.ok || first.reason !== "campaign_service_unavailable") return first;
+    await new Promise((r) => setTimeout(r, RECURRING_STATUS_RETRY_MS));
+    return await fetchRecurringCampaignStatuses(orgId);
+  } finally {
+    const next = recurringWaiters.shift();
+    if (next) next();
+    else recurringInFlight -= 1;
+  }
+}
+
 export async function getProactiveBudget(orgId: string): Promise<ProactiveBudget> {
   const funding = await readFunding(orgId);
   // An org funding nothing has nothing to ask campaign-service about.
   if (funding.length === 0) {
     return { dailyBudgetCents: fixed(new Decimal(0)), unknownReason: null, brands: [], campaigns: [] };
   }
-  const answer = await fetchRecurringCampaignStatuses(orgId);
+  const answer = await recurringStatusesThrottled(orgId);
   if (!answer.ok) {
     return { dailyBudgetCents: null, unknownReason: answer.reason, brands: [], campaigns: [] };
   }

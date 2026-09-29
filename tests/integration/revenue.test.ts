@@ -270,6 +270,20 @@ describe("revenue: recurring, one-off, cash", () => {
     expect(bucketSum.equals(allEvents)).toBe(true);
   });
 
+  it("a campaign-service that fails once is asked again before the figure goes unknown", async () => {
+    const cs = await import("../../src/lib/campaign-service-client.js");
+    let calls = 0;
+    vi.spyOn(cs, "fetchRecurringCampaignStatuses").mockImplementation(async () => {
+      calls += 1;
+      return calls === 1
+        ? { ok: false, reason: "campaign_service_unavailable" }
+        : { ok: true, campaigns: STATUSES[RECURRING]! };
+    });
+    const res = await request(app).get(`/internal/revenue/by-org/${RECURRING}`).set(apiKeyHeaders);
+    expect(calls).toBe(2);
+    expect(res.body.drrCents).toBe("5000.0000000000");
+  });
+
   it("400s on a bad orgId or horizon, 404s for an unknown org", async () => {
     expect((await request(app).get("/internal/revenue/by-org/nope").set(apiKeyHeaders)).status).toBe(400);
     expect(
