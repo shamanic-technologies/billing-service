@@ -147,7 +147,7 @@ export interface PaymentOutlook {
  * ONLY by the global sales budget carries neither of the first two, and leaving
  * it out made its money read as zero.
  */
-async function fundedBrandIds(orgId: string): Promise<string[]> {
+export async function fundedBrandIds(orgId: string): Promise<string[]> {
   const rows = await db.execute<{ brand_id: string }>(sql`
     SELECT DISTINCT brand_id
       FROM campaign_daily_budgets
@@ -321,6 +321,14 @@ export interface PaymentOutlookInputs {
   requiredCents: string;
   /** Null when the org has no credit line (nothing can be reloaded). */
   tierAmountCents: number | null;
+  /** ≥1 chargeable payment method on file right now (card or link). */
+  hasCardPm: boolean;
+  /** False when the card's issuing country cannot be charged off-session. */
+  autoReloadSupported: boolean;
+  /** The stored auto top-up switch (config present). */
+  autoTopupEnabled: boolean;
+  /** The issuer called the card lost / stolen / closed on a live streak. */
+  cardUnusable: boolean;
 }
 
 /**
@@ -356,6 +364,7 @@ async function decideOutlook(
       orgId: billingAccounts.orgId,
       paymentMode: billingAccounts.paymentMode,
       createdAt: billingAccounts.createdAt,
+      topupAmountCents: billingAccounts.topupAmountCents,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
@@ -377,6 +386,10 @@ async function decideOutlook(
     paidTopupsCents: snapshot.paidTopupsCents,
     requiredCents: block.requiredCents,
     tierAmountCents: block.tier ? block.tier.amountCents : null,
+    hasCardPm: snapshot.hasCardPm,
+    autoReloadSupported: snapshot.autoReloadSupported,
+    autoTopupEnabled: account.topupAmountCents != null,
+    cardUnusable: streak?.cardUnusableAt != null,
   };
 
   const paymentMode = asPaymentMode(account.paymentMode);
