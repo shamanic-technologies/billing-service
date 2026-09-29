@@ -14,7 +14,13 @@
  *    crossing that is one unit.
  *  - MONTH END: on the last day at `SWEEP_HOUR_UTC`, a NEGATIVE balance is settled
  *    to exactly zero (`computeSettleCharge`, below the acquirer minimum → nothing,
- *    it rolls). A non-negative balance is left alone.
+ *    it rolls). A non-negative balance is left alone. The balance settled is the
+ *    ACTUAL one (credited − actual usage): provisioned holds are never charged,
+ *    so they are carried as a constant gap between the spendable balance the
+ *    floor rule reads and the settle balance the month-end rule reads.
+ *  - A POSTPAID org with no credit line (auto top-up off) and a card → ONE
+ *    month-end event for what it owes now; its floor is zero, so spend stops
+ *    there and no replay can carry it further below.
  *  - Every charge counts as a paid top-up, so the tier (and therefore the floor)
  *    is re-derived after each one (`reloadTierFor`), exactly as the live ladder
  *    does.
@@ -114,6 +120,11 @@ export function replayCharges(params: {
   now: Date;
   end: Date;
   balanceCents: string;
+  /**
+   * Credited − ACTUAL usage (what a month-end settle charges against). Defaults
+   * to `balanceCents` (no provisioned holds).
+   */
+  settleBalanceCents?: string;
   paidTopupsCents: string;
   requiredCents: string;
   dailyBurnCents: string;
@@ -125,6 +136,8 @@ export function replayCharges(params: {
   const burn = new Decimal(params.dailyBurnCents);
   const required = new Decimal(params.requiredCents);
   let balance = new Decimal(params.balanceCents);
+  // Provisioned holds: in the spendable balance, never in what a settle charges.
+  const holds = new Decimal(params.settleBalanceCents ?? params.balanceCents).minus(balance);
   let paid = new Decimal(params.paidTopupsCents);
   let t = params.now;
 
@@ -186,7 +199,7 @@ export function replayCharges(params: {
     if (monthEnd.getTime() > params.end.getTime()) break;
     balance = project(balance, burn, monthEnd.getTime() - t.getTime());
     t = monthEnd;
-    const amount = computeSettleCharge(fixed(balance));
+    const amount = computeSettleCharge(fixed(balance.plus(holds)));
     if (amount > 0) charge(t, "month_end", amount);
   }
 
@@ -215,6 +228,7 @@ export async function getChargeSchedule(
       now,
       end,
       balanceCents: inputs.balanceCents,
+      settleBalanceCents: inputs.settleBalanceCents,
       paidTopupsCents: inputs.paidTopupsCents,
       requiredCents: inputs.requiredCents,
       dailyBurnCents: outlook.realizedDailyBurnCents,
@@ -245,6 +259,28 @@ export async function getChargeSchedule(
         projectedBalanceAfterCents: fixed(before.plus(amount)),
       },
     ];
+  } else if (
+    outlook.state === "will_charge" &&
+    outlook.trigger === "month_end" &&
+    inputs.tierAmountCents === null &&
+    outlook.nextChargeAttemptAt !== null &&
+    new Date(outlook.nextChargeAttemptAt).getTime() <= end.getTime()
+  ) {
+    // A postpaid org with a card and no credit line: the month-end sweep settles
+    // what it owes now, and nothing after it (its floor is zero).
+    const amount = computeSettleCharge(inputs.settleBalanceCents);
+    if (amount > 0) {
+      const before = new Decimal(inputs.balanceCents);
+      events = [
+        {
+          at: outlook.nextChargeAttemptAt,
+          trigger: "month_end",
+          expectedAmountCents: String(amount),
+          projectedBalanceBeforeCents: fixed(before),
+          projectedBalanceAfterCents: fixed(before.plus(amount)),
+        },
+      ];
+    }
   } else if (
     outlook.state === "unknown" &&
     outlook.trigger === "month_end" &&

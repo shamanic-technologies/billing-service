@@ -23,6 +23,11 @@ describe("POST /v1/portal-sessions", () => {
         as_of: "2026-01-31T00:00:00.000Z",
       })
     );
+    // Settles charge ACTUAL usage only; with no holds in these fixtures it
+    // equals the projected usage above.
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      async (org: string) => ({ spent_cents: "0.0000000000" })
+    );
     await cleanTestData();
   });
 

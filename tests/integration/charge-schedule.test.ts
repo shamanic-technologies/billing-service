@@ -60,6 +60,11 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
       spent_cents: usage,
       as_of: "2026-09-18T00:00:00.000Z",
     }));
+    // Settles charge ACTUAL usage only; with no holds in these fixtures it
+    // equals the projected usage above.
+    vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockImplementation(
+      async () => ({ spent_cents: usage })
+    );
 
     // campaign-service is fail-soft by design; default it to unreachable so the
     // cases below assert the degraded shape unless they say otherwise.
@@ -90,9 +95,14 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
     }
   });
 
-  it("no auto-topup: says so, and lists NO automatic charge", async () => {
-    await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
-    setUsage("30000.0000000000"); // owes $50 — still never charged automatically
+  it("no auto-topup, PREPAID: says so, and lists NO automatic charge", async () => {
+    await insertTestAccount({
+      orgId,
+      topupAmountCents: null,
+      topupThresholdCents: null,
+      paymentMode: "prepaid",
+    });
+    setUsage("30000.0000000000"); // owes $50 — a prepaid org is never charged automatically
 
     const res = await request(app).get(schedulePath(orgId)).set(apiKeyHeaders);
 
@@ -101,6 +111,20 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
     expect(res.body.events).toEqual([]);
     expect(res.body.expectedTotalCents).toBe("0");
     expect(res.body.horizonDays).toBe(90);
+  });
+
+  it("no auto-topup, POSTPAID with a card: the month-end sweep settles what it owes, once", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
+    setUsage("30000.0000000000"); // owes $50
+
+    const res = await request(app).get(schedulePath(orgId)).set(apiKeyHeaders);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe("will_charge");
+    expect(res.body.events).toHaveLength(1);
+    expect(res.body.events[0].trigger).toBe("month_end");
+    expect(res.body.events[0].expectedAmountCents).toBe("5000");
+    expect(res.body.expectedTotalCents).toBe("5000");
   });
 
   it("an org that owes: month-end settles what is owed then, and the schedule agrees with the outlook", async () => {

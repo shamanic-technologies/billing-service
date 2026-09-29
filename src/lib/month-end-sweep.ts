@@ -23,6 +23,17 @@
  * Stripe's ~24h key retention. The amount is IN the key on purpose — see
  * sweepIdempotencyKey. No new storage.
  *
+ * WHO IS SWEPT: every auto-topup-enabled org AND every POSTPAID org, whatever
+ * its auto top-up switch says (owner rule: a postpaid org that owes money and
+ * has a chargeable card is collected at month end). Auto top-up decides whether
+ * a reload fires mid-month when the credit line is crossed; it never decided
+ * whether money a postpaid org already owes gets collected. Sweeping only the
+ * enabled orgs left a postpaid org that turned it off owing forever.
+ *
+ * WHAT IS CHARGED: ACTUAL usage only (`computeSettleBalanceCents`). A
+ * provisioned hold is a reservation that may yet be cancelled; charging it would
+ * collect money for work that never happened.
+ *
  * No cost declaration: a reload collects the org's OWN money via Stripe (the org
  * paid its provider) — it is not a metered platform cost, exactly like the
  * authorize / usage_apply reloads. Matches that path's absence of a runs-service
@@ -31,10 +42,10 @@
 
 import crypto from "crypto";
 import { Decimal } from "decimal.js";
-import { and, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
-import { computeBalance } from "./balance.js";
+import { computeBalance, computeSettleBalanceCents } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { coalesceReload } from "./reload-coalescer.js";
 import {
@@ -201,14 +212,19 @@ function withTimeout<T>(ms: number, p: Promise<T>): Promise<T> {
 export interface MonthEndSweepResult {
   /** False when `now` is not the month's single sweep tick — the sweep no-ops. */
   ranSweep: boolean;
-  /** Auto-topup-enabled accounts examined. */
+  /** Accounts examined: every auto-topup-enabled org plus every postpaid org. */
   eligible: number;
   /** Orgs charged one settling reload. */
   charged: number;
-  /** Orgs skipped because they owe nothing this cycle, or owe under the Stripe minimum. */
+  /**
+   * Orgs skipped because they owe nothing this cycle, owe under the Stripe
+   * minimum, or owe with no card but were not flagged (prepaid, no customer
+   * anywhere, or the flag deferred to the next hourly scan).
+   */
   skipped: number;
   /**
-   * Orgs that OWE money with no chargeable card. NEVER counted as `skipped`:
+   * Orgs that OWE money with no chargeable card AND that `flagUncollectableDebt`
+   * actually flagged (this call, or already on the episode). NEVER counted as `skipped`:
    * the debt is flagged on the org's depletion episode, the customer is told a
    * card is required (with the amount), staff are told, and campaigns stop
    * through the existing credit-line floor. See lib/unpaid-debt.
@@ -255,17 +271,21 @@ export async function runMonthEndSweep(
   result.ranSweep = true;
   const bucket = monthBucket(now);
 
-  // Auto-topup ENABLED accounts only (both config columns non-null ⇒ enabled,
-  // mirroring the usage_apply gate). Reload-capability (chargeable card +
+  // Auto-topup ENABLED accounts (both config columns non-null ⇒ enabled,
+  // mirroring the usage_apply gate) AND every POSTPAID account whatever its
+  // switch says — see the file header. Reload-capability (chargeable card +
   // non-blocked issuing country) is re-checked per org below against the live
-  // Stripe snapshot.
+  // snapshot.
   const enabled = await db
     .select()
     .from(billingAccounts)
     .where(
-      and(
-        isNotNull(billingAccounts.topupAmountCents),
-        isNotNull(billingAccounts.topupThresholdCents)
+      or(
+        and(
+          isNotNull(billingAccounts.topupAmountCents),
+          isNotNull(billingAccounts.topupThresholdCents)
+        ),
+        eq(billingAccounts.paymentMode, "postpaid")
       )
     );
 
@@ -287,8 +307,16 @@ export async function runMonthEndSweep(
         if (!owes) {
           result.skipped += 1;
         } else if (!snapshot.hasCardPm) {
-          await flagUncollectableDebt({ orgId: account.orgId, snapshot });
-          result.unpaidDebt += 1;
+          // Count only what was actually flagged. A prepaid org, an org with no
+          // customer anywhere, or a notification deferred to the next tick is
+          // NOT carrying a flagged debt, and counting it would overstate the
+          // metric staff read.
+          const flag = await flagUncollectableDebt({ orgId: account.orgId, snapshot });
+          if (flag.state === "flagged" || flag.state === "already_flagged") {
+            result.unpaidDebt += 1;
+          } else {
+            result.skipped += 1;
+          }
         } else {
           result.blockedCountryDebt += 1;
           console.warn(
@@ -310,20 +338,22 @@ export async function runMonthEndSweep(
 
       // Only settle a NEGATIVE balance (outstanding spend on credit that never
       // crossed the floor). A non-negative org owes nothing this cycle — the
-      // normal floor-crossing path owns anything already past the floor.
-      if (cmpCents(snapshot.balanceCents, "0") >= 0) {
+      // normal floor-crossing path owns anything already past the floor. The
+      // balance is ACTUAL usage only: a provisioned hold is not money owed.
+      const settleBalance = await computeSettleBalanceCents(account.orgId, snapshot);
+      if (cmpCents(settleBalance, "0") >= 0) {
         result.skipped += 1;
         continue;
       }
 
       // Charge EXACTLY the outstanding amount, settling the balance back to 0.
-      const chargeAmount = computeSettleCharge(snapshot.balanceCents);
+      const chargeAmount = computeSettleCharge(settleBalance);
       if (chargeAmount <= 0) {
         // Only reachable below Stripe's minimum charge (the non-negative case
         // returned above) — the remainder rolls into next month's sweep.
         console.log(
           `[billing-service] month-end sweep: org ${account.orgId} owes ` +
-            `${snapshot.balanceCents} cents, below the ` +
+            `${settleBalance} cents, below the ` +
             `${STRIPE_MIN_CHARGE_CENTS}-cent Stripe minimum — skipped (${bucket})`
         );
         result.skipped += 1;
