@@ -969,6 +969,66 @@ export const SetBrandDailyBudgetRequestSchema = z
   })
   .openapi("SetBrandDailyBudgetRequest");
 
+// --- Brand global sales budget (one daily budget for sales, "global" mode) ---
+
+export const SetBrandSalesBudgetRequestSchema = z
+  .object({
+    /**
+     * The brand's ONE daily budget for sales, in cents. Non-negative (0 is
+     * legal). Accepts a number or decimal string; stored at numeric(16,10).
+     */
+    dailyBudgetCents: z.union([z.string(), z.number()]),
+  })
+  .openapi("SetBrandSalesBudgetRequest");
+
+const BrandBudgetModeSchema = z
+  .enum(["global", "campaigns"])
+  .openapi("BrandBudgetMode", {
+    description:
+      "global = the brand stated one daily sales budget that campaign-service allocates; " +
+      "campaigns = every campaign is paced on its own ceiling (the default).",
+  });
+
+export const BrandSalesBudgetSchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    mode: BrandBudgetModeSchema,
+    /** The stated daily sales budget; null in campaigns mode. */
+    dailyBudgetCents: CentsStringSchema.nullable(),
+    /** When it was stated; null in campaigns mode. */
+    updatedAt: z.string().nullable(),
+  })
+  .openapi("BrandSalesBudget");
+
+export const SetBrandSalesBudgetResponseSchema = BrandSalesBudgetSchema.extend({
+  /** The amount stated before this write; null when the brand was in campaigns mode. */
+  previousDailyBudgetCents: CentsStringSchema.nullable(),
+}).openapi("SetBrandSalesBudgetResponse");
+
+export const ClearBrandSalesBudgetResponseSchema = BrandSalesBudgetSchema.extend({
+  /** false when the brand was already in campaigns mode (nothing written). */
+  cleared: z.boolean(),
+  previousDailyBudgetCents: CentsStringSchema.nullable(),
+  /** The brand total the brand is back on (its campaign ceilings); null when none. */
+  campaignsDailyBudgetCents: CentsStringSchema.nullable(),
+}).openapi("ClearBrandSalesBudgetResponse");
+
+export const BrandSalesBudgetHistorySchema = z
+  .object({
+    brandId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    history: z.array(
+      z.object({
+        mode: BrandBudgetModeSchema,
+        /** The amount stated at this point; null = cleared (back to campaigns mode). */
+        dailyBudgetCents: CentsStringSchema.nullable(),
+        changedAt: z.string(),
+      })
+    ),
+  })
+  .openapi("BrandSalesBudgetHistory");
+
 export const BrandDailyBudgetSchema = z
   .object({
     brandId: z.string().uuid(),
@@ -3443,5 +3503,88 @@ registry.registerPath({
       description: "The acquisition channels' published terms could not be read",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+// --- Brand global sales budget -----------------------------------------------
+
+const brandIdParam = z.object({ brandId: z.string().uuid() });
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/sales-budget",
+  summary: "Read a brand's funding mode and global sales budget",
+  description:
+    "Service-to-service read (x-api-key + x-org-id). mode is global when the brand stated ONE " +
+    "daily sales budget (dailyBudgetCents), campaigns when every campaign is paced on its own " +
+    "ceiling (dailyBudgetCents null). billing stores and serves; campaign-service allocates.",
+  request: { headers: internalOrgHeaders, params: brandIdParam },
+  responses: {
+    200: { description: "Mode and amount", content: { "application/json": { schema: BrandSalesBudgetSchema } } },
+    400: { description: "Invalid brandId or x-org-id", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/sales-budget/history",
+  summary: "Every state and clear of a brand's global sales budget, oldest first",
+  request: { headers: internalOrgHeaders, params: brandIdParam },
+  responses: {
+    200: { description: "History", content: { "application/json": { schema: BrandSalesBudgetHistorySchema } } },
+    400: { description: "Invalid brandId or x-org-id", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/sales-budget",
+  summary: "Read this brand's funding mode and global sales budget",
+  request: { headers: protectedHeaders, params: brandIdParam },
+  responses: {
+    200: { description: "Mode and amount", content: { "application/json": { schema: BrandSalesBudgetSchema } } },
+    400: { description: "Invalid brandId", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/sales-budget/history",
+  summary: "Every state and clear of this brand's global sales budget, oldest first",
+  request: { headers: protectedHeaders, params: brandIdParam },
+  responses: {
+    200: { description: "History", content: { "application/json": { schema: BrandSalesBudgetHistorySchema } } },
+    400: { description: "Invalid brandId", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/brands/{brandId}/sales-budget",
+  summary: "State the brand's ONE daily sales budget (global mode)",
+  description:
+    "The brand enters global mode: campaign-service allocates this amount to the best-return " +
+    "sales path. Non-negative (0 legal). The campaign ceilings are NOT touched, and while it is " +
+    "stated the brand's daily budget (GET /internal/brands/{brandId}/daily-budget) answers this amount.",
+  request: {
+    headers: protectedHeaders,
+    params: brandIdParam,
+    body: { content: { "application/json": { schema: SetBrandSalesBudgetRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Stated", content: { "application/json": { schema: SetBrandSalesBudgetResponseSchema } } },
+    400: { description: "Invalid brandId or dailyBudgetCents", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: "/v1/brands/{brandId}/sales-budget",
+  summary: "Clear the brand's global sales budget (back to campaign ceilings)",
+  description: "Idempotent: a brand already in campaigns mode answers cleared: false.",
+  request: { headers: protectedHeaders, params: brandIdParam },
+  responses: {
+    200: { description: "Cleared", content: { "application/json": { schema: ClearBrandSalesBudgetResponseSchema } } },
+    400: { description: "Invalid brandId", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });

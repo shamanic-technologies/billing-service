@@ -379,6 +379,13 @@
       "when": 1792749600000,
       "tag": "0053_staff_debits",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1792836000000,
+      "tag": "0054_brand_sales_budgets",
+      "breakpoints": true
     }
   ]
 }
