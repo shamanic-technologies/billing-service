@@ -83,9 +83,12 @@ const TEMPLATES = [
     // {{summaryHtml}} arrives already escaped.
     name: BRAND_DAILY_BUDGET_CHANGED_EVENT,
     subject: "{{subject}}",
-    htmlBody: `<p>{{email}} changed a daily budget.</p>
+    // {{action}} is "changed a daily budget" for a budget write and "paused a
+    // mission" / "restarted a mission" for a status change: ONE template for
+    // both, so the two emails cannot drift apart.
+    htmlBody: `<p>{{email}} {{action}}.</p>
 {{summaryHtml}}`,
-    textBody: "{{email}} changed a daily budget.\n\n{{summaryText}}",
+    textBody: "{{email}} {{action}}.\n\n{{summaryText}}",
   },
   {
     // Someone the recipient invited has converted, so a reward just opened for

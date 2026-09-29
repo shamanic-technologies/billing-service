@@ -3262,6 +3262,50 @@ registry.registerPath({
   },
 });
 
+export const MissionStatusChangedRequestSchema = z
+  .object({
+    campaignId: z.string().uuid(),
+    featureSlug: z.string().min(1).nullable(),
+    offerId: z.string().uuid().nullable(),
+    legKey: z.string().min(1).nullable(),
+    fromStatus: z.string().min(1).nullable(),
+    toStatus: z.string().min(1),
+  })
+  .openapi("MissionStatusChangedRequest");
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/brands/{brandId}/mission-status-changed",
+  summary: "A person paused or restarted a mission: email staff",
+  description:
+    "campaign-service calls this after a person's status write has committed. " +
+    "billing composes the SAME staff email as a budget change (event " +
+    "`brand_daily_budget_changed`): the mission and its move, then the daily " +
+    "total, reactive caps and paused missions as they stand after the move. " +
+    "Only `ongoing` <-> `stopped` moves send; anything else answers notified:false. " +
+    "The email is sent in the background; this answers 202 before it goes out. " +
+    "Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
+  request: {
+    headers: internalOrgHeaders,
+    params: z.object({ brandId: z.string().uuid() }),
+    body: { content: { "application/json": { schema: MissionStatusChangedRequestSchema } } },
+  },
+  responses: {
+    202: {
+      description: "Accepted; `notified` says whether an email will be sent",
+      content: {
+        "application/json": {
+          schema: z.object({ notified: z.boolean(), move: z.enum(["paused", "restarted"]).nullable() }),
+        },
+      },
+    },
+    400: {
+      description: "Invalid brandId, x-org-id or body",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
 const campaignQuery = z.object({
   offerId: z.string().uuid(),
   legKey: z.string().min(1),

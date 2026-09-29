@@ -229,7 +229,7 @@ describe("boot-time email template registration", () => {
       ].map((m) => m[1]),
     );
     expect(t.subject).toBe("{{subject}}");
-    expect(vars).toEqual(new Set(["email", "subject", "summaryHtml", "summaryText"]));
+    expect(vars).toEqual(new Set(["action", "email", "subject", "summaryHtml", "summaryText"]));
     // The retired status-blind pair must not come back.
     expect(`${t.htmlBody} ${t.textBody}`).not.toMatch(/Running:|Configured:/);
 

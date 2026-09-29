@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { Router } from "express";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import {
+  MissionStatusChangedRequestSchema,
   SetBrandDailyBudgetRequestSchema,
   SetCampaignDailyBudgetRequestSchema,
 } from "../schemas.js";
@@ -18,7 +19,11 @@ import {
   parseUtcDay,
   utcDaySpan,
 } from "../lib/utc-day.js";
-import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
+import {
+  notifyBrandDailyBudgetChanged,
+  notifyMissionStatusChanged,
+  statusMoveOf,
+} from "../lib/brand-budget-notification.js";
 import {
   BrandBudgetManagedByCampaignsError,
   CeilingBelowMinimumError,
@@ -395,6 +400,45 @@ router.patch(
       dailyBudgetCents: row.dailyBudgetCents,
       updatedAt: row.updatedAt.toISOString(),
     });
+  }
+);
+
+// POST /internal/brands/:brandId/mission-status-changed — campaign-service tells
+// billing that a PERSON paused or restarted a mission, after its own write
+// committed. The staff email is the budget-change email (one composition): see
+// lib/brand-budget-notification.ts. Answers 202 before the email goes out; the
+// caller fires this and forgets it.
+router.post(
+  "/internal/brands/:brandId/mission-status-changed",
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = requireInternalOrgId(req, res);
+    if (!orgId) return;
+    const parsed = MissionStatusChangedRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+    const body = parsed.data;
+    const move = statusMoveOf(body.fromStatus, body.toStatus);
+    if (move) {
+      console.log(
+        `[billing-service] mission ${move}: brand=${brandId} org=${orgId} campaign=${body.campaignId}`
+      );
+      void notifyMissionStatusChanged({
+        orgId,
+        userId: (req.headers["x-user-id"] as string | undefined) ?? "",
+        runId: (req.headers["x-run-id"] as string | undefined) ?? "",
+        brandId,
+        ...body,
+        actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
+      });
+    }
+    res.status(202).json({ notified: move !== null, move });
   }
 );
 
