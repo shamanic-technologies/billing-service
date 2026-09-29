@@ -16,6 +16,13 @@
  *    added. A mission we cannot classify is listed apart and never added either.
  *  - A source that could not be read is SAID, for the part it feeds. No figure
  *    is guessed and none is merged to cover for a gap.
+ *
+ * A PAUSE OR RESTART IS THE SAME EMAIL. Pausing a mission (campaign-service owns
+ * the status) moves the brand's real daily spend exactly as lowering its ceiling
+ * does, so staff get the same composition: the mission and its move under "What
+ * changed", then the daily total, reactive caps and paused missions as they
+ * stand AFTER the move. A status change carries no amount change, so its line
+ * states the ceiling the mission keeps.
  */
 
 import { Decimal } from "decimal.js";
@@ -40,14 +47,25 @@ export interface MissionChange extends MissionGrain {
   newDailyBudgetCents: string;
 }
 
+/** A person paused or restarted a mission (campaign-service's status). */
+export type MissionStatusMove = "paused" | "restarted";
+
+export interface MissionStatusChange extends MissionGrain {
+  move: MissionStatusMove;
+}
+
 export interface BudgetChangeEmailInput {
   brandId: string;
   orgId: string;
   /** The brand never had a budget before this write. */
   firstBudget: boolean;
   changes: MissionChange[];
+  /** Missions a person paused or restarted; empty for a budget write. */
+  statusChanges?: MissionStatusChange[];
   /** Every ceiling as it stands AFTER the write. */
   ceilings: MissionCeiling[];
+  /** billing's own ceiling read failed (status notification only): no amount is stated. */
+  ceilingsUnavailable?: boolean;
   brandName: string | null;
   org: OrgIdentity | null;
   offerNames: Map<string, string> | null;
@@ -57,6 +75,8 @@ export interface BudgetChangeEmailInput {
 }
 
 export interface BudgetChangeEmail {
+  /** What the person did, for the template's first line ("{{email}} {{action}}."). */
+  action: string;
   subject: string;
   summaryHtml: string;
   summaryText: string;
@@ -184,16 +204,49 @@ function joinNames(names: string[]): string {
   return `${unique.slice(0, -1).join(", ")} and ${unique[unique.length - 1]}`;
 }
 
+/** The ceiling a mission holds after the write, as `$7/day` / `$3 cap`; null when none is stated. */
+function ceilingOf(
+  g: MissionGrain,
+  ceilings: MissionCeiling[],
+  kind: MissionKind
+): string | null {
+  const row = ceilings.find((c) => key(c) === key(g));
+  if (!row || new Decimal(row.dailyBudgetCents).isZero()) return null;
+  return formatAmount(row.dailyBudgetCents, kind);
+}
+
+/** `paused ($7/day kept)` / `restarted ($7/day)` / `paused (no budget set)`. */
+export function formatStatusMove(move: MissionStatusMove, amount: string | null): string {
+  if (move === "paused") return amount ? `paused (${amount} kept)` : "paused (no budget set)";
+  return amount ? `restarted (${amount})` : "restarted (no budget set, so it cannot spend)";
+}
+
 export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetChangeEmail {
   const { catalogue, offerNames, spendable } = input;
   const brand = input.brandName ?? "A brand";
   const describe = (g: MissionGrain) => describeMission(g, catalogue, offerNames);
+  const statusDescribed = (input.statusChanges ?? []).map((s) => {
+    const d = describe(s);
+    return { s, d, amount: ceilingOf(s, input.ceilings, d.kind) };
+  });
 
   // --- subject: direction + brand + crew -------------------------------------
   const described = input.changes.map((c) => ({ change: c, d: describe(c) }));
   const crews = joinNames(described.map((x) => x.d.crew));
   let subject: string;
-  if (input.firstBudget) {
+  let action = "changed a daily budget";
+  if (input.changes.length === 0 && statusDescribed.length > 0) {
+    const moves = new Set(statusDescribed.map((x) => x.s.move));
+    const move = moves.size === 1 ? [...moves][0] : null;
+    action = move === "paused" ? "paused a mission" : move === "restarted" ? "restarted a mission" : "paused and restarted missions";
+    const who = joinNames(statusDescribed.map((x) => x.d.crew));
+    if (statusDescribed.length === 1) {
+      const { s, amount } = statusDescribed[0];
+      subject = `${brand} ${formatStatusMove(s.move, amount).replace(/^(\w+)/, `$1 ${who}`)}`;
+    } else {
+      subject = `${brand} ${move ?? "paused and restarted"} ${who}`;
+    }
+  } else if (input.firstBudget) {
     const set = described
       .filter((x) => !new Decimal(x.change.newDailyBudgetCents).isZero())
       .map((x) => `${x.d.crew} ${formatAmount(x.change.newDailyBudgetCents, x.d.kind)}`);
@@ -215,9 +268,10 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
   }
 
   // --- what changed ------------------------------------------------------------
-  const changedLines = described.map(
-    ({ change, d }) => `${d.label}: ${formatChange(change, d.kind)}`
-  );
+  const changedLines = [
+    ...described.map(({ change, d }) => `${d.label}: ${formatChange(change, d.kind)}`),
+    ...statusDescribed.map(({ s, d, amount }) => `${d.label}: ${formatStatusMove(s.move, amount)}`),
+  ];
 
   // --- what the brand now runs -------------------------------------------------
   const runningOf = (g: MissionGrain): boolean | null => {
@@ -278,6 +332,11 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
       "The crew catalogue (features-service) could not be read, so crews are unnamed and daily missions cannot be told apart from reactive caps."
     );
   }
+  if (input.ceilingsUnavailable) {
+    notes.push(
+      "The mission budgets could not be read from billing, so no amount or daily total below is complete."
+    );
+  }
   if (!offerNames) notes.push("Offer names could not be read from brand-service.");
   if (!input.brandName) notes.push("The brand name could not be read from brand-service.");
   if (!input.org?.name) notes.push("The org name could not be read.");
@@ -328,6 +387,7 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
   text.push(`Brand id ${input.brandId} · Org id ${input.orgId}`);
 
   return {
+    action,
     subject,
     summaryHtml: html.join("\n"),
     summaryText: text.join("\n"),

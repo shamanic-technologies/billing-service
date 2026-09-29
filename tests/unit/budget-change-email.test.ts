@@ -212,3 +212,70 @@ describe("buildBudgetChangeEmail — rules", () => {
     expect(email.summaryHtml).toContain("&lt;b&gt;X&lt;/b&gt;");
   });
 });
+
+describe("buildBudgetChangeEmail — a person paused or restarted a mission", () => {
+  const herald = { featureSlug: COLD, offerId: OFFER, legKey: HERALD_LEG };
+
+  it("a pause is the same email: the move, then the state after it", () => {
+    const email = buildBudgetChangeEmail(
+      novemiq({
+        changes: [],
+        statusChanges: [{ ...herald, move: "paused" }],
+        spendable: spendable([
+          { slug: COLD, leg: HERALD_LEG, cents: 700, running: false },
+          { slug: MEET, leg: PILOT_LEG, cents: 300, running: true },
+        ]),
+      })
+    );
+    expect(email.subject).toBe("NOVEMIQ paused Herald ($7/day kept)");
+    expect(email.action).toBe("paused a mission");
+    const changed = email.summaryText.split("What changed\n")[1].split("\n\n")[0];
+    expect(changed).toBe(
+      '- Herald · Sales Cold Email Outreach · Positive reply · offer "Growth": paused ($7/day kept)'
+    );
+    expect(email.summaryText).toContain("Daily spend now: $0/day (no daily mission is running)");
+    expect(email.summaryText).toContain(
+      'Pilot · AI Meeting Booking · Positive reply → Meeting booked · offer "Growth": $3 cap'
+    );
+    expect(email.summaryText).toMatch(/Paused \(amount kept, not spending\)\n- Herald .*: \$7\/day kept/);
+    expect(`${email.subject}${email.summaryText}`).not.toMatch(/\$10\b|—/);
+  });
+
+  it("a restart says restarted and counts the mission again", () => {
+    const email = buildBudgetChangeEmail(
+      novemiq({ changes: [], statusChanges: [{ ...herald, move: "restarted" }] })
+    );
+    expect(email.subject).toBe("NOVEMIQ restarted Herald ($7/day)");
+    expect(email.action).toBe("restarted a mission");
+    expect(email.summaryText).toContain('offer "Growth": restarted ($7/day)');
+    expect(email.summaryText).toContain("Daily spend now: $7/day");
+    expect(email.summaryText).not.toContain("Paused (amount kept");
+  });
+
+  it("a paused reactive mission keeps its cap wording", () => {
+    const email = buildBudgetChangeEmail(
+      novemiq({
+        changes: [],
+        statusChanges: [{ featureSlug: MEET, offerId: OFFER, legKey: PILOT_LEG, move: "paused" }],
+      })
+    );
+    expect(email.subject).toBe("NOVEMIQ paused Pilot ($3 cap kept)");
+  });
+
+  it("a mission with no ceiling says so, and an unreadable ceiling read is stated", () => {
+    const email = buildBudgetChangeEmail(
+      novemiq({
+        changes: [],
+        statusChanges: [{ ...herald, move: "restarted" }],
+        ceilings: [],
+        ceilingsUnavailable: true,
+      })
+    );
+    expect(email.subject).toBe("NOVEMIQ restarted Herald (no budget set, so it cannot spend)");
+    expect(email.summaryText).toContain("The mission budgets could not be read from billing");
+  });
+
+  it("a budget write still reads as a budget change", () => {
+    expect(buildBudgetChangeEmail(novemiq()).action).toBe("changed a daily budget");
+  });
+});
