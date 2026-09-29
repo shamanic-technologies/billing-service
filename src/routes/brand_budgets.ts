@@ -378,6 +378,14 @@ router.patch(
         previousDailyBudgetCents,
         row.dailyBudgetCents
       ),
+      ceilings: [
+        {
+          featureSlug: null,
+          offerId: null,
+          legKey: null,
+          dailyBudgetCents: row.dailyBudgetCents,
+        },
+      ],
       actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
     });
 
@@ -720,6 +728,7 @@ router.put(
       previousDailyBudgetCents: written.previousBrandDailyBudgetCents,
       newDailyBudgetCents: written.brandDailyBudgetCents,
       changes,
+      ceilings: written.ceilings,
       actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
     });
 

@@ -7,19 +7,15 @@
  * owns the ONLY write path for that value in the fleet, so it is the only place
  * that can observe every change.
  *
- * THE HEADLINE IS THE RUNNING FIGURE, not the configured total. billing stores
- * no campaign status, so the total it can compute alone counts a ceiling whose
- * campaign has been stopped for weeks exactly like one sending today. Measured
- * in prod: a brand with $200/day behind an ongoing campaign and $10/day behind a
- * stopped one was reported as "$110/day → $210/day" on a raise that moved the
- * spendable figure $100 → $200. Every such message overstated the change by
- * whatever was paused. campaign-service answers the split (see
- * `campaign-service-client.ts`); the arithmetic for the BEFORE side is in
- * `brand-running-budget.ts`.
- *
- * THE CONFIGURED TOTAL IS STATED TOO, on its own line. Dropping it would hide
- * the paused money rather than surface it, and the paused money is the reason
- * the two figures differ.
+ * ONE LINE PER MISSION, NEVER A BRAND SUM. A brand's ceilings are missions
+ * (offer x leg x channel) of two kinds: an entry leg spends DAILY, a leg that
+ * starts from a step (e.g. AI meeting booking, from a positive reply) is a
+ * REACTIVE cap that only spends when triggered. Summing them misstates both:
+ * on 2026-09-29 NOVEMIQ's Herald went $10 -> $7/day and staff read
+ * "$13/day -> $10/day" with UUIDs for names. The email now names each changed
+ * mission, states the daily total over running entry legs only, and lists
+ * reactive caps and paused missions apart. See `budget-change-email.ts` (the
+ * words) and `budget-change-context.ts` (the fail-soft reads of the names).
  *
  * Channel: the existing fire-and-forget transactional-email-service client.
  * transactional-email-service routes the `brand_daily_budget_changed` event to
@@ -43,34 +39,24 @@ import { Decimal } from "decimal.js";
 import { cmpCents } from "./cents.js";
 import { sendEmail } from "./email-client.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
+import type { CeilingChange } from "./brand-running-budget.js";
 import {
-  runningTotalsFor,
-  type CeilingChange,
-} from "./brand-running-budget.js";
+  fetchBrandName,
+  fetchCrewCatalogue,
+  fetchOfferNames,
+  fetchOrgIdentity,
+} from "./budget-change-context.js";
+import {
+  buildBudgetChangeEmail,
+  type MissionCeiling,
+} from "./budget-change-email.js";
 
 /** Byte-equal to the transactional-email-service event key AND template name. */
 export const BRAND_DAILY_BUDGET_CHANGED_EVENT = "brand_daily_budget_changed";
 
 /**
- * What the running lines say when campaign-service could not be read. NEVER a
- * configured figure wearing the running label — an overstated number is the bug
- * this whole change exists to remove, and a silently wrong one is worse than an
- * absent one.
- */
-export const RUNNING_UNAVAILABLE = "unavailable";
-
-/** Always supplied, never empty — an unset {{variable}} renders literally. */
-export const RUNNING_NOTE_OK =
-  "Running = the part of the configured budget attached to a campaign that is ongoing right now.";
-export const RUNNING_NOTE_UNAVAILABLE =
-  "Running split unavailable: campaign-service could not be read, so only the configured totals are known.";
-
-/**
- * Render a stored fractional-cents budget as the staff-readable daily figure.
- *
- * A daily budget is a whole-dollar configuration value, so cents never show.
- * Zero is a deliberate pause, not "changed to 0" — it must read as such. null is
- * the never-configured state (a first-ever set has no "from" value).
+ * Render a stored fractional-cents budget as a whole-dollar daily figure.
+ * Zero is a deliberate pause; null is the never-configured state.
  */
 export function formatDailyBudget(cents: string | null): string {
   if (cents === null) return "unset";
@@ -88,13 +74,14 @@ export interface BrandDailyBudgetChangeNotification {
   previousDailyBudgetCents: string | null;
   /** Brand-level total stored by this write. */
   newDailyBudgetCents: string;
-  /**
-   * Every ceiling this write touched, with its before and after value. Used to
-   * carry the running figure back to the state before the write — statuses do
-   * not move during a budget write, so the post-write running verdict per
-   * ceiling applies to both sides. See `brand-running-budget.ts`.
-   */
+  /** Every ceiling this write touched, with its before and after value. */
   changes: CeilingChange[];
+  /**
+   * Every ceiling as it stands AFTER the write (a brand-grain write passes its
+   * scalar with every grain field null). The email lists these, split into
+   * daily money, reactive caps and paused missions.
+   */
+  ceilings: MissionCeiling[];
   /**
    * Acting staff/user email when the gateway forwarded one (`x-email`). Left
    * absent so the email service fills `email` from `x-user-id` — it only
@@ -112,7 +99,7 @@ function isRealChange(params: BrandDailyBudgetChangeNotification): boolean {
     return true;
   }
   // A reallocation that keeps the brand total identical still moves money
-  // between campaigns, so it can move the RUNNING total — which is the headline.
+  // between missions.
   return params.changes.some(
     (c) =>
       cmpCents(c.previousDailyBudgetCents, c.newDailyBudgetCents) !== 0
@@ -121,9 +108,7 @@ function isRealChange(params: BrandDailyBudgetChangeNotification): boolean {
 
 /**
  * Notify staff of a real daily-budget change. A re-save of the SAME value is not
- * a change and sends nothing; a first-ever set does notify, with the "from" side
- * shown as unset. A change that only moved PAUSED money still sends — a paused
- * ceiling moving is a business signal, and the headline then reads unchanged.
+ * a change and sends nothing; a first-ever set does notify.
  *
  * Never throws and never rejects — see the module doc. Returns a promise ONLY so
  * callers can await it in tests; no route awaits it.
@@ -134,32 +119,33 @@ export async function notifyBrandDailyBudgetChanged(
   try {
     if (!isRealChange(params)) return;
 
-    const previousBudget = formatDailyBudget(params.previousDailyBudgetCents);
-    const newBudget = formatDailyBudget(params.newDailyBudgetCents);
+    // The write has already committed, so every read sees the NEW state. All
+    // five are fail-soft; the email says in words which part is missing.
+    const [spendable, catalogue, brandName, offerNames, org] = await Promise.all([
+      fetchSpendableBudget(params.orgId, params.brandId),
+      fetchCrewCatalogue(),
+      fetchBrandName(params.orgId, params.brandId),
+      fetchOfferNames(params.orgId, params.brandId),
+      fetchOrgIdentity(params.orgId),
+    ]);
 
-    // The write has already committed, so campaign-service reads the NEW
-    // ceilings back — that is exactly the "now" side we want.
-    const spendable = await fetchSpendableBudget(params.orgId, params.brandId);
-    const running = spendable
-      ? runningTotalsFor(spendable, params.changes)
-      : null;
-
-    const metadata: Record<string, string | null> = {
+    const email = buildBudgetChangeEmail({
       brandId: params.brandId,
       orgId: params.orgId,
-      // The headline, on both sides of the change.
-      previousRunningBudget: running
-        ? formatDailyBudget(running.runningBeforeCents)
-        : RUNNING_UNAVAILABLE,
-      newRunningBudget: running
-        ? formatDailyBudget(running.runningNowCents)
-        : RUNNING_UNAVAILABLE,
-      // The configured totals, stated alongside so the paused money is visible
-      // rather than silently dropped. Names unchanged — they have always meant
-      // the configured figure.
-      previousBudget,
-      newBudget,
-      runningNote: running ? RUNNING_NOTE_OK : RUNNING_NOTE_UNAVAILABLE,
+      firstBudget: params.previousDailyBudgetCents === null,
+      changes: params.changes,
+      ceilings: params.ceilings,
+      brandName,
+      org,
+      offerNames,
+      catalogue,
+      spendable,
+    });
+
+    const metadata: Record<string, string | null> = {
+      subject: email.subject,
+      summaryHtml: email.summaryHtml,
+      summaryText: email.summaryText,
     };
     if (params.actingEmail) metadata.email = params.actingEmail;
 

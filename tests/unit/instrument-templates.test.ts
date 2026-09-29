@@ -218,7 +218,7 @@ describe("boot-time email template registration", () => {
     }
   });
 
-  it("headlines the RUNNING budget and supplies every variable it prints", async () => {
+  it("carries the sender-composed summary and supplies every variable it prints", async () => {
     await deployEmailTemplates();
     const t = lastBody(fetchMock).templates.find(
       (x) => x.name === BRAND_DAILY_BUDGET_CHANGED_EVENT,
@@ -228,23 +228,10 @@ describe("boot-time email template registration", () => {
         ...`${t.subject} ${t.htmlBody} ${t.textBody}`.matchAll(/\{\{(\w+)\}\}/g),
       ].map((m) => m[1]),
     );
-
-    // The headline is the running figure; the configured total is stated too, so
-    // the paused money is visible rather than silently dropped.
-    expect(t.subject).toContain("{{previousRunningBudget}}");
-    expect(t.subject).toContain("{{newRunningBudget}}");
-    expect(vars).toEqual(
-      new Set([
-        "email",
-        "previousRunningBudget",
-        "newRunningBudget",
-        "previousBudget",
-        "newBudget",
-        "brandId",
-        "orgId",
-        "runningNote",
-      ]),
-    );
+    expect(t.subject).toBe("{{subject}}");
+    expect(vars).toEqual(new Set(["email", "subject", "summaryHtml", "summaryText"]));
+    // The retired status-blind pair must not come back.
+    expect(`${t.htmlBody} ${t.textBody}`).not.toMatch(/Running:|Configured:/);
 
     // `email` is the one the email service enriches when billing sends none;
     // every other variable is written by the sender on every send.

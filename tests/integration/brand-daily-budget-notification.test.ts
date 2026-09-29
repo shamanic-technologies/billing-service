@@ -63,8 +63,13 @@ describe("brand daily budget → staff notification", () => {
       .send({ dailyBudgetCents: amount });
   }
 
+  // The email's name/catalogue reads are fail-soft; with no sibling configured
+  // they answer null at once instead of retrying a closed port past waitFor.
+  const featuresUrl = process.env.FEATURES_SERVICE_URL;
+
   beforeEach(async () => {
     vi.restoreAllMocks();
+    delete process.env.FEATURES_SERVICE_URL;
     delete process.env.CAMPAIGN_SERVICE_URL;
     delete process.env.CAMPAIGN_SERVICE_API_KEY;
     await cleanTestData();
@@ -73,6 +78,7 @@ describe("brand daily budget → staff notification", () => {
 
   afterAll(async () => {
     vi.restoreAllMocks();
+    process.env.FEATURES_SERVICE_URL = featuresUrl;
     delete process.env.CAMPAIGN_SERVICE_URL;
     delete process.env.CAMPAIGN_SERVICE_API_KEY;
     await cleanTestData();
@@ -89,12 +95,13 @@ describe("brand daily budget → staff notification", () => {
     expect(call.orgId).toBe(orgId);
     expect(call.userId).toBe(userId);
     expect(call.runId).toBe(runId);
-    expect(call.metadata).toMatchObject({
-      brandId,
-      orgId,
-      previousBudget: "unset",
-      newBudget: "$50/day",
-    });
+    expect(call.metadata.subject).toBe(
+      "A brand set a first budget: Brand-wide budget $50/day"
+    );
+    expect(call.metadata.summaryText).toContain(
+      "Brand-wide budget (no mission): $0 → $50/day (+$50, new)"
+    );
+    expect(call.metadata.summaryText).toContain(`Brand id ${brandId} · Org id ${orgId}`);
     // No staff address is named by billing — the email service owns who staff is.
     expect(call.recipientEmail).toBeUndefined();
   });
@@ -106,10 +113,9 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(9900);
 
-    expect((await sentCall()).metadata).toMatchObject({
-      previousBudget: "$50/day",
-      newBudget: "$99/day",
-    });
+    const { metadata } = await sentCall();
+    expect(metadata.subject).toBe("A brand raised Brand-wide budget: $50/day → $99/day");
+    expect(metadata.summaryText).toContain("$50/day → $99/day (+$49, +98%)");
     expect(sendEmailSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -133,10 +139,9 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(0);
 
-    expect((await sentCall()).metadata).toMatchObject({
-      previousBudget: "$50/day",
-      newBudget: "paused ($0/day)",
-    });
+    const { metadata } = await sentCall();
+    expect(metadata.subject).toBe("A brand paused Brand-wide budget ($0)");
+    expect(metadata.summaryText).toContain("$50/day → paused ($0) (−$50, −100%)");
   });
 
   it("leaving a pause notifies with the pause as the previous side", async () => {
@@ -146,10 +151,9 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(8000);
 
-    expect((await sentCall()).metadata).toMatchObject({
-      previousBudget: "paused ($0/day)",
-      newBudget: "$80/day",
-    });
+    expect((await sentCall()).metadata.summaryText).toContain(
+      "$0 → $80/day (+$80, new)"
+    );
   });
 
   it("never prints fractional cents on a fractional stored budget", async () => {
@@ -159,7 +163,7 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget("5049.5");
 
-    expect((await sentCall()).metadata.newBudget).toBe("$50/day");
+    expect((await sentCall()).metadata.summaryText).toContain("$0 → $50/day");
   });
 
   it("forwards the acting staff email when the gateway supplies x-email", async () => {
@@ -182,10 +186,9 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(2000, getAuthHeaders(otherOrgId, userId, runId));
 
-    expect((await sentCall()).metadata).toMatchObject({
-      previousBudget: "$10/day",
-      newBudget: "$20/day",
-    });
+    expect((await sentCall()).metadata.summaryText).toContain(
+      "$10/day → $20/day (+$10, +100%)"
+    );
   });
 
   it("an erroring email client changes neither the status code nor the body", async () => {
@@ -255,16 +258,14 @@ describe("brand daily budget → staff notification", () => {
 
   // --- the running split (campaign-service unconfigured / unreachable) ---
 
-  it("says the running split is unavailable rather than quoting a configured total", async () => {
+  it("states no daily total when campaign statuses cannot be read", async () => {
     await setBudget(5000);
 
     const { metadata } = await sentCall();
-    expect(metadata.previousRunningBudget).toBe("unavailable");
-    expect(metadata.newRunningBudget).toBe("unavailable");
-    expect(metadata.runningNote).toContain("campaign-service could not be read");
-    // The configured totals are still stated in full.
-    expect(metadata.previousBudget).toBe("unset");
-    expect(metadata.newBudget).toBe("$50/day");
+    expect(metadata.summaryText).toContain("Daily spend now: unavailable");
+    expect(metadata.summaryText).toContain("Campaign statuses could not be read");
+    expect(metadata.summaryText).toContain("Funded, status unknown");
+    expect(metadata.summaryText).not.toMatch(/Running:|Configured:/);
   });
 
   it("a hanging campaign-service changes neither the status code, body nor the write", async () => {
