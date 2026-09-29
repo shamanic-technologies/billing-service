@@ -48,8 +48,12 @@ import {
 } from "./budget-change-context.js";
 import {
   buildBudgetChangeEmail,
+  type BudgetChangeEmail,
   type MissionCeiling,
+  type MissionStatusMove,
 } from "./budget-change-email.js";
+import { getBrandCeilings } from "./campaign-budgets.js";
+import { getBrandDailyBudget } from "./brand-budgets.js";
 
 /** Byte-equal to the transactional-email-service event key AND template name. */
 export const BRAND_DAILY_BUDGET_CHANGED_EVENT = "brand_daily_budget_changed";
@@ -88,6 +92,31 @@ export interface BrandDailyBudgetChangeNotification {
    * enriches when the caller supplied nothing.
    */
   actingEmail?: string | null;
+}
+
+/**
+ * ONE send path for both notifications (a budget write and a status change), so
+ * the two cannot drift: same event, same template, same variables.
+ */
+export function sendStaffEmail(
+  params: { orgId: string; userId: string; runId: string; actingEmail?: string | null },
+  email: BudgetChangeEmail
+): void {
+  const metadata: Record<string, string | null> = {
+    action: email.action,
+    subject: email.subject,
+    summaryHtml: email.summaryHtml,
+    summaryText: email.summaryText,
+  };
+  if (params.actingEmail) metadata.email = params.actingEmail;
+
+  sendEmail({
+    eventType: BRAND_DAILY_BUDGET_CHANGED_EVENT,
+    orgId: params.orgId,
+    userId: params.userId,
+    runId: params.runId,
+    metadata,
+  });
 }
 
 /** True when this write moved the brand total OR any individual ceiling. */
@@ -142,24 +171,121 @@ export async function notifyBrandDailyBudgetChanged(
       spendable,
     });
 
-    const metadata: Record<string, string | null> = {
-      subject: email.subject,
-      summaryHtml: email.summaryHtml,
-      summaryText: email.summaryText,
-    };
-    if (params.actingEmail) metadata.email = params.actingEmail;
-
-    sendEmail({
-      eventType: BRAND_DAILY_BUDGET_CHANGED_EVENT,
-      orgId: params.orgId,
-      userId: params.userId,
-      runId: params.runId,
-      metadata,
-    });
+    sendStaffEmail(params, email);
   } catch (err) {
     console.error(
       "[billing-service] failed to notify staff of a brand daily-budget change:",
       err
     );
+  }
+}
+
+// --- a person paused or restarted a mission ------------------------------------
+//
+// campaign-service owns a campaign's status; pausing a mission changes the
+// brand's real daily spend exactly as lowering its ceiling does, so staff get
+// the SAME email. campaign-service tells billing that a status moved (after its
+// own write committed) and billing composes: the ceilings are billing's, the
+// running split is read back from campaign-service and already reflects the move.
+
+/** campaign-service's two stored statuses a person can move a mission between. */
+export function statusMoveOf(
+  fromStatus: string | null,
+  toStatus: string
+): MissionStatusMove | null {
+  if (fromStatus === toStatus) return null;
+  if (toStatus === "stopped") return "paused";
+  if (toStatus === "ongoing") return "restarted";
+  return null;
+}
+
+export interface MissionStatusChangeNotification {
+  orgId: string;
+  userId: string;
+  runId: string;
+  brandId: string;
+  campaignId: string;
+  featureSlug: string | null;
+  offerId: string | null;
+  legKey: string | null;
+  fromStatus: string | null;
+  toStatus: string;
+  actingEmail?: string | null;
+}
+
+async function readCeilingsAfter(
+  orgId: string,
+  brandId: string
+): Promise<MissionCeiling[] | null> {
+  try {
+    const rows = await getBrandCeilings(orgId, brandId);
+    if (rows.length > 0) return rows;
+    const brandPot = await getBrandDailyBudget(orgId, brandId);
+    return brandPot
+      ? [{ featureSlug: null, offerId: null, legKey: null, dailyBudgetCents: brandPot.dailyBudgetCents }]
+      : [];
+  } catch (err) {
+    console.error(
+      `[billing-service] ceiling read failed for the mission status email, brand=${brandId}:`,
+      err
+    );
+    return null;
+  }
+}
+
+/**
+ * Notify staff that a person paused or restarted a mission. A move that is not
+ * a real transition between running and paused sends nothing.
+ *
+ * Never throws and never rejects — the same fire-and-forget posture as the
+ * budget notification. Returns whether an email was handed to the sender, so
+ * the route and the tests can say so.
+ */
+export async function notifyMissionStatusChanged(
+  params: MissionStatusChangeNotification
+): Promise<boolean> {
+  try {
+    const move = statusMoveOf(params.fromStatus, params.toStatus);
+    if (!move) return false;
+
+    const [ceilings, spendable, catalogue, brandName, offerNames, org] = await Promise.all([
+      readCeilingsAfter(params.orgId, params.brandId),
+      fetchSpendableBudget(params.orgId, params.brandId),
+      fetchCrewCatalogue(),
+      fetchBrandName(params.orgId, params.brandId),
+      fetchOfferNames(params.orgId, params.brandId),
+      fetchOrgIdentity(params.orgId),
+    ]);
+
+    const email = buildBudgetChangeEmail({
+      brandId: params.brandId,
+      orgId: params.orgId,
+      firstBudget: false,
+      changes: [],
+      statusChanges: [
+        {
+          featureSlug: params.featureSlug,
+          offerId: params.offerId,
+          legKey: params.legKey,
+          move,
+        },
+      ],
+      ceilings: ceilings ?? [],
+      ceilingsUnavailable: ceilings === null,
+      brandName,
+      org,
+      offerNames,
+      catalogue,
+      spendable,
+    });
+
+    sendStaffEmail(params, email);
+    return true;
+  } catch (err) {
+    console.error(
+      `[billing-service] failed to notify staff of a mission status change (campaign=${params.campaignId}):`,
+      err
+    );
+    return false;
   }
 }
