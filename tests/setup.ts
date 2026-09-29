@@ -221,6 +221,31 @@ beforeAll(async () => {
       ON "brand_daily_budget_changes" ("org_id", "brand_id", "changed_at", "id")
   `;
 
+  // brand_sales_budgets + history (a brand's global sales budget, migration 0054).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "brand_sales_budgets" (
+      "org_id" uuid NOT NULL,
+      "brand_id" uuid NOT NULL,
+      "daily_budget_cents" numeric(16,10) NOT NULL,
+      "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "brand_sales_budgets_pkey" PRIMARY KEY ("org_id", "brand_id"),
+      CONSTRAINT "brand_sales_budgets_non_negative" CHECK ("daily_budget_cents" >= 0)
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS "brand_sales_budget_changes" (
+      "id" bigserial PRIMARY KEY,
+      "org_id" uuid NOT NULL,
+      "brand_id" uuid NOT NULL,
+      "daily_budget_cents" numeric(16,10),
+      "changed_at" timestamp with time zone DEFAULT now() NOT NULL
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS "brand_sales_budget_changes_org_brand_changed_at_idx"
+      ON "brand_sales_budget_changes" ("org_id", "brand_id", "changed_at", "id")
+  `;
+
   // org_usage_discounts (per-org platform-usage discount, migration 0026).
   await sql`
     CREATE TABLE IF NOT EXISTS "org_usage_discounts" (

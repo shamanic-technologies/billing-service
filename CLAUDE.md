@@ -877,6 +877,17 @@ Owner verdict on the previous shape ("Running: $13/day → $10/day / Configured:
 
 **Follow-ups (other repos, not built here):** api-service gateway proxy for the user `PATCH`; campaign-service reads the internal `GET` per loop + enforces; dashboard UI to set it.
 
+### A brand's ONE daily sales budget — "global" mode (`src/lib/brand-sales-budget.ts`, migration 0054)
+
+Owner decision 2026-09-29 (phase 3 of "how an offer sells"). A brand is funded in one of two MODES: `campaigns` (default: each campaign paced on its own ceiling) or `global` (the brand stated ONE daily amount for sales; campaign-service puts it behind the best-ROI sales path and runs reactive legs whenever authorised). billing stores + serves; allocation is campaign-service's.
+
+- **State:** `brand_sales_budgets` (PK org+brand, amount ≥ 0, 0 legal) and append-only `brand_sales_budget_changes` (NULL amount = a clear). No row = `campaigns` mode, byte-identical to before.
+- **Routes:** `GET /internal/brands/:id/sales-budget` (+ `/history`, x-org-id) for campaign-service; `GET|PUT|DELETE /v1/brands/:id/sales-budget` (+ `GET …/history`) for the dashboard via the api-service gateway. Every answer carries `mode`; `DELETE` is idempotent (`cleared:false`).
+- **The campaign ceilings are NEVER touched** by a state or a clear; clearing puts the brand straight back on them.
+- **The brand total follows the mode.** In global mode `getBrandDailyBudget` (the `/internal/brands/:id/daily-budget` read every gate uses) answers the stated amount, and every state/clear appends the new effective total to `brand_daily_budget_changes` (so the by-day replay stays right). A campaign-ceiling write in global mode does NOT append a brand-total row (the total did not move). A brand-scalar `PATCH /v1/brands/:id/daily-budget` answers 409 in global mode.
+- Org teardown deletes `brand_sales_budgets`; a brand transfer moves both tables and refuses a merge onto a target that holds one.
+- **Not built here:** the staff budget-change email does not fire on a sales-budget write yet (its "daily spend now" composes missions and would state the wrong figure in global mode); campaign-service's `spendable-budget` (read by payment-outlook) must learn the mode in its own phase.
+
 ### One ceiling per CAMPAIGN (`src/lib/campaign-budgets.ts`, table `campaign_daily_budgets`)
 
 A campaign is **(offer x leg x acquisition channel)** and a daily ceiling is keyed on exactly that: one row per campaign, `UNIQUE NULLS NOT DISTINCT (org_id, brand_id, feature_slug, offer_id, leg_key)`. `getBrandDailyBudget` answers the SUM of the ceilings (else the brand scalar, else null) — the one number the launch gate, runway warnings, credit alerts, the Overview tile and campaign-service read. **Never let a consumer recompose a sum**: every figure (brand, per offer, per leg, per campaign) is served here.

@@ -49,6 +49,7 @@ import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
+  brandSalesBudgets,
   campaignDailyBudgets,
   type CeilingRow,
 } from "../db/schema.js";
@@ -503,12 +504,27 @@ export async function setCampaignDailyBudget(
         );
     }
 
-    await tx.insert(brandDailyBudgetChanges).values({
-      orgId,
-      brandId,
-      dailyBudgetCents: brandDailyBudgetCents,
-      changedAt,
-    });
+    // A brand in GLOBAL mode keeps its stated sales budget as its total, so a
+    // ceiling write (a reactive cap, the campaigns-mode fallback) does not move
+    // the brand-total timeline.
+    const [salesRow] = await tx
+      .select({ orgId: brandSalesBudgets.orgId })
+      .from(brandSalesBudgets)
+      .where(
+        and(
+          eq(brandSalesBudgets.orgId, orgId),
+          eq(brandSalesBudgets.brandId, brandId)
+        )
+      )
+      .limit(1);
+    if (!salesRow) {
+      await tx.insert(brandDailyBudgetChanges).values({
+        orgId,
+        brandId,
+        dailyBudgetCents: brandDailyBudgetCents,
+        changedAt,
+      });
+    }
 
     const campaign = campaignBudgetOf(ceilings, key);
     if (!campaign) {

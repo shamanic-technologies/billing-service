@@ -4,6 +4,7 @@ import { requireOrgHeaders } from "../middleware/auth.js";
 import {
   MissionStatusChangedRequestSchema,
   SetBrandDailyBudgetRequestSchema,
+  SetBrandSalesBudgetRequestSchema,
   SetCampaignDailyBudgetRequestSchema,
 } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
@@ -12,7 +13,15 @@ import {
   getBrandDailyBudgetByDay,
   getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
+  BrandBudgetManagedBySalesBudgetError,
 } from "../lib/brand-budgets.js";
+import {
+  clearBrandSalesBudget,
+  getBrandSalesBudget,
+  getBrandSalesBudgetHistory,
+  setBrandSalesBudget,
+  viewOf,
+} from "../lib/brand-sales-budget.js";
 import {
   MAX_DAY_RANGE_DAYS,
   currentUtcDay,
@@ -362,7 +371,10 @@ router.patch(
         dailyBudgetCents
       ));
     } catch (err) {
-      if (err instanceof BrandBudgetManagedByCampaignsError) {
+      if (
+        err instanceof BrandBudgetManagedByCampaignsError ||
+        err instanceof BrandBudgetManagedBySalesBudgetError
+      ) {
         res.status(409).json({ error: err.message });
         return;
       }
@@ -784,6 +796,176 @@ router.put(
       updatedAt: written.campaign.updatedAt.toISOString(),
       brandDailyBudgetCents: written.brandDailyBudgetCents,
       campaigns: renderCampaigns(campaignTotalsOf(written.ceilings)),
+    });
+  }
+);
+
+// --- The brand's ONE daily sales budget (global mode) --------------------
+//
+// A brand either paces every campaign on its own ceiling ("campaigns" mode, the
+// default) or states ONE daily budget for sales ("global" mode) that campaign-
+// service allocates to the best-return sales path. See lib/brand-sales-budget.ts.
+// Every answer carries the mode, so a reader never infers it from a null.
+
+async function composeSalesBudgetView(orgId: string, brandId: string) {
+  const view = viewOf(await getBrandSalesBudget(orgId, brandId));
+  return {
+    mode: view.mode,
+    dailyBudgetCents: view.dailyBudgetCents,
+    updatedAt: view.updatedAt ? view.updatedAt.toISOString() : null,
+  };
+}
+
+async function composeSalesBudgetHistory(orgId: string, brandId: string) {
+  const changes = await getBrandSalesBudgetHistory(orgId, brandId);
+  return changes.map((c) => ({
+    mode: c.dailyBudgetCents === null ? "campaigns" : "global",
+    dailyBudgetCents: c.dailyBudgetCents,
+    changedAt: c.changedAt.toISOString(),
+  }));
+}
+
+// GET /internal/brands/:brandId/sales-budget — campaign-service reads the mode
+// and, in global mode, the amount it allocates. Auth: x-api-key + x-org-id.
+router.get("/internal/brands/:brandId/sales-budget", async (req, res) => {
+  const { brandId } = req.params;
+  if (!UUID_RE.test(brandId)) {
+    res.status(400).json({ error: "brandId must be a valid UUID" });
+    return;
+  }
+  const orgId = requireInternalOrgId(req, res);
+  if (!orgId) return;
+  res.json({ brandId, orgId, ...(await composeSalesBudgetView(orgId, brandId)) });
+});
+
+// GET /internal/brands/:brandId/sales-budget/history — every state and clear,
+// oldest first. Auth: x-api-key + x-org-id.
+router.get(
+  "/internal/brands/:brandId/sales-budget/history",
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = requireInternalOrgId(req, res);
+    if (!orgId) return;
+    res.json({
+      brandId,
+      orgId,
+      history: await composeSalesBudgetHistory(orgId, brandId),
+    });
+  }
+);
+
+// GET /v1/brands/:brandId/sales-budget — the same answer for the user (gateway).
+router.get(
+  "/v1/brands/:brandId/sales-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = req.headers["x-org-id"] as string;
+    res.json({ brandId, orgId, ...(await composeSalesBudgetView(orgId, brandId)) });
+  }
+);
+
+// GET /v1/brands/:brandId/sales-budget/history — the history for the user.
+router.get(
+  "/v1/brands/:brandId/sales-budget/history",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = req.headers["x-org-id"] as string;
+    res.json({
+      brandId,
+      orgId,
+      history: await composeSalesBudgetHistory(orgId, brandId),
+    });
+  }
+);
+
+// PUT /v1/brands/:brandId/sales-budget — state the brand's one daily sales
+// budget (the brand enters global mode). Body: { dailyBudgetCents } non-negative
+// (0 is legal). The campaign ceilings are untouched. Auth: org headers.
+router.put(
+  "/v1/brands/:brandId/sales-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const parsed = SetBrandSalesBudgetRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+    let dailyBudgetCents: string;
+    try {
+      dailyBudgetCents = parseNonNegativeCents(parsed.data.dailyBudgetCents);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : "invalid dailyBudgetCents",
+      });
+      return;
+    }
+    const orgId = req.headers["x-org-id"] as string;
+    const { row, previousDailyBudgetCents } = await setBrandSalesBudget(
+      orgId,
+      brandId,
+      dailyBudgetCents
+    );
+    console.log(
+      `[billing-service] brand sales budget set: brand=${brandId} org=${orgId} budget=${row.dailyBudgetCents} previous=${previousDailyBudgetCents ?? "campaigns-mode"}`
+    );
+    res.json({
+      brandId,
+      orgId,
+      mode: "global",
+      dailyBudgetCents: row.dailyBudgetCents,
+      updatedAt: row.updatedAt.toISOString(),
+      previousDailyBudgetCents,
+    });
+  }
+);
+
+// DELETE /v1/brands/:brandId/sales-budget — clear it: the brand is back on its
+// campaign ceilings. Idempotent (a brand already in campaigns mode answers
+// cleared: false). Auth: org headers.
+router.delete(
+  "/v1/brands/:brandId/sales-budget",
+  requireOrgHeaders,
+  async (req, res) => {
+    const { brandId } = req.params;
+    if (!UUID_RE.test(brandId)) {
+      res.status(400).json({ error: "brandId must be a valid UUID" });
+      return;
+    }
+    const orgId = req.headers["x-org-id"] as string;
+    const result = await clearBrandSalesBudget(orgId, brandId);
+    if (result.cleared) {
+      console.log(
+        `[billing-service] brand sales budget cleared: brand=${brandId} org=${orgId} previous=${result.previousDailyBudgetCents} campaigns=${result.campaignsDailyBudgetCents ?? "none"}`
+      );
+    }
+    res.json({
+      brandId,
+      orgId,
+      mode: "campaigns",
+      dailyBudgetCents: null,
+      updatedAt: null,
+      cleared: result.cleared,
+      previousDailyBudgetCents: result.previousDailyBudgetCents,
+      campaignsDailyBudgetCents: result.campaignsDailyBudgetCents,
     });
   }
 );

@@ -9,6 +9,7 @@ import {
 import {
   billingAccounts,
   brandDailyBudgets,
+  brandSalesBudgets,
   campaignDailyBudgets,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
@@ -122,6 +123,13 @@ async function deleteBillingStateByOrg(
       .where(eq(brandDailyBudgets.orgId, orgId))
       .returning({ brandId: brandDailyBudgets.brandId });
 
+    // A brand's global sales budget (migration 0054) is this org's pacing config
+    // too: left behind, it would keep a brand in global mode after teardown.
+    const deletedSalesBudgets = await tx
+      .delete(brandSalesBudgets)
+      .where(eq(brandSalesBudgets.orgId, orgId))
+      .returning({ brandId: brandSalesBudgets.brandId });
+
     // Campaign ceilings are this org's own pacing config for the same brands.
     const deletedCampaignBudgets = await tx
       .delete(campaignDailyBudgets)
@@ -157,6 +165,7 @@ async function deleteBillingStateByOrg(
       campaignReloadSweepAttempts: deletedSweepAttempts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
       campaignDailyBudgets: deletedCampaignBudgets.length,
+      brandSalesBudgets: deletedSalesBudgets.length,
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
       staffDebits: deletedStaffDebits.length,

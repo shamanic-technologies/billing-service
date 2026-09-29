@@ -765,6 +765,67 @@ export const campaignDailyBudgets = pgTable(
 export type CeilingRow = typeof campaignDailyBudgets.$inferSelect;
 export type NewCeilingRow = typeof campaignDailyBudgets.$inferInsert;
 
+// brand_sales_budgets: ONE daily budget for SALES stated at the BRAND grain
+// (migration 0054). A brand that states one runs in "global" mode: campaign-
+// service decides where the money goes (the best-return sales path), instead of
+// pacing each campaign on its own ceiling. Clearing it DELETES the row and the
+// brand is back on its campaign ceilings, which this table never touches.
+// No row = the brand never stated one (or cleared it) = "campaigns" mode.
+// 0 is a legal stated value (a brand that sells nothing today), distinct from
+// no row at all.
+export const brandSalesBudgets = pgTable(
+  "brand_sales_budgets",
+  {
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    dailyBudgetCents: numeric("daily_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "brand_sales_budgets_pkey",
+      columns: [table.orgId, table.brandId],
+    }),
+  ]
+);
+
+export type BrandSalesBudget = typeof brandSalesBudgets.$inferSelect;
+
+// brand_sales_budget_changes: append-only history of every state / clear of
+// the brand's global sales budget. `daily_budget_cents` NULL = cleared (the
+// brand went back to its campaign ceilings). Written in the SAME transaction as
+// the brand_sales_budgets write. Forward-only.
+export const brandSalesBudgetChanges = pgTable(
+  "brand_sales_budget_changes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    dailyBudgetCents: numeric("daily_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
+    changedAt: timestamp("changed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("brand_sales_budget_changes_org_brand_changed_at_idx").on(
+      table.orgId,
+      table.brandId,
+      table.changedAt,
+      table.id
+    ),
+  ]
+);
+
+export type BrandSalesBudgetChange = typeof brandSalesBudgetChanges.$inferSelect;
+
 export type BrandDailyBudgetChange = typeof brandDailyBudgetChanges.$inferSelect;
 export type NewBrandDailyBudgetChange =
   typeof brandDailyBudgetChanges.$inferInsert;
