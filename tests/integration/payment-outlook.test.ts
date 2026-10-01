@@ -20,7 +20,7 @@
  * paying customer.
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp } from "../helpers/test-app.js";
 import {
@@ -97,6 +97,10 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   afterAll(async () => {
     await cleanTestData();
     await closeDb();
@@ -129,6 +133,10 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
   });
 
   it("dates the FLOOR crossing for a healthy postpaid org", async () => {
+    // These dates race the calendar (month end vs floor), so pin "now" mid-month:
+    // on the 1st, this month's sweep is 30 days out and wins over a 45-day floor.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
     // $250 paid ⇒ the $200 tier ⇒ a −20000 floor. Credit of 25000 burning 1000
     // a day has 45000 cents of headroom, 45 days out — well past this month's
@@ -146,6 +154,10 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
   });
 
   it("prefers the MONTH-END settle when it comes first and something is owed", async () => {
+    // These dates race the calendar (month end vs floor), so pin "now" mid-month:
+    // on the 1st, this month's sweep is 30 days out and wins over a 45-day floor.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
     // Already in the red: the sweep settles it on the last day of the month,
     // which arrives long before this burn eats the rest of the credit line.

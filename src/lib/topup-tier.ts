@@ -73,6 +73,10 @@ export function resolvePostpaidTier(params: {
    */
   paymentMode?: PaymentMode;
 }): { tier: TopupTier | null; thresholdCents: string } {
+  // SUBSCRIPTION never reloads and extends no credit: its money is the monthly
+  // invoice Stripe charges on its own schedule, and spend stops at zero (owner
+  // rule). Whatever the stored auto-top-up flag says.
+  if (params.paymentMode === "subscription") return { tier: null, thresholdCents: "0" };
   const canReload =
     params.topupEnabled && params.hasCardPm && params.autoReloadSupported;
   if (!canReload) return { tier: null, thresholdCents: "0" };
@@ -97,6 +101,12 @@ export function reloadTierFor(
   paidTopupsCents: string,
   paymentMode: PaymentMode
 ): TopupTier {
+  if (paymentMode === "subscription") {
+    // Unreachable by construction (resolvePostpaidTier grants a subscription org no
+    // tier, its auto top-up is disarmed on entry and refused after). A caller here
+    // is about to compute a reload billing must never fire.
+    throw new Error("[billing-service] a subscription org has no reload tier");
+  }
   const ladder = tierFor(paidTopupsCents);
   return paymentMode === "prepaid"
     ? { thresholdCents: 0, amountCents: ladder.amountCents }

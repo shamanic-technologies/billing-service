@@ -42,7 +42,7 @@
 
 import crypto from "crypto";
 import { Decimal } from "decimal.js";
-import { and, eq, isNotNull, or } from "drizzle-orm";
+import { and, eq, isNotNull, ne, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
@@ -280,12 +280,17 @@ export async function runMonthEndSweep(
     .select()
     .from(billingAccounts)
     .where(
-      or(
-        and(
-          isNotNull(billingAccounts.topupAmountCents),
-          isNotNull(billingAccounts.topupThresholdCents)
+      and(
+        or(
+          and(
+            isNotNull(billingAccounts.topupAmountCents),
+            isNotNull(billingAccounts.topupThresholdCents)
+          ),
+          eq(billingAccounts.paymentMode, "postpaid")
         ),
-        eq(billingAccounts.paymentMode, "postpaid")
+        // A SUBSCRIPTION org is never charged by billing: Stripe invoices it monthly
+        // and nothing else (lib/subscription).
+        ne(billingAccounts.paymentMode, "subscription")
       )
     );
 
