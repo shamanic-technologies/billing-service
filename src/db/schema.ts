@@ -104,6 +104,13 @@ export const billingAccounts = pgTable(
     // existing row and every new account is 'postpaid' until someone chooses
     // otherwise. See lib/payment-mode.
     paymentMode: text("payment_mode").notNull().default("postpaid"),
+    // When this org last opened a SUBSCRIPTION checkout (migration 0055). Cleared
+    // once the subscription is observed live (or the attempt is abandoned), so it
+    // bounds which orgs the hourly settle asks stripe-service about. See
+    // lib/subscription.
+    subscriptionCheckoutStartedAt: timestamp("subscription_checkout_started_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -446,6 +453,20 @@ export const ORG_CREATION_BONUS_CODE = "org_creation_bonus";
 
 /** Seed default of the org-creation bonus (migration 0052). The live figure is the code row. */
 export const ORG_CREATION_BONUS_AMOUNT_CENTS = 500;
+
+/**
+ * Ledger key for the SUBSCRIPTION trial grant (migration 0055): when an org's
+ * subscription trial starts, its free credit is topped up to this code row's
+ * amount ($99 seeded), at our expense even if it cancels during the trial.
+ *
+ * ONE-SHOT per org on the partial unique (org_id, promo_code_id) index. The amount
+ * is the live code row (re-priceable via PATCH /internal/promo-codes/subscription_trial).
+ * See lib/subscription.
+ */
+export const SUBSCRIPTION_TRIAL_CODE = "subscription_trial";
+
+/** Seed default of the subscription trial grant (migration 0055). The live figure is the code row. */
+export const SUBSCRIPTION_TRIAL_AMOUNT_CENTS = 9900;
 
 /**
  * Grant reasons a SERVICE may name on POST /internal/credits/grant. Closed set —

@@ -1143,17 +1143,28 @@ export const PaymentStoppedPeriodsResponseSchema = z
 
 // --- Payment mode (prepaid / postpaid) ---
 
-export const PaymentModeSchema = z.enum(["prepaid", "postpaid"]).openapi({
+export const PaymentModeSchema = z.enum(["prepaid", "postpaid", "subscription"]).openapi({
   description:
-    "How this org pays — the customer's explicit choice. postpaid (default for every org): a " +
+    "How this org pays. postpaid (default for every org): a " +
     "credit line the balance may run below zero into, a card required, and no chargeable card is " +
     "charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never " +
-    "charge_blocked; spend stops at zero through the affordability check.",
+    "charge_blocked; spend stops at zero through the affordability check. subscription: a monthly " +
+    "Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that " +
+    "amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting " +
+    "a subscription (POST /v1/accounts/subscription/checkout_session) or by staff.",
 });
 
+/** What a CUSTOMER may switch to on their own: never subscription (see PaymentModeSchema). */
+export const CustomerPaymentModeSchema = z.enum(["prepaid", "postpaid"]);
+
 export const SetPaymentModeRequestSchema = z
-  .object({ payment_mode: PaymentModeSchema })
+  .object({ payment_mode: CustomerPaymentModeSchema })
   .openapi("SetPaymentModeRequest");
+
+/** Staff/service: any mode, subscription included. */
+export const StaffSetPaymentModeRequestSchema = z
+  .object({ payment_mode: PaymentModeSchema })
+  .openapi("StaffSetPaymentModeRequest");
 
 export const PaymentModeResponseSchema = z
   .object({
@@ -1180,6 +1191,7 @@ export const PaymentModeRefusalSchema = z
       "outstanding_balance_no_card",
       "outstanding_balance_charge_declined",
       "outstanding_balance_below_minimum_charge",
+      "subscription_mode_staff_only",
     ]),
     /** What the org owes, positive cents. */
     owed_cents: z.string(),
@@ -2718,11 +2730,14 @@ registry.registerPath({
     "POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; " +
     "if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and " +
     "409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). " +
-    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). " +
+    "-> SUBSCRIPTION (staff only): what is owed is settled first exactly as for prepaid, auto " +
+    "top-up is DISARMED (a subscription org never reloads); the org then starts its subscription " +
+    "from the dashboard. Leaving subscription does not cancel the Stripe subscription.",
   request: {
     headers: internalHeaders,
     params: z.object({ orgId: z.string().uuid() }),
-    body: { content: { "application/json": { schema: SetPaymentModeRequestSchema } } },
+    body: { content: { "application/json": { schema: StaffSetPaymentModeRequestSchema } } },
   },
   responses: {
     200: {
@@ -3599,6 +3614,8 @@ const RevenueClassReasonSchema = z.enum([
   "prepaid_no_chargeable_card",
   "postpaid_no_chargeable_card",
   "prepaid_balance_spent",
+  "subscription",
+  "subscription_no_card",
 ]);
 const DailyBudgetUnknownReasonSchema = z.enum([
   "campaign_service_unconfigured",
@@ -3781,5 +3798,202 @@ registry.registerPath({
     200: { description: "Fleet revenue", content: { "application/json": { schema: FleetRevenueResponseSchema } } },
     400: { description: "Bad cashHorizonDays", content: { "application/json": { schema: ErrorResponseSchema } } },
     502: { description: "The account list could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// --- Subscription (third payment mode; lib/subscription) ---
+
+export const SubscriptionCheckoutRequestSchema = z
+  .object({
+    /** "embedded" (default) → client_secret for Stripe's initEmbeddedCheckout; "hosted" → url to redirect to. */
+    ui_mode: z.enum(["embedded", "hosted"]).optional(),
+    /** Hosted only (required there). */
+    success_url: z.string().url().optional(),
+    cancel_url: z.string().url().optional(),
+  })
+  .openapi("SubscriptionCheckoutRequest");
+
+export const SubscriptionCheckoutResponseSchema = z
+  .object({
+    mode: z.enum(["embedded", "hosted"]),
+    session_id: z.string(),
+    client_secret: z.string().nullable(),
+    url: z.string().nullable(),
+    /** 3 for a first subscription; null when the org already had its trial. */
+    trial_days: z.number().int().nullable(),
+    monthly_amount_cents: z.number().int(),
+    currency: z.literal("usd"),
+  })
+  .openapi("SubscriptionCheckoutResponse");
+
+export const RaiseSubscriptionRequestSchema = z
+  .object({
+    /** The new monthly amount: 9900 + k × 10000, higher than the current one. */
+    monthly_amount_cents: z.number().int().positive(),
+  })
+  .openapi("RaiseSubscriptionRequest");
+
+export const SubscriptionViewSchema = z
+  .object({
+    id: z.string(),
+    /** Stripe's status: trialing | active | past_due | canceled | unpaid | incomplete | incomplete_expired | paused */
+    status: z.string(),
+    trial_end: z.string().nullable(),
+    /** true = cancelled, ends at current_period_end, no further invoice. */
+    cancel_at_period_end: z.boolean(),
+    current_period_end: z.string().nullable(),
+    /** When Stripe next charges: trial_end while trialing, current_period_end while active; null once cancel is pending or ended. */
+    next_charge_at: z.string().nullable(),
+    monthly_amount_cents: z.number().int(),
+    currency: z.string(),
+    has_payment_method: z.boolean(),
+    /** Active, no cancel pending: the +$100 raise is allowed. */
+    can_raise: z.boolean(),
+    next_raise_monthly_amount_cents: z.number().int().nullable(),
+  })
+  .openapi("SubscriptionView");
+
+export const SubscriptionReadResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    payment_mode: PaymentModeSchema.nullable(),
+    subscription: SubscriptionViewSchema.nullable(),
+    /** Spendable credit right now (= balance_cents on GET /v1/accounts). */
+    credits_remaining_cents: z.string(),
+    /** The one-shot trial grant this org received; null when it has had none. */
+    trial_grant_cents: z.number().nullable(),
+  })
+  .openapi("SubscriptionReadResponse");
+
+export const SubscriptionActionResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    subscription: SubscriptionViewSchema,
+    credits_remaining_cents: z.string(),
+  })
+  .openapi("SubscriptionActionResponse");
+
+export const SubscriptionRefusalSchema = z
+  .object({
+    error: z.string(),
+    code: z.enum([
+      "subscription_exists",
+      "existing_paying_org",
+      "acquirer_not_supported",
+      "no_subscription",
+      "subscription_trialing",
+      "subscription_not_active",
+      "subscription_cancel_pending",
+      "subscription_not_cancel_pending",
+      "amount_not_higher",
+    ]),
+  })
+  .openapi("SubscriptionRefusal");
+
+const subscriptionRefusal = (description: string) => ({
+  description,
+  content: { "application/json": { schema: SubscriptionRefusalSchema } },
+});
+const subscriptionUpstream = {
+  description: "stripe-service or the balance could not be read",
+  content: { "application/json": { schema: ErrorResponseSchema } },
+};
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/subscription",
+  summary: "Read this org's subscription, payment mode and remaining credits",
+  description:
+    "Live from Stripe (via stripe-service). Settles first: right after a subscription checkout " +
+    "completes, this read enters subscription mode and grants the trial credit (the org's free " +
+    "credit is topped up to $99, once). subscription is null when the org never subscribed.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "The subscription view", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/checkout_session",
+  summary: "Start a $99/month subscription: 3-day free trial, card required",
+  description:
+    "Stripe Checkout in subscription mode. Embedded by default (client_secret), hosted with " +
+    "ui_mode=hosted (url). The trial is once per org. 409 when the org already has a live " +
+    "subscription, already pays as prepaid/postpaid with money paid in (staff moves it), or pays " +
+    "through an acquirer with no subscriptions.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: SubscriptionCheckoutRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Checkout session", content: { "application/json": { schema: SubscriptionCheckoutResponseSchema } } },
+    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: subscriptionRefusal("subscription_exists | existing_paying_org | acquirer_not_supported"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/v1/accounts/subscription",
+  summary: "Raise the monthly amount (+$100 steps), from the next invoice",
+  description:
+    "Active subscriptions only. No proration: the next invoice charges the new amount. 400 when " +
+    "the amount is off the ladder (9900 + k x 10000); 404 no_subscription; 409 " +
+    "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: RaiseSubscriptionRequestSchema } } },
+  },
+  responses: {
+    200: { description: "The subscription after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/cancel",
+  summary: "Cancel at period end: no further invoice",
+  description:
+    "Stops future charges; the subscription ends at current_period_end (trial end while " +
+    "trialing). Credits already held stay. Idempotent. Undo with /resume until then.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "The subscription after the cancel", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/resume",
+  summary: "Undo a pending cancel",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "The subscription after the resume", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_not_cancel_pending"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/subscription",
+  summary: "Staff/service: read an org's subscription, payment mode and remaining credits",
+  description: "Same body as GET /v1/accounts/subscription. x-api-key only, org in the path.",
+  request: { headers: internalHeaders, params: z.object({ orgId: z.string().uuid() }) },
+  responses: {
+    200: { description: "The subscription view", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
+    400: { description: "Bad orgId", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "No billing account", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: subscriptionUpstream,
   },
 });

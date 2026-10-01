@@ -182,7 +182,12 @@ function buildAccountResponse(
   const enabled =
     account.topupAmountCents != null && account.topupThresholdCents != null;
   const paymentMode = asPaymentMode(account.paymentMode);
-  const tier = enabled ? reloadTierFor(funds.paidTopupsCents, paymentMode) : null;
+  // A subscription org never reloads (lib/subscription): no tier, whatever a stale
+  // stored flag says.
+  const tier =
+    enabled && paymentMode !== "subscription"
+      ? reloadTierFor(funds.paidTopupsCents, paymentMode)
+      : null;
   return {
     id: account.id,
     org_id: account.orgId,
@@ -509,6 +514,16 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
 
     if (!account) {
       res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    // A SUBSCRIPTION org is never reloaded (owner rule: when credit runs out,
+    // sending stops). Its money is the monthly invoice — lib/subscription.
+    if (account.paymentMode === "subscription") {
+      res.status(409).json({
+        error: "This organization pays by subscription; automatic top-up is not available.",
+        code: "subscription_mode",
+      });
       return;
     }
 

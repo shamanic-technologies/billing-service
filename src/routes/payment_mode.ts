@@ -7,7 +7,7 @@ import {
   PaymentModeAccountNotFound,
   PaymentModeSwitchRefused,
 } from "../lib/payment-mode.js";
-import { SetPaymentModeRequestSchema } from "../schemas.js";
+import { SetPaymentModeRequestSchema, StaffSetPaymentModeRequestSchema } from "../schemas.js";
 
 /**
  * PREPAID or POSTPAID — see lib/payment-mode for what each means and what a
@@ -20,14 +20,23 @@ const router = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function applySwitch(orgId: string, req: Request, res: Response): Promise<void> {
-  const parsed = SetPaymentModeRequestSchema.safeParse(req.body);
+async function applySwitch(
+  orgId: string,
+  req: Request,
+  res: Response,
+  actor: "customer" | "staff"
+): Promise<void> {
+  // The customer may choose prepaid or postpaid; subscription is entered by
+  // starting one (or by staff) — see lib/payment-mode.
+  const parsed = (
+    actor === "customer" ? SetPaymentModeRequestSchema : StaffSetPaymentModeRequestSchema
+  ).safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
   try {
-    const state = await setPaymentMode(orgId, parsed.data.payment_mode);
+    const state = await setPaymentMode(orgId, parsed.data.payment_mode, actor);
     res.json({
       org_id: state.orgId,
       payment_mode: state.paymentMode,
@@ -67,7 +76,7 @@ router.put("/v1/accounts/payment_mode", requireOrgHeaders, async (req, res) => {
     // Onboarding may choose before any other billing touch, so the account is
     // created here exactly as every other /v1 read creates it.
     await findOrCreateAccount(orgId, userId);
-    await applySwitch(orgId, req, res);
+    await applySwitch(orgId, req, res, "customer");
   } catch (err) {
     console.error("[billing-service] Error switching payment mode:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -99,7 +108,7 @@ router.put("/internal/accounts/by-org/:orgId/payment-mode", async (req, res) => 
     res.status(400).json({ error: "orgId must be a valid UUID" });
     return;
   }
-  await applySwitch(orgId, req, res);
+  await applySwitch(orgId, req, res, "staff");
 });
 
 export default router;

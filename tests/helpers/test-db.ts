@@ -27,6 +27,8 @@ import {
   TRIAL_SEED_CODE,
   ORG_CREATION_BONUS_CODE,
   ORG_CREATION_BONUS_AMOUNT_CENTS,
+  SUBSCRIPTION_TRIAL_CODE,
+  SUBSCRIPTION_TRIAL_AMOUNT_CENTS,
   WELCOME_PROMO_AMOUNT_CENTS,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
@@ -45,6 +47,7 @@ const SEEDED_PROMO_CODES = [
   PRODUCT_TASK_REWARD_CODE,
   TRIAL_SEED_CODE,
   ORG_CREATION_BONUS_CODE,
+  SUBSCRIPTION_TRIAL_CODE,
 ];
 
 export async function cleanTestData() {
@@ -94,6 +97,20 @@ export async function cleanTestData() {
     .onConflictDoUpdate({
       target: localPromoCodes.code,
       set: { amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS },
+    });
+  // The subscription trial grant's amount IS the code row; restore it for a suite
+  // that re-priced or removed it.
+  await db
+    .insert(localPromoCodes)
+    .values({
+      code: SUBSCRIPTION_TRIAL_CODE,
+      amountCents: SUBSCRIPTION_TRIAL_AMOUNT_CENTS,
+      maxRedemptions: null,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: localPromoCodes.code,
+      set: { amountCents: SUBSCRIPTION_TRIAL_AMOUNT_CENTS },
     });
   // Product-task rewards carry their amount per row (this code row is a 0
   // placeholder), so restore it for a suite that exercised the fail-loud path.
@@ -297,7 +314,7 @@ export async function insertTestAccount(data: {
   createdAt?: Date;
   freeCreditEntitlementCents?: number;
   freeCreditPaidTriggerCents?: number;
-  paymentMode?: "prepaid" | "postpaid";
+  paymentMode?: "prepaid" | "postpaid" | "subscription";
 }) {
   const [account] = await db
     .insert(billingAccounts)

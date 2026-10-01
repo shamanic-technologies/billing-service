@@ -407,6 +407,13 @@ async function decideOutlook(
 
   const noDate = { nextChargeAttemptAt: null, trigger: null } as const;
 
+  // SUBSCRIPTION: billing never charges this org. Stripe invoices it monthly on its
+  // own schedule, and between invoices spend stops at zero (lib/subscription). No
+  // card rule can block it either, because no card charge is ever ours to attempt.
+  if (paymentMode === "subscription") {
+    return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+  }
+
   // PREPAID: the card rules below exist because a postpaid org spends on credit
   // we must be able to collect. A prepaid org spends only what it already paid,
   // so no card, a refused card, an unusable card or an unsupported country never

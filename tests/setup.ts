@@ -58,6 +58,8 @@ beforeAll(async () => {
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 3000`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
+  // Subscription checkout stamp (migration 0055).
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "subscription_checkout_started_at" timestamp with time zone`;
 
   // Drop legacy columns if a stale local DB still has them.
   await sql`ALTER TABLE "billing_accounts" DROP COLUMN IF EXISTS "balance_cents"`;
@@ -344,7 +346,8 @@ beforeAll(async () => {
            ('referral_reward', 50000, NULL, NULL),
            ('product_task_completed', 0, NULL, NULL),
            ('trial_seed', 0, NULL, NULL),
-           ('org_creation_bonus', 500, NULL, NULL)
+           ('org_creation_bonus', 500, NULL, NULL),
+           ('subscription_trial', 9900, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 

@@ -78,7 +78,9 @@ export type RevenueClassReason =
   | "prepaid_no_auto_topup"
   | "prepaid_no_chargeable_card"
   | "postpaid_no_chargeable_card"
-  | "prepaid_balance_spent";
+  | "prepaid_balance_spent"
+  | "subscription"
+  | "subscription_no_card";
 
 export type DailyBudgetUnknownReason =
   | RecurringStatusUnavailableReason
@@ -104,6 +106,13 @@ export function classify(p: {
   balanceCents: string;
 }): { revenueClass: RevenueClass; reason: RevenueClassReason; chargeableCard: boolean } {
   const chargeableCard = p.hasCardPm && p.autoReloadSupported && !p.cardUnusable;
+  if (p.paymentMode === "subscription") {
+    // Stripe charges it every month on the card it holds; whether the subscription
+    // is still live is stripe-service's to say, so a card on file is the signal.
+    return p.hasCardPm
+      ? { revenueClass: "recurring", reason: "subscription", chargeableCard }
+      : { revenueClass: "none", reason: "subscription_no_card", chargeableCard };
+  }
   if (p.paymentMode === "postpaid") {
     return chargeableCard
       ? { revenueClass: "recurring", reason: "postpaid_chargeable_card", chargeableCard }
