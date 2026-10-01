@@ -356,7 +356,11 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
 
     const account = await findOrCreateAccount(orgId, userId);
 
-    if (!account.topupAmountCents || account.topupThresholdCents == null) {
+    if (
+      !account.topupAmountCents ||
+      account.topupThresholdCents == null ||
+      account.paymentMode === "subscription"
+    ) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup-config" }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;

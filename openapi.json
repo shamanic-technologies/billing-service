@@ -1391,9 +1391,10 @@
             "type": "string",
             "enum": [
               "prepaid",
-              "postpaid"
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           }
         },
         "required": [
@@ -1412,9 +1413,10 @@
             "type": "string",
             "enum": [
               "prepaid",
-              "postpaid"
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           },
           "settled_cents": {
             "type": "string"
@@ -1441,7 +1443,8 @@
             "enum": [
               "outstanding_balance_no_card",
               "outstanding_balance_charge_declined",
-              "outstanding_balance_below_minimum_charge"
+              "outstanding_balance_below_minimum_charge",
+              "subscription_mode_staff_only"
             ]
           },
           "owed_cents": {
@@ -1462,8 +1465,24 @@
             "enum": [
               "prepaid",
               "postpaid"
+            ]
+          }
+        },
+        "required": [
+          "payment_mode"
+        ]
+      },
+      "StaffSetPaymentModeRequest": {
+        "type": "object",
+        "properties": {
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           }
         },
         "required": [
@@ -1516,9 +1535,10 @@
             "type": "string",
             "enum": [
               "prepaid",
-              "postpaid"
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           },
           "state": {
             "type": "string",
@@ -1610,9 +1630,10 @@
             "type": "string",
             "enum": [
               "prepaid",
-              "postpaid"
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           },
           "state": {
             "type": "string",
@@ -2777,9 +2798,10 @@
             "type": "string",
             "enum": [
               "prepaid",
-              "postpaid"
+              "postpaid",
+              "subscription"
             ],
-            "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           },
           "revenueClass": {
             "type": "string",
@@ -2797,7 +2819,9 @@
               "prepaid_no_auto_topup",
               "prepaid_no_chargeable_card",
               "postpaid_no_chargeable_card",
-              "prepaid_balance_spent"
+              "prepaid_balance_spent",
+              "subscription",
+              "subscription_no_card"
             ]
           },
           "chargeableCard": {
@@ -3059,9 +3083,10 @@
                   "type": "string",
                   "enum": [
                     "prepaid",
-                    "postpaid"
+                    "postpaid",
+                    "subscription"
                   ],
-                  "description": "How this org pays — the customer's explicit choice. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check."
+                  "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
                 },
                 "revenueClass": {
                   "type": "string",
@@ -3079,7 +3104,9 @@
                     "prepaid_no_auto_topup",
                     "prepaid_no_chargeable_card",
                     "postpaid_no_chargeable_card",
-                    "prepaid_balance_spent"
+                    "prepaid_balance_spent",
+                    "subscription",
+                    "subscription_no_card"
                   ]
                 },
                 "chargeableCard": {
@@ -3203,6 +3230,222 @@
           "cashFlow",
           "orgs",
           "unreadableOrgs"
+        ]
+      },
+      "SubscriptionView": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "trial_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "cancel_at_period_end": {
+            "type": "boolean"
+          },
+          "current_period_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "next_charge_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "monthly_amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "has_payment_method": {
+            "type": "boolean"
+          },
+          "can_raise": {
+            "type": "boolean"
+          },
+          "next_raise_monthly_amount_cents": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "trial_end",
+          "cancel_at_period_end",
+          "current_period_end",
+          "next_charge_at",
+          "monthly_amount_cents",
+          "currency",
+          "has_payment_method",
+          "can_raise",
+          "next_raise_monthly_amount_cents"
+        ]
+      },
+      "SubscriptionReadResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
+            ],
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionView"
+          },
+          "credits_remaining_cents": {
+            "type": "string"
+          },
+          "trial_grant_cents": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "org_id",
+          "payment_mode",
+          "subscription",
+          "credits_remaining_cents",
+          "trial_grant_cents"
+        ]
+      },
+      "SubscriptionCheckoutResponse": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "embedded",
+              "hosted"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "trial_days": {
+            "type": "integer",
+            "nullable": true
+          },
+          "monthly_amount_cents": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "usd"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "session_id",
+          "client_secret",
+          "url",
+          "trial_days",
+          "monthly_amount_cents",
+          "currency"
+        ]
+      },
+      "SubscriptionRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "subscription_exists",
+              "existing_paying_org",
+              "acquirer_not_supported",
+              "no_subscription",
+              "subscription_trialing",
+              "subscription_not_active",
+              "subscription_cancel_pending",
+              "subscription_not_cancel_pending",
+              "amount_not_higher"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ]
+      },
+      "SubscriptionCheckoutRequest": {
+        "type": "object",
+        "properties": {
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "embedded",
+              "hosted"
+            ]
+          },
+          "success_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "cancel_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "SubscriptionActionResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionView"
+          },
+          "credits_remaining_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "subscription",
+          "credits_remaining_cents"
+        ]
+      },
+      "RaiseSubscriptionRequest": {
+        "type": "object",
+        "properties": {
+          "monthly_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          }
+        },
+        "required": [
+          "monthly_amount_cents"
         ]
       }
     },
@@ -6325,7 +6568,7 @@
       },
       "put": {
         "summary": "Staff/service: set an org's payment mode",
-        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). -> SUBSCRIPTION (staff only): what is owed is settled first exactly as for prepaid, auto top-up is DISARMED (a subscription org never reloads); the org then starts its subscription from the dashboard. Leaving subscription does not cancel the Stripe subscription.",
         "parameters": [
           {
             "schema": {
@@ -6349,7 +6592,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SetPaymentModeRequest"
+                "$ref": "#/components/schemas/StaffSetPaymentModeRequest"
               }
             }
           }
@@ -8983,6 +9226,723 @@
           },
           "502": {
             "description": "The account list could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscription": {
+      "get": {
+        "summary": "Read this org's subscription, payment mode and remaining credits",
+        "description": "Live from Stripe (via stripe-service). Settles first: right after a subscription checkout completes, this read enters subscription mode and grants the trial credit (the org's free credit is topped up to $99, once). subscription is null when the org never subscribed.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionReadResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Raise the monthly amount (+$100 steps), from the next invoice",
+        "description": "Active subscriptions only. No proration: the next invoice charges the new amount. 400 when the amount is off the ladder (9900 + k x 10000); 404 no_subscription; 409 subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaiseSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The subscription after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Amount off the ladder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscription/checkout_session": {
+      "post": {
+        "summary": "Start a $99/month subscription: 3-day free trial, card required",
+        "description": "Stripe Checkout in subscription mode. Embedded by default (client_secret), hosted with ui_mode=hosted (url). The trial is once per org. 409 when the org already has a live subscription, already pays as prepaid/postpaid with money paid in (staff moves it), or pays through an acquirer with no subscriptions.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionCheckoutRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionCheckoutResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_exists | existing_paying_org | acquirer_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscription/cancel": {
+      "post": {
+        "summary": "Cancel at period end: no further invoice",
+        "description": "Stops future charges; the subscription ends at current_period_end (trial end while trialing). Credits already held stay. Idempotent. Undo with /resume until then.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription after the cancel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscription/resume": {
+      "post": {
+        "summary": "Undo a pending cancel",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription after the resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_not_cancel_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/subscription": {
+      "get": {
+        "summary": "Staff/service: read an org's subscription, payment mode and remaining credits",
+        "description": "Same body as GET /v1/accounts/subscription. x-api-key only, org in the path.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionReadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad orgId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or the balance could not be read",
             "content": {
               "application/json": {
                 "schema": {

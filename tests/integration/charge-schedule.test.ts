@@ -3,7 +3,7 @@
  * built on the payment outlook's own decision.
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp } from "../helpers/test-app.js";
 import {
@@ -80,6 +80,10 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
     });
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   afterAll(async () => {
     await cleanTestData();
     await closeDb();
@@ -128,6 +132,9 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
   });
 
   it("an org that owes: month-end settles what is owed then, and the schedule agrees with the outlook", async () => {
+    // Pin "now": the two reads below must see the same instant to date the same charge.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
     setUsage("25741.0000000000"); // balance −741
     burnMock.mockResolvedValue({ dailyCents: "681.0000000000", unavailableReason: null, windowDays: 14 });

@@ -153,7 +153,7 @@ export async function flagUncollectableDebt(params: {
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, params.orgId))
     .limit(1);
-  if (modeRow?.paymentMode === "prepaid") {
+  if (modeRow?.paymentMode === "prepaid" || modeRow?.paymentMode === "subscription") {
     // A prepaid org holds no credit line and needs no card. Its spend stops at
     // zero through the affordability check; what a last run overshot is covered
     // by the next credit it adds. Telling it to "add a card" would contradict the

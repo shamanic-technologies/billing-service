@@ -12,6 +12,7 @@ import {
   claimWelcomeForPerson,
   withdrawFreeCreditOffer,
 } from "./welcome-recipient.js";
+import { getSubscriptionTrialGrantCents } from "./subscription.js";
 
 /**
  * Trial seed — free credit for an org that has NOT signed up yet, and the settlement
@@ -237,7 +238,14 @@ export async function settleSignupWelcome(
     };
   }
 
-  const remainderCents = Math.max(0, welcome.amountCents - trialSeedCents);
+  // A SUBSCRIPTION org's trial grant already topped its free credit up to the trial
+  // amount (lib/subscription), welcome included; a welcome landing after it would
+  // put free credit beyond what the owner allows. So its remainder counts the grant.
+  const subscriptionTrialCents = (await getSubscriptionTrialGrantCents(orgId)) ?? 0;
+  const remainderCents = Math.max(
+    0,
+    welcome.amountCents - trialSeedCents - subscriptionTrialCents
+  );
 
   const outcome = await db.transaction(async (tx) => {
     await tx.insert(billingAccounts).values({ orgId }).onConflictDoNothing();

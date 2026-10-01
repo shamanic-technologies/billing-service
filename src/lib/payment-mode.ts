@@ -25,6 +25,12 @@
  *    has already drawn on.
  *  - prepaid → postpaid: postpaid rules apply from then on (so a card becomes
  *    required). Nothing is charged by the switch itself.
+ *
+ * SUBSCRIPTION (third mode, lib/subscription): a monthly Stripe subscription. Floor
+ * zero, never reloaded, auto top-up disarmed on entry. Entered by starting a
+ * subscription or by STAFF; a customer can neither switch into it nor out of it
+ * through this switch (`subscription_mode_staff_only`) — they cancel instead. From
+ * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
 import { eq } from "drizzle-orm";
@@ -47,7 +53,13 @@ export type PaymentModeRefusalCode =
   /** The org owes money and the card was refused (or is in retry backoff). */
   | "outstanding_balance_charge_declined"
   /** The org owes less than the smallest amount a card can be charged. */
-  | "outstanding_balance_below_minimum_charge";
+  | "outstanding_balance_below_minimum_charge"
+  /**
+   * A CUSTOMER tried to move an org out of SUBSCRIPTION. Entering and leaving it
+   * is staff's (or starting a subscription); the customer cancels the subscription
+   * instead.
+   */
+  | "subscription_mode_staff_only";
 
 export class PaymentModeSwitchRefused extends Error {
   readonly code: PaymentModeRefusalCode;
@@ -151,7 +163,8 @@ async function settleBeforePrepaid(
  */
 export async function setPaymentMode(
   orgId: string,
-  target: PaymentMode
+  target: PaymentMode,
+  actor: "customer" | "staff" = "staff"
 ): Promise<PaymentModeState> {
   const [account] = await db
     .select()
@@ -170,11 +183,34 @@ export async function setPaymentMode(
     };
   }
 
+  if (actor === "customer" && (current === "subscription" || target === "subscription")) {
+    throw new PaymentModeSwitchRefused(
+      "subscription_mode_staff_only",
+      "0",
+      "This organization pays by subscription. Cancel the subscription from the Billing " +
+        "page; changing how it pays is done by our team."
+    );
+  }
+
   let settledCents = "0";
   const patch: Partial<typeof billingAccounts.$inferInsert> = {
     paymentMode: target,
     updatedAt: new Date(),
   };
+
+  if (target === "subscription") {
+    // A credit line this org already drew on is collected first, exactly as when it
+    // becomes prepaid: subscription extends no credit either. Coming from prepaid
+    // there is no line to collect (an overshoot is covered by the next credit).
+    if (current === "postpaid") {
+      const snapshot = await computeBalance(orgId);
+      settledCents = await settleBeforePrepaid(orgId, snapshot);
+    }
+    // A subscription org never reloads (lib/subscription): disarm auto top-up so no
+    // stored flag can read as "enabled" to the month-end sweep or the dashboard.
+    patch.topupAmountCents = null;
+    patch.topupThresholdCents = null;
+  }
 
   if (target === "prepaid") {
     const snapshot = await computeBalance(orgId);
