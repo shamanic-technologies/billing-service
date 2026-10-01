@@ -59,6 +59,7 @@ import {
 } from "./payment-outlook.js";
 import type { BurnUnavailableReason } from "./realized-burn.js";
 import type { PaymentMode } from "./payment-mode-types.js";
+import { subscriptionChargeDates } from "./subscription-schedule.js";
 
 export const DEFAULT_CHARGE_SCHEDULE_HORIZON_DAYS = 90;
 export const MAX_CHARGE_SCHEDULE_HORIZON_DAYS = 366;
@@ -232,6 +233,22 @@ export function chargeScheduleFrom(
 
   let events: ExpectedCharge[] = [];
 
+  // SUBSCRIPTION: the plan at each renewal (or one retry rung), straight from the
+  // subscription's own calendar; no burn replay applies (lib/subscription-schedule).
+  if (outlook.paymentMode === "subscription") {
+    const facts = inputs.subscription;
+    events = facts
+      ? subscriptionChargeDates(facts.sub, facts.currentCharge, end).map((c) => ({
+          at: new Date(Math.max(c.at.getTime(), now.getTime())).toISOString(),
+          trigger: c.trigger,
+          expectedAmountCents: String(c.amountCents),
+          projectedBalanceBeforeCents: null,
+          projectedBalanceAfterCents: null,
+        }))
+      : [];
+    return finishSchedule(resolved, horizonDays, now, end, events);
+  }
+
   const replayable =
     (outlook.state === "will_charge" && outlook.trigger !== "retry_rung") ||
     outlook.state === "charge_due_now" ||
@@ -312,6 +329,18 @@ export function chargeScheduleFrom(
     ];
   }
 
+  return finishSchedule(resolved, horizonDays, now, end, events);
+}
+
+function finishSchedule(
+  resolved: NonNullable<Awaited<ReturnType<typeof resolvePaymentOutlook>>>,
+  horizonDays: number,
+  now: Date,
+  end: Date,
+  events: ExpectedCharge[]
+): ChargeSchedule {
+  const { outlook } = resolved;
+  const orgId = outlook.orgId;
   let total: Decimal | null = new Decimal(0);
   for (const e of events) {
     if (e.expectedAmountCents === null) {

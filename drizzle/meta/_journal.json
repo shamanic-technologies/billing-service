@@ -393,6 +393,13 @@
       "when": 1792922400000,
       "tag": "0055_subscription_payment_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1793008800000,
+      "tag": "0056_billing_owned_subscriptions",
+      "breakpoints": true
     }
   ]
 }

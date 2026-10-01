@@ -14,7 +14,8 @@ import { runMonthEndSweep } from "./month-end-sweep.js";
 import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 import { runUnpaidDebtScan } from "./unpaid-debt.js";
 import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
-import { runSubscriptionSettleSweep } from "./subscription.js";
+import { runSubscriptionSweep } from "./subscription.js";
+import { notifySubscriptionCreditsUsedIfDue } from "./subscription-notifications.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
 // is plenty frequent for both follow-ups and recharge detection.
@@ -110,18 +111,21 @@ export function startDunningScheduler(): void {
         console.error("[billing-service] welcome-completion sweep failed:", err);
       }
 
-      // Subscription settle — enters subscription mode + grants the trial credit for
-      // every org that opened a subscription checkout, even if the dashboard never
-      // reads again (lib/subscription). Isolated like the others.
+      // Subscription sweep — starts subscriptions whose card is now on file, expires
+      // unspent credit and bills each renewal, retries refused charges on their rungs,
+      // and sends the once-a-period "credits used" email (lib/subscription). Isolated
+      // like the others.
       try {
-        const s = await runSubscriptionSettleSweep();
+        const s = await runSubscriptionSweep(new Date(), (orgId, sub) =>
+          notifySubscriptionCreditsUsedIfDue(orgId, sub)
+        );
         if (s.checked > 0) {
           console.log(
-            `[billing-service] subscription settle: checked=${s.checked} entered=${s.entered} failed=${s.failed}`
+            `[billing-service] subscription sweep: checked=${s.checked} failed=${s.failed}`
           );
         }
       } catch (err) {
-        console.error("[billing-service] subscription settle sweep failed:", err);
+        console.error("[billing-service] subscription sweep failed:", err);
       }
     } finally {
       timer = setTimeout(tick, TICK_INTERVAL_MS);

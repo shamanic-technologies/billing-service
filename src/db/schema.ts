@@ -111,6 +111,9 @@ export const billingAccounts = pgTable(
     subscriptionCheckoutStartedAt: timestamp("subscription_checkout_started_at", {
       withTimezone: true,
     }),
+    // The monthly amount the customer picked when opening the subscription
+    // checkout (migration 0056); the subscription starts at it once the card is saved.
+    subscriptionRequestedAmountCents: integer("subscription_requested_amount_cents"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -972,3 +975,71 @@ export const DUNNING_EVENT_10D = "credit-depleted-followup-10d";
 export const DUNNING_EVENT_T0_BLOCKED = "credit-depleted-blocked";
 export const DUNNING_EVENT_3D_BLOCKED = "credit-depleted-followup-3d-blocked";
 export const DUNNING_EVENT_10D_BLOCKED = "credit-depleted-followup-10d-blocked";
+
+// --- SUBSCRIPTION, owned by billing (migration 0056; lib/subscription) ---
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    /** trialing | active | past_due | canceled */
+    status: text("status").notNull(),
+    monthlyAmountCents: integer("monthly_amount_cents").notNull(),
+    trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+    trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+    currentPeriodStart: timestamp("current_period_start", { withTimezone: true }).notNull(),
+    currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }).notNull(),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    creditsUsedNotifiedPeriodStart: timestamp("credits_used_notified_period_start", {
+      withTimezone: true,
+    }),
+    /** The person who started it; the customer emails go to them. */
+    startedByUserId: uuid("started_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_subscriptions_org").on(table.orgId)]
+);
+export type Subscription = typeof subscriptions.$inferSelect;
+
+export const subscriptionCharges = pgTable(
+  "subscription_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subscriptionId: uuid("subscription_id").notNull(),
+    orgId: uuid("org_id").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    /** pending | paid | failed */
+    status: text("status").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    firstFailedAt: timestamp("first_failed_at", { withTimezone: true }),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    reference: text("reference"),
+    failureCode: text("failure_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("subscription_charges_period_unique").on(table.subscriptionId, table.periodStart),
+    index("idx_subscription_charges_org").on(table.orgId),
+  ]
+);
+export type SubscriptionCharge = typeof subscriptionCharges.$inferSelect;
+
+export const subscriptionCreditExpiries = pgTable(
+  "subscription_credit_expiries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    subscriptionId: uuid("subscription_id").notNull(),
+    boundaryAt: timestamp("boundary_at", { withTimezone: true }).notNull(),
+    amountCents: numeric("amount_cents", { precision: 16, scale: 10 }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique("subscription_credit_expiries_org_boundary").on(table.orgId, table.boundaryAt)]
+);

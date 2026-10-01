@@ -1234,7 +1234,7 @@ export const PaymentOutlookResponseSchema = z
      */
     nextChargeAttemptAt: z.string().nullable(),
     /** What brings that date about. Null whenever the date is null. */
-    trigger: z.enum(["floor", "month_end", "retry_rung"]).nullable(),
+    trigger: z.enum(["floor", "month_end", "retry_rung", "subscription_renewal"]).nullable(),
     /** Why no charge is possible. Null unless state is charge_blocked. */
     blockedReason: z
       .enum([
@@ -1279,7 +1279,7 @@ export const ExpectedChargeSchema = z
   .object({
     /** When billing expects to PRESENT the card (ISO 8601). An attempt, never a payment. */
     at: z.string(),
-    trigger: z.enum(["floor", "month_end", "retry_rung"]),
+    trigger: z.enum(["floor", "month_end", "retry_rung", "subscription_renewal"]),
     /**
      * Integer cents billing would ask for. Null only when the amount cannot be
      * established (the burn is unmeasured) — never 0 as a stand-in.
@@ -3615,13 +3615,28 @@ const RevenueClassReasonSchema = z.enum([
   "postpaid_no_chargeable_card",
   "prepaid_balance_spent",
   "subscription",
-  "subscription_no_card",
+  "subscription_trialing",
+  "subscription_canceling",
+  "subscription_payment_failed",
+  "subscription_ended",
+  "subscription_not_started",
 ]);
 const DailyBudgetUnknownReasonSchema = z.enum([
   "campaign_service_unconfigured",
   "campaign_service_unavailable",
   "campaign_recurrence_unknown",
 ]);
+
+export const RevenueSubscriptionSchema = z
+  .object({
+    status: z.string(),
+    /** The plan we collect each month: a recurring subscription's MRR. */
+    monthlyAmountCents: z.number().int(),
+    cancelAtPeriodEnd: z.boolean(),
+    trialEndsAt: z.string().nullable(),
+    currentPeriodEnd: z.string(),
+  })
+  .openapi("RevenueSubscription");
 
 export const OneOffRevenueSchema = z
   .object({
@@ -3690,6 +3705,7 @@ const revenueCore = {
   mrrCents: z.string().nullable(),
   arrCents: z.string().nullable(),
   oneOff: OneOffRevenueSchema.nullable(),
+  subscription: RevenueSubscriptionSchema.nullable(),
   projections: z.array(ProjectedRevenueSchema),
 };
 
@@ -3727,6 +3743,8 @@ export const FleetRevenueResponseSchema = z
       arrCents: z.string(),
       drrUnknownOrgIds: z.array(z.string()),
       oneOffRemainingCents: z.string(),
+      /** Subscriptions in their free trial: not revenue yet, shown apart. */
+      subscriptionTrials: z.object({ count: z.number().int(), monthlyAmountCents: z.string() }),
       windows: z.array(
         z.object({
           horizonDays: z.number().int(),
@@ -3801,53 +3819,71 @@ registry.registerPath({
   },
 });
 
-// --- Subscription (third payment mode; lib/subscription) ---
+// --- Subscription (third payment mode, owned by billing; lib/subscription) ---
+
+const MonthlyAmountSchema = z
+  .number()
+  .int()
+  .positive()
+  .openapi({ description: "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)." });
 
 export const SubscriptionCheckoutRequestSchema = z
   .object({
-    /** "embedded" (default) → client_secret for Stripe's initEmbeddedCheckout; "hosted" → url to redirect to. */
+    /** The plan the customer picked. Default 9900. */
+    monthly_amount_cents: MonthlyAmountSchema.optional(),
+    /** How the card form is presented (same as POST /v1/accounts/card_setup). Default embedded. */
     ui_mode: z.enum(["embedded", "hosted"]).optional(),
-    /** Hosted only (required there). */
-    success_url: z.string().url().optional(),
-    cancel_url: z.string().url().optional(),
+    /** Where a hosted card form returns to. Required for hosted. */
+    return_url: z.string().url().optional(),
   })
   .openapi("SubscriptionCheckoutRequest");
 
 export const SubscriptionCheckoutResponseSchema = z
   .object({
-    mode: z.enum(["embedded", "hosted"]),
-    session_id: z.string(),
-    client_secret: z.string().nullable(),
-    url: z.string().nullable(),
-    /** 3 for a first subscription; null when the org already had its trial. */
-    trial_days: z.number().int().nullable(),
     monthly_amount_cents: z.number().int(),
     currency: z.literal("usd"),
+    /** 3 for an org that never had a trial; null otherwise (the first month is charged at start). */
+    trial_days: z.number().int().nullable(),
+    /** false = a chargeable card is already on file: call POST /v1/accounts/subscription/start now. */
+    card_required: z.boolean(),
+    /**
+     * The card form to render, exactly as POST /v1/accounts/card_setup returns it
+     * (switch on `mode`: embedded_widget = Revolut widget, embedded_checkout = Stripe,
+     * hosted_redirect = redirect to url). Null when card_required is false.
+     */
+    card_setup: z.record(z.unknown()).nullable(),
   })
   .openapi("SubscriptionCheckoutResponse");
 
-export const RaiseSubscriptionRequestSchema = z
+export const StartSubscriptionRequestSchema = z
   .object({
-    /** The new monthly amount: 9900 + k × 10000, higher than the current one. */
-    monthly_amount_cents: z.number().int().positive(),
+    /** Overrides the amount picked at checkout. */
+    monthly_amount_cents: MonthlyAmountSchema.optional(),
   })
-  .openapi("RaiseSubscriptionRequest");
+  .openapi("StartSubscriptionRequest");
+
+export const ChangeSubscriptionAmountRequestSchema = z
+  .object({ monthly_amount_cents: MonthlyAmountSchema })
+  .openapi("ChangeSubscriptionAmountRequest");
 
 export const SubscriptionViewSchema = z
   .object({
-    id: z.string(),
-    /** Stripe's status: trialing | active | past_due | canceled | unpaid | incomplete | incomplete_expired | paused */
-    status: z.string(),
+    id: z.string().uuid(),
+    status: z.enum(["trialing", "active", "past_due", "canceled"]),
     trial_end: z.string().nullable(),
-    /** true = cancelled, ends at current_period_end, no further invoice. */
+    /** true = ends at current_period_end, no further charge. */
     cancel_at_period_end: z.boolean(),
-    current_period_end: z.string().nullable(),
-    /** When Stripe next charges: trial_end while trialing, current_period_end while active; null once cancel is pending or ended. */
+    current_period_start: z.string(),
+    current_period_end: z.string(),
+    /** When billing next charges the card (trial end / renewal); null once ending or ended. */
     next_charge_at: z.string().nullable(),
+    ended_at: z.string().nullable(),
     monthly_amount_cents: z.number().int(),
-    currency: z.string(),
-    has_payment_method: z.boolean(),
-    /** Active, no cancel pending: the +$100 raise is allowed. */
+    currency: z.literal("usd"),
+    has_payment_method: z.boolean().nullable(),
+    /** Active, no cancel pending: the plan can be changed (any ladder value, up or down). */
+    can_change_amount: z.boolean(),
+    /** Same as can_change_amount (kept for the first shape). */
     can_raise: z.boolean(),
     next_raise_monthly_amount_cents: z.number().int().nullable(),
   })
@@ -3862,6 +3898,8 @@ export const SubscriptionReadResponseSchema = z
     credits_remaining_cents: z.string(),
     /** The one-shot trial grant this org received; null when it has had none. */
     trial_grant_cents: z.number().nullable(),
+    /** Total credit expired unspent at renewals (= expired_cents on GET /v1/accounts). */
+    expired_cents: z.string(),
   })
   .openapi("SubscriptionReadResponse");
 
@@ -3879,13 +3917,14 @@ export const SubscriptionRefusalSchema = z
     code: z.enum([
       "subscription_exists",
       "existing_paying_org",
-      "acquirer_not_supported",
+      "card_required",
+      "first_charge_declined",
       "no_subscription",
       "subscription_trialing",
       "subscription_not_active",
       "subscription_cancel_pending",
       "subscription_not_cancel_pending",
-      "amount_not_higher",
+      "amount_unchanged",
     ]),
   })
   .openapi("SubscriptionRefusal");
@@ -3895,18 +3934,63 @@ const subscriptionRefusal = (description: string) => ({
   content: { "application/json": { schema: SubscriptionRefusalSchema } },
 });
 const subscriptionUpstream = {
-  description: "stripe-service or the balance could not be read",
+  description: "The card acquirer or the balance could not be read",
   content: { "application/json": { schema: ErrorResponseSchema } },
 };
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/checkout_session",
+  summary: "Prepare a subscription: the chosen plan + the card form (no charge)",
+  description:
+    "Records the plan the customer picked and returns the card form of whichever acquirer holds " +
+    "the org (Revolut by default, Stripe for legacy orgs), exactly as POST /v1/accounts/card_setup. " +
+    "When the card is saved (widget callback / return from the hosted form), call " +
+    "POST /v1/accounts/subscription/start. card_required=false means a chargeable card is already " +
+    "on file: call start directly. Nothing is charged here. 409 subscription_exists | existing_paying_org.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: SubscriptionCheckoutRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Plan recorded", content: { "application/json": { schema: SubscriptionCheckoutResponseSchema } } },
+    400: { description: "Off-ladder amount or missing return_url", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: subscriptionRefusal("subscription_exists | existing_paying_org"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/start",
+  summary: "Start the subscription once the card is saved",
+  description:
+    "First subscription: 3-day free trial with $99 of credit, nothing charged; billing charges the " +
+    "plan at trial end, then every month on that anniversary, on the saved card. An org that already " +
+    "had its trial is charged the first month now (409 first_charge_declined if the card refuses; " +
+    "nothing starts). 409 card_required when no chargeable card is on file yet. Returns the same " +
+    "body as GET /v1/accounts/subscription. (The read also starts it on its own once the card is on " +
+    "file, so a missed call is caught.)",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: StartSubscriptionRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Started", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
+    400: { description: "Off-ladder amount", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: subscriptionRefusal("card_required | first_charge_declined | subscription_exists | existing_paying_org"),
+    502: subscriptionUpstream,
+  },
+});
 
 registry.registerPath({
   method: "get",
   path: "/v1/accounts/subscription",
   summary: "Read this org's subscription, payment mode and remaining credits",
   description:
-    "Live from Stripe (via stripe-service). Settles first: right after a subscription checkout " +
-    "completes, this read enters subscription mode and grants the trial credit (the org's free " +
-    "credit is topped up to $99, once). subscription is null when the org never subscribed.",
+    "Settles first: starts a subscription whose card is now on file, and applies any renewal that " +
+    "fell due (unspent credit expires, the month is charged). subscription is null when the org " +
+    "never subscribed.",
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "The subscription view", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
@@ -3915,43 +3999,21 @@ registry.registerPath({
 });
 
 registry.registerPath({
-  method: "post",
-  path: "/v1/accounts/subscription/checkout_session",
-  summary: "Start a $99/month subscription: 3-day free trial, card required",
-  description:
-    "Stripe Checkout in subscription mode. Embedded by default (client_secret), hosted with " +
-    "ui_mode=hosted (url). The trial is once per org. 409 when the org already has a live " +
-    "subscription, already pays as prepaid/postpaid with money paid in (staff moves it), or pays " +
-    "through an acquirer with no subscriptions.",
-  request: {
-    headers: protectedHeaders,
-    body: { content: { "application/json": { schema: SubscriptionCheckoutRequestSchema } } },
-  },
-  responses: {
-    200: { description: "Checkout session", content: { "application/json": { schema: SubscriptionCheckoutResponseSchema } } },
-    400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
-    409: subscriptionRefusal("subscription_exists | existing_paying_org | acquirer_not_supported"),
-    502: subscriptionUpstream,
-  },
-});
-
-registry.registerPath({
   method: "patch",
   path: "/v1/accounts/subscription",
-  summary: "Raise the monthly amount (+$100 steps), from the next invoice",
+  summary: "Change the plan (any ladder value, up or down), from the next charge",
   description:
-    "Active subscriptions only. No proration: the next invoice charges the new amount. 400 when " +
-    "the amount is off the ladder (9900 + k x 10000); 404 no_subscription; 409 " +
-    "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher.",
+    "Active subscriptions only. 400 off-ladder; 404 no_subscription; 409 subscription_trialing | " +
+    "subscription_not_active | subscription_cancel_pending | amount_unchanged.",
   request: {
     headers: protectedHeaders,
-    body: { content: { "application/json": { schema: RaiseSubscriptionRequestSchema } } },
+    body: { content: { "application/json": { schema: ChangeSubscriptionAmountRequestSchema } } },
   },
   responses: {
     200: { description: "The subscription after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
     400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("no_subscription"),
-    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_not_higher"),
+    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged"),
     502: subscriptionUpstream,
   },
 });
@@ -3959,10 +4021,10 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/accounts/subscription/cancel",
-  summary: "Cancel at period end: no further invoice",
+  summary: "Cancel: no further charge",
   description:
-    "Stops future charges; the subscription ends at current_period_end (trial end while " +
-    "trialing). Credits already held stay. Idempotent. Undo with /resume until then.",
+    "Trialing / active: ends at current_period_end (undo with /resume until then); unspent credit " +
+    "expires then. past_due: ends now. Idempotent.",
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "The subscription after the cancel", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },

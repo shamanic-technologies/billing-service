@@ -17,6 +17,9 @@ import {
   welcomeRecipients,
   brandTransfers,
   staffDebits,
+  subscriptions,
+  subscriptionCharges,
+  subscriptionCreditExpiries,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -51,6 +54,9 @@ const SEEDED_PROMO_CODES = [
 ];
 
 export async function cleanTestData() {
+  await db.delete(subscriptionCreditExpiries);
+  await db.delete(subscriptionCharges);
+  await db.delete(subscriptions);
   await db.delete(freeCreditPromises);
   await db.delete(brandTransfers);
   await db.delete(staffDebits);
