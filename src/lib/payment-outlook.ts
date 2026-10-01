@@ -48,7 +48,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, campaignReloadSweepAttempts } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
@@ -60,6 +60,13 @@ import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
+import {
+  subscriptions,
+  subscriptionCharges,
+  type Subscription,
+  type SubscriptionCharge,
+} from "../db/schema.js";
+import { subscriptionChargeDates } from "./subscription-schedule.js";
 
 /** What billing expects to happen next, money-wise, for this org. */
 export type PaymentOutlookState =
@@ -96,7 +103,9 @@ export type PaymentChargeTrigger =
   /** The month-end sweep settles the balance to zero. */
   | "month_end"
   /** The next rung of the refused-card retry schedule. */
-  | "retry_rung";
+  | "retry_rung"
+  /** A subscription's renewal (trial end, then monthly): billing charges the plan. */
+  | "subscription_renewal";
 
 export interface PaymentOutlook {
   orgId: string;
@@ -329,6 +338,36 @@ export interface PaymentOutlookInputs {
   autoTopupEnabled: boolean;
   /** The issuer called the card lost / stolen / closed on a live streak. */
   cardUnusable: boolean;
+  /**
+   * SUBSCRIPTION orgs: the live (or latest) subscription and its current charge,
+   * which date every charge billing will make (lib/subscription-schedule). Null
+   * for every other mode, and for a subscription-mode org that never subscribed.
+   */
+  subscription: { sub: Subscription; currentCharge: SubscriptionCharge | null } | null;
+}
+
+/** The org's live subscription (else its latest) and that period's charge row. */
+async function readSubscriptionFacts(
+  orgId: string
+): Promise<{ sub: Subscription; currentCharge: SubscriptionCharge | null } | null> {
+  const [sub] = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.orgId, orgId))
+    .orderBy(desc(subscriptions.createdAt))
+    .limit(1);
+  if (!sub) return null;
+  const [currentCharge] = await db
+    .select()
+    .from(subscriptionCharges)
+    .where(
+      and(
+        eq(subscriptionCharges.subscriptionId, sub.id),
+        eq(subscriptionCharges.periodStart, sub.currentPeriodStart)
+      )
+    )
+    .limit(1);
+  return { sub, currentCharge: currentCharge ?? null };
 }
 
 /**
@@ -390,6 +429,8 @@ async function decideOutlook(
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,
     cardUnusable: streak?.cardUnusableAt != null,
+    subscription:
+      account.paymentMode === "subscription" ? await readSubscriptionFacts(orgId) : null,
   };
 
   const paymentMode = asPaymentMode(account.paymentMode);
@@ -407,11 +448,23 @@ async function decideOutlook(
 
   const noDate = { nextChargeAttemptAt: null, trigger: null } as const;
 
-  // SUBSCRIPTION: billing never charges this org. Stripe invoices it monthly on its
-  // own schedule, and between invoices spend stops at zero (lib/subscription). No
-  // card rule can block it either, because no card charge is ever ours to attempt.
+  // SUBSCRIPTION: the only charge is the plan, on its renewal date (trial end, then
+  // monthly), or the next retry rung of a refused renewal. No floor reload, no
+  // month-end settle, and no card rule blocks it: between charges spend stops at
+  // zero (lib/subscription). Cancel pending / ended / never started → no date.
   if (paymentMode === "subscription") {
-    return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+    const facts = inputsOut.current?.subscription ?? null;
+    const [first] = facts
+      ? subscriptionChargeDates(facts.sub, facts.currentCharge, new Date(8.64e15))
+      : [];
+    if (!first) return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+    return {
+      ...base,
+      state: "will_charge",
+      blockedReason: null,
+      nextChargeAttemptAt: new Date(Math.max(first.at.getTime(), now.getTime())).toISOString(),
+      trigger: first.trigger,
+    };
   }
 
   // PREPAID: the card rules below exist because a postpaid org spends on credit

@@ -161,6 +161,8 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
         welcomeCreditClaims: 0,
         freeCreditPromises: 0,
         staffDebits: 0,
+        subscriptions: 0,
+        subscriptionCreditExpiries: 0,
       },
     });
     expect(await orgRowCounts(targetOrgId)).toEqual({
@@ -205,6 +207,8 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       welcomeCreditClaims: 0,
       freeCreditPromises: 0,
       staffDebits: 0,
+      subscriptions: 0,
+      subscriptionCreditExpiries: 0,
     });
   });
 

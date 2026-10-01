@@ -40,6 +40,7 @@ import {
   type RunsOrgUsageTotalResult,
 } from "./runs-client.js";
 import { sumStaffDebitsForOrg } from "./staff-debits.js";
+import { sumSubscriptionExpiriesForOrg } from "./subscription-expiries.js";
 
 export interface TransferUsageAdjustment {
   /** Added to the org's net PROJECTED usage (actual + provisioned). */
@@ -76,9 +77,13 @@ function adjusted(runsCents: string, adjustmentCents: string): string {
   return cmpCents(adjustmentCents, "0") === 0 ? runsCents : addCents(runsCents, adjustmentCents);
 }
 
-/** Staff debits the org carries — already INCLUDED in `spent_cents`, not on top of it. */
+/**
+ * Staff debits and expired subscription credit the org carries — both already
+ * INCLUDED in `spent_cents`, not on top of it.
+ */
 export interface StaffDebitsPart {
   staff_debits_cents: string;
+  subscription_expired_cents: string;
 }
 
 /**
@@ -89,15 +94,17 @@ export async function fetchOrgUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
 ): Promise<RunsOrgUsageTotalResult & StaffDebitsPart> {
-  const [runs, adj, debits] = await Promise.all([
+  const [runs, adj, debits, expired] = await Promise.all([
     fetchRunsOrgUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
+    sumSubscriptionExpiriesForOrg(orgId),
   ]);
   return {
     ...runs,
-    spent_cents: adjusted(adjusted(runs.spent_cents, adj.usageCents), debits),
+    spent_cents: adjusted(adjusted(adjusted(runs.spent_cents, adj.usageCents), debits), expired),
     staff_debits_cents: debits,
+    subscription_expired_cents: expired,
   };
 }
 
@@ -109,13 +116,15 @@ export async function fetchOrgActualUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
 ): Promise<RunsOrgActualUsageTotalResult & StaffDebitsPart> {
-  const [runs, adj, debits] = await Promise.all([
+  const [runs, adj, debits, expired] = await Promise.all([
     fetchRunsOrgActualUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
+    sumSubscriptionExpiriesForOrg(orgId),
   ]);
   return {
-    spent_cents: adjusted(adjusted(runs.spent_cents, adj.actualCents), debits),
+    spent_cents: adjusted(adjusted(adjusted(runs.spent_cents, adj.actualCents), debits), expired),
     staff_debits_cents: debits,
+    subscription_expired_cents: expired,
   };
 }

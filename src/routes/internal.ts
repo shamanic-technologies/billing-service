@@ -17,6 +17,8 @@ import {
   freeCreditPromises,
   welcomeRecipients,
   staffDebits,
+  subscriptions,
+  subscriptionCreditExpiries,
   localPromos,
   ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
@@ -158,6 +160,17 @@ async function deleteBillingStateByOrg(
       .where(eq(staffDebits.orgId, orgId))
       .returning({ id: staffDebits.id });
 
+    // The org's subscription (migration 0056): its schedule, its charges and its
+    // expired credit only ever concern this org. Charges cascade with it.
+    const deletedExpiries = await tx
+      .delete(subscriptionCreditExpiries)
+      .where(eq(subscriptionCreditExpiries.orgId, orgId))
+      .returning({ id: subscriptionCreditExpiries.id });
+    const deletedSubscriptions = await tx
+      .delete(subscriptions)
+      .where(eq(subscriptions.orgId, orgId))
+      .returning({ id: subscriptions.id });
+
     const deletedBillingAccounts = await tx
       .delete(billingAccounts)
       .where(eq(billingAccounts.orgId, orgId))
@@ -175,6 +188,8 @@ async function deleteBillingStateByOrg(
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
       staffDebits: deletedStaffDebits.length,
+      subscriptions: deletedSubscriptions.length,
+      subscriptionCreditExpiries: deletedExpiries.length,
     };
   });
 }
