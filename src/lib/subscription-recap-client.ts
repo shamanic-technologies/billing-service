@@ -19,6 +19,8 @@ export interface SubscriptionRecap {
   lifetimeRevenueUsd: number | null;
   /** Revenue multiple at current results if the plan is raised by $100/month. */
   raiseRevenueMultiple: number | null;
+  /** Extra revenue (USD) at current results if the plan is raised by $100/month. */
+  raiseAdditionalRevenueUsd: number | null;
 }
 
 /** The wire fields billing reads (features-service `OrgPeriodRecapResponse`). */
@@ -26,7 +28,7 @@ interface PeriodRecapWire {
   outbound?: { emailsSent?: number; deliveryRatePct?: number | null };
   expectedPositiveReplies?: number | null;
   expectedReturn?: { roiMultiple?: number | null; lifetimeRevenuePerClientUsd?: number | null };
-  budgetIncrease?: { revenueMultiple?: number | null };
+  budgetIncrease?: { revenueMultiple?: number | null; expectedAdditionalRevenueUsd?: number | null };
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -48,6 +50,7 @@ export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
     expectedRoiMultiple: num(w.expectedReturn?.roiMultiple),
     lifetimeRevenueUsd: num(w.expectedReturn?.lifetimeRevenuePerClientUsd),
     raiseRevenueMultiple: num(w.budgetIncrease?.revenueMultiple),
+    raiseAdditionalRevenueUsd: num(w.budgetIncrease?.expectedAdditionalRevenueUsd),
   };
 }
 
