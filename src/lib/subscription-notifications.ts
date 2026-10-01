@@ -87,8 +87,14 @@ export function composeCreditsUsedEmail(params: {
   }
 
   const nextPlan = params.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS;
+  // The gain in DOLLARS reads strongest and is exactly what features-service
+  // states; the multiple is the fallback.
   const upsell =
-    r?.raiseRevenueMultiple != null
+    r?.raiseAdditionalRevenueUsd != null && r.raiseAdditionalRevenueUsd > 0
+      ? `We strongly recommend raising your plan: +$100 a month would bring about ${dollars(
+          Math.round(r.raiseAdditionalRevenueUsd) * 100
+        )} more revenue at your current results.`
+      : r?.raiseRevenueMultiple != null
       ? `We strongly recommend raising your plan: +$100 a month would bring about ${times(
           r.raiseRevenueMultiple
         )} the revenue at your current results.`

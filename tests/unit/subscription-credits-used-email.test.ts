@@ -19,6 +19,7 @@ describe("composeCreditsUsedEmail", () => {
         expectedRoiMultiple: 3.2,
         lifetimeRevenueUsd: 2500,
         raiseRevenueMultiple: 3,
+        raiseAdditionalRevenueUsd: 957.85,
       },
       monthlyAmountCents: 9900,
       ctaUrl: "https://dashboard.distribute.you/orgs/org_1/billing",
@@ -30,7 +31,9 @@ describe("composeCreditsUsedEmail", () => {
     expect(e.results).toBe(
       "On this volume we expect about 6 positive replies, for a 3.2x return based on your $2,500 lifetime revenue per client."
     );
-    expect(e.upsell).toContain("+$100 a month would bring about 3x the revenue");
+    expect(e.upsell).toBe(
+      "We strongly recommend raising your plan: +$100 a month would bring about $958 more revenue at your current results."
+    );
     expect(e.ctaLabel).toBe("Raise my plan to $199/month");
     expect(JSON.stringify(e)).not.toMatch(SHORTAGE);
     expect(JSON.stringify(e)).not.toContain("—");
@@ -55,7 +58,7 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
         outbound: { emailsSent: 1240, deliveryRatePct: 99.1 },
         expectedPositiveReplies: 6.2,
         expectedReturn: { roiMultiple: 3.2, lifetimeRevenuePerClientUsd: 2500 },
-        budgetIncrease: { revenueMultiple: null },
+        budgetIncrease: { revenueMultiple: null, expectedAdditionalRevenueUsd: 957.85 },
       })
     ).toEqual({
       sentCount: 1240,
@@ -64,6 +67,7 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
       expectedRoiMultiple: 3.2,
       lifetimeRevenueUsd: 2500,
       raiseRevenueMultiple: null,
+      raiseAdditionalRevenueUsd: 957.85,
     });
   });
 });
