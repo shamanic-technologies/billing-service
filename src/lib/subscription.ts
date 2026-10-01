@@ -49,6 +49,7 @@ import {
   createSubscriptionCheckout,
   fetchOrgSubscriptions,
   setSubscriptionCancelAtPeriodEnd,
+  SubscriptionServiceError,
   updateSubscriptionMonthlyAmount,
   type OrgSubscription,
   type SubscriptionCheckoutSession,
@@ -357,6 +358,8 @@ export async function startSubscriptionCheckout(params: {
       "This organization pays through a processor that does not support subscriptions."
     );
   }
+  // stripe-service checks a subscription out on the org's Stripe customer and
+  // refuses one without (409 no_customer): create it here, as every Stripe checkout does.
   const customer = await ensureOrgStripeCustomer(params.identity);
   if (!customer) {
     // ensureOrgStripeCustomer answers null only for a non-Stripe acquirer, refused above.
@@ -367,14 +370,26 @@ export async function startSubscriptionCheckout(params: {
     ? SUBSCRIPTION_TRIAL_DAYS
     : null;
   await stampSubscriptionCheckout(orgId, params.now);
-  const session = await createSubscriptionCheckout(params.identity, {
-    customerId: customer.id,
-    monthlyAmountCents: SUBSCRIPTION_BASE_MONTHLY_CENTS,
-    trialDays,
-    uiMode: params.uiMode,
-    successUrl: params.successUrl,
-    cancelUrl: params.cancelUrl,
-  });
+  let session: SubscriptionCheckoutSession;
+  try {
+    session = await createSubscriptionCheckout(orgId, {
+      monthlyAmountCents: SUBSCRIPTION_BASE_MONTHLY_CENTS,
+      trialDays,
+      uiMode: params.uiMode,
+      successUrl: params.successUrl,
+      cancelUrl: params.cancelUrl,
+      userId: params.identity["x-user-id"],
+    });
+  } catch (err) {
+    // The org was pinned to another acquirer between our read and the checkout.
+    if (err instanceof SubscriptionServiceError && err.code === "acquirer_not_stripe") {
+      throw new SubscriptionRefused(
+        "acquirer_not_supported",
+        "This organization pays through a processor that does not support subscriptions."
+      );
+    }
+    throw err;
+  }
   return { ...session, trialDays, monthlyAmountCents: SUBSCRIPTION_BASE_MONTHLY_CENTS };
 }
 
@@ -420,14 +435,34 @@ export async function raiseSubscriptionAmount(
       `The new monthly amount must be higher than the current ${current.monthlyAmountCents} cents.`
     );
   }
-  return updateSubscriptionMonthlyAmount(orgId, current.id, monthlyAmountCents);
+  return asRefusal(() => updateSubscriptionMonthlyAmount(orgId, current.id, monthlyAmountCents));
+}
+
+/**
+ * stripe-service refuses an action on a subscription that ended between our read and
+ * the write (409 subscription_ended) or vanished (404): both mean "no subscription"
+ * to the customer. Anything else (403 not owned, 409 unsupported shape, 5xx) is a
+ * defect or an outage and propagates.
+ */
+async function asRefusal<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (
+      err instanceof SubscriptionServiceError &&
+      (err.code === "subscription_ended" || err.code === "subscription_not_found")
+    ) {
+      throw new SubscriptionRefused("no_subscription", "This organization has no subscription.", 404);
+    }
+    throw err;
+  }
 }
 
 /** Cancel at period end: no further invoice. Idempotent. */
 export async function cancelSubscription(orgId: string): Promise<OrgSubscription> {
   const current = await requireCurrentLive(orgId);
   if (current.cancelAtPeriodEnd) return current;
-  return setSubscriptionCancelAtPeriodEnd(orgId, current.id, true);
+  return asRefusal(() => setSubscriptionCancelAtPeriodEnd(orgId, current.id, true));
 }
 
 /** Undo a pending cancel. Refused when nothing is pending. */
@@ -439,7 +474,7 @@ export async function resumeSubscription(orgId: string): Promise<OrgSubscription
       "The subscription is not set to cancel."
     );
   }
-  return setSubscriptionCancelAtPeriodEnd(orgId, current.id, false);
+  return asRefusal(() => setSubscriptionCancelAtPeriodEnd(orgId, current.id, false));
 }
 
 /** The wire view of a subscription, shared by every route. */

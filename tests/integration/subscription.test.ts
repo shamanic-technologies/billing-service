@@ -135,9 +135,11 @@ describe("subscription payment mode", () => {
       monthly_amount_cents: 9900,
       currency: "usd",
     });
-    const call = vi.mocked(client.createSubscriptionCheckout).mock.calls[0][1];
-    expect(call).toMatchObject({ monthlyAmountCents: 9900, trialDays: 3, uiMode: "embedded" });
-    expect(call.customerId).toBeTruthy();
+    const [calledOrg, call] = vi.mocked(client.createSubscriptionCheckout).mock.calls[0];
+    expect(calledOrg).toBe(orgId);
+    expect(call).toMatchObject({ monthlyAmountCents: 9900, trialDays: 3, uiMode: "embedded", userId });
+    // A Stripe customer exists before the checkout (stripe-service refuses one without).
+    expect(ssMocks.getCustomerByOrgOrNull).toHaveBeenCalled();
     expect((await account()).subscriptionCheckoutStartedAt).not.toBeNull();
   });
 
