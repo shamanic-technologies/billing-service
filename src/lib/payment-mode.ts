@@ -33,9 +33,9 @@
  * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
+import { billingAccounts, subscriptions } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents, type BalanceSnapshot } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
@@ -197,6 +197,20 @@ export async function setPaymentMode(
     paymentMode: target,
     updatedAt: new Date(),
   };
+
+  if (current === "subscription") {
+    // Staff moving an org OUT of subscription: billing owns the schedule, so the
+    // live subscription ends NOW (no further charge). Credit it already holds is
+    // kept: it was paid for, and the new mode spends it.
+    const ended = await db
+      .update(subscriptions)
+      .set({ status: "canceled", cancelAtPeriodEnd: true, canceledAt: new Date(), endedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(subscriptions.orgId, orgId), ne(subscriptions.status, "canceled")))
+      .returning({ id: subscriptions.id });
+    if (ended.length > 0) {
+      console.log(`[billing-service] payment mode: org ${orgId} left subscription, subscription ended`);
+    }
+  }
 
   if (target === "subscription") {
     // A credit line this org already drew on is collected first, exactly as when it

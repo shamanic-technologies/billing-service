@@ -19,6 +19,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
+  billingAccounts,
   creditDepletionEpisodes,
   PLATFORM_USER_ID,
   type CreditDepletionEpisode,
@@ -35,6 +36,8 @@ import { cannotSpend, resolveSpendBlock } from "./spend-block.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
+import { getLiveSubscription } from "./subscription.js";
+import { notifySubscriptionCreditsUsedIfDue } from "./subscription-notifications.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const FOLLOWUP_3D_MS = 3 * DAY_MS;
@@ -111,6 +114,15 @@ export interface OpenEpisodeParams {
   recipientEmail?: string | null;
 }
 
+async function isSubscriptionOrg(orgId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ paymentMode: billingAccounts.paymentMode })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+  return row?.paymentMode === "subscription";
+}
+
 /**
  * Open a depletion episode + send the instant T0 email, IFF the org cannot pay
  * for the run this authorize was refusing AND has campaign activity AND has no
@@ -124,6 +136,13 @@ export interface OpenEpisodeParams {
 export async function openDepletionEpisodeIfDepleted(
   params: OpenEpisodeParams
 ): Promise<{ opened: boolean }> {
+  // A SUBSCRIPTION org running out of the month's credit is the plan working, not
+  // a payment problem: no episode, and the customer gets the celebratory
+  // "all your outbound went out" email instead (lib/subscription-notifications).
+  if (await isSubscriptionOrg(params.orgId)) {
+    void notifySubscriptionCreditsUsedIfDue(params.orgId, await getLiveSubscription(params.orgId));
+    return { opened: false };
+  }
   const blocked = cannotSpend(
     params.balanceCents,
     params.requiredCents ?? "0",
@@ -254,6 +273,8 @@ export async function openBlockedCampaignEpisode(params: {
   /** False when the caller has already mailed this org on this tick. */
   sendT0?: boolean;
 }): Promise<{ opened: boolean }> {
+  // Same as openDepletionEpisodeIfDepleted: never for a subscription org.
+  if (await isSubscriptionOrg(params.orgId)) return { opened: false };
   const sendT0 = params.sendT0 ?? true;
   // Marked sent when we suppress it too: the marker claims the stage, and the
   // stage is genuinely spent — the customer WAS told, by the message the caller

@@ -80,7 +80,11 @@ export type RevenueClassReason =
   | "postpaid_no_chargeable_card"
   | "prepaid_balance_spent"
   | "subscription"
-  | "subscription_no_card";
+  | "subscription_trialing"
+  | "subscription_canceling"
+  | "subscription_payment_failed"
+  | "subscription_ended"
+  | "subscription_not_started";
 
 export type DailyBudgetUnknownReason =
   | RecurringStatusUnavailableReason
@@ -104,14 +108,24 @@ export function classify(p: {
   cardUnusable: boolean;
   autoTopupEnabled: boolean;
   balanceCents: string;
+  /** SUBSCRIPTION orgs: the subscription's state (null = never started). */
+  subscription?: { status: string; cancelAtPeriodEnd: boolean } | null;
 }): { revenueClass: RevenueClass; reason: RevenueClassReason; chargeableCard: boolean } {
   const chargeableCard = p.hasCardPm && p.autoReloadSupported && !p.cardUnusable;
   if (p.paymentMode === "subscription") {
-    // Stripe charges it every month on the card it holds; whether the subscription
-    // is still live is stripe-service's to say, so a card on file is the signal.
-    return p.hasCardPm
-      ? { revenueClass: "recurring", reason: "subscription", chargeableCard }
-      : { revenueClass: "none", reason: "subscription_no_card", chargeableCard };
+    // Owner rule (2026-10-01): a subscription's revenue is the plan we collect
+    // every month, spent or not. Recurring only while ACTIVE with no cancel
+    // pending: a trial has not paid yet (listed apart), a pending cancel is
+    // churn, a refused renewal means payment stopped.
+    const s = p.subscription ?? null;
+    if (!s) return { revenueClass: "none", reason: "subscription_not_started", chargeableCard };
+    if (s.status === "canceled") return { revenueClass: "none", reason: "subscription_ended", chargeableCard };
+    if (s.status === "past_due") {
+      return { revenueClass: "none", reason: "subscription_payment_failed", chargeableCard };
+    }
+    if (s.cancelAtPeriodEnd) return { revenueClass: "none", reason: "subscription_canceling", chargeableCard };
+    if (s.status === "trialing") return { revenueClass: "none", reason: "subscription_trialing", chargeableCard };
+    return { revenueClass: "recurring", reason: "subscription", chargeableCard };
   }
   if (p.paymentMode === "postpaid") {
     return chargeableCard
@@ -389,6 +403,14 @@ export interface OneOffRevenue {
   runOutUnknownReason: RunOutUnknownReason | null;
 }
 
+export interface RevenueSubscription {
+  status: string;
+  monthlyAmountCents: number;
+  cancelAtPeriodEnd: boolean;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string;
+}
+
 export interface OrgRevenue {
   orgId: string;
   asOf: string;
@@ -411,6 +433,8 @@ export interface OrgRevenue {
   arrCents: string | null;
   /** Present only for a one-off org. */
   oneOff: OneOffRevenue | null;
+  /** SUBSCRIPTION orgs: the plan and its state (a trial is shown apart, not counted). */
+  subscription: RevenueSubscription | null;
   projections: ProjectedRevenue[];
   /** The org's own charge schedule (lib/charge-schedule), unchanged. */
   cash: ChargeSchedule;
@@ -449,10 +473,23 @@ export function composeOrgRevenue(
     cardUnusable: inputs.cardUnusable,
     autoTopupEnabled: inputs.autoTopupEnabled,
     balanceCents: inputs.balanceCents,
+    subscription: inputs.subscription
+      ? {
+          status: inputs.subscription.sub.status,
+          cancelAtPeriodEnd: inputs.subscription.sub.cancelAtPeriodEnd,
+        }
+      : null,
   });
 
   const pace = proactive.dailyBudgetCents;
-  const drr = cls.revenueClass === "recurring" ? pace : fixed(new Decimal(0));
+  // A subscription's day is worth its plan / 30, whatever its campaigns spend.
+  const subscriptionPlan = inputs.subscription ? inputs.subscription.sub.monthlyAmountCents : null;
+  const drr =
+    cls.revenueClass !== "recurring"
+      ? fixed(new Decimal(0))
+      : outlook.paymentMode === "subscription" && subscriptionPlan !== null
+        ? fixed(new Decimal(subscriptionPlan).dividedBy(MRR_DAYS))
+        : pace;
 
   let oneOff: OneOffRevenue | null = null;
   if (cls.revenueClass === "one_off") {
@@ -484,7 +521,12 @@ export function composeOrgRevenue(
     return { horizonDays: days, recurringCents, oneOffCents, totalCents };
   });
 
-  const mrr = times(drr, MRR_DAYS);
+  // A subscription's MRR IS its plan, exactly (plan / 30 × 30 would lose a cent
+  // to rounding).
+  const mrr =
+    cls.revenueClass === "recurring" && outlook.paymentMode === "subscription" && subscriptionPlan !== null
+      ? fixed(new Decimal(subscriptionPlan))
+      : times(drr, MRR_DAYS);
   return {
     orgId: outlook.orgId,
     asOf: now.toISOString(),
@@ -503,6 +545,15 @@ export function composeOrgRevenue(
     mrrCents: mrr,
     arrCents: times(mrr, ARR_MONTHS),
     oneOff,
+    subscription: inputs.subscription
+      ? {
+          status: inputs.subscription.sub.status,
+          monthlyAmountCents: inputs.subscription.sub.monthlyAmountCents,
+          cancelAtPeriodEnd: inputs.subscription.sub.cancelAtPeriodEnd,
+          trialEndsAt: inputs.subscription.sub.trialEndsAt?.toISOString() ?? null,
+          currentPeriodEnd: inputs.subscription.sub.currentPeriodEnd.toISOString(),
+        }
+      : null,
     projections,
     cash: chargeScheduleFrom(resolved, cashHorizonDays, now),
     brands: proactive.brands,
@@ -536,6 +587,7 @@ export interface FleetRevenueRow {
   mrrCents: string | null;
   arrCents: string | null;
   oneOff: OneOffRevenue | null;
+  subscription: RevenueSubscription | null;
   projections: ProjectedRevenue[];
   cashState: ChargeSchedule["state"];
   cashBlockedReason: ChargeSchedule["blockedReason"];
@@ -569,6 +621,8 @@ export interface FleetRevenue {
     drrUnknownOrgIds: string[];
     /** One-off money still to be spent, all one-off orgs. */
     oneOffRemainingCents: string;
+    /** Subscriptions in their free trial: not revenue yet, shown apart. */
+    subscriptionTrials: { count: number; monthlyAmountCents: string };
     windows: FleetTotalWindow[];
   };
   cashFlow: { byDay: CashBucket[]; byWeek: CashBucket[] };
@@ -625,12 +679,22 @@ export function composeFleet(
 ): FleetRevenue {
   const classCounts: Record<RevenueClass, number> = { recurring: 0, one_off: 0, none: 0 };
   let drr = new Decimal(0);
+  let mrrSum = new Decimal(0);
   const drrUnknown: string[] = [];
   let oneOffRemaining = new Decimal(0);
+  let trialCount = 0;
+  let trialPlans = new Decimal(0);
   for (const r of rows) {
+    if (r.classReason === "subscription_trialing" && r.subscription) {
+      trialCount += 1;
+      trialPlans = trialPlans.plus(r.subscription.monthlyAmountCents);
+    }
     classCounts[r.revenueClass] += 1;
     if (r.drrCents === null) drrUnknown.push(r.orgId);
-    else drr = drr.plus(r.drrCents);
+    else {
+      drr = drr.plus(r.drrCents);
+      mrrSum = mrrSum.plus(r.mrrCents ?? new Decimal(r.drrCents).times(MRR_DAYS));
+    }
     if (r.oneOff) oneOffRemaining = oneOffRemaining.plus(r.oneOff.remainingCents);
   }
 
@@ -672,7 +736,9 @@ export function composeFleet(
     };
   });
 
-  const mrr = drr.times(MRR_DAYS);
+  // Sum of the per-org MRRs (equal to DRR × 30 for budget-based orgs; exact for a
+  // subscription's plan).
+  const mrr = mrrSum;
   return {
     asOf: now.toISOString(),
     cashHorizonDays,
@@ -684,6 +750,7 @@ export function composeFleet(
       arrCents: fixed(mrr.times(ARR_MONTHS)),
       drrUnknownOrgIds: drrUnknown,
       oneOffRemainingCents: fixed(oneOffRemaining),
+      subscriptionTrials: { count: trialCount, monthlyAmountCents: fixed(trialPlans) },
       windows,
     },
     cashFlow: { byDay: bucketCash(allEvents, isoDay), byWeek: bucketCash(allEvents, isoWeekStart) },
@@ -701,6 +768,7 @@ export function composeFleet(
       mrrCents: r.mrrCents,
       arrCents: r.arrCents,
       oneOff: r.oneOff,
+      subscription: r.subscription,
       projections: r.projections,
       cashState: r.cash.state,
       cashBlockedReason: r.cash.blockedReason,

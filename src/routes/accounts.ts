@@ -65,6 +65,7 @@ async function composeAccountFunds(
   creditedCents: string;
   usageCents: string;
   debitedCents: string;
+  expiredCents: string;
   balanceCents: string;
   actualBalanceCents: string;
   discountPct: number | null;
@@ -137,8 +138,14 @@ async function composeAccountFunds(
     // Staff debits are included in the usage figure the balances subtract (they
     // lower the balance like spend), but they are NOT campaign usage: taken back out
     // here and shown as their own line, debited_cents. See lib/staff-debits.
-    usageCents: subCents(runsUsage.spent_cents, runsUsage.staff_debits_cents),
+    // Expired subscription credit (lib/subscription) rides the same choke point
+    // and is shown as its own line too, expired_cents.
+    usageCents: subCents(
+      subCents(runsUsage.spent_cents, runsUsage.staff_debits_cents),
+      runsUsage.subscription_expired_cents
+    ),
     debitedCents: runsUsage.staff_debits_cents,
+    expiredCents: runsUsage.subscription_expired_cents,
     balanceCents,
     actualBalanceCents,
     discountPct,
@@ -160,6 +167,7 @@ function buildAccountResponse(
     creditedCents: string;
     usageCents: string;
     debitedCents: string;
+    expiredCents: string;
     balanceCents: string;
     actualBalanceCents: string;
     discountPct: number | null;
@@ -208,6 +216,9 @@ function buildAccountResponse(
     // line, never folded into usage_cents. Invariant:
     //   balance_cents === credited_cents − usage_cents − debited_cents
     debited_cents: funds.debitedCents,
+    // Subscription credit that expired unspent at a renewal, its own line.
+    //   balance_cents === credited_cents − usage_cents − debited_cents − expired_cents
+    expired_cents: funds.expiredCents,
     balance_cents: funds.balanceCents,
     actual_balance_cents: funds.actualBalanceCents,
     // Free credit the org can still spend, ready-made so the dashboard decides a

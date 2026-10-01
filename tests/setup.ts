@@ -334,6 +334,24 @@ beforeAll(async () => {
   `;
   await sql`CREATE INDEX IF NOT EXISTS "idx_staff_debits_org" ON "staff_debits" ("org_id")`;
 
+  // Billing-owned subscriptions (migration 0056): replay the migration's own
+  // statements, all idempotent, so the suite and prod cannot disagree on the shape.
+  {
+    const { readFileSync } = await import("fs");
+    const migration = readFileSync(
+      new URL("../drizzle/0056_billing_owned_subscriptions.sql", import.meta.url),
+      "utf8"
+    );
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      const body = statement
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("--"))
+        .join("\n")
+        .trim();
+      if (body) await sql.unsafe(body);
+    }
+  }
+
   // Seed platform-issued grant promo codes (matches migrations 0017 + 0025 + 0033 + 0045 + 0052).
   // referral_reward's amount_cents is NOT a placeholder: it is the live amount a NEW
   // referral promise freezes ($500), re-priceable at runtime.

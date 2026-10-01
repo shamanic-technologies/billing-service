@@ -22,6 +22,7 @@
  *   - `credit-debt-card-required`  → src/lib/unpaid-debt.ts
  *   - `credit-card-unusable`       → src/lib/card-usability.ts
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
+ *   - `subscription-credits-used`  → src/lib/subscription-notifications.ts
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
@@ -36,6 +37,7 @@ import {
   UNPAID_DEBT_STAFF_EVENT,
 } from "./lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
+import { SUBSCRIPTION_CREDITS_USED_EVENT } from "./lib/subscription-notifications.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -54,6 +56,18 @@ const TEMPLATES = [
     htmlBody: `<p>We attempted to automatically reload your account, but the payment failed. Please update your payment method.</p>
 <p><a href="{{settingsUrl}}">Update payment method</a></p>`,
     textBody: "We attempted to automatically reload your account, but the payment failed. Please update your payment method. Visit: {{settingsUrl}}",
+  },
+  {
+    // A subscription org used all of this period's credit. A success to celebrate
+    // (owner rule), never a shortage: every sentence is composed in code by
+    // composeCreditsUsedEmail, so no variable can render as a literal placeholder.
+    name: SUBSCRIPTION_CREDITS_USED_EVENT,
+    subject: "{{subject}}",
+    htmlBody: `<p>{{intro}}</p>
+<p>{{results}}</p>
+<p>{{upsell}}</p>
+<p><a href="{{ctaUrl}}">{{ctaLabel}}</a></p>`,
+    textBody: "{{intro}}\n\n{{results}}\n\n{{upsell}}\n\n{{ctaLabel}}: {{ctaUrl}}",
   },
   {
     // The card is still on file and can never be charged again: the bank called
