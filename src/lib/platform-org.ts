@@ -20,8 +20,10 @@
  *   - resolveSpendBlock: never blocked (dunning tick, outlook, sweeps read it);
  *   - campaign reload sweep + month-end sweep: never charged, never flagged;
  *   - flagUncollectableDebt: `platform_org`, never flagged, nobody mailed;
- *   - payment outlook: `no_autopay` (no automatic charge, ever);
- *   - revenue: `none` / `platform_org` (internal spend is not revenue).
+ *   - payment outlook: `no_autopay` (no automatic charge, ever).
+ *
+ * Its PAYMENTS still count as revenue like any org's (owner rule 2026-10-02):
+ * the revenue read classifies it by the ordinary rules, never special-cased.
  *
  * WHAT IT DOES NOT CHANGE: usage is still recorded at full price in
  * runs-service, and every balance figure stays TRUE — it may go deeply

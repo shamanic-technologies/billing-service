@@ -339,8 +339,6 @@ export interface PaymentOutlookInputs {
   autoTopupEnabled: boolean;
   /** The issuer called the card lost / stolen / closed on a live streak. */
   cardUnusable: boolean;
-  /** Our own internal org (lib/platform-org): never charged, not revenue. */
-  platformOrg: boolean;
   /**
    * SUBSCRIPTION orgs: the live (or latest) subscription and its current charge,
    * which date every charge billing will make (lib/subscription-schedule). Null
@@ -433,7 +431,6 @@ async function decideOutlook(
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,
     cardUnusable: streak?.cardUnusableAt != null,
-    platformOrg,
     subscription:
       account.paymentMode === "subscription" ? await readSubscriptionFacts(orgId) : null,
   };
