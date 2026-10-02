@@ -55,6 +55,7 @@ import { computeBalance, computeSettleBalanceCents } from "./balance.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { addCents, cmpCents, subCents } from "./cents.js";
 import { resolveSpendBlock } from "./spend-block.js";
+import { isPlatformOrg } from "./platform-org.js";
 import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
@@ -338,6 +339,8 @@ export interface PaymentOutlookInputs {
   autoTopupEnabled: boolean;
   /** The issuer called the card lost / stolen / closed on a live streak. */
   cardUnusable: boolean;
+  /** Our own internal org (lib/platform-org): never charged, not revenue. */
+  platformOrg: boolean;
   /**
    * SUBSCRIPTION orgs: the live (or latest) subscription and its current charge,
    * which date every charge billing will make (lib/subscription-schedule). Null
@@ -411,12 +414,13 @@ async function decideOutlook(
   if (!account) return null;
 
   const snapshot = await computeBalance(orgId);
-  const [block, burn, budgets, streak, settleBalanceCents] = await Promise.all([
+  const [block, burn, budgets, streak, settleBalanceCents, platformOrg] = await Promise.all([
     resolveSpendBlock(orgId, snapshot),
     fetchRealizedDailyBurn(orgId, now, account.createdAt),
     resolveBudgets(orgId),
     openStreak(orgId, snapshot.creditedCents),
     computeSettleBalanceCents(orgId, snapshot),
+    isPlatformOrg(orgId),
   ]);
 
   inputsOut.current = {
@@ -429,6 +433,7 @@ async function decideOutlook(
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,
     cardUnusable: streak?.cardUnusableAt != null,
+    platformOrg,
     subscription:
       account.paymentMode === "subscription" ? await readSubscriptionFacts(orgId) : null,
   };
@@ -447,6 +452,10 @@ async function decideOutlook(
   };
 
   const noDate = { nextChargeAttemptAt: null, trigger: null } as const;
+
+  // Our own internal org (lib/platform-org) is never charged automatically and
+  // never blocked: no date, and nothing for campaign-service to stop on.
+  if (platformOrg) return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
 
   // SUBSCRIPTION: the only charge is the plan, on its renewal date (trial end, then
   // monthly), or the next retry rung of a refused renewal. No floor reload, no

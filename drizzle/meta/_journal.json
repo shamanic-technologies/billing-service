@@ -400,6 +400,13 @@
       "when": 1793008800000,
       "tag": "0056_billing_owned_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1793095200000,
+      "tag": "0057_platform_orgs",
+      "breakpoints": true
     }
   ]
 }

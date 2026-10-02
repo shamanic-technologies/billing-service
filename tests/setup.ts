@@ -334,14 +334,12 @@ beforeAll(async () => {
   `;
   await sql`CREATE INDEX IF NOT EXISTS "idx_staff_debits_org" ON "staff_debits" ("org_id")`;
 
-  // Billing-owned subscriptions (migration 0056): replay the migration's own
-  // statements, all idempotent, so the suite and prod cannot disagree on the shape.
-  {
+  // Billing-owned subscriptions (migration 0056) and platform orgs (0057): replay
+  // the migrations' own statements, all idempotent, so the suite and prod cannot
+  // disagree on the shape (or on 0057's seed).
+  for (const file of ["0056_billing_owned_subscriptions.sql", "0057_platform_orgs.sql"]) {
     const { readFileSync } = await import("fs");
-    const migration = readFileSync(
-      new URL("../drizzle/0056_billing_owned_subscriptions.sql", import.meta.url),
-      "utf8"
-    );
+    const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint")) {
       const body = statement
         .split("\n")

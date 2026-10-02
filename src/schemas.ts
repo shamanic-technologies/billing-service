@@ -923,6 +923,9 @@ export const PaymentMethodLostResponseSchema = z
       "flagged",
       "already_flagged",
       "deferred",
+      "no_customer",
+      "prepaid",
+      "platform_org",
     ]),
     owed_cents: z.string(),
   })
@@ -3620,6 +3623,7 @@ const RevenueClassReasonSchema = z.enum([
   "subscription_payment_failed",
   "subscription_ended",
   "subscription_not_started",
+  "platform_org",
 ]);
 const DailyBudgetUnknownReasonSchema = z.enum([
   "campaign_service_unconfigured",

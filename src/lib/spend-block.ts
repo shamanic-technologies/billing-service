@@ -34,6 +34,7 @@ import { isDepleted, subCents, gte as gteCents } from "./cents.js";
 import { resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
 import type { BalanceSnapshot } from "./balance.js";
 import { asPaymentMode } from "./payment-mode-types.js";
+import { isPlatformOrg } from "./platform-org.js";
 
 /**
  * True when this org cannot pay for its next run of `requiredCents`.
@@ -132,13 +133,16 @@ export async function resolveSpendBlock(
   orgId: string,
   snapshot: BalanceSnapshot
 ): Promise<SpendBlock> {
-  const [floor, requiredCents] = await Promise.all([
+  const [floor, requiredCents, platformOrg] = await Promise.all([
     resolveOrgFloor(orgId, snapshot),
     maxCampaignEstimateCents(orgId),
+    isPlatformOrg(orgId),
   ]);
   return {
     ...floor,
     requiredCents,
-    blocked: cannotSpend(snapshot.balanceCents, requiredCents, floor.floorCents),
+    // Our own internal org is never blocked (lib/platform-org).
+    blocked:
+      !platformOrg && cannotSpend(snapshot.balanceCents, requiredCents, floor.floorCents),
   };
 }

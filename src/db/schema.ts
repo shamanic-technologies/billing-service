@@ -1043,3 +1043,13 @@ export const subscriptionCreditExpiries = pgTable(
   },
   (table) => [unique("subscription_credit_expiries_org_boundary").on(table.orgId, table.boundaryAt)]
 );
+
+// Platform orgs (migration 0057): our OWN internal organizations, exempt from every
+// balance / card gate. Explicit and auditable: one row per org, with why and who.
+// See lib/platform-org.ts for exactly what a row changes.
+export const platformOrgs = pgTable("platform_orgs", {
+  orgId: uuid("org_id").primaryKey(),
+  reason: text("reason").notNull(),
+  addedBy: text("added_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

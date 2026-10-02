@@ -497,6 +497,12 @@ Both are registered by THIS service in `src/instrument.ts` (a template belongs t
 
 **Fail-soft on the telling, fail-loud on the state**: a notification failure can never touch the money it describes, but a database failure propagates.
 
+## Platform orgs — our OWN internal orgs are never blocked and never charged (`src/lib/platform-org.ts`, migration 0057)
+
+`platform_orgs` (org_id, reason, added_by): one row per internal org. Seeded: distribute.you (`f0420eb5-…`, sends our newsletter). A row makes authorize answer sufficient, the affordability pre-flight affordable, `resolveSpendBlock` never blocked, and skips every reload / month-end settle / reload-sweep charge, depletion episode and uncollectable-debt flag (`platform_org`); the outlook answers `no_autopay`, revenue `none` / `platform_org`. Usage is still recorded at full price and balances stay TRUE (they go negative: that is what the org cost us). Rows are added by migration only. Customer orgs are byte-unchanged.
+
+**Why (2026-10-01):** distribute.you was a postpaid org on a real card. A $384.16 month-end settle declined on 09-30, the balance kept falling on the credit line and crossed the -$500 floor at 13:45 UTC, the $500 reload declined, and apollo-service was refused on every verification for ~17h (3,279 refusals, newsletter stalled). It was NOT a bad write: credited never moved, usage grew by real spend. A daily-update grant of $1000 on 10-02 06:13 unblocked it by hand.
+
 ## Off_session auto-reload — country eligibility (India / RBI e-mandates)
 
 **Off_session auto-reload is IMPOSSIBLE for cards issued in some countries, and Stripe cannot fix it through the path billing uses. India is the confirmed, prod-observed case (GH #220).** Hard Stripe facts (verified against docs 2026-06-27 — re-verify before changing this):

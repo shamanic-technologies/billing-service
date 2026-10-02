@@ -84,6 +84,7 @@ import { openBlockedCampaignEpisode } from "./dunning.js";
 import { computeTopupCharge } from "./topup-tier.js";
 import { addCents, cmpCents } from "./cents.js";
 import { cannotSpend, resolveOrgFloor } from "./spend-block.js";
+import { isPlatformOrg } from "./platform-org.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
 import { sendEmail } from "./email-client.js";
@@ -491,6 +492,8 @@ export async function runCampaignReloadSweep(
     // seconds apart — the episode opens either way, the message does not double.
     let mailedThisTick = false;
     try {
+      // Our own internal org is never blocked and never charged (lib/platform-org).
+      if (await isPlatformOrg(orgId)) continue;
       const snapshot = await computeBalance(orgId);
       const { tier, floorCents: thresholdCents } = await resolveOrgFloor(orgId, snapshot);
 
