@@ -20,6 +20,7 @@ import {
   subscriptions,
   subscriptionCharges,
   subscriptionCreditExpiries,
+  platformOrgs,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -53,7 +54,12 @@ const SEEDED_PROMO_CODES = [
   SUBSCRIPTION_TRIAL_CODE,
 ];
 
+/** The org migration 0057 seeds as a platform org (distribute.you). */
+export const SEEDED_PLATFORM_ORG_ID = "f0420eb5-8f72-4f0a-a150-f473746df1e6";
+
 export async function cleanTestData() {
+  // Keep 0057's seeded row; drop any a test added.
+  await db.delete(platformOrgs).where(notInArray(platformOrgs.orgId, [SEEDED_PLATFORM_ORG_ID]));
   await db.delete(subscriptionCreditExpiries);
   await db.delete(subscriptionCharges);
   await db.delete(subscriptions);

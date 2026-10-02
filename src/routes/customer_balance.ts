@@ -13,6 +13,7 @@ import { reloadTierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/t
 import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
+import { isPlatformOrg } from "../lib/platform-org.js";
 import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
 
@@ -110,6 +111,18 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       console.error("[billing-service] Failed to compute balance:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
       res.status(502).json({ error: "Failed to compute balance" });
+      return;
+    }
+
+    // Our OWN internal org (lib/platform-org): never refused by its balance or a
+    // declined card, and never charged. The balance returned stays the true one.
+    if (await isPlatformOrg(orgId)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "platform_org", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+      res.json({
+        sufficient: true,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
       return;
     }
 
@@ -359,7 +372,8 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     if (
       !account.topupAmountCents ||
       account.topupThresholdCents == null ||
-      account.paymentMode === "subscription"
+      account.paymentMode === "subscription" ||
+      (await isPlatformOrg(orgId))
     ) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup-config" }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });

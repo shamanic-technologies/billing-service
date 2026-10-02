@@ -1225,7 +1225,10 @@
               "collectable",
               "flagged",
               "already_flagged",
-              "deferred"
+              "deferred",
+              "no_customer",
+              "prepaid",
+              "platform_org"
             ]
           },
           "owed_cents": {
@@ -2856,7 +2859,8 @@
               "subscription_canceling",
               "subscription_payment_failed",
               "subscription_ended",
-              "subscription_not_started"
+              "subscription_not_started",
+              "platform_org"
             ]
           },
           "chargeableCard": {
@@ -3165,7 +3169,8 @@
                     "subscription_canceling",
                     "subscription_payment_failed",
                     "subscription_ended",
-                    "subscription_not_started"
+                    "subscription_not_started",
+                    "platform_org"
                   ]
                 },
                 "chargeableCard": {

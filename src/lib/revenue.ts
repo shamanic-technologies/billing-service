@@ -84,7 +84,9 @@ export type RevenueClassReason =
   | "subscription_canceling"
   | "subscription_payment_failed"
   | "subscription_ended"
-  | "subscription_not_started";
+  | "subscription_not_started"
+  /** Our own internal org (lib/platform-org): its spend is our cost, not revenue. */
+  | "platform_org";
 
 export type DailyBudgetUnknownReason =
   | RecurringStatusUnavailableReason
@@ -108,10 +110,13 @@ export function classify(p: {
   cardUnusable: boolean;
   autoTopupEnabled: boolean;
   balanceCents: string;
+  /** Our own internal org (lib/platform-org). */
+  platformOrg?: boolean;
   /** SUBSCRIPTION orgs: the subscription's state (null = never started). */
   subscription?: { status: string; cancelAtPeriodEnd: boolean } | null;
 }): { revenueClass: RevenueClass; reason: RevenueClassReason; chargeableCard: boolean } {
   const chargeableCard = p.hasCardPm && p.autoReloadSupported && !p.cardUnusable;
+  if (p.platformOrg) return { revenueClass: "none", reason: "platform_org", chargeableCard };
   if (p.paymentMode === "subscription") {
     // Owner rule (2026-10-01): a subscription's revenue is the plan we collect
     // every month, spent or not. Recurring only while ACTIVE with no cancel
@@ -473,6 +478,7 @@ export function composeOrgRevenue(
     cardUnusable: inputs.cardUnusable,
     autoTopupEnabled: inputs.autoTopupEnabled,
     balanceCents: inputs.balanceCents,
+    platformOrg: inputs.platformOrg,
     subscription: inputs.subscription
       ? {
           status: inputs.subscription.sub.status,
