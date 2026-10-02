@@ -56,6 +56,7 @@ import {
 } from "./card-usability.js";
 import { reloadOffSession } from "./reload.js";
 import { flagUncollectableDebt } from "./unpaid-debt.js";
+import { isPlatformOrg } from "./platform-org.js";
 
 
 // A hung stripe-service call must not stall the whole sweep loop.
@@ -297,6 +298,11 @@ export async function runMonthEndSweep(
   for (const account of enabled) {
     result.eligible += 1;
     try {
+      // Our own internal org is never charged and never flagged (lib/platform-org).
+      if (await isPlatformOrg(account.orgId)) {
+        result.skipped += 1;
+        continue;
+      }
       const snapshot = await computeBalance(account.orgId);
 
       // Reload-capable guards — mirror usage_apply: chargeable card AND an

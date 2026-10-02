@@ -37,6 +37,7 @@ import { db } from "../db/index.js";
 import { billingAccounts, creditDepletionEpisodes } from "../db/schema.js";
 import { computeBalance, type BalanceSnapshot } from "./balance.js";
 import { ensureOpenEpisode } from "./dunning.js";
+import { isPlatformOrg } from "./platform-org.js";
 import { cmpCents } from "./cents.js";
 import { sendEmail } from "./email-client.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
@@ -81,7 +82,12 @@ export type UnpaidDebtState =
    * small overshoot below zero is covered by its next credit, never a reason to
    * demand a card. Not flagged. See lib/payment-mode.
    */
-  | "prepaid";
+  | "prepaid"
+  /**
+   * Our OWN internal org (lib/platform-org): its negative balance is what
+   * running it cost the platform, not a customer debt. Never flagged.
+   */
+  | "platform_org";
 
 export interface UnpaidDebtOutcome {
   state: UnpaidDebtState;
@@ -126,6 +132,11 @@ export async function flagUncollectableDebt(params: {
     // clear it so the staff surface does not show a debt that no longer exists.
     await clearUncollectableFlag(params.orgId);
     return { state: "no_debt", owedCents: "0" };
+  }
+
+  if (await isPlatformOrg(params.orgId)) {
+    await clearUncollectableFlag(params.orgId);
+    return { state: "platform_org", owedCents };
   }
 
   if (snapshot.customer === null) {

@@ -55,6 +55,7 @@ import {
   OnDemandChargeError,
 } from "../lib/on-demand-charge.js";
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
+import { isPlatformOrg } from "../lib/platform-org.js";
 import {
   getOrgRevenue,
   getFleetRevenue,
@@ -360,7 +361,10 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
   const lastRequiredCents = stored.lastAuthorizeRequiredCents;
 
   res.json({
-    affordable: !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents),
+    // Our own internal org is never refused (lib/platform-org).
+    affordable:
+      (await isPlatformOrg(orgId)) ||
+      !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents),
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
     hasHistory: true,
