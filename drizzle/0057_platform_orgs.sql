@@ -10,8 +10,8 @@
 --     and no reload is ever attempted for that org (no card is ever presented);
 --   * no depletion episode, no dunning mail, no uncollectable-debt flag, no
 --     month-end settle charge, no campaign reload sweep charge;
---   * payment outlook answers no_autopay (no automatic charge, ever) and the
---     revenue read classifies it `none` / `platform_org` (internal spend is not revenue).
+--   * payment outlook answers no_autopay (no automatic charge, ever).
+-- Its payments still count as revenue, like any org's (owner rule 2026-10-02).
 -- What it does NOT change: usage is still recorded in runs-service at full price,
 -- and every balance figure stays TRUE (it may go deeply negative; that negative
 -- figure is the platform's own cost of running that org, not a customer debt).

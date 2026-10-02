@@ -29,7 +29,6 @@ import { runCampaignReloadSweep } from "../../src/lib/campaign-reload-sweep.js";
 import { flagUncollectableDebt } from "../../src/lib/unpaid-debt.js";
 import { resolveSpendBlock } from "../../src/lib/spend-block.js";
 import { computeBalance } from "../../src/lib/balance.js";
-import { classify } from "../../src/lib/revenue.js";
 
 const platformOrg = "00000000-0000-0000-0000-0000000001a1";
 const customerOrg = "00000000-0000-0000-0000-0000000001a2";
@@ -151,18 +150,5 @@ describe("platform orgs are never refused by their balance or a declined card", 
     const flag = await flagUncollectableDebt({ orgId: platformOrg });
     expect(flag.state).toBe("platform_org");
     expect(await listEpisodes(platformOrg)).toHaveLength(0);
-  });
-
-  it("revenue: a platform org is never revenue", () => {
-    const base = {
-      paymentMode: "postpaid" as const,
-      hasCardPm: true,
-      autoReloadSupported: true,
-      cardUnusable: false,
-      autoTopupEnabled: true,
-      balanceCents: "0",
-    };
-    expect(classify({ ...base, platformOrg: true })).toMatchObject({ revenueClass: "none", reason: "platform_org" });
-    expect(classify(base)).toMatchObject({ revenueClass: "recurring" });
   });
 });

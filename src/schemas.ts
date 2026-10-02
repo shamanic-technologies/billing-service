@@ -3623,7 +3623,6 @@ const RevenueClassReasonSchema = z.enum([
   "subscription_payment_failed",
   "subscription_ended",
   "subscription_not_started",
-  "platform_org",
 ]);
 const DailyBudgetUnknownReasonSchema = z.enum([
   "campaign_service_unconfigured",
