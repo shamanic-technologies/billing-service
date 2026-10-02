@@ -2859,8 +2859,7 @@
               "subscription_canceling",
               "subscription_payment_failed",
               "subscription_ended",
-              "subscription_not_started",
-              "platform_org"
+              "subscription_not_started"
             ]
           },
           "chargeableCard": {
@@ -3169,8 +3168,7 @@
                     "subscription_canceling",
                     "subscription_payment_failed",
                     "subscription_ended",
-                    "subscription_not_started",
-                    "platform_org"
+                    "subscription_not_started"
                   ]
                 },
                 "chargeableCard": {
