@@ -18,7 +18,8 @@
  *  - When credit runs out, sending stops (floor 0, no reload) and the customer
  *    gets the "all your outbound went out" email (lib/subscription-notifications).
  *  - Amount change: any ladder value, up or down, from the next charge; not while
- *    trialing. Cancel = no further charge (at period end; immediately when
+ *    trialing. A trialing plan can instead be STARTED NOW (`startSubscriptionNow`):
+ *    charged today at the chosen amount, trial over, period restarts. Cancel = no further charge (at period end; immediately when
  *    past_due). Resume undoes a pending cancel.
  *
  * WHY BILLING OWNS IT. The default acquirer (Revolut Business) has no
@@ -113,6 +114,8 @@ export type SubscriptionRefusalCode =
   | "first_charge_declined"
   | "no_subscription"
   | "subscription_trialing"
+  | "subscription_not_trialing"
+  | "start_now_in_progress"
   | "subscription_not_active"
   | "subscription_cancel_pending"
   | "subscription_not_cancel_pending"
@@ -988,6 +991,116 @@ export async function changeSubscriptionAmount(
 }
 
 /**
+ * START NOW: the customer ends the free trial early and pays today (owner
+ * 2026-10-03), at any ladder amount, the current one included. Only on the
+ * customer's explicit action (`start_now: true` on the amount-change routes).
+ *
+ *  - The chosen amount is charged NOW on the card on file (same acquirer-neutral
+ *    charge as a renewal). Paid → the trial ends now (`trial_ends_at` = now), the
+ *    plan is active at that amount, and the first paid period runs from now to one
+ *    month later (the anniversary moves to today). The credit is the ordinary
+ *    succeeded payment, counted once by stripe-service; nothing is granted here.
+ *  - The trial credit left is NOT expired at this early boundary: paying early
+ *    must never cost the customer the trial credit they still hold. It rolls into
+ *    the first paid period and expires with it at the first renewal, like any
+ *    unspent credit.
+ *  - Refused (declined / dead card) → 409 first_charge_declined; could not be
+ *    attempted → 502 charge_unavailable. Either way the plan stays trialing at its
+ *    old amount and its trial end, and no credit is added.
+ *  - Nothing is charged at the old trial end: the period now ends a month out.
+ *  - Two concurrent clicks: the plan is CLAIMED (optimistic, on updated_at) before
+ *    the charge, so only one charge is made; the other is 409 start_now_in_progress.
+ */
+export async function startSubscriptionNow(
+  orgId: string,
+  monthlyAmountCents: number,
+  now: Date = new Date(),
+  subscriptionId?: string
+): Promise<Subscription> {
+  if (!isValidMonthlyAmount(monthlyAmountCents)) {
+    throw new Error(`[billing-service] off-ladder plan amount ${monthlyAmountCents} for org ${orgId}`);
+  }
+  const sub = await requireLive(orgId, now, subscriptionId);
+  if (sub.status !== "trialing") {
+    throw new SubscriptionRefused(
+      "subscription_not_trialing",
+      "Only a plan in its free trial can be started now."
+    );
+  }
+  if (sub.cancelAtPeriodEnd) {
+    throw new SubscriptionRefused(
+      "subscription_cancel_pending",
+      "The subscription is set to end; resume it before starting it now."
+    );
+  }
+  if (!(await confirmChargeableCard(orgId))) {
+    throw new SubscriptionRefused("card_required", "Add a card to start the plan now.");
+  }
+
+  const [claimed] = await db
+    .update(subscriptions)
+    .set({ updatedAt: now })
+    .where(
+      and(
+        eq(subscriptions.id, sub.id),
+        eq(subscriptions.status, "trialing"),
+        // timestamptz holds microseconds, a JS Date milliseconds: compare at ms.
+        rawSql`date_trunc('milliseconds', ${subscriptions.updatedAt}) = ${sub.updatedAt.toISOString()}::timestamptz`
+      )
+    )
+    .returning();
+  if (!claimed) {
+    throw new SubscriptionRefused(
+      "start_now_in_progress",
+      "This plan is already being started. Refresh in a moment."
+    );
+  }
+
+  const periodEnd = nextPeriodEnd(now, now);
+  const [charge] = await db
+    .insert(subscriptionCharges)
+    .values({
+      subscriptionId: sub.id,
+      orgId,
+      periodStart: now,
+      periodEnd,
+      amountCents: monthlyAmountCents,
+      status: "pending",
+    })
+    .returning();
+  const result = await attemptCharge(claimed, charge, now);
+  if (result === "error") {
+    throw new SubscriptionRefused(
+      "charge_unavailable",
+      "The card could not be charged right now, so the plan was not started. Try again in a moment.",
+      502
+    );
+  }
+  if (result !== "paid") {
+    throw new SubscriptionRefused(
+      "first_charge_declined",
+      "The card was not charged, so the plan is still in its free trial. Try another card."
+    );
+  }
+  const [active] = await db
+    .update(subscriptions)
+    .set({
+      status: "active",
+      monthlyAmountCents,
+      trialEndsAt: now,
+      currentPeriodStart: now,
+      currentPeriodEnd: periodEnd,
+      updatedAt: now,
+    })
+    .where(eq(subscriptions.id, sub.id))
+    .returning();
+  console.log(
+    `[billing-service] subscription: org ${orgId} started plan ${sub.id} now at ${monthlyAmountCents} cents/month (trial ended early)`
+  );
+  return active;
+}
+
+/**
  * Cancel: no further charge. Trialing / active → ends at the period end (undoable
  * until then). past_due → ends now (its pending retries ARE the future charges).
  */
@@ -1044,6 +1157,7 @@ export function nextChargeAt(sub: Subscription): Date | null {
 export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boolean | null) {
   if (!sub) return null;
   const canChange = sub.status === "active" && !sub.cancelAtPeriodEnd;
+  const canStartNow = sub.status === "trialing" && !sub.cancelAtPeriodEnd;
   const next = nextChargeAt(sub);
   return {
     id: sub.id,
@@ -1060,6 +1174,8 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
     currency: "usd",
     has_payment_method: hasPaymentMethod,
     can_change_amount: canChange,
+    /** Trialing: the customer may end the trial and pay today (PATCH with start_now: true). */
+    can_start_now: canStartNow,
     /** Kept for consumers written against the first (+$100) shape; = can_change_amount. */
     can_raise: canChange,
     next_raise_monthly_amount_cents: canChange ? sub.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS : null,
