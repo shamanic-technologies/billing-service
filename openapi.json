@@ -3374,6 +3374,8 @@
               "first_charge_declined",
               "no_subscription",
               "subscription_trialing",
+              "subscription_not_trialing",
+              "start_now_in_progress",
               "subscription_not_active",
               "subscription_cancel_pending",
               "subscription_not_cancel_pending",
@@ -3475,6 +3477,9 @@
           "can_change_amount": {
             "type": "boolean"
           },
+          "can_start_now": {
+            "type": "boolean"
+          },
           "can_raise": {
             "type": "boolean"
           },
@@ -3498,6 +3503,7 @@
           "currency",
           "has_payment_method",
           "can_change_amount",
+          "can_start_now",
           "can_raise",
           "next_raise_monthly_amount_cents"
         ]
@@ -3581,6 +3587,9 @@
             "minimum": 0,
             "exclusiveMinimum": true,
             "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+          },
+          "start_now": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -9830,8 +9839,8 @@
         }
       },
       "patch": {
-        "summary": "Change the plan (any ladder value, up or down), from the next charge",
-        "description": "Active subscriptions only. 400 off-ladder; 404 no_subscription; 409 subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged.",
+        "summary": "Change the plan (any ladder value, up or down), from the next charge; or start a trialing plan now",
+        "description": "Active subscriptions: the new amount applies from the next charge. Trialing subscriptions: send start_now: true to end the trial and charge the chosen amount today (see can_start_now). 400 off-ladder; 404 no_subscription; 409 subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged | subscription_not_trialing | card_required | first_charge_declined | start_now_in_progress; 502 charge_unavailable.",
         "parameters": [
           {
             "schema": {
@@ -9956,7 +9965,7 @@
             }
           },
           "409": {
-            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged",
+            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; with start_now: subscription_not_trialing | subscription_cancel_pending | card_required | first_charge_declined | start_now_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -9966,11 +9975,11 @@
             }
           },
           "502": {
-            "description": "The card acquirer or the balance could not be read",
+            "description": "charge_unavailable (start_now: the charge could not be attempted; nothing changed) or an upstream read failed",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
                 }
               }
             }
@@ -10490,7 +10499,7 @@
     },
     "/v1/accounts/subscriptions/{subscriptionId}": {
       "patch": {
-        "summary": "Change one plan's amount (any ladder value), from its next charge",
+        "summary": "Change one plan's amount (any ladder value), from its next charge; or start a trialing plan now (start_now: true)",
         "parameters": [
           {
             "schema": {
@@ -10624,7 +10633,7 @@
             }
           },
           "409": {
-            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged",
+            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; with start_now: subscription_not_trialing | subscription_cancel_pending | card_required | first_charge_declined | start_now_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -10634,11 +10643,11 @@
             }
           },
           "502": {
-            "description": "The card acquirer or the balance could not be read",
+            "description": "charge_unavailable (start_now: the charge could not be attempted; nothing changed) or an upstream read failed",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
                 }
               }
             }

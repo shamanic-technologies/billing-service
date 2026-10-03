@@ -3872,7 +3872,18 @@ export const StartSubscriptionRequestSchema = z
   .openapi("StartSubscriptionRequest");
 
 export const ChangeSubscriptionAmountRequestSchema = z
-  .object({ monthly_amount_cents: MonthlyAmountSchema })
+  .object({
+    monthly_amount_cents: MonthlyAmountSchema,
+    /**
+     * TRIALING plan only: end the free trial NOW and charge monthly_amount_cents today
+     * (the current amount or any other ladder value). Paid → active at that amount,
+     * period restarts today (next charge one month out), credit lands now. Refused →
+     * nothing changes (still trialing, old amount). Absent/false on a trialing plan →
+     * 409 subscription_trialing, exactly as before. Never sent implicitly: the
+     * customer confirms the charge first.
+     */
+    start_now: z.boolean().optional(),
+  })
   .openapi("ChangeSubscriptionAmountRequest");
 
 export const SubscriptionViewSchema = z
@@ -3895,6 +3906,8 @@ export const SubscriptionViewSchema = z
     has_payment_method: z.boolean().nullable(),
     /** Active, no cancel pending: the plan can be changed (any ladder value, up or down). */
     can_change_amount: z.boolean(),
+    /** Trialing, no cancel pending: the customer may end the trial and pay today (PATCH with start_now: true, any ladder amount). */
+    can_start_now: z.boolean(),
     /** Same as can_change_amount (kept for the first shape). */
     can_raise: z.boolean(),
     next_raise_monthly_amount_cents: z.number().int().nullable(),
@@ -3933,6 +3946,8 @@ export const SubscriptionRefusalSchema = z
       "first_charge_declined",
       "no_subscription",
       "subscription_trialing",
+      "subscription_not_trialing",
+      "start_now_in_progress",
       "subscription_not_active",
       "subscription_cancel_pending",
       "subscription_not_cancel_pending",
@@ -4037,10 +4052,13 @@ registry.registerPath({
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/subscription",
-  summary: "Change the plan (any ladder value, up or down), from the next charge",
+  summary: "Change the plan (any ladder value, up or down), from the next charge; or start a trialing plan now",
   description:
-    "Active subscriptions only. 400 off-ladder; 404 no_subscription; 409 subscription_trialing | " +
-    "subscription_not_active | subscription_cancel_pending | amount_unchanged.",
+    "Active subscriptions: the new amount applies from the next charge. Trialing subscriptions: send " +
+    "start_now: true to end the trial and charge the chosen amount today (see can_start_now). " +
+    "400 off-ladder; 404 no_subscription; 409 subscription_trialing | " +
+    "subscription_not_active | subscription_cancel_pending | amount_unchanged | subscription_not_trialing | " +
+    "card_required | first_charge_declined | start_now_in_progress; 502 charge_unavailable.",
   request: {
     headers: protectedHeaders,
     body: { content: { "application/json": { schema: ChangeSubscriptionAmountRequestSchema } } },
@@ -4049,8 +4067,11 @@ registry.registerPath({
     200: { description: "The subscription after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
     400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("no_subscription"),
-    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged"),
-    502: subscriptionUpstream,
+    409: subscriptionRefusal(
+      "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; " +
+        "with start_now: subscription_not_trialing | subscription_cancel_pending | card_required | first_charge_declined | start_now_in_progress"
+    ),
+    502: subscriptionRefusal("charge_unavailable (start_now: the charge could not be attempted; nothing changed) or an upstream read failed"),
   },
 });
 
@@ -4127,7 +4148,7 @@ registry.registerPath({
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/subscriptions/{subscriptionId}",
-  summary: "Change one plan's amount (any ladder value), from its next charge",
+  summary: "Change one plan's amount (any ladder value), from its next charge; or start a trialing plan now (start_now: true)",
   request: {
     headers: protectedHeaders,
     params: planIdParams,
@@ -4137,8 +4158,11 @@ registry.registerPath({
     200: { description: "The plan after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
     400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("no_subscription (no live plan with this id in this org)"),
-    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged"),
-    502: subscriptionUpstream,
+    409: subscriptionRefusal(
+      "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; " +
+        "with start_now: subscription_not_trialing | subscription_cancel_pending | card_required | first_charge_declined | start_now_in_progress"
+    ),
+    502: subscriptionRefusal("charge_unavailable (start_now: the charge could not be attempted; nothing changed) or an upstream read failed"),
   },
 });
 
