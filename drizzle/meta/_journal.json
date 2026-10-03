@@ -407,6 +407,13 @@
       "when": 1793095200000,
       "tag": "0057_platform_orgs",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1793181600000,
+      "tag": "0058_plan_per_brand_offer",
+      "breakpoints": true
     }
   ]
 }

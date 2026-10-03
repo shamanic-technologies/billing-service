@@ -236,16 +236,17 @@ export function chargeScheduleFrom(
   // SUBSCRIPTION: the plan at each renewal (or one retry rung), straight from the
   // subscription's own calendar; no burn replay applies (lib/subscription-schedule).
   if (outlook.paymentMode === "subscription") {
-    const facts = inputs.subscription;
-    events = facts
-      ? subscriptionChargeDates(facts.sub, facts.currentCharge, end).map((c) => ({
-          at: new Date(Math.max(c.at.getTime(), now.getTime())).toISOString(),
-          trigger: c.trigger,
-          expectedAmountCents: String(c.amountCents),
-          projectedBalanceBeforeCents: null,
-          projectedBalanceAfterCents: null,
-        }))
-      : [];
+    // Every plan (one per brand x offer) on its own calendar, merged by date.
+    events = inputs.subscriptions
+      .flatMap((facts) => subscriptionChargeDates(facts.sub, facts.currentCharge, end))
+      .sort((x, y) => x.at.getTime() - y.at.getTime())
+      .map((c) => ({
+        at: new Date(Math.max(c.at.getTime(), now.getTime())).toISOString(),
+        trigger: c.trigger,
+        expectedAmountCents: String(c.amountCents),
+        projectedBalanceBeforeCents: null,
+        projectedBalanceAfterCents: null,
+      }));
     return finishSchedule(resolved, horizonDays, now, end, events);
   }
 

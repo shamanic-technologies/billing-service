@@ -8,7 +8,9 @@ import {
   cancelSubscription,
   changeSubscriptionAmount,
   isValidMonthlyAmount,
+  listAllSubscriptions,
   requestSubscription,
+  startPlanForOffer,
   resumeSubscription,
   settleOrgSubscription,
   startSubscription,
@@ -17,9 +19,11 @@ import {
   SUBSCRIPTION_BASE_MONTHLY_CENTS,
 } from "../lib/subscription.js";
 import { sumSubscriptionExpiriesForOrg } from "../lib/subscription-expiries.js";
+import { attributeUnassignedPlan } from "../lib/subscription-plans.js";
 import type { Subscription } from "../db/schema.js";
 import {
   ChangeSubscriptionAmountRequestSchema,
+  StartPlanRequestSchema,
   StartSubscriptionRequestSchema,
   SubscriptionCheckoutRequestSchema,
 } from "../schemas.js";
@@ -190,6 +194,128 @@ router.post("/v1/accounts/subscription/resume", requireOrgHeaders, async (req, r
     if (err instanceof SubscriptionRefused) return refuse(res, err);
     console.error(`[billing-service] subscription resume failed for org ${orgId}:`, err);
     res.status(502).json({ error: "Failed to resume the subscription" });
+  }
+});
+
+// --- plans per brand x offer ------------------------------------------------
+
+/** Live plans first (oldest first), then ended ones (newest first). */
+function orderPlans(plans: Subscription[]): Subscription[] {
+  const live = plans.filter((p) => p.status !== "canceled");
+  const ended = plans.filter((p) => p.status === "canceled").reverse();
+  return [...live, ...ended];
+}
+
+router.get("/v1/accounts/subscriptions", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  try {
+    await findOrCreateAccount(orgId, req.headers["x-user-id"] as string);
+    await settleOrgSubscription(orgId);
+    await attributeUnassignedPlan(orgId);
+    const [plans, snapshot, mode, expired, saved] = await Promise.all([
+      listAllSubscriptions(orgId),
+      computeBalance(orgId),
+      getPaymentMode(orgId),
+      sumSubscriptionExpiriesForOrg(orgId),
+      hasSavedCard(orgId),
+    ]);
+    res.json({
+      org_id: orgId,
+      payment_mode: mode,
+      subscriptions: orderPlans(plans).map((p) => subscriptionWire(p, saved)),
+      credits_remaining_cents: snapshot.balanceCents,
+      expired_cents: expired,
+    });
+  } catch (err) {
+    console.error(`[billing-service] plan list failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to read the plans" });
+  }
+});
+
+router.post("/v1/accounts/subscriptions", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const userId = req.headers["x-user-id"] as string;
+  const parsed = StartPlanRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  if (!isValidMonthlyAmount(parsed.data.monthly_amount_cents)) {
+    res.status(400).json({ error: LADDER_MESSAGE });
+    return;
+  }
+  try {
+    await findOrCreateAccount(orgId, userId);
+    const sub = await startPlanForOffer({
+      orgId,
+      userId,
+      brandId: parsed.data.brand_id,
+      offerId: parsed.data.offer_id,
+      monthlyAmountCents: parsed.data.monthly_amount_cents,
+    });
+    res.status(201).json(await actionResponse(orgId, sub));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan start failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to start the plan" });
+  }
+});
+
+function planId(req: { params: Record<string, string> }, res: Response): string | null {
+  const id = req.params.subscriptionId;
+  if (!UUID_RE.test(id)) {
+    res.status(404).json({ error: "This organization has no such plan.", code: "no_subscription" });
+    return null;
+  }
+  return id.toLowerCase();
+}
+
+router.patch("/v1/accounts/subscriptions/:subscriptionId", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const id = planId(req, res);
+  if (!id) return;
+  const parsed = ChangeSubscriptionAmountRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  if (!isValidMonthlyAmount(parsed.data.monthly_amount_cents)) {
+    res.status(400).json({ error: LADDER_MESSAGE });
+    return;
+  }
+  try {
+    const sub = await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents, new Date(), id);
+    res.json(await actionResponse(orgId, sub));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan amount change failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to change the plan amount" });
+  }
+});
+
+router.post("/v1/accounts/subscriptions/:subscriptionId/cancel", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const id = planId(req, res);
+  if (!id) return;
+  try {
+    res.json(await actionResponse(orgId, await cancelSubscription(orgId, new Date(), id)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan cancel failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to cancel the plan" });
+  }
+});
+
+router.post("/v1/accounts/subscriptions/:subscriptionId/resume", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const id = planId(req, res);
+  if (!id) return;
+  try {
+    res.json(await actionResponse(orgId, await resumeSubscription(orgId, new Date(), id)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan resume failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to resume the plan" });
   }
 });
 
