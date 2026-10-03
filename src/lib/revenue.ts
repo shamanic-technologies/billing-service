@@ -13,10 +13,18 @@
  *   - PREPAID otherwise, still holding money → one_off (spends it, then stops)
  *   - everything else                        → none, with the reason
  *
+ * RECURRING MEANS IT EARNS TODAY (owner verdict 2026-10-03). A postpaid /
+ * auto-top-up org with a chargeable card whose proactive daily budget is 0
+ * (nothing running that recurs) brings no recurring money: it is `none` with
+ * `postpaid_idle` / `prepaid_auto_topup_idle`. A daily budget we could NOT read
+ * (null) is not idle: the org stays recurring with a null DRR, listed among the
+ * unknowns, never silently dropped.
+ *
  * "Chargeable card" = a payment method on file, in an issuing country that can
- * be charged off-session, and not called lost/stolen/closed by its issuer — the
- * same three facts the credit line (`resolvePostpaidTier`) and the payment
- * outlook read. A POSTPAID org without one is `none`: campaign-service stops
+ * be charged off-session, not called lost/stolen/closed by its issuer, and not
+ * on a refusal streak whose retries are exhausted — the facts the credit line
+ * (`resolvePostpaidTier`) and the payment outlook read. A postpaid org whose
+ * retries are exhausted reads `postpaid_charge_retries_exhausted`. A POSTPAID org without one is `none`: campaign-service stops
  * every campaign of an org the outlook reports `charge_blocked /
  * no_chargeable_card`, so it spends nothing more.
  *
@@ -78,6 +86,9 @@ export type RevenueClassReason =
   | "prepaid_no_auto_topup"
   | "prepaid_no_chargeable_card"
   | "postpaid_no_chargeable_card"
+  | "postpaid_charge_retries_exhausted"
+  | "postpaid_idle"
+  | "prepaid_auto_topup_idle"
   | "prepaid_balance_spent"
   | "subscription"
   | "subscription_trialing"
@@ -107,12 +118,21 @@ export function classify(p: {
   hasCardPm: boolean;
   autoReloadSupported: boolean;
   cardUnusable: boolean;
+  /** A live refusal streak has used every retry rung (the outlook's `retries_exhausted`). */
+  chargeRetriesExhausted: boolean;
   autoTopupEnabled: boolean;
   balanceCents: string;
+  /** The proactive daily budget; null when it could not be read. */
+  proactiveDailyBudgetCents: string | null;
   /** SUBSCRIPTION orgs: the subscription's state (null = never started). */
   subscription?: { status: string; cancelAtPeriodEnd: boolean; paused?: boolean } | null;
 }): { revenueClass: RevenueClass; reason: RevenueClassReason; chargeableCard: boolean } {
-  const chargeableCard = p.hasCardPm && p.autoReloadSupported && !p.cardUnusable;
+  const chargeableCard =
+    p.hasCardPm && p.autoReloadSupported && !p.cardUnusable && !p.chargeRetriesExhausted;
+  // "0" (or less) = nothing recurring runs. Null = unknown, never idle.
+  const idle =
+    p.proactiveDailyBudgetCents !== null &&
+    new Decimal(p.proactiveDailyBudgetCents).lessThanOrEqualTo(0);
   if (p.paymentMode === "subscription") {
     // Owner rule (2026-10-01): a subscription's revenue is the plan we collect
     // every month, spent or not. Recurring only while ACTIVE with no cancel
@@ -131,12 +151,19 @@ export function classify(p: {
     return { revenueClass: "recurring", reason: "subscription", chargeableCard };
   }
   if (p.paymentMode === "postpaid") {
-    return chargeableCard
-      ? { revenueClass: "recurring", reason: "postpaid_chargeable_card", chargeableCard }
-      : { revenueClass: "none", reason: "postpaid_no_chargeable_card", chargeableCard };
+    if (!chargeableCard) {
+      return p.chargeRetriesExhausted && p.hasCardPm
+        ? { revenueClass: "none", reason: "postpaid_charge_retries_exhausted", chargeableCard }
+        : { revenueClass: "none", reason: "postpaid_no_chargeable_card", chargeableCard };
+    }
+    return idle
+      ? { revenueClass: "none", reason: "postpaid_idle", chargeableCard }
+      : { revenueClass: "recurring", reason: "postpaid_chargeable_card", chargeableCard };
   }
   if (chargeableCard && p.autoTopupEnabled) {
-    return { revenueClass: "recurring", reason: "prepaid_auto_topup", chargeableCard };
+    return idle
+      ? { revenueClass: "none", reason: "prepaid_auto_topup_idle", chargeableCard }
+      : { revenueClass: "recurring", reason: "prepaid_auto_topup", chargeableCard };
   }
   if (new Decimal(p.balanceCents).lessThanOrEqualTo(0)) {
     return { revenueClass: "none", reason: "prepaid_balance_spent", chargeableCard };
@@ -494,8 +521,10 @@ export function composeOrgRevenue(
     hasCardPm: inputs.hasCardPm,
     autoReloadSupported: inputs.autoReloadSupported,
     cardUnusable: inputs.cardUnusable,
+    chargeRetriesExhausted: inputs.chargeRetriesExhausted,
     autoTopupEnabled: inputs.autoTopupEnabled,
     balanceCents: inputs.balanceCents,
+    proactiveDailyBudgetCents: proactive.dailyBudgetCents,
     // Several plans (one per brand x offer): the org is recurring when ANY plan
     // is paying; otherwise it reads as its primary plan, as with a single plan.
     subscription: (payingPlans[0] ?? inputs.subscription)
