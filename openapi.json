@@ -2869,6 +2869,7 @@
               "subscription",
               "subscription_trialing",
               "subscription_canceling",
+              "subscription_paused",
               "subscription_payment_failed",
               "subscription_ended",
               "subscription_not_started"
@@ -3185,6 +3186,7 @@
                     "subscription",
                     "subscription_trialing",
                     "subscription_canceling",
+                    "subscription_paused",
                     "subscription_payment_failed",
                     "subscription_ended",
                     "subscription_not_started"
@@ -3382,7 +3384,10 @@
               "amount_unchanged",
               "plan_exists_for_offer",
               "offer_not_found",
-              "charge_unavailable"
+              "charge_unavailable",
+              "subscription_paused",
+              "subscription_not_paused",
+              "subscription_ended"
             ]
           }
         },
@@ -3480,6 +3485,23 @@
           "can_start_now": {
             "type": "boolean"
           },
+          "paused": {
+            "type": "boolean"
+          },
+          "paused_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "pause_ends_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "can_pause": {
+            "type": "boolean"
+          },
+          "can_unpause": {
+            "type": "boolean"
+          },
           "can_raise": {
             "type": "boolean"
           },
@@ -3504,6 +3526,11 @@
           "has_payment_method",
           "can_change_amount",
           "can_start_now",
+          "paused",
+          "paused_at",
+          "pause_ends_at",
+          "can_pause",
+          "can_unpause",
           "can_raise",
           "next_raise_monthly_amount_cents"
         ]
@@ -3595,6 +3622,37 @@
         "required": [
           "monthly_amount_cents"
         ]
+      },
+      "PauseSubscriptionRequest": {
+        "type": "object",
+        "properties": {
+          "months": {
+            "anyOf": [
+              {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  2
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  3
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "months"
+        ],
+        "additionalProperties": false
       },
       "PlanListResponse": {
         "type": "object",
@@ -10238,6 +10296,287 @@
         }
       }
     },
+    "/v1/accounts/subscription/pause": {
+      "post": {
+        "summary": "Pause the subscription for 1, 2 or 3 months",
+        "description": "PAUSE (\"I need a break\"): the plan stops for 1, 2 or 3 months, then resumes on its own. While paused: no charge, no credit expiry, the time left in the current period (trial included) is kept and resumes at the pause end; when every live plan of the org is paused, sending stops (authorize and the affordability pre-flight refuse spend). The credit is kept. Unpause ends it earlier. A cancel during the pause applies at the (pushed) period end, as usual. 400 months not 1|2|3; 404 no_subscription; 409 subscription_ended | subscription_paused | subscription_not_active (past_due) | subscription_cancel_pending.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "months is not 1, 2 or 3",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_ended | subscription_paused | subscription_not_active | subscription_cancel_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscription/unpause": {
+      "post": {
+        "summary": "Unpause the subscription now",
+        "description": "UNPAUSE: the paused plan resumes now; its period (trial included) is pushed by the time it was paused, so next_charge_at = now + the time it had left. 404 no_subscription; 409 subscription_ended | subscription_not_paused.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_ended | subscription_not_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/accounts/subscriptions": {
       "get": {
         "summary": "List every plan of this org, each tied to one brand x offer",
@@ -10902,6 +11241,305 @@
           },
           "409": {
             "description": "subscription_not_cancel_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions/{subscriptionId}/pause": {
+      "post": {
+        "summary": "Pause one plan for 1, 2 or 3 months",
+        "description": "PAUSE (\"I need a break\"): the plan stops for 1, 2 or 3 months, then resumes on its own. While paused: no charge, no credit expiry, the time left in the current period (trial included) is kept and resumes at the pause end; when every live plan of the org is paused, sending stops (authorize and the affordability pre-flight refuse spend). The credit is kept. Unpause ends it earlier. A cancel during the pause applies at the (pushed) period end, as usual. 400 months not 1|2|3; 404 no_subscription; 409 subscription_ended | subscription_paused | subscription_not_active (past_due) | subscription_cancel_pending.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "subscriptionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "months is not 1, 2 or 3",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_ended | subscription_paused | subscription_not_active | subscription_cancel_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions/{subscriptionId}/unpause": {
+      "post": {
+        "summary": "Unpause one plan now",
+        "description": "UNPAUSE: the paused plan resumes now; its period (trial included) is pushed by the time it was paused, so next_charge_at = now + the time it had left. 404 no_subscription; 409 subscription_ended | subscription_not_paused.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "subscriptionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan after the action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_ended | subscription_not_paused",
             "content": {
               "application/json": {
                 "schema": {

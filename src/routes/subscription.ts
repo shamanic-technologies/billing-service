@@ -7,6 +7,8 @@ import { getSavedPaymentMethod } from "../lib/stripe-service-client.js";
 import {
   cancelSubscription,
   changeSubscriptionAmount,
+  pauseSubscription,
+  unpauseSubscription,
   isValidMonthlyAmount,
   listAllSubscriptions,
   requestSubscription,
@@ -24,6 +26,7 @@ import { attributeUnassignedPlan } from "../lib/subscription-plans.js";
 import type { Subscription } from "../db/schema.js";
 import {
   ChangeSubscriptionAmountRequestSchema,
+  PauseSubscriptionRequestSchema,
   StartPlanRequestSchema,
   StartSubscriptionRequestSchema,
   SubscriptionCheckoutRequestSchema,
@@ -200,6 +203,35 @@ router.post("/v1/accounts/subscription/resume", requireOrgHeaders, async (req, r
   }
 });
 
+// --- pause / unpause (the primary plan) --------------------------------------
+
+router.post("/v1/accounts/subscription/pause", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const parsed = PauseSubscriptionRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "months must be 1, 2 or 3" });
+    return;
+  }
+  try {
+    res.json(await actionResponse(orgId, await pauseSubscription(orgId, parsed.data.months)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] subscription pause failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to pause the subscription" });
+  }
+});
+
+router.post("/v1/accounts/subscription/unpause", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  try {
+    res.json(await actionResponse(orgId, await unpauseSubscription(orgId)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] subscription unpause failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to unpause the subscription" });
+  }
+});
+
 // --- plans per brand x offer ------------------------------------------------
 
 /** Live plans first (oldest first), then ended ones (newest first). */
@@ -321,6 +353,37 @@ router.post("/v1/accounts/subscriptions/:subscriptionId/resume", requireOrgHeade
     if (err instanceof SubscriptionRefused) return refuse(res, err);
     console.error(`[billing-service] plan resume failed for org ${orgId}:`, err);
     res.status(502).json({ error: "Failed to resume the plan" });
+  }
+});
+
+router.post("/v1/accounts/subscriptions/:subscriptionId/pause", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const id = planId(req, res);
+  if (!id) return;
+  const parsed = PauseSubscriptionRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: "months must be 1, 2 or 3" });
+    return;
+  }
+  try {
+    res.json(await actionResponse(orgId, await pauseSubscription(orgId, parsed.data.months, new Date(), id)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan pause failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to pause the plan" });
+  }
+});
+
+router.post("/v1/accounts/subscriptions/:subscriptionId/unpause", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  const id = planId(req, res);
+  if (!id) return;
+  try {
+    res.json(await actionResponse(orgId, await unpauseSubscription(orgId, new Date(), id)));
+  } catch (err) {
+    if (err instanceof SubscriptionRefused) return refuse(res, err);
+    console.error(`[billing-service] plan unpause failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to unpause the plan" });
   }
 });
 
