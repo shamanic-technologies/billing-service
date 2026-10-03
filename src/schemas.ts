@@ -3620,6 +3620,7 @@ const RevenueClassReasonSchema = z.enum([
   "subscription",
   "subscription_trialing",
   "subscription_canceling",
+  "subscription_paused",
   "subscription_payment_failed",
   "subscription_ended",
   "subscription_not_started",
@@ -3898,7 +3899,10 @@ export const SubscriptionViewSchema = z
     cancel_at_period_end: z.boolean(),
     current_period_start: z.string(),
     current_period_end: z.string(),
-    /** When billing next charges the card (trial end / renewal); null once ending or ended. */
+    /**
+     * When billing next charges the card (trial end / renewal); null once ending or ended.
+     * Paused: the pause end + the time the period had left when it was paused.
+     */
     next_charge_at: z.string().nullable(),
     ended_at: z.string().nullable(),
     monthly_amount_cents: z.number().int(),
@@ -3908,6 +3912,15 @@ export const SubscriptionViewSchema = z
     can_change_amount: z.boolean(),
     /** Trialing, no cancel pending: the customer may end the trial and pay today (PATCH with start_now: true, any ladder amount). */
     can_start_now: z.boolean(),
+    /** Paused by the customer: no charge, no credit expiry; sending stops once every live plan is paused. */
+    paused: z.boolean(),
+    paused_at: z.string().nullable(),
+    /** When the pause ends on its own; the plan then resumes and charges at next_charge_at. */
+    pause_ends_at: z.string().nullable(),
+    /** Trialing or active, not paused, no cancel pending: POST .../pause. */
+    can_pause: z.boolean(),
+    /** Paused: POST .../unpause. */
+    can_unpause: z.boolean(),
     /** Same as can_change_amount (kept for the first shape). */
     can_raise: z.boolean(),
     next_raise_monthly_amount_cents: z.number().int().nullable(),
@@ -3955,9 +3968,20 @@ export const SubscriptionRefusalSchema = z
       "plan_exists_for_offer",
       "offer_not_found",
       "charge_unavailable",
+      "subscription_paused",
+      "subscription_not_paused",
+      "subscription_ended",
     ]),
   })
   .openapi("SubscriptionRefusal");
+
+export const PauseSubscriptionRequestSchema = z
+  .object({
+    /** How long the break lasts: 1, 2 or 3 months. The plan resumes on its own after it. */
+    months: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+  })
+  .strict()
+  .openapi("PauseSubscriptionRequest");
 
 export const StartPlanRequestSchema = z
   .object({
@@ -4103,6 +4127,46 @@ registry.registerPath({
   },
 });
 
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/pause",
+  summary: "Pause the subscription for 1, 2 or 3 months",
+  description:
+    "PAUSE (\"I need a break\"): the plan stops for 1, 2 or 3 months, then resumes on its own. " +
+    "While paused: no charge, no credit expiry, the time left in the current period (trial included) " +
+    "is kept and resumes at the pause end; when every live plan of the org is paused, sending stops " +
+    "(authorize and the affordability pre-flight refuse spend). The credit is kept. Unpause ends it " +
+    "earlier. A cancel during the pause applies at the (pushed) period end, as usual. 400 months not " +
+    "1|2|3; 404 no_subscription; 409 subscription_ended | subscription_paused | subscription_not_active " +
+    "(past_due) | subscription_cancel_pending.",
+  request: { headers: protectedHeaders, body: { content: { "application/json": { schema: PauseSubscriptionRequestSchema } } } },
+  responses: {
+    200: { description: "The plan after the action", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    400: { description: "months is not 1, 2 or 3", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_ended | subscription_paused | subscription_not_active | subscription_cancel_pending"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscription/unpause",
+  summary: "Unpause the subscription now",
+  description:
+    "UNPAUSE: the paused plan resumes now; its period (trial included) is pushed by the time it was " +
+    "paused, so next_charge_at = now + the time it had left. 404 no_subscription; 409 subscription_ended " +
+    "| subscription_not_paused.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "The plan after the action", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_ended | subscription_not_paused"),
+    502: subscriptionUpstream,
+  },
+});
+
 // --- Plans per brand x offer (one live plan per brand x offer; lib/subscription) ---
 
 const planIdParams = z.object({ subscriptionId: z.string().uuid() });
@@ -4187,6 +4251,46 @@ registry.registerPath({
     200: { description: "The plan after the resume", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
     404: subscriptionRefusal("no_subscription"),
     409: subscriptionRefusal("subscription_not_cancel_pending"),
+    502: subscriptionUpstream,
+  },
+});
+
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscriptions/{subscriptionId}/pause",
+  summary: "Pause one plan for 1, 2 or 3 months",
+  description:
+    "PAUSE (\"I need a break\"): the plan stops for 1, 2 or 3 months, then resumes on its own. " +
+    "While paused: no charge, no credit expiry, the time left in the current period (trial included) " +
+    "is kept and resumes at the pause end; when every live plan of the org is paused, sending stops " +
+    "(authorize and the affordability pre-flight refuse spend). The credit is kept. Unpause ends it " +
+    "earlier. A cancel during the pause applies at the (pushed) period end, as usual. 400 months not " +
+    "1|2|3; 404 no_subscription; 409 subscription_ended | subscription_paused | subscription_not_active " +
+    "(past_due) | subscription_cancel_pending.",
+  request: { headers: protectedHeaders, params: planIdParams, body: { content: { "application/json": { schema: PauseSubscriptionRequestSchema } } } },
+  responses: {
+    200: { description: "The plan after the action", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    400: { description: "months is not 1, 2 or 3", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_ended | subscription_paused | subscription_not_active | subscription_cancel_pending"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscriptions/{subscriptionId}/unpause",
+  summary: "Unpause one plan now",
+  description:
+    "UNPAUSE: the paused plan resumes now; its period (trial included) is pushed by the time it was " +
+    "paused, so next_charge_at = now + the time it had left. 404 no_subscription; 409 subscription_ended " +
+    "| subscription_not_paused.",
+  request: { headers: protectedHeaders, params: planIdParams },
+  responses: {
+    200: { description: "The plan after the action", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_ended | subscription_not_paused"),
     502: subscriptionUpstream,
   },
 });

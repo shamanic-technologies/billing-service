@@ -414,6 +414,13 @@
       "when": 1793181600000,
       "tag": "0058_plan_per_brand_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793268000000,
+      "tag": "0059_subscription_pause",
+      "breakpoints": true
     }
   ]
 }

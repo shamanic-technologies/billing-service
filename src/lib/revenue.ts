@@ -82,6 +82,7 @@ export type RevenueClassReason =
   | "subscription"
   | "subscription_trialing"
   | "subscription_canceling"
+  | "subscription_paused"
   | "subscription_payment_failed"
   | "subscription_ended"
   | "subscription_not_started";
@@ -109,7 +110,7 @@ export function classify(p: {
   autoTopupEnabled: boolean;
   balanceCents: string;
   /** SUBSCRIPTION orgs: the subscription's state (null = never started). */
-  subscription?: { status: string; cancelAtPeriodEnd: boolean } | null;
+  subscription?: { status: string; cancelAtPeriodEnd: boolean; paused?: boolean } | null;
 }): { revenueClass: RevenueClass; reason: RevenueClassReason; chargeableCard: boolean } {
   const chargeableCard = p.hasCardPm && p.autoReloadSupported && !p.cardUnusable;
   if (p.paymentMode === "subscription") {
@@ -124,6 +125,8 @@ export function classify(p: {
       return { revenueClass: "none", reason: "subscription_payment_failed", chargeableCard };
     }
     if (s.cancelAtPeriodEnd) return { revenueClass: "none", reason: "subscription_canceling", chargeableCard };
+    // A paused plan collects nothing until it resumes.
+    if (s.paused) return { revenueClass: "none", reason: "subscription_paused", chargeableCard };
     if (s.status === "trialing") return { revenueClass: "none", reason: "subscription_trialing", chargeableCard };
     return { revenueClass: "recurring", reason: "subscription", chargeableCard };
   }
@@ -484,7 +487,7 @@ export function composeOrgRevenue(
 ): OrgRevenue {
   const { outlook, inputs } = resolved;
   const payingPlans = inputs.subscriptions.filter(
-    (p) => p.sub.status === "active" && !p.sub.cancelAtPeriodEnd
+    (p) => p.sub.status === "active" && !p.sub.cancelAtPeriodEnd && p.sub.pausedAt === null
   );
   const cls = classify({
     paymentMode: outlook.paymentMode,
@@ -499,13 +502,14 @@ export function composeOrgRevenue(
       ? {
           status: (payingPlans[0] ?? inputs.subscription)!.sub.status,
           cancelAtPeriodEnd: (payingPlans[0] ?? inputs.subscription)!.sub.cancelAtPeriodEnd,
+          paused: (payingPlans[0] ?? inputs.subscription)!.sub.pausedAt !== null,
         }
       : null,
   });
 
   const pace = proactive.dailyBudgetCents;
   // A subscription's day is worth its plans / 30, whatever its campaigns spend:
-  // the sum of every PAYING plan (active, no cancel pending).
+  // the sum of every PAYING plan (active, no cancel pending, not paused).
   const subscriptionPlan = inputs.subscription
     ? payingPlans.reduce((sum, p) => sum + p.sub.monthlyAmountCents, 0)
     : null;

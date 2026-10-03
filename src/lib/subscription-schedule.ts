@@ -32,7 +32,18 @@ export function nextPeriodEnd(boundary: Date, anchor: Date): Date {
 
 /** The anchor every renewal is dated from: the trial end, else the start. */
 export function renewalAnchor(sub: Subscription): Date {
-  return sub.trialEndsAt ?? sub.createdAt;
+  return sub.renewalAnchorAt ?? sub.trialEndsAt ?? sub.createdAt;
+}
+
+/**
+ * A PAUSED plan's clock is frozen: the time left in its period when it was paused
+ * resumes at the pause end. So its period would end at pause end + time left, and
+ * that is where its next charge falls. Null when the plan is not paused.
+ */
+export function pausedPeriodEnd(sub: Subscription): Date | null {
+  if (!sub.pausedAt || !sub.pauseEndsAt) return null;
+  const left = Math.max(0, sub.currentPeriodEnd.getTime() - sub.pausedAt.getTime());
+  return new Date(sub.pauseEndsAt.getTime() + left);
 }
 
 export interface SubscriptionChargeDate {
@@ -64,8 +75,11 @@ export function subscriptionChargeDates(
   }
   if (sub.cancelAtPeriodEnd) return [];
   const out: SubscriptionChargeDate[] = [];
-  const anchor = renewalAnchor(sub);
-  let at = sub.currentPeriodEnd;
+  // Paused: the first charge is where the frozen period resumes and ends, and the
+  // renewals after it are counted from there (as the unpause will set them).
+  const resumedEnd = pausedPeriodEnd(sub);
+  const anchor = resumedEnd ?? renewalAnchor(sub);
+  let at = resumedEnd ?? sub.currentPeriodEnd;
   while (at <= end && out.length < 24) {
     out.push({ at, amountCents: sub.monthlyAmountCents, trigger: "subscription_renewal" });
     at = nextPeriodEnd(at, anchor);

@@ -14,6 +14,7 @@ import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
+import { isOrgSpendingPaused } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
 
@@ -120,6 +121,19 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "platform_org", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
       res.json({
         sufficient: true,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
+      return;
+    }
+
+    // The customer PAUSED their plan ("I need a break"): sending stops until they
+    // unpause, whatever the balance. No reload, no depletion episode and no
+    // "credits used" email: a pause is a choice, not a shortage (lib/subscription).
+    if (account.paymentMode === "subscription" && (await isOrgSpendingPaused(orgId))) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "subscription_paused", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+      res.json({
+        sufficient: false,
         balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });

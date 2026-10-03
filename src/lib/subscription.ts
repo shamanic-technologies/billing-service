@@ -79,10 +79,10 @@ import {
   sumSucceededTopupsForOrg,
 } from "./stripe-service-client.js";
 import { ensureOrgStripeCustomer } from "./account.js";
-import { nextPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
+import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
 
-export { nextPeriodEnd } from "./subscription-schedule.js";
+export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
 /** $99/month: the smallest plan. */
 export const SUBSCRIPTION_BASE_MONTHLY_CENTS = 9900;
@@ -96,6 +96,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const CHARGE_TIMEOUT_MS = 30_000;
 /** Safety bound on boundaries walked in one tick (a month each; normally 0 or 1). */
 const MAX_BOUNDARIES_PER_TICK = 3;
+/** A pause lasts 1, 2 or 3 months (it can be ended earlier). */
+export const PAUSE_MONTH_CHOICES = [1, 2, 3] as const;
 
 /** A monthly amount the ladder allows: $99 + k × $100, k ≥ 0. */
 export function isValidMonthlyAmount(cents: number): boolean {
@@ -122,7 +124,10 @@ export type SubscriptionRefusalCode =
   | "amount_unchanged"
   | "plan_exists_for_offer"
   | "offer_not_found"
-  | "charge_unavailable";
+  | "charge_unavailable"
+  | "subscription_paused"
+  | "subscription_not_paused"
+  | "subscription_ended";
 
 export class SubscriptionRefused extends Error {
   readonly code: SubscriptionRefusalCode;
@@ -846,6 +851,13 @@ export async function advanceSubscription(sub: Subscription, now: Date = new Dat
   let current = sub;
   for (let i = 0; i < MAX_BOUNDARIES_PER_TICK; i += 1) {
     if (current.status === "canceled") return current;
+    if (current.pausedAt) {
+      // Paused: nothing moves (no charge, no expiry) until the pause ends. It then
+      // resumes AT its end, so the period is pushed by exactly the paused time.
+      if (!current.pauseEndsAt || now < current.pauseEndsAt) return current;
+      current = await unpauseAt(current, current.pauseEndsAt, now);
+      continue;
+    }
     if (current.status === "past_due") return retryPastDue(current, now);
     if (now < current.currentPeriodEnd) return current;
 
@@ -961,6 +973,7 @@ export async function changeSubscriptionAmount(
   subscriptionId?: string
 ): Promise<Subscription> {
   const sub = await requireLive(orgId, now, subscriptionId);
+  assertNotPaused(sub);
   if (sub.status === "trialing") {
     throw new SubscriptionRefused(
       "subscription_trialing",
@@ -1021,6 +1034,7 @@ export async function startSubscriptionNow(
     throw new Error(`[billing-service] off-ladder plan amount ${monthlyAmountCents} for org ${orgId}`);
   }
   const sub = await requireLive(orgId, now, subscriptionId);
+  assertNotPaused(sub);
   if (sub.status !== "trialing") {
     throw new SubscriptionRefused(
       "subscription_not_trialing",
@@ -1088,6 +1102,7 @@ export async function startSubscriptionNow(
       status: "active",
       monthlyAmountCents,
       trialEndsAt: now,
+      renewalAnchorAt: null,
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
       updatedAt: now,
@@ -1145,19 +1160,164 @@ export async function resumeSubscription(
   return updated;
 }
 
+// --- pause -------------------------------------------------------------------
+
+function assertNotPaused(sub: Subscription): void {
+  if (sub.pausedAt) {
+    throw new SubscriptionRefused(
+      "subscription_paused",
+      "The plan is paused; unpause it first."
+    );
+  }
+}
+
+/** `months` calendar months after `from`, clamped to short months. */
+export function addMonths(from: Date, months: number): Date {
+  let at = from;
+  for (let i = 0; i < months; i += 1) at = nextPeriodEnd(at, from);
+  return at;
+}
+
+/**
+ * The plan a pause acts on, brought up to now. An ENDED plan is refused with its
+ * own code (409 subscription_ended), distinct from an org that never had one.
+ */
+async function requirePlanForPause(
+  orgId: string,
+  now: Date,
+  subscriptionId?: string
+): Promise<Subscription> {
+  const ended = (): SubscriptionRefused =>
+    new SubscriptionRefused("subscription_ended", "This plan has ended; it cannot be paused or unpaused.");
+  let plan: Subscription | null;
+  if (subscriptionId) {
+    plan = (await listAllSubscriptions(orgId)).find((s) => s.id === subscriptionId) ?? null;
+  } else {
+    plan = (await getLiveSubscription(orgId)) ?? (await getLatestSubscription(orgId));
+  }
+  if (!plan) throw new SubscriptionRefused("no_subscription", "This organization has no subscription.", 404);
+  if (plan.status === "canceled") throw ended();
+  const advanced = await advanceSubscription(plan, now);
+  if (advanced.status === "canceled") throw ended();
+  return advanced;
+}
+
+/**
+ * PAUSE ("I need a break"): the plan's clock stops for 1, 2 or 3 months.
+ *  - No charge and no expiry while paused: the time left in the current period
+ *    (trial included) is kept and resumes when the pause ends, so the customer
+ *    loses nothing they paid for and nothing is prorated or refunded.
+ *  - Sending stops: when EVERY live plan of the org is paused, authorize and the
+ *    affordability pre-flight refuse spend (`isOrgSpendingPaused`). Credit is kept.
+ *  - It ends on its own at `pause_ends_at` (hourly sweep or any read), or earlier
+ *    via unpause. The next charge is then at resume + the time left.
+ * Refused: past_due (subscription_not_active), a pending cancel
+ * (subscription_cancel_pending), already paused (subscription_paused), ended
+ * (subscription_ended), none (no_subscription 404).
+ */
+export async function pauseSubscription(
+  orgId: string,
+  months: number,
+  now: Date = new Date(),
+  subscriptionId?: string
+): Promise<Subscription> {
+  if (!(PAUSE_MONTH_CHOICES as readonly number[]).includes(months)) {
+    throw new Error(`[billing-service] pause of ${months} months for org ${orgId}`);
+  }
+  const sub = await requirePlanForPause(orgId, now, subscriptionId);
+  assertNotPaused(sub);
+  if (sub.status === "past_due") {
+    throw new SubscriptionRefused(
+      "subscription_not_active",
+      "The last payment did not go through; the plan can be paused once it has."
+    );
+  }
+  if (sub.cancelAtPeriodEnd) {
+    throw new SubscriptionRefused(
+      "subscription_cancel_pending",
+      "The subscription is set to end; resume it before pausing it."
+    );
+  }
+  const [paused] = await db
+    .update(subscriptions)
+    .set({ pausedAt: now, pauseEndsAt: addMonths(now, months), updatedAt: now })
+    .where(and(eq(subscriptions.id, sub.id), rawSql`${subscriptions.pausedAt} IS NULL`))
+    .returning();
+  if (!paused) throw new SubscriptionRefused("subscription_paused", "The plan is already paused.");
+  console.log(
+    `[billing-service] subscription: org ${orgId} paused plan ${sub.id} for ${months} month(s)`
+  );
+  return paused;
+}
+
+/** Resume a paused plan at `at`: its period (and trial) are pushed by the paused time. */
+async function unpauseAt(sub: Subscription, at: Date, now: Date): Promise<Subscription> {
+  if (!sub.pausedAt) return sub;
+  const pausedFor = Math.max(0, at.getTime() - sub.pausedAt.getTime());
+  const periodEnd = new Date(sub.currentPeriodEnd.getTime() + pausedFor);
+  const trialing = sub.status === "trialing" && sub.trialEndsAt;
+  const [resumed] = await db
+    .update(subscriptions)
+    .set({
+      pausedAt: null,
+      pauseEndsAt: null,
+      currentPeriodEnd: periodEnd,
+      renewalAnchorAt: periodEnd,
+      ...(trialing ? { trialEndsAt: new Date(sub.trialEndsAt!.getTime() + pausedFor) } : {}),
+      updatedAt: now,
+    })
+    .where(and(eq(subscriptions.id, sub.id), isNotNull(subscriptions.pausedAt)))
+    .returning();
+  if (!resumed) {
+    const [row] = await db.select().from(subscriptions).where(eq(subscriptions.id, sub.id)).limit(1);
+    return row;
+  }
+  console.log(
+    `[billing-service] subscription: org ${sub.orgId} plan ${sub.id} unpaused (period now ends ${periodEnd.toISOString()})`
+  );
+  return resumed;
+}
+
+/** UNPAUSE: the plan resumes now; the next charge is at now + the time it had left. */
+export async function unpauseSubscription(
+  orgId: string,
+  now: Date = new Date(),
+  subscriptionId?: string
+): Promise<Subscription> {
+  const sub = await requirePlanForPause(orgId, now, subscriptionId);
+  if (!sub.pausedAt) {
+    throw new SubscriptionRefused("subscription_not_paused", "The plan is not paused.");
+  }
+  return advanceSubscription(await unpauseAt(sub, now, now), now);
+}
+
+/**
+ * Is spending paused for this org? True when it holds at least one live plan and
+ * EVERY live plan is paused (plans share one balance; a plan still running keeps
+ * sending). A pause already past its end counts as over.
+ */
+export async function isOrgSpendingPaused(orgId: string, now: Date = new Date()): Promise<boolean> {
+  const live = await listLiveSubscriptions(orgId);
+  if (live.length === 0) return false;
+  return live.every((s) => s.pausedAt !== null && (!s.pauseEndsAt || now < s.pauseEndsAt));
+}
+
 // --- wire --------------------------------------------------------------------
 
 /** When billing will next charge: trial end / period end; never once ending or ended. */
 export function nextChargeAt(sub: Subscription): Date | null {
   if (sub.status === "canceled" || sub.cancelAtPeriodEnd) return null;
-  return sub.currentPeriodEnd;
+  return pausedPeriodEnd(sub) ?? sub.currentPeriodEnd;
 }
 
 /** The wire view of a subscription, shared by every route. */
 export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boolean | null) {
   if (!sub) return null;
-  const canChange = sub.status === "active" && !sub.cancelAtPeriodEnd;
-  const canStartNow = sub.status === "trialing" && !sub.cancelAtPeriodEnd;
+  const paused = sub.pausedAt !== null;
+  const canChange = sub.status === "active" && !sub.cancelAtPeriodEnd && !paused;
+  const canStartNow = sub.status === "trialing" && !sub.cancelAtPeriodEnd && !paused;
+  const canPause =
+    (sub.status === "active" || sub.status === "trialing") && !sub.cancelAtPeriodEnd && !paused;
   const next = nextChargeAt(sub);
   return {
     id: sub.id,
@@ -1176,6 +1336,15 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
     can_change_amount: canChange,
     /** Trialing: the customer may end the trial and pay today (PATCH with start_now: true). */
     can_start_now: canStartNow,
+    /** Paused by the customer: no charge, no expiry; sending stops once every plan is paused. */
+    paused,
+    paused_at: sub.pausedAt ? sub.pausedAt.toISOString() : null,
+    /** When the pause ends on its own (the plan then resumes and charges at next_charge_at). */
+    pause_ends_at: sub.pauseEndsAt ? sub.pauseEndsAt.toISOString() : null,
+    /** Trialing or active, not paused, no cancel pending: POST .../pause. */
+    can_pause: canPause,
+    /** Paused: POST .../unpause. */
+    can_unpause: paused,
     /** Kept for consumers written against the first (+$100) shape; = can_change_amount. */
     can_raise: canChange,
     next_raise_monthly_amount_cents: canChange ? sub.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS : null,
