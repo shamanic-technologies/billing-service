@@ -43,7 +43,7 @@
 import { Decimal } from "decimal.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, brandDailyBudgets } from "../db/schema.js";
+import { billingAccounts, brandDailyBudgets, type Subscription } from "../db/schema.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { campaignCeilingRows, getBrandCeilings, type CampaignKey } from "./campaign-budgets.js";
 import {
@@ -404,6 +404,9 @@ export interface OneOffRevenue {
 }
 
 export interface RevenueSubscription {
+  /** The brand x offer the plan pays for; null on a plan not attributed yet. */
+  brandId: string | null;
+  offerId: string | null;
   status: string;
   monthlyAmountCents: number;
   cancelAtPeriodEnd: boolean;
@@ -433,13 +436,27 @@ export interface OrgRevenue {
   arrCents: string | null;
   /** Present only for a one-off org. */
   oneOff: OneOffRevenue | null;
-  /** SUBSCRIPTION orgs: the plan and its state (a trial is shown apart, not counted). */
+  /** SUBSCRIPTION orgs: the PRIMARY plan and its state (a trial is shown apart, not counted). */
   subscription: RevenueSubscription | null;
+  /** Every plan of the org (one per brand x offer); MRR = the sum of the paying ones. */
+  subscriptions: RevenueSubscription[];
   projections: ProjectedRevenue[];
   /** The org's own charge schedule (lib/charge-schedule), unchanged. */
   cash: ChargeSchedule;
   brands: RevenueBrandLine[];
   campaigns: RevenueCampaignLine[];
+}
+
+function revenueSubscription(sub: Subscription): RevenueSubscription {
+  return {
+    brandId: sub.brandId,
+    offerId: sub.offerId,
+    status: sub.status,
+    monthlyAmountCents: sub.monthlyAmountCents,
+    cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+    trialEndsAt: sub.trialEndsAt?.toISOString() ?? null,
+    currentPeriodEnd: sub.currentPeriodEnd.toISOString(),
+  };
 }
 
 function times(cents: string | null, n: number): string | null {
@@ -466,6 +483,9 @@ export function composeOrgRevenue(
   now: Date
 ): OrgRevenue {
   const { outlook, inputs } = resolved;
+  const payingPlans = inputs.subscriptions.filter(
+    (p) => p.sub.status === "active" && !p.sub.cancelAtPeriodEnd
+  );
   const cls = classify({
     paymentMode: outlook.paymentMode,
     hasCardPm: inputs.hasCardPm,
@@ -473,17 +493,22 @@ export function composeOrgRevenue(
     cardUnusable: inputs.cardUnusable,
     autoTopupEnabled: inputs.autoTopupEnabled,
     balanceCents: inputs.balanceCents,
-    subscription: inputs.subscription
+    // Several plans (one per brand x offer): the org is recurring when ANY plan
+    // is paying; otherwise it reads as its primary plan, as with a single plan.
+    subscription: (payingPlans[0] ?? inputs.subscription)
       ? {
-          status: inputs.subscription.sub.status,
-          cancelAtPeriodEnd: inputs.subscription.sub.cancelAtPeriodEnd,
+          status: (payingPlans[0] ?? inputs.subscription)!.sub.status,
+          cancelAtPeriodEnd: (payingPlans[0] ?? inputs.subscription)!.sub.cancelAtPeriodEnd,
         }
       : null,
   });
 
   const pace = proactive.dailyBudgetCents;
-  // A subscription's day is worth its plan / 30, whatever its campaigns spend.
-  const subscriptionPlan = inputs.subscription ? inputs.subscription.sub.monthlyAmountCents : null;
+  // A subscription's day is worth its plans / 30, whatever its campaigns spend:
+  // the sum of every PAYING plan (active, no cancel pending).
+  const subscriptionPlan = inputs.subscription
+    ? payingPlans.reduce((sum, p) => sum + p.sub.monthlyAmountCents, 0)
+    : null;
   const drr =
     cls.revenueClass !== "recurring"
       ? fixed(new Decimal(0))
@@ -545,15 +570,8 @@ export function composeOrgRevenue(
     mrrCents: mrr,
     arrCents: times(mrr, ARR_MONTHS),
     oneOff,
-    subscription: inputs.subscription
-      ? {
-          status: inputs.subscription.sub.status,
-          monthlyAmountCents: inputs.subscription.sub.monthlyAmountCents,
-          cancelAtPeriodEnd: inputs.subscription.sub.cancelAtPeriodEnd,
-          trialEndsAt: inputs.subscription.sub.trialEndsAt?.toISOString() ?? null,
-          currentPeriodEnd: inputs.subscription.sub.currentPeriodEnd.toISOString(),
-        }
-      : null,
+    subscription: inputs.subscription ? revenueSubscription(inputs.subscription.sub) : null,
+    subscriptions: inputs.subscriptions.map((p) => revenueSubscription(p.sub)),
     projections,
     cash: chargeScheduleFrom(resolved, cashHorizonDays, now),
     brands: proactive.brands,
@@ -588,6 +606,7 @@ export interface FleetRevenueRow {
   arrCents: string | null;
   oneOff: OneOffRevenue | null;
   subscription: RevenueSubscription | null;
+  subscriptions: RevenueSubscription[];
   projections: ProjectedRevenue[];
   cashState: ChargeSchedule["state"];
   cashBlockedReason: ChargeSchedule["blockedReason"];
@@ -685,9 +704,10 @@ export function composeFleet(
   let trialCount = 0;
   let trialPlans = new Decimal(0);
   for (const r of rows) {
-    if (r.classReason === "subscription_trialing" && r.subscription) {
+    for (const plan of r.subscriptions) {
+      if (plan.status !== "trialing" || plan.cancelAtPeriodEnd) continue;
       trialCount += 1;
-      trialPlans = trialPlans.plus(r.subscription.monthlyAmountCents);
+      trialPlans = trialPlans.plus(plan.monthlyAmountCents);
     }
     classCounts[r.revenueClass] += 1;
     if (r.drrCents === null) drrUnknown.push(r.orgId);
@@ -769,6 +789,7 @@ export function composeFleet(
       arrCents: r.arrCents,
       oneOff: r.oneOff,
       subscription: r.subscription,
+      subscriptions: r.subscriptions,
       projections: r.projections,
       cashState: r.cash.state,
       cashBlockedReason: r.cash.blockedReason,

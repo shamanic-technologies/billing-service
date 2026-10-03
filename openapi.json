@@ -2659,6 +2659,16 @@
         "type": "object",
         "nullable": true,
         "properties": {
+          "brandId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
           "status": {
             "type": "string"
           },
@@ -2677,6 +2687,8 @@
           }
         },
         "required": [
+          "brandId",
+          "offerId",
           "status",
           "monthlyAmountCents",
           "cancelAtPeriodEnd",
@@ -2902,6 +2914,12 @@
           "subscription": {
             "$ref": "#/components/schemas/RevenueSubscription"
           },
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueSubscription"
+            }
+          },
           "projections": {
             "type": "array",
             "items": {
@@ -2951,6 +2969,7 @@
           "arrCents",
           "oneOff",
           "subscription",
+          "subscriptions",
           "projections",
           "asOf",
           "hasPaymentMethod",
@@ -3211,6 +3230,12 @@
                 "subscription": {
                   "$ref": "#/components/schemas/RevenueSubscription"
                 },
+                "subscriptions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RevenueSubscription"
+                  }
+                },
                 "projections": {
                   "type": "array",
                   "items": {
@@ -3261,6 +3286,7 @@
                 "arrCents",
                 "oneOff",
                 "subscription",
+                "subscriptions",
                 "projections",
                 "cashState",
                 "cashBlockedReason",
@@ -3351,7 +3377,10 @@
               "subscription_not_active",
               "subscription_cancel_pending",
               "subscription_not_cancel_pending",
-              "amount_unchanged"
+              "amount_unchanged",
+              "plan_exists_for_offer",
+              "offer_not_found",
+              "charge_unavailable"
             ]
           }
         },
@@ -3388,6 +3417,16 @@
         "properties": {
           "id": {
             "type": "string",
+            "format": "uuid"
+          },
+          "brand_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "offer_id": {
+            "type": "string",
+            "nullable": true,
             "format": "uuid"
           },
           "status": {
@@ -3446,6 +3485,8 @@
         },
         "required": [
           "id",
+          "brand_id",
+          "offer_id",
           "status",
           "trial_end",
           "cancel_at_period_end",
@@ -3545,6 +3586,69 @@
         "required": [
           "monthly_amount_cents"
         ]
+      },
+      "PlanListResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
+            ],
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
+          },
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionView"
+            }
+          },
+          "credits_remaining_cents": {
+            "type": "string"
+          },
+          "expired_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "org_id",
+          "payment_mode",
+          "subscriptions",
+          "credits_remaining_cents",
+          "expired_cents"
+        ]
+      },
+      "StartPlanRequest": {
+        "type": "object",
+        "properties": {
+          "brand_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "monthly_amount_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+          }
+        },
+        "required": [
+          "brand_id",
+          "offer_id",
+          "monthly_amount_cents"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -10084,6 +10188,691 @@
         "responses": {
           "200": {
             "description": "The subscription after the resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_not_cancel_pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions": {
+      "get": {
+        "summary": "List every plan of this org, each tied to one brand x offer",
+        "description": "Settles first (renewals due are applied). An onboarding plan started before plans were per offer is attributed to the org's first brand x offer (oldest brand, its oldest active offer) on this read and keeps that pair. A brand x offer with a live plan (status trialing | active | past_due) can send; one without needs a plan.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanListResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Buy a plan for one brand x offer: no trial, charged now on the saved card",
+        "description": "Charges the first month at once on the card already on file; the plan then renews every month on that anniversary. Refusals (body {error, code}): 404 offer_not_found; 409 plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org; 502 charge_unavailable (the charge could not be attempted, nothing started). 400 off-ladder amount or bad body.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The plan, active and paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body or off-ladder amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "offer_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "charge_unavailable (or brand-service / acquirer unreadable: {error} only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions/{subscriptionId}": {
+      "patch": {
+        "summary": "Change one plan's amount (any ladder value), from its next charge",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "subscriptionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeSubscriptionAmountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The plan after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Amount off the ladder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription (no live plan with this id in this org)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions/{subscriptionId}/cancel": {
+      "post": {
+        "summary": "Cancel one plan: no further charge (at period end; now when past_due)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "subscriptionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan after the cancel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionActionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "no_subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The card acquirer or the balance could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/subscriptions/{subscriptionId}/resume": {
+      "post": {
+        "summary": "Undo a pending cancel on one plan",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "subscriptionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan after the resume",
             "content": {
               "application/json": {
                 "schema": {

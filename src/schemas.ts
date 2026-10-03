@@ -3632,6 +3632,9 @@ const DailyBudgetUnknownReasonSchema = z.enum([
 
 export const RevenueSubscriptionSchema = z
   .object({
+    /** The brand x offer the plan pays for; null on a plan not attributed yet. */
+    brandId: z.string().uuid().nullable(),
+    offerId: z.string().uuid().nullable(),
     status: z.string(),
     /** The plan we collect each month: a recurring subscription's MRR. */
     monthlyAmountCents: z.number().int(),
@@ -3708,7 +3711,10 @@ const revenueCore = {
   mrrCents: z.string().nullable(),
   arrCents: z.string().nullable(),
   oneOff: OneOffRevenueSchema.nullable(),
+  /** The PRIMARY plan (the oldest live one). */
   subscription: RevenueSubscriptionSchema.nullable(),
+  /** Every plan of the org (one per brand x offer); MRR = the sum of the active ones with no cancel pending. */
+  subscriptions: z.array(RevenueSubscriptionSchema),
   projections: z.array(ProjectedRevenueSchema),
 };
 
@@ -3872,6 +3878,9 @@ export const ChangeSubscriptionAmountRequestSchema = z
 export const SubscriptionViewSchema = z
   .object({
     id: z.string().uuid(),
+    /** The brand x offer this plan pays for. Null on an onboarding plan not attributed yet. */
+    brand_id: z.string().uuid().nullable(),
+    offer_id: z.string().uuid().nullable(),
     status: z.enum(["trialing", "active", "past_due", "canceled"]),
     trial_end: z.string().nullable(),
     /** true = ends at current_period_end, no further charge. */
@@ -3928,9 +3937,33 @@ export const SubscriptionRefusalSchema = z
       "subscription_cancel_pending",
       "subscription_not_cancel_pending",
       "amount_unchanged",
+      "plan_exists_for_offer",
+      "offer_not_found",
+      "charge_unavailable",
     ]),
   })
   .openapi("SubscriptionRefusal");
+
+export const StartPlanRequestSchema = z
+  .object({
+    brand_id: z.string().uuid(),
+    offer_id: z.string().uuid(),
+    monthly_amount_cents: MonthlyAmountSchema,
+  })
+  .strict()
+  .openapi("StartPlanRequest");
+
+export const PlanListResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    payment_mode: PaymentModeSchema.nullable(),
+    /** Every plan of the org, live ones first (oldest first), then ended ones (newest first). */
+    subscriptions: z.array(SubscriptionViewSchema),
+    /** Spendable credit right now, shared by every plan (= balance_cents on GET /v1/accounts). */
+    credits_remaining_cents: z.string(),
+    expired_cents: z.string(),
+  })
+  .openapi("PlanListResponse");
 
 const subscriptionRefusal = (description: string) => ({
   description,
@@ -4043,6 +4076,91 @@ registry.registerPath({
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "The subscription after the resume", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    409: subscriptionRefusal("subscription_not_cancel_pending"),
+    502: subscriptionUpstream,
+  },
+});
+
+// --- Plans per brand x offer (one live plan per brand x offer; lib/subscription) ---
+
+const planIdParams = z.object({ subscriptionId: z.string().uuid() });
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/subscriptions",
+  summary: "List every plan of this org, each tied to one brand x offer",
+  description:
+    "Settles first (renewals due are applied). An onboarding plan started before plans were per " +
+    "offer is attributed to the org's first brand x offer (oldest brand, its oldest active offer) on " +
+    "this read and keeps that pair. A brand x offer with a live plan (status trialing | active | " +
+    "past_due) can send; one without needs a plan.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Every plan", content: { "application/json": { schema: PlanListResponseSchema } } },
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscriptions",
+  summary: "Buy a plan for one brand x offer: no trial, charged now on the saved card",
+  description:
+    "Charges the first month at once on the card already on file; the plan then renews every month " +
+    "on that anniversary. Refusals (body {error, code}): 404 offer_not_found; 409 plan_exists_for_offer " +
+    "| card_required | first_charge_declined | existing_paying_org; 502 charge_unavailable (the charge " +
+    "could not be attempted, nothing started). 400 off-ladder amount or bad body.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: StartPlanRequestSchema } } },
+  },
+  responses: {
+    201: { description: "The plan, active and paid", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    400: { description: "Bad body or off-ladder amount", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: subscriptionRefusal("offer_not_found"),
+    409: subscriptionRefusal("plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org"),
+    502: subscriptionRefusal("charge_unavailable (or brand-service / acquirer unreadable: {error} only)"),
+  },
+});
+
+registry.registerPath({
+  method: "patch",
+  path: "/v1/accounts/subscriptions/{subscriptionId}",
+  summary: "Change one plan's amount (any ladder value), from its next charge",
+  request: {
+    headers: protectedHeaders,
+    params: planIdParams,
+    body: { content: { "application/json": { schema: ChangeSubscriptionAmountRequestSchema } } },
+  },
+  responses: {
+    200: { description: "The plan after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: subscriptionRefusal("no_subscription (no live plan with this id in this org)"),
+    409: subscriptionRefusal("subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscriptions/{subscriptionId}/cancel",
+  summary: "Cancel one plan: no further charge (at period end; now when past_due)",
+  request: { headers: protectedHeaders, params: planIdParams },
+  responses: {
+    200: { description: "The plan after the cancel", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
+    404: subscriptionRefusal("no_subscription"),
+    502: subscriptionUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/subscriptions/{subscriptionId}/resume",
+  summary: "Undo a pending cancel on one plan",
+  request: { headers: protectedHeaders, params: planIdParams },
+  responses: {
+    200: { description: "The plan after the resume", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
     404: subscriptionRefusal("no_subscription"),
     409: subscriptionRefusal("subscription_not_cancel_pending"),
     502: subscriptionUpstream,

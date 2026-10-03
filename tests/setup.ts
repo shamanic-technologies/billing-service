@@ -337,7 +337,11 @@ beforeAll(async () => {
   // Billing-owned subscriptions (migration 0056) and platform orgs (0057): replay
   // the migrations' own statements, all idempotent, so the suite and prod cannot
   // disagree on the shape (or on 0057's seed).
-  for (const file of ["0056_billing_owned_subscriptions.sql", "0057_platform_orgs.sql"]) {
+  for (const file of [
+    "0056_billing_owned_subscriptions.sql",
+    "0057_platform_orgs.sql",
+    "0058_plan_per_brand_offer.sql",
+  ]) {
     const { readFileSync } = await import("fs");
     const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint")) {

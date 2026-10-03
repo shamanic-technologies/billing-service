@@ -33,6 +33,16 @@
  * subscription. A charge that never reached an acquirer (an outage) consumes no
  * rung and is retried on the next tick.
  *
+ * PLANS PER BRAND x OFFER (owner decision 2026-10-03, migration 0058). An org holds
+ * one live plan per (brand, offer). The onboarding plan (checkout + start below,
+ * 3-day trial once per org) carries no brand/offer and is attributed to the org's
+ * first brand x offer on first read (lib/subscription-plans). A plan bought from
+ * the dashboard for another brand x offer (`startPlanForOffer`) has NO trial: its
+ * first month is charged at once on the card already saved. Every plan runs its
+ * own calendar, charges and retries; the credit they buy is ONE org balance.
+ * The org-level routes act on the PRIMARY plan (the oldest live one), which for
+ * an org holding a single plan is that plan, exactly as before.
+ *
  * FLOW: `requestSubscription` (checkout) records the chosen amount and hands back
  * the ordinary card-setup descriptor when no chargeable card is on file. The
  * subscription STARTS when a chargeable card is confirmed: `startSubscription`
@@ -41,7 +51,7 @@
  * keyed (one charge row per period, one expiry per boundary).
  */
 
-import { and, desc, eq, gte, isNotNull, ne, sql as rawSql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNotNull, ne, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   billingAccounts,
@@ -69,6 +79,7 @@ import {
 } from "./stripe-service-client.js";
 import { ensureOrgStripeCustomer } from "./account.js";
 import { nextPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
+import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
 
 export { nextPeriodEnd } from "./subscription-schedule.js";
 
@@ -105,12 +116,15 @@ export type SubscriptionRefusalCode =
   | "subscription_not_active"
   | "subscription_cancel_pending"
   | "subscription_not_cancel_pending"
-  | "amount_unchanged";
+  | "amount_unchanged"
+  | "plan_exists_for_offer"
+  | "offer_not_found"
+  | "charge_unavailable";
 
 export class SubscriptionRefused extends Error {
   readonly code: SubscriptionRefusalCode;
-  readonly status: 404 | 409;
-  constructor(code: SubscriptionRefusalCode, message: string, status: 404 | 409 = 409) {
+  readonly status: 404 | 409 | 502;
+  constructor(code: SubscriptionRefusalCode, message: string, status: 404 | 409 | 502 = 409) {
     super(message);
     this.name = "SubscriptionRefused";
     this.code = code;
@@ -122,12 +136,26 @@ export class SubscriptionRefused extends Error {
 
 /** The org's subscription that has not ended, or null. */
 export async function getLiveSubscription(orgId: string): Promise<Subscription | null> {
-  const [row] = await db
+  const [row] = await listLiveSubscriptions(orgId);
+  return row ?? null;
+}
+
+/** Every plan of the org that has not ended, oldest first (the first is the PRIMARY). */
+export async function listLiveSubscriptions(orgId: string): Promise<Subscription[]> {
+  return db
     .select()
     .from(subscriptions)
     .where(and(eq(subscriptions.orgId, orgId), ne(subscriptions.status, "canceled")))
-    .limit(1);
-  return row ?? null;
+    .orderBy(asc(subscriptions.createdAt), asc(subscriptions.id));
+}
+
+/** Every plan the org ever held, oldest first. */
+export async function listAllSubscriptions(orgId: string): Promise<Subscription[]> {
+  return db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.orgId, orgId))
+    .orderBy(asc(subscriptions.createdAt), asc(subscriptions.id));
 }
 
 /** The org's newest subscription of any status, or null when it never had one. */
@@ -437,6 +465,128 @@ export async function startSubscription(params: {
   return active;
 }
 
+/**
+ * Buy a plan for one brand x offer from the dashboard: NO trial, the first month
+ * is charged at once on the card already on file. Refusals, each named:
+ *   offer_not_found (404)       the org does not sell this offer under this brand;
+ *   plan_exists_for_offer (409) that brand x offer already has a live plan
+ *                               (an unattributed onboarding plan is attributed first);
+ *   existing_paying_org (409)   the org pays prepaid/postpaid and holds no plan:
+ *                               moving it to plans is done by our team;
+ *   card_required (409)         no chargeable card on file;
+ *   first_charge_declined (409) the card refused; nothing starts;
+ *   charge_unavailable (502)    the charge could not be attempted; nothing starts.
+ * On success the org is (or stays) in subscription mode.
+ */
+export async function startPlanForOffer(params: {
+  orgId: string;
+  userId: string | null;
+  brandId: string;
+  offerId: string;
+  monthlyAmountCents: number;
+  now?: Date;
+}): Promise<Subscription> {
+  const { orgId, monthlyAmountCents } = params;
+  const brandId = params.brandId.toLowerCase();
+  const offerId = params.offerId.toLowerCase();
+  const now = params.now ?? new Date();
+  if (!isValidMonthlyAmount(monthlyAmountCents)) {
+    throw new Error(`[billing-service] off-ladder plan amount ${monthlyAmountCents} for org ${orgId}`);
+  }
+  if (!(await isOrgOfferOnBrand(orgId, brandId, offerId))) {
+    throw new SubscriptionRefused(
+      "offer_not_found",
+      "This offer is not one this organization sells under this brand.",
+      404
+    );
+  }
+  await attributeUnassignedPlan(orgId);
+  const live = await listLiveSubscriptions(orgId);
+  const taken = (): SubscriptionRefused =>
+    new SubscriptionRefused("plan_exists_for_offer", "This offer already has a plan.");
+  if (live.some((s) => s.brandId === brandId && s.offerId === offerId)) throw taken();
+  if (live.length === 0) {
+    const [account] = await db
+      .select({ paymentMode: billingAccounts.paymentMode })
+      .from(billingAccounts)
+      .where(eq(billingAccounts.orgId, orgId))
+      .limit(1);
+    if (account && account.paymentMode !== "subscription") {
+      const paid = await sumSucceededTopupsForOrg(orgId);
+      if (Number(paid) > 0) {
+        throw new SubscriptionRefused(
+          "existing_paying_org",
+          `This organization already pays as ${account.paymentMode}; moving it to a plan is done by our team.`
+        );
+      }
+    }
+  }
+  if (!(await confirmChargeableCard(orgId))) {
+    throw new SubscriptionRefused("card_required", "Add a card to start the plan.");
+  }
+
+  const periodEnd = nextPeriodEnd(now, now);
+  let sub: Subscription;
+  try {
+    [sub] = await db
+      .insert(subscriptions)
+      .values({
+        orgId,
+        brandId,
+        offerId,
+        status: "past_due",
+        createdAt: now,
+        monthlyAmountCents,
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        startedByUserId: params.userId && params.userId !== PLATFORM_USER_ID ? params.userId : null,
+      })
+      .returning();
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") throw taken();
+    throw err;
+  }
+  const [charge] = await db
+    .insert(subscriptionCharges)
+    .values({
+      subscriptionId: sub.id,
+      orgId,
+      periodStart: now,
+      periodEnd,
+      amountCents: monthlyAmountCents,
+      status: "pending",
+    })
+    .returning();
+  const result = await attemptCharge(sub, charge, now);
+  if (result !== "paid") {
+    await db
+      .update(subscriptions)
+      .set({ status: "canceled", endedAt: now, canceledAt: now, updatedAt: now })
+      .where(eq(subscriptions.id, sub.id));
+    if (result === "error") {
+      throw new SubscriptionRefused(
+        "charge_unavailable",
+        "The card could not be charged right now, so the plan did not start. Try again in a moment.",
+        502
+      );
+    }
+    throw new SubscriptionRefused(
+      "first_charge_declined",
+      "The card was not charged, so the plan did not start. Try another card."
+    );
+  }
+  const [active] = await db
+    .update(subscriptions)
+    .set({ status: "active", updatedAt: now })
+    .where(eq(subscriptions.id, sub.id))
+    .returning();
+  await enterSubscriptionMode(orgId);
+  console.log(
+    `[billing-service] plan: org ${orgId} bought ${monthlyAmountCents} cents/month for brand ${brandId} x offer ${offerId}`
+  );
+  return active;
+}
+
 // --- the lifecycle ---------------------------------------------------------
 
 /**
@@ -452,7 +602,7 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
     .from(subscriptionCreditExpiries)
     .where(
       and(
-        eq(subscriptionCreditExpiries.orgId, sub.orgId),
+        eq(subscriptionCreditExpiries.subscriptionId, sub.id),
         eq(subscriptionCreditExpiries.boundaryAt, boundary)
       )
     )
@@ -476,7 +626,11 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
     .where(and(eq(localPromos.orgId, sub.orgId), gte(localPromos.createdAt, boundary)));
   const unspent =
     Number(snapshot.balanceCents) - Number(paidSince?.total ?? 0) - Number(grantedSince?.total ?? 0);
-  const amount = Math.max(0, unspent);
+  // Several plans share ONE balance: a plan never expires more than the credit IT
+  // brought for the period that is ending, so its boundary cannot eat another
+  // plan's month. A lone plan is uncapped, exactly as before plans were per offer.
+  const cap = await otherPlansLive(sub) ? await periodCreditCents(sub) : Number.POSITIVE_INFINITY;
+  const amount = Math.max(0, Math.min(unspent, cap));
 
   await db
     .insert(subscriptionCreditExpiries)
@@ -487,13 +641,39 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
       amountCents: amount.toFixed(10),
     })
     .onConflictDoNothing({
-      target: [subscriptionCreditExpiries.orgId, subscriptionCreditExpiries.boundaryAt],
+      target: [subscriptionCreditExpiries.subscriptionId, subscriptionCreditExpiries.boundaryAt],
     });
   if (amount > 0) {
     console.log(
       `[billing-service] subscription: org ${sub.orgId} — ${amount.toFixed(2)} cents of unspent credit expired at ${boundary.toISOString()}`
     );
   }
+}
+
+/** Does the org hold a live plan other than this one? */
+async function otherPlansLive(sub: Subscription): Promise<boolean> {
+  const [row] = await db
+    .select({ id: subscriptions.id })
+    .from(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.orgId, sub.orgId),
+        ne(subscriptions.status, "canceled"),
+        ne(subscriptions.id, sub.id)
+      )
+    )
+    .limit(1);
+  return !!row;
+}
+
+/** The credit this plan brought for its current period: its paid charge, or the trial grant. */
+async function periodCreditCents(sub: Subscription): Promise<number> {
+  const charge = await getCharge(sub.id, sub.currentPeriodStart);
+  if (charge?.status === "paid") return charge.amountCents;
+  if (sub.trialStartedAt && sub.trialStartedAt.getTime() === sub.currentPeriodStart.getTime()) {
+    return (await getSubscriptionTrialGrantCents(sub.orgId)) ?? 0;
+  }
+  return 0;
 }
 
 type AttemptResult = "paid" | "declined" | "permanent" | "error";
@@ -713,7 +893,15 @@ export async function settleOrgSubscription(
       }
     }
   }
-  const subscription = live ? await advanceSubscription(live, now) : await getLatestSubscription(orgId);
+  let subscription: Subscription | null = null;
+  if (live) {
+    for (const plan of await listLiveSubscriptions(orgId)) {
+      const advanced = await advanceSubscription(plan, now);
+      if (plan.id === live.id) subscription = advanced;
+    }
+  } else {
+    subscription = await getLatestSubscription(orgId);
+  }
   return { subscription, trialGrantCents: await getSubscriptionTrialGrantCents(orgId) };
 }
 
@@ -750,8 +938,10 @@ export async function runSubscriptionSweep(
 
 // --- customer actions ------------------------------------------------------
 
-async function requireLive(orgId: string, now: Date): Promise<Subscription> {
-  const live = await getLiveSubscription(orgId);
+async function requireLive(orgId: string, now: Date, subscriptionId?: string): Promise<Subscription> {
+  const live = subscriptionId
+    ? (await listLiveSubscriptions(orgId)).find((s) => s.id === subscriptionId) ?? null
+    : await getLiveSubscription(orgId);
   if (!live) throw new SubscriptionRefused("no_subscription", "This organization has no subscription.", 404);
   const advanced = await advanceSubscription(live, now);
   if (advanced.status === "canceled") {
@@ -764,9 +954,10 @@ async function requireLive(orgId: string, now: Date): Promise<Subscription> {
 export async function changeSubscriptionAmount(
   orgId: string,
   monthlyAmountCents: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  subscriptionId?: string
 ): Promise<Subscription> {
-  const sub = await requireLive(orgId, now);
+  const sub = await requireLive(orgId, now, subscriptionId);
   if (sub.status === "trialing") {
     throw new SubscriptionRefused(
       "subscription_trialing",
@@ -800,8 +991,12 @@ export async function changeSubscriptionAmount(
  * Cancel: no further charge. Trialing / active → ends at the period end (undoable
  * until then). past_due → ends now (its pending retries ARE the future charges).
  */
-export async function cancelSubscription(orgId: string, now: Date = new Date()): Promise<Subscription> {
-  const sub = await requireLive(orgId, now);
+export async function cancelSubscription(
+  orgId: string,
+  now: Date = new Date(),
+  subscriptionId?: string
+): Promise<Subscription> {
+  const sub = await requireLive(orgId, now, subscriptionId);
   if (sub.status === "past_due") {
     const [flagged] = await db
       .update(subscriptions)
@@ -820,8 +1015,12 @@ export async function cancelSubscription(orgId: string, now: Date = new Date()):
 }
 
 /** Undo a pending cancel. */
-export async function resumeSubscription(orgId: string, now: Date = new Date()): Promise<Subscription> {
-  const sub = await requireLive(orgId, now);
+export async function resumeSubscription(
+  orgId: string,
+  now: Date = new Date(),
+  subscriptionId?: string
+): Promise<Subscription> {
+  const sub = await requireLive(orgId, now, subscriptionId);
   if (!sub.cancelAtPeriodEnd) {
     throw new SubscriptionRefused("subscription_not_cancel_pending", "The subscription is not set to end.");
   }
@@ -848,6 +1047,8 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
   const next = nextChargeAt(sub);
   return {
     id: sub.id,
+    brand_id: sub.brandId,
+    offer_id: sub.offerId,
     status: sub.status,
     trial_end: sub.trialEndsAt ? sub.trialEndsAt.toISOString() : null,
     cancel_at_period_end: sub.cancelAtPeriodEnd,
