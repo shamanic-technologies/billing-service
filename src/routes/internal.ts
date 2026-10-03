@@ -56,6 +56,7 @@ import {
 } from "../lib/on-demand-charge.js";
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
+import { isOrgSpendingPaused } from "../lib/subscription.js";
 import {
   getOrgRevenue,
   getFleetRevenue,
@@ -361,10 +362,12 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
   const lastRequiredCents = stored.lastAuthorizeRequiredCents;
 
   res.json({
-    // Our own internal org is never refused (lib/platform-org).
+    // Our own internal org is never refused (lib/platform-org); an org whose
+    // every plan is paused by the customer is (lib/subscription).
     affordable:
       (await isPlatformOrg(orgId)) ||
-      !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents),
+      (!(await isOrgSpendingPaused(orgId)) &&
+        !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents)),
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
     hasHistory: true,

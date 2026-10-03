@@ -1003,6 +1003,12 @@ export const subscriptions = pgTable(
     creditsUsedNotifiedPeriodStart: timestamp("credits_used_notified_period_start", {
       withTimezone: true,
     }),
+    /** Set while the customer paused the plan (migration 0059): clock frozen, no charge. */
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    /** When the pause ends on its own. */
+    pauseEndsAt: timestamp("pause_ends_at", { withTimezone: true }),
+    /** Renewals are counted from here after an unpause; NULL = trial end, else creation. */
+    renewalAnchorAt: timestamp("renewal_anchor_at", { withTimezone: true }),
     /** The person who started it; the customer emails go to them. */
     startedByUserId: uuid("started_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
