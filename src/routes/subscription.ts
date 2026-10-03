@@ -9,7 +9,8 @@ import {
   changeSubscriptionAmount,
   pauseSubscription,
   unpauseSubscription,
-  isValidMonthlyAmount,
+  getOrgSendingStopped,
+  monthlyAmountRefusal,
   listAllSubscriptions,
   requestSubscription,
   startPlanForOffer,
@@ -39,7 +40,25 @@ import {
 const router = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const LADDER_MESSAGE = "monthly_amount_cents must be 9900 + a multiple of 10000 ($99, $199, $299, ...)";
+/** 400 {error, code} when a monthly amount is refused; true when it was. */
+function refuseAmount(res: Response, cents: number): boolean {
+  const code = monthlyAmountRefusal(cents);
+  if (!code) return false;
+  res.status(400).json({
+    error:
+      code === "amount_below_minimum"
+        ? "monthly_amount_cents must be at least 2900 ($29)"
+        : "monthly_amount_cents must be whole dollars (a multiple of 100)",
+    code,
+  });
+  return true;
+}
+
+/** Whether this org still sends, for the dashboard ("sending has stopped"). */
+async function sendingFields(orgId: string) {
+  const reason = await getOrgSendingStopped(orgId);
+  return { sending_stopped: reason !== null, sending_stopped_reason: reason };
+}
 
 function refuse(res: Response, err: SubscriptionRefused): void {
   res.status(err.status).json({ error: err.message, code: err.code });
@@ -52,13 +71,15 @@ async function hasSavedCard(orgId: string): Promise<boolean> {
 /** The subscription read: settles first (starts / renews / expires as due). */
 async function readSubscription(orgId: string) {
   const settled = await settleOrgSubscription(orgId);
-  const [snapshot, mode, expired, saved] = await Promise.all([
+  const [snapshot, mode, expired, saved, sending] = await Promise.all([
     computeBalance(orgId),
     getPaymentMode(orgId),
     sumSubscriptionExpiriesForOrg(orgId),
     hasSavedCard(orgId),
+    sendingFields(orgId),
   ]);
   return {
+    ...sending,
     org_id: orgId,
     payment_mode: mode,
     subscription: subscriptionWire(settled.subscription, saved),
@@ -69,8 +90,13 @@ async function readSubscription(orgId: string) {
 }
 
 async function actionResponse(orgId: string, sub: Subscription) {
-  const [snapshot, saved] = await Promise.all([computeBalance(orgId), hasSavedCard(orgId)]);
+  const [snapshot, saved, sending] = await Promise.all([
+    computeBalance(orgId),
+    hasSavedCard(orgId),
+    sendingFields(orgId),
+  ]);
   return {
+    ...sending,
     org_id: orgId,
     subscription: subscriptionWire(sub, saved),
     credits_remaining_cents: snapshot.balanceCents,
@@ -97,10 +123,7 @@ router.post("/v1/accounts/subscription/checkout_session", requireOrgHeaders, asy
     return;
   }
   const amount = parsed.data.monthly_amount_cents ?? SUBSCRIPTION_BASE_MONTHLY_CENTS;
-  if (!isValidMonthlyAmount(amount)) {
-    res.status(400).json({ error: LADDER_MESSAGE });
-    return;
-  }
+  if (refuseAmount(res, amount)) return;
   const uiMode = parsed.data.ui_mode ?? "embedded";
   if (uiMode === "hosted" && !parsed.data.return_url) {
     res.status(400).json({ error: "return_url is required for a hosted card form" });
@@ -143,10 +166,7 @@ router.post("/v1/accounts/subscription/start", requireOrgHeaders, async (req, re
     return;
   }
   const amount = parsed.data.monthly_amount_cents;
-  if (amount !== undefined && !isValidMonthlyAmount(amount)) {
-    res.status(400).json({ error: LADDER_MESSAGE });
-    return;
-  }
+  if (amount !== undefined && refuseAmount(res, amount)) return;
   try {
     await findOrCreateAccount(orgId, userId);
     await startSubscription({ orgId, userId, monthlyAmountCents: amount });
@@ -165,10 +185,7 @@ router.patch("/v1/accounts/subscription", requireOrgHeaders, async (req, res) =>
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  if (!isValidMonthlyAmount(parsed.data.monthly_amount_cents)) {
-    res.status(400).json({ error: LADDER_MESSAGE });
-    return;
-  }
+  if (refuseAmount(res, parsed.data.monthly_amount_cents)) return;
   try {
     const sub = parsed.data.start_now
       ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents)
@@ -247,14 +264,16 @@ router.get("/v1/accounts/subscriptions", requireOrgHeaders, async (req, res) => 
     await findOrCreateAccount(orgId, req.headers["x-user-id"] as string);
     await settleOrgSubscription(orgId);
     await attributeUnassignedPlan(orgId);
-    const [plans, snapshot, mode, expired, saved] = await Promise.all([
+    const [plans, snapshot, mode, expired, saved, sending] = await Promise.all([
       listAllSubscriptions(orgId),
       computeBalance(orgId),
       getPaymentMode(orgId),
       sumSubscriptionExpiriesForOrg(orgId),
       hasSavedCard(orgId),
+      sendingFields(orgId),
     ]);
     res.json({
+      ...sending,
       org_id: orgId,
       payment_mode: mode,
       subscriptions: orderPlans(plans).map((p) => subscriptionWire(p, saved)),
@@ -275,10 +294,7 @@ router.post("/v1/accounts/subscriptions", requireOrgHeaders, async (req, res) =>
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  if (!isValidMonthlyAmount(parsed.data.monthly_amount_cents)) {
-    res.status(400).json({ error: LADDER_MESSAGE });
-    return;
-  }
+  if (refuseAmount(res, parsed.data.monthly_amount_cents)) return;
   try {
     await findOrCreateAccount(orgId, userId);
     const sub = await startPlanForOffer({
@@ -314,10 +330,7 @@ router.patch("/v1/accounts/subscriptions/:subscriptionId", requireOrgHeaders, as
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  if (!isValidMonthlyAmount(parsed.data.monthly_amount_cents)) {
-    res.status(400).json({ error: LADDER_MESSAGE });
-    return;
-  }
+  if (refuseAmount(res, parsed.data.monthly_amount_cents)) return;
   try {
     const sub = parsed.data.start_now
       ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents, new Date(), id)
