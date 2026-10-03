@@ -3835,7 +3835,11 @@ const MonthlyAmountSchema = z
   .number()
   .int()
   .positive()
-  .openapi({ description: "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)." });
+  .openapi({
+    description:
+      "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum " +
+      "(< 2900) | amount_not_whole_dollars (not a multiple of 100).",
+  });
 
 export const SubscriptionCheckoutRequestSchema = z
   .object({
@@ -3877,7 +3881,7 @@ export const ChangeSubscriptionAmountRequestSchema = z
     monthly_amount_cents: MonthlyAmountSchema,
     /**
      * TRIALING plan only: end the free trial NOW and charge monthly_amount_cents today
-     * (the current amount or any other ladder value). Paid → active at that amount,
+     * (the current amount or any other amount from $29). Paid → active at that amount,
      * period restarts today (next charge one month out), credit lands now. Refused →
      * nothing changes (still trialing, old amount). Absent/false on a trialing plan →
      * 409 subscription_trialing, exactly as before. Never sent implicitly: the
@@ -3908,9 +3912,9 @@ export const SubscriptionViewSchema = z
     monthly_amount_cents: z.number().int(),
     currency: z.literal("usd"),
     has_payment_method: z.boolean().nullable(),
-    /** Active, no cancel pending: the plan can be changed (any ladder value, up or down). */
+    /** Active, no cancel pending: the plan can be changed (any amount from $29, up or down). */
     can_change_amount: z.boolean(),
-    /** Trialing, no cancel pending: the customer may end the trial and pay today (PATCH with start_now: true, any ladder amount). */
+    /** Trialing, no cancel pending: the customer may end the trial and pay today (PATCH with start_now: true, any amount from $29). */
     can_start_now: z.boolean(),
     /** Paused by the customer: no charge, no credit expiry; sending stops once every live plan is paused. */
     paused: z.boolean(),
@@ -3921,6 +3925,8 @@ export const SubscriptionViewSchema = z
     can_pause: z.boolean(),
     /** Paused: POST .../unpause. */
     can_unpause: z.boolean(),
+    /** This plan no longer sends: paused, cancelled (stops at once, not at period end) or ended. */
+    sending_stopped: z.boolean(),
     /** Same as can_change_amount (kept for the first shape). */
     can_raise: z.boolean(),
     next_raise_monthly_amount_cents: z.number().int().nullable(),
@@ -3929,6 +3935,14 @@ export const SubscriptionViewSchema = z
 
 export const SubscriptionReadResponseSchema = z
   .object({
+    /**
+     * The ORG no longer sends (authorize + affordability refuse spend): every live plan
+     * is paused or cancelled, or the plan has ended. A cancel stops sending AT ONCE;
+     * resume (keep the plan) or unpause restarts it.
+     */
+    sending_stopped: z.boolean(),
+    /** plan_canceled | plan_paused; null while sending. */
+    sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
     org_id: z.string().uuid(),
     payment_mode: PaymentModeSchema.nullable(),
     subscription: SubscriptionViewSchema.nullable(),
@@ -3943,6 +3957,14 @@ export const SubscriptionReadResponseSchema = z
 
 export const SubscriptionActionResponseSchema = z
   .object({
+    /**
+     * The ORG no longer sends (authorize + affordability refuse spend): every live plan
+     * is paused or cancelled, or the plan has ended. A cancel stops sending AT ONCE;
+     * resume (keep the plan) or unpause restarts it.
+     */
+    sending_stopped: z.boolean(),
+    /** plan_canceled | plan_paused; null while sending. */
+    sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
     org_id: z.string().uuid(),
     subscription: SubscriptionViewSchema,
     credits_remaining_cents: z.string(),
@@ -3971,6 +3993,8 @@ export const SubscriptionRefusalSchema = z
       "subscription_paused",
       "subscription_not_paused",
       "subscription_ended",
+      "amount_below_minimum",
+      "amount_not_whole_dollars",
     ]),
   })
   .openapi("SubscriptionRefusal");
@@ -3994,6 +4018,14 @@ export const StartPlanRequestSchema = z
 
 export const PlanListResponseSchema = z
   .object({
+    /**
+     * The ORG no longer sends (authorize + affordability refuse spend): every live plan
+     * is paused or cancelled, or the plan has ended. A cancel stops sending AT ONCE;
+     * resume (keep the plan) or unpause restarts it.
+     */
+    sending_stopped: z.boolean(),
+    /** plan_canceled | plan_paused; null while sending. */
+    sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
     org_id: z.string().uuid(),
     payment_mode: PaymentModeSchema.nullable(),
     /** Every plan of the org, live ones first (oldest first), then ended ones (newest first). */
@@ -4029,7 +4061,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Plan recorded", content: { "application/json": { schema: SubscriptionCheckoutResponseSchema } } },
-    400: { description: "Off-ladder amount or missing return_url", content: { "application/json": { schema: ErrorResponseSchema } } },
+    400: { description: "Amount refused (amount_below_minimum | amount_not_whole_dollars) or missing return_url", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: subscriptionRefusal("subscription_exists | existing_paying_org"),
     502: subscriptionUpstream,
   },
@@ -4052,7 +4084,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Started", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
-    400: { description: "Off-ladder amount", content: { "application/json": { schema: ErrorResponseSchema } } },
+    400: { description: "Amount refused (amount_below_minimum | amount_not_whole_dollars)", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: subscriptionRefusal("card_required | first_charge_declined | subscription_exists | existing_paying_org"),
     502: subscriptionUpstream,
   },
@@ -4076,11 +4108,11 @@ registry.registerPath({
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/subscription",
-  summary: "Change the plan (any ladder value, up or down), from the next charge; or start a trialing plan now",
+  summary: "Change the plan (any amount from $29, up or down), from the next charge; or start a trialing plan now",
   description:
     "Active subscriptions: the new amount applies from the next charge. Trialing subscriptions: send " +
     "start_now: true to end the trial and charge the chosen amount today (see can_start_now). " +
-    "400 off-ladder; 404 no_subscription; 409 subscription_trialing | " +
+    "400 amount_below_minimum | amount_not_whole_dollars; 404 no_subscription; 409 subscription_trialing | " +
     "subscription_not_active | subscription_cancel_pending | amount_unchanged | subscription_not_trialing | " +
     "card_required | first_charge_declined | start_now_in_progress; 502 charge_unavailable.",
   request: {
@@ -4089,7 +4121,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "The subscription after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
-    400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
+    400: { description: "Amount refused (amount_below_minimum | amount_not_whole_dollars)", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("no_subscription"),
     409: subscriptionRefusal(
       "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; " +
@@ -4104,7 +4136,9 @@ registry.registerPath({
   path: "/v1/accounts/subscription/cancel",
   summary: "Cancel: no further charge",
   description:
-    "Trialing / active: ends at current_period_end (undo with /resume until then); unspent credit " +
+    "No further charge. SENDING STOPS AT ONCE (authorize + affordability refuse spend; " +
+    "sending_stopped=true, reason plan_canceled). Trialing / active: the plan ends at " +
+    "current_period_end (undo with /resume until then, which restarts sending); unspent credit " +
     "expires then. past_due: ends now. Idempotent.",
   request: { headers: protectedHeaders },
   responses: {
@@ -4195,14 +4229,14 @@ registry.registerPath({
     "Charges the first month at once on the card already on file; the plan then renews every month " +
     "on that anniversary. Refusals (body {error, code}): 404 offer_not_found; 409 plan_exists_for_offer " +
     "| card_required | first_charge_declined | existing_paying_org; 502 charge_unavailable (the charge " +
-    "could not be attempted, nothing started). 400 off-ladder amount or bad body.",
+    "could not be attempted, nothing started). 400 amount_below_minimum | amount_not_whole_dollars, or bad body.",
   request: {
     headers: protectedHeaders,
     body: { content: { "application/json": { schema: StartPlanRequestSchema } } },
   },
   responses: {
     201: { description: "The plan, active and paid", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
-    400: { description: "Bad body or off-ladder amount", content: { "application/json": { schema: ErrorResponseSchema } } },
+    400: { description: "Bad body, or amount refused (amount_below_minimum | amount_not_whole_dollars)", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("offer_not_found"),
     409: subscriptionRefusal("plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org"),
     502: subscriptionRefusal("charge_unavailable (or brand-service / acquirer unreadable: {error} only)"),
@@ -4212,7 +4246,7 @@ registry.registerPath({
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/subscriptions/{subscriptionId}",
-  summary: "Change one plan's amount (any ladder value), from its next charge; or start a trialing plan now (start_now: true)",
+  summary: "Change one plan's amount (any amount from $29), from its next charge; or start a trialing plan now (start_now: true)",
   request: {
     headers: protectedHeaders,
     params: planIdParams,
@@ -4220,7 +4254,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "The plan after the change", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },
-    400: { description: "Amount off the ladder", content: { "application/json": { schema: ErrorResponseSchema } } },
+    400: { description: "Amount refused (amount_below_minimum | amount_not_whole_dollars)", content: { "application/json": { schema: ErrorResponseSchema } } },
     404: subscriptionRefusal("no_subscription (no live plan with this id in this org)"),
     409: subscriptionRefusal(
       "subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged; " +
@@ -4234,6 +4268,9 @@ registry.registerPath({
   method: "post",
   path: "/v1/accounts/subscriptions/{subscriptionId}/cancel",
   summary: "Cancel one plan: no further charge (at period end; now when past_due)",
+  description:
+    "This plan stops sending AT ONCE; the org stops sending once every live plan is paused or " +
+    "cancelled (sending_stopped). Resume undoes the cancel and restarts sending.",
   request: { headers: protectedHeaders, params: planIdParams },
   responses: {
     200: { description: "The plan after the cancel", content: { "application/json": { schema: SubscriptionActionResponseSchema } } },

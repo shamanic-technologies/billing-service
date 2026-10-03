@@ -25,7 +25,7 @@ import {
   advanceSubscription,
   cancelSubscription,
   getLiveSubscription,
-  isOrgSpendingPaused,
+  getOrgSendingStopped,
   pauseSubscription,
   runSubscriptionSweep,
   startSubscription,
@@ -158,12 +158,12 @@ describe("subscription: pause and unpause", () => {
     expect(ok.body.affordable).toBe(true);
 
     await pauseSubscription(orgId, 1);
-    expect(await isOrgSpendingPaused(orgId)).toBe(true);
+    expect(await getOrgSendingStopped(orgId)).toBe("plan_paused");
     const refused = await request(app).get(`/internal/campaigns/${campaignId}/affordability`).set(headers);
     expect(refused.body.affordable).toBe(false);
 
     await unpauseSubscription(orgId);
-    expect(await isOrgSpendingPaused(orgId)).toBe(false);
+    expect(await getOrgSendingStopped(orgId)).toBeNull();
     const back = await request(app).get(`/internal/campaigns/${campaignId}/affordability`).set(headers);
     expect(back.body.affordable).toBe(true);
   });
