@@ -63,7 +63,54 @@ export function effectiveBurnWindowDays(now: Date, orgCreatedAt: Date | null): n
   return Math.min(BURN_WINDOW_DAYS, Math.max(MIN_BURN_WINDOW_DAYS, ageDays));
 }
 
-const BURN_TIMEOUT_MS = 10_000;
+/**
+ * Per-request ceiling on the runs-service read, counted from the moment the
+ * request is SENT (after it clears the concurrency gate below), never from when
+ * it was queued.
+ *
+ * Measured 2026-10-03 from inside the billing container, one request at a time:
+ * the largest orgs answered in 8.9s, 5.5s and 4.3s on a cold read (the rest in
+ * 0.2s to 0.7s). The old 10s ceiling sat right on top of that, so the first
+ * fleet-wide read of the morning failed for exactly the orgs that spend most.
+ */
+export const BURN_TIMEOUT_MS = 25_000;
+
+/**
+ * How many burn reads may be in flight against runs-service at once.
+ *
+ * features-service builds the staff customer-health board (and the owner's
+ * morning Telegram) by asking for EVERY org's payment outlook in parallel. Each
+ * one became an unbounded concurrent timeseries query, runs-service slowed under
+ * the pile-up, and 54 of them hit the 10s ceiling in one morning (bursts of 31
+ * and 12 in the same minute). Queuing here keeps each query near its
+ * one-at-a-time latency instead of every query sharing the slowest one.
+ */
+export const BURN_MAX_CONCURRENCY = 4;
+
+let burnInFlight = 0;
+const burnQueue: (() => void)[] = [];
+
+/** Run `task` once fewer than BURN_MAX_CONCURRENCY burn reads are in flight. */
+async function withBurnSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (burnInFlight >= BURN_MAX_CONCURRENCY) {
+    await new Promise<void>((resolve) => burnQueue.push(resolve));
+  } else {
+    burnInFlight += 1;
+  }
+  try {
+    return await task();
+  } finally {
+    const next = burnQueue.shift();
+    // Hand the slot straight to the next waiter (count unchanged) or free it.
+    if (next) next();
+    else burnInFlight -= 1;
+  }
+}
+
+/** Test-only view of the gate, so a test can assert the bound actually holds. */
+export function __burnGateState(): { inFlight: number; queued: number } {
+  return { inFlight: burnInFlight, queued: burnQueue.length };
+}
 
 /**
  * Why a burn figure is absent. A named reason, never a bare null — a consumer
@@ -178,21 +225,31 @@ export async function fetchRealizedDailyBurn(
     startedAfter: burnWindowStart(now, windowDays),
   });
 
-  const res = await fetchWithRetry(
-    `${config.url}/v1/stats/public/costs/timeseries?${query.toString()}&${filter}`,
-    {
-      headers: { "x-api-key": config.apiKey },
-      signal: AbortSignal.timeout(BURN_TIMEOUT_MS),
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(
-      `runs-service cost timeseries failed for org ${orgId}: ${res.status} ${await res.text()}`
+  // The slot is held until the BODY is read, and the timeout clock starts only
+  // once the slot is held: a request waiting its turn is not a slow runs-service.
+  const { status, ok, text } = await withBurnSlot(async () => {
+    const res = await fetchWithRetry(
+      `${config.url}/v1/stats/public/costs/timeseries?${query.toString()}&${filter}`,
+      {
+        headers: { "x-api-key": config.apiKey },
+        signal: AbortSignal.timeout(BURN_TIMEOUT_MS),
+      }
     );
+    return { status: res.status, ok: res.ok, text: await res.text() };
+  });
+
+  if (!ok) {
+    throw new Error(`runs-service cost timeseries failed for org ${orgId}: ${status} ${text}`);
   }
 
-  const body = (await res.json()) as CostTimeseriesResponse;
+  let body: CostTimeseriesResponse;
+  try {
+    body = JSON.parse(text) as CostTimeseriesResponse;
+  } catch {
+    throw new Error(
+      `runs-service cost timeseries answered non-JSON for org ${orgId}: ${text.slice(0, 200)}`
+    );
+  }
   if (!Array.isArray(body?.buckets)) {
     throw new Error(
       `runs-service cost timeseries answered an unusable shape for org ${orgId}`
