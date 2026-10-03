@@ -13,6 +13,7 @@ import {
   startPlanForOffer,
   resumeSubscription,
   settleOrgSubscription,
+  startSubscriptionNow,
   startSubscription,
   subscriptionWire,
   SubscriptionRefused,
@@ -166,7 +167,9 @@ router.patch("/v1/accounts/subscription", requireOrgHeaders, async (req, res) =>
     return;
   }
   try {
-    const sub = await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents);
+    const sub = parsed.data.start_now
+      ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents)
+      : await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents);
     res.json(await actionResponse(orgId, sub));
   } catch (err) {
     if (err instanceof SubscriptionRefused) return refuse(res, err);
@@ -284,7 +287,9 @@ router.patch("/v1/accounts/subscriptions/:subscriptionId", requireOrgHeaders, as
     return;
   }
   try {
-    const sub = await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents, new Date(), id);
+    const sub = parsed.data.start_now
+      ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents, new Date(), id)
+      : await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents, new Date(), id);
     res.json(await actionResponse(orgId, sub));
   } catch (err) {
     if (err instanceof SubscriptionRefused) return refuse(res, err);
