@@ -48,7 +48,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, campaignReloadSweepAttempts } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
@@ -345,30 +345,44 @@ export interface PaymentOutlookInputs {
    * for every other mode, and for a subscription-mode org that never subscribed.
    */
   subscription: { sub: Subscription; currentCharge: SubscriptionCharge | null } | null;
+  /**
+   * Every plan of a SUBSCRIPTION org (one per brand x offer): the live ones oldest
+   * first, else its latest ended one. `subscription` is the first of them (the
+   * PRIMARY plan). Empty for every other mode.
+   */
+  subscriptions: { sub: Subscription; currentCharge: SubscriptionCharge | null }[];
 }
 
-/** The org's live subscription (else its latest) and that period's charge row. */
-async function readSubscriptionFacts(
-  orgId: string
-): Promise<{ sub: Subscription; currentCharge: SubscriptionCharge | null } | null> {
-  const [sub] = await db
+type PlanFacts = { sub: Subscription; currentCharge: SubscriptionCharge | null };
+
+/**
+ * The org's plans and each one's current-period charge row: every live plan
+ * (oldest first), else the latest ended one. An org with a single plan reads
+ * exactly that plan, as before plans were per brand x offer.
+ */
+async function readSubscriptionFacts(orgId: string): Promise<PlanFacts[]> {
+  const all = await db
     .select()
     .from(subscriptions)
     .where(eq(subscriptions.orgId, orgId))
-    .orderBy(desc(subscriptions.createdAt))
-    .limit(1);
-  if (!sub) return null;
-  const [currentCharge] = await db
-    .select()
-    .from(subscriptionCharges)
-    .where(
-      and(
-        eq(subscriptionCharges.subscriptionId, sub.id),
-        eq(subscriptionCharges.periodStart, sub.currentPeriodStart)
-      )
-    )
-    .limit(1);
-  return { sub, currentCharge: currentCharge ?? null };
+    .orderBy(asc(subscriptions.createdAt), asc(subscriptions.id));
+  const live = all.filter((s) => s.status !== "canceled");
+  const plans = live.length > 0 ? live : all.slice(-1);
+  return Promise.all(
+    plans.map(async (sub): Promise<PlanFacts> => {
+      const [currentCharge] = await db
+        .select()
+        .from(subscriptionCharges)
+        .where(
+          and(
+            eq(subscriptionCharges.subscriptionId, sub.id),
+            eq(subscriptionCharges.periodStart, sub.currentPeriodStart)
+          )
+        )
+        .limit(1);
+      return { sub, currentCharge: currentCharge ?? null };
+    })
+  );
 }
 
 /**
@@ -421,6 +435,7 @@ async function decideOutlook(
     isPlatformOrg(orgId),
   ]);
 
+  const plans = account.paymentMode === "subscription" ? await readSubscriptionFacts(orgId) : [];
   inputsOut.current = {
     balanceCents: snapshot.balanceCents,
     settleBalanceCents,
@@ -431,8 +446,8 @@ async function decideOutlook(
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,
     cardUnusable: streak?.cardUnusableAt != null,
-    subscription:
-      account.paymentMode === "subscription" ? await readSubscriptionFacts(orgId) : null,
+    subscription: plans[0] ?? null,
+    subscriptions: plans,
   };
 
   const paymentMode = asPaymentMode(account.paymentMode);
@@ -459,10 +474,11 @@ async function decideOutlook(
   // month-end settle, and no card rule blocks it: between charges spend stops at
   // zero (lib/subscription). Cancel pending / ended / never started → no date.
   if (paymentMode === "subscription") {
-    const facts = inputsOut.current?.subscription ?? null;
-    const [first] = facts
-      ? subscriptionChargeDates(facts.sub, facts.currentCharge, new Date(8.64e15))
-      : [];
+    // Several plans (one per brand x offer): the earliest charge of any of them.
+    const [first] = plans
+      .map((p) => subscriptionChargeDates(p.sub, p.currentCharge, new Date(8.64e15))[0])
+      .filter((d) => d !== undefined)
+      .sort((x, y) => x.at.getTime() - y.at.getTime());
     if (!first) return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
     return {
       ...base,

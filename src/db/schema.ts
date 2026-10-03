@@ -983,6 +983,13 @@ export const subscriptions = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
+    /**
+     * The brand x offer this plan pays for (migration 0058). NULL on a plan started
+     * before plans were per offer: attributed to the org's first brand x offer on
+     * first read (lib/subscription-plans). One live plan per (org, brand, offer).
+     */
+    brandId: uuid("brand_id"),
+    offerId: uuid("offer_id"),
     /** trialing | active | past_due | canceled */
     status: text("status").notNull(),
     monthlyAmountCents: integer("monthly_amount_cents").notNull(),
@@ -1041,7 +1048,7 @@ export const subscriptionCreditExpiries = pgTable(
     amountCents: numeric("amount_cents", { precision: 16, scale: 10 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [unique("subscription_credit_expiries_org_boundary").on(table.orgId, table.boundaryAt)]
+  (table) => [unique("subscription_credit_expiries_sub_boundary").on(table.subscriptionId, table.boundaryAt)]
 );
 
 // Platform orgs (migration 0057): our OWN internal organizations, exempt from every
