@@ -3387,7 +3387,9 @@
               "charge_unavailable",
               "subscription_paused",
               "subscription_not_paused",
-              "subscription_ended"
+              "subscription_ended",
+              "amount_below_minimum",
+              "amount_not_whole_dollars"
             ]
           }
         },
@@ -3403,7 +3405,7 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+            "description": "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum (< 2900) | amount_not_whole_dollars (not a multiple of 100)."
           },
           "ui_mode": {
             "type": "string",
@@ -3502,6 +3504,9 @@
           "can_unpause": {
             "type": "boolean"
           },
+          "sending_stopped": {
+            "type": "boolean"
+          },
           "can_raise": {
             "type": "boolean"
           },
@@ -3531,6 +3536,7 @@
           "pause_ends_at",
           "can_pause",
           "can_unpause",
+          "sending_stopped",
           "can_raise",
           "next_raise_monthly_amount_cents"
         ]
@@ -3538,6 +3544,17 @@
       "SubscriptionReadResponse": {
         "type": "object",
         "properties": {
+          "sending_stopped": {
+            "type": "boolean"
+          },
+          "sending_stopped_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "plan_paused",
+              "plan_canceled"
+            ]
+          },
           "org_id": {
             "type": "string",
             "format": "uuid"
@@ -3567,6 +3584,8 @@
           }
         },
         "required": [
+          "sending_stopped",
+          "sending_stopped_reason",
           "org_id",
           "payment_mode",
           "subscription",
@@ -3582,13 +3601,24 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+            "description": "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum (< 2900) | amount_not_whole_dollars (not a multiple of 100)."
           }
         }
       },
       "SubscriptionActionResponse": {
         "type": "object",
         "properties": {
+          "sending_stopped": {
+            "type": "boolean"
+          },
+          "sending_stopped_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "plan_paused",
+              "plan_canceled"
+            ]
+          },
           "org_id": {
             "type": "string",
             "format": "uuid"
@@ -3601,6 +3631,8 @@
           }
         },
         "required": [
+          "sending_stopped",
+          "sending_stopped_reason",
           "org_id",
           "subscription",
           "credits_remaining_cents"
@@ -3613,7 +3645,7 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+            "description": "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum (< 2900) | amount_not_whole_dollars (not a multiple of 100)."
           },
           "start_now": {
             "type": "boolean"
@@ -3657,6 +3689,17 @@
       "PlanListResponse": {
         "type": "object",
         "properties": {
+          "sending_stopped": {
+            "type": "boolean"
+          },
+          "sending_stopped_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "plan_paused",
+              "plan_canceled"
+            ]
+          },
           "org_id": {
             "type": "string",
             "format": "uuid"
@@ -3685,6 +3728,8 @@
           }
         },
         "required": [
+          "sending_stopped",
+          "sending_stopped_reason",
           "org_id",
           "payment_mode",
           "subscriptions",
@@ -3707,7 +3752,7 @@
             "type": "integer",
             "minimum": 0,
             "exclusiveMinimum": true,
-            "description": "Monthly plan in cents: 9900 + k x 10000 ($99, $199, $299, ...)."
+            "description": "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum (< 2900) | amount_not_whole_dollars (not a multiple of 100)."
           }
         },
         "required": [
@@ -9614,7 +9659,7 @@
             }
           },
           "400": {
-            "description": "Off-ladder amount or missing return_url",
+            "description": "Amount refused (amount_below_minimum | amount_not_whole_dollars) or missing return_url",
             "content": {
               "application/json": {
                 "schema": {
@@ -9754,7 +9799,7 @@
             }
           },
           "400": {
-            "description": "Off-ladder amount",
+            "description": "Amount refused (amount_below_minimum | amount_not_whole_dollars)",
             "content": {
               "application/json": {
                 "schema": {
@@ -9897,8 +9942,8 @@
         }
       },
       "patch": {
-        "summary": "Change the plan (any ladder value, up or down), from the next charge; or start a trialing plan now",
-        "description": "Active subscriptions: the new amount applies from the next charge. Trialing subscriptions: send start_now: true to end the trial and charge the chosen amount today (see can_start_now). 400 off-ladder; 404 no_subscription; 409 subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged | subscription_not_trialing | card_required | first_charge_declined | start_now_in_progress; 502 charge_unavailable.",
+        "summary": "Change the plan (any amount from $29, up or down), from the next charge; or start a trialing plan now",
+        "description": "Active subscriptions: the new amount applies from the next charge. Trialing subscriptions: send start_now: true to end the trial and charge the chosen amount today (see can_start_now). 400 amount_below_minimum | amount_not_whole_dollars; 404 no_subscription; 409 subscription_trialing | subscription_not_active | subscription_cancel_pending | amount_unchanged | subscription_not_trialing | card_required | first_charge_declined | start_now_in_progress; 502 charge_unavailable.",
         "parameters": [
           {
             "schema": {
@@ -10003,7 +10048,7 @@
             }
           },
           "400": {
-            "description": "Amount off the ladder",
+            "description": "Amount refused (amount_below_minimum | amount_not_whole_dollars)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10048,7 +10093,7 @@
     "/v1/accounts/subscription/cancel": {
       "post": {
         "summary": "Cancel: no further charge",
-        "description": "Trialing / active: ends at current_period_end (undo with /resume until then); unspent credit expires then. past_due: ends now. Idempotent.",
+        "description": "No further charge. SENDING STOPS AT ONCE (authorize + affordability refuse spend; sending_stopped=true, reason plan_canceled). Trialing / active: the plan ends at current_period_end (undo with /resume until then, which restarts sending); unspent credit expires then. past_due: ends now. Idempotent.",
         "parameters": [
           {
             "schema": {
@@ -10689,7 +10734,7 @@
       },
       "post": {
         "summary": "Buy a plan for one brand x offer: no trial, charged now on the saved card",
-        "description": "Charges the first month at once on the card already on file; the plan then renews every month on that anniversary. Refusals (body {error, code}): 404 offer_not_found; 409 plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org; 502 charge_unavailable (the charge could not be attempted, nothing started). 400 off-ladder amount or bad body.",
+        "description": "Charges the first month at once on the card already on file; the plan then renews every month on that anniversary. Refusals (body {error, code}): 404 offer_not_found; 409 plan_exists_for_offer | card_required | first_charge_declined | existing_paying_org; 502 charge_unavailable (the charge could not be attempted, nothing started). 400 amount_below_minimum | amount_not_whole_dollars, or bad body.",
         "parameters": [
           {
             "schema": {
@@ -10794,7 +10839,7 @@
             }
           },
           "400": {
-            "description": "Bad body or off-ladder amount",
+            "description": "Bad body, or amount refused (amount_below_minimum | amount_not_whole_dollars)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10838,7 +10883,7 @@
     },
     "/v1/accounts/subscriptions/{subscriptionId}": {
       "patch": {
-        "summary": "Change one plan's amount (any ladder value), from its next charge; or start a trialing plan now (start_now: true)",
+        "summary": "Change one plan's amount (any amount from $29), from its next charge; or start a trialing plan now (start_now: true)",
         "parameters": [
           {
             "schema": {
@@ -10952,7 +10997,7 @@
             }
           },
           "400": {
-            "description": "Amount off the ladder",
+            "description": "Amount refused (amount_below_minimum | amount_not_whole_dollars)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10997,6 +11042,7 @@
     "/v1/accounts/subscriptions/{subscriptionId}/cancel": {
       "post": {
         "summary": "Cancel one plan: no further charge (at period end; now when past_due)",
+        "description": "This plan stops sending AT ONCE; the org stops sending once every live plan is paused or cancelled (sending_stopped). Resume undoes the cancel and restarts sending.",
         "parameters": [
           {
             "schema": {

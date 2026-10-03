@@ -169,8 +169,9 @@ describe("subscription (billing-owned)", () => {
     let res = await request(app)
       .post("/v1/accounts/subscription/checkout_session")
       .set(headers)
-      .send({ monthly_amount_cents: 15000 });
+      .send({ monthly_amount_cents: 2800 });
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe("amount_below_minimum");
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("5000.0000000000");
     res = await request(app).post("/v1/accounts/subscription/checkout_session").set(headers).send({});
     expect(res.status).toBe(409);
@@ -306,8 +307,9 @@ describe("subscription (billing-owned)", () => {
     expect(res.body.subscription.monthly_amount_cents).toBe(9900);
     expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(29900);
 
-    res = await request(app).patch("/v1/accounts/subscription").set(headers).send({ monthly_amount_cents: 15000 });
+    res = await request(app).patch("/v1/accounts/subscription").set(headers).send({ monthly_amount_cents: 15050 });
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe("amount_not_whole_dollars");
     res = await request(app).patch("/v1/accounts/subscription").set(headers).send({ monthly_amount_cents: 9900 });
     expect(res.body.code).toBe("amount_unchanged");
 

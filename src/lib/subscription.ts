@@ -2,8 +2,8 @@
  * SUBSCRIPTION — the third payment mode, OWNED BY BILLING (migrations 0055, 0056).
  *
  * Owner's model (2026-10-01):
- *  - The customer picks a monthly amount ($99, $199, $299, ... = 9900 + k×10000)
- *    and saves a card. Card MANDATORY. A 3-day free trial starts at once with $99
+ *  - The customer picks a monthly amount (any whole-dollar amount from $29; $99
+ *    is the default, owner 2026-10-03) and saves a card. Card MANDATORY. A 3-day free trial starts at once with $99
  *    of credit (the `subscription_trial` grant, "topped up TO" $99 so no other
  *    gift stacks on it), at our expense if they cancel during the trial.
  *  - At trial end, then every month on the ANNIVERSARY of that date, billing
@@ -84,9 +84,11 @@ import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
-/** $99/month: the smallest plan. */
+/** $99/month: the default plan (checkout without an amount). */
 export const SUBSCRIPTION_BASE_MONTHLY_CENTS = 9900;
-/** Plans move in $100 steps: $99, $199, $299, … */
+/** $29/month: the smallest plan a customer may pick (owner 2026-10-03). */
+export const SUBSCRIPTION_MIN_MONTHLY_CENTS = 2900;
+/** The +$100 step the raise suggestion and the recap email speak of. */
 export const SUBSCRIPTION_STEP_CENTS = 10000;
 /** Free trial before the first charge. */
 export const SUBSCRIPTION_TRIAL_DAYS = 3;
@@ -99,13 +101,18 @@ const MAX_BOUNDARIES_PER_TICK = 3;
 /** A pause lasts 1, 2 or 3 months (it can be ended earlier). */
 export const PAUSE_MONTH_CHOICES = [1, 2, 3] as const;
 
-/** A monthly amount the ladder allows: $99 + k × $100, k ≥ 0. */
+/** Why a monthly amount is refused, or null when it is allowed: whole dollars, $29 or more. */
+export function monthlyAmountRefusal(
+  cents: number
+): "amount_below_minimum" | "amount_not_whole_dollars" | null {
+  if (!Number.isInteger(cents) || cents % 100 !== 0) return "amount_not_whole_dollars";
+  if (cents < SUBSCRIPTION_MIN_MONTHLY_CENTS) return "amount_below_minimum";
+  return null;
+}
+
+/** A monthly amount a plan may carry: any whole-dollar amount from $29. */
 export function isValidMonthlyAmount(cents: number): boolean {
-  return (
-    Number.isInteger(cents) &&
-    cents >= SUBSCRIPTION_BASE_MONTHLY_CENTS &&
-    (cents - SUBSCRIPTION_BASE_MONTHLY_CENTS) % SUBSCRIPTION_STEP_CENTS === 0
-  );
+  return monthlyAmountRefusal(cents) === null;
 }
 
 /** Why a subscription action was refused. Stable codes a caller branches on. */
@@ -1118,6 +1125,8 @@ export async function startSubscriptionNow(
 /**
  * Cancel: no further charge. Trialing / active → ends at the period end (undoable
  * until then). past_due → ends now (its pending retries ARE the future charges).
+ * Sending stops AT ONCE either way (owner 2026-10-03, `getOrgSendingStopped`);
+ * resume undoes the cancel and restarts sending.
  */
 export async function cancelSubscription(
   orgId: string,
@@ -1208,7 +1217,7 @@ async function requirePlanForPause(
  *    (trial included) is kept and resumes when the pause ends, so the customer
  *    loses nothing they paid for and nothing is prorated or refunded.
  *  - Sending stops: when EVERY live plan of the org is paused, authorize and the
- *    affordability pre-flight refuse spend (`isOrgSpendingPaused`). Credit is kept.
+ *    affordability pre-flight refuse spend (`getOrgSendingStopped`). Credit is kept.
  *  - It ends on its own at `pause_ends_at` (hourly sweep or any read), or earlier
  *    via unpause. The next charge is then at resume + the time left.
  * Refused: past_due (subscription_not_active), a pending cancel
@@ -1291,15 +1300,36 @@ export async function unpauseSubscription(
   return advanceSubscription(await unpauseAt(sub, now, now), now);
 }
 
+/** Why a subscription org may not spend right now (null = it may). */
+export type SendingStoppedReason = "plan_paused" | "plan_canceled";
+
 /**
- * Is spending paused for this org? True when it holds at least one live plan and
- * EVERY live plan is paused (plans share one balance; a plan still running keeps
- * sending). A pause already past its end counts as over.
+ * Has sending STOPPED for this subscription org? Owner rule (2026-10-03): a cancel
+ * stops every send AT ONCE, not at period end; a pause stops it too. True when
+ * the org pays by subscription and EVERY live plan is either paused or cancelled
+ * (cancel pending), or it holds no live plan any more after having had one. Plans
+ * share one balance, so a plan still running keeps the org sending. The credit is
+ * not touched: a cancelled plan's credit expires at its period end as before, and
+ * resuming the plan ("keep my plan") restarts sending at once.
  */
-export async function isOrgSpendingPaused(orgId: string, now: Date = new Date()): Promise<boolean> {
+export async function getOrgSendingStopped(
+  orgId: string,
+  now: Date = new Date()
+): Promise<SendingStoppedReason | null> {
+  const [account] = await db
+    .select({ paymentMode: billingAccounts.paymentMode })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+  if (account?.paymentMode !== "subscription") return null;
   const live = await listLiveSubscriptions(orgId);
-  if (live.length === 0) return false;
-  return live.every((s) => s.pausedAt !== null && (!s.pauseEndsAt || now < s.pauseEndsAt));
+  if (live.length === 0) {
+    return (await getLatestSubscription(orgId)) ? "plan_canceled" : null;
+  }
+  const paused = (s: Subscription) =>
+    s.pausedAt !== null && (!s.pauseEndsAt || now < s.pauseEndsAt);
+  if (!live.every((s) => s.cancelAtPeriodEnd || paused(s))) return null;
+  return live.some((s) => s.cancelAtPeriodEnd) ? "plan_canceled" : "plan_paused";
 }
 
 // --- wire --------------------------------------------------------------------
@@ -1345,6 +1375,12 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
     can_pause: canPause,
     /** Paused: POST .../unpause. */
     can_unpause: paused,
+    /**
+     * This plan no longer sends: paused, cancelled (cancel pending: stops at once,
+     * not at period end), or ended. Whether the ORG still sends is the read's
+     * top-level sending_stopped (another live plan may keep it sending).
+     */
+    sending_stopped: paused || sub.cancelAtPeriodEnd || sub.status === "canceled",
     /** Kept for consumers written against the first (+$100) shape; = can_change_amount. */
     can_raise: canChange,
     next_raise_monthly_amount_cents: canChange ? sub.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS : null,

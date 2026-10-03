@@ -251,7 +251,7 @@ describe("plans per brand x offer", () => {
     expect(res.body.code).toBe("offer_not_found");
     res = await buy(BRAND_A, OFFER_B1);
     expect(res.status).toBe(404);
-    res = await buy(BRAND_B, OFFER_B1, 15000);
+    res = await buy(BRAND_B, OFFER_B1, 2800);
     expect(res.status).toBe(400);
     res = await request(app).post("/v1/accounts/subscriptions").set(headers).send({ brand_id: BRAND_B });
     expect(res.status).toBe(400);
