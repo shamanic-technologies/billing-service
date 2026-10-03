@@ -6,7 +6,8 @@
  *   - the fleet MRR is the sum of the per-org rows;
  *   - every org lands in exactly one class;
  *   - a prepaid org without top-up shows a run-out date and contributes no MRR;
- *   - a reactive-only org has DRR 0;
+ *   - a reactive-only (idle) org is NOT recurring: none / postpaid_idle, DRR 0;
+ *   - a card whose retries are exhausted is not a chargeable card;
  *   - the fleet cash over 30 days equals the sum of the per-org charge schedules;
  *   - an unreadable campaign-service is a NULL figure with a reason, never 0.
  */
@@ -18,7 +19,11 @@ import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
-import { brandSalesBudgets, campaignDailyBudgets } from "../../src/db/schema.js";
+import {
+  brandSalesBudgets,
+  campaignDailyBudgets,
+  campaignReloadSweepAttempts,
+} from "../../src/db/schema.js";
 import type { RecurringCampaignStatus } from "../../src/lib/campaign-service-client.js";
 
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
@@ -205,9 +210,11 @@ describe("revenue: recurring, one-off, cash", () => {
     expect(res.body.cash.events).toEqual([]);
   });
 
-  it("reactive-only org has DRR 0; card-less postpaid is none; campaign-service down is null with a reason", async () => {
+  it("reactive-only org is idle (not recurring); card-less postpaid is none; campaign-service down is null with a reason", async () => {
     const reactive = await request(app).get(`/internal/revenue/by-org/${REACTIVE}`).set(apiKeyHeaders);
-    expect(reactive.body.revenueClass).toBe("recurring");
+    expect(reactive.body.revenueClass).toBe("none");
+    expect(reactive.body.classReason).toBe("postpaid_idle");
+    expect(reactive.body.chargeableCard).toBe(true);
     expect(reactive.body.drrCents).toBe("0.0000000000");
 
     const noCard = await request(app).get(`/internal/revenue/by-org/${NO_CARD}`).set(apiKeyHeaders);
@@ -216,7 +223,9 @@ describe("revenue: recurring, one-off, cash", () => {
     expect(noCard.body.drrCents).toBe("0.0000000000");
 
     const down = await request(app).get(`/internal/revenue/by-org/${CS_DOWN}`).set(apiKeyHeaders);
+    // Unknown is not idle: it stays recurring, its figure null and listed.
     expect(down.body.revenueClass).toBe("recurring");
+    expect(down.body.classReason).toBe("postpaid_chargeable_card");
     expect(down.body.drrCents).toBeNull();
     expect(down.body.mrrCents).toBeNull();
     expect(down.body.proactiveDailyBudgetUnknownReason).toBe("campaign_service_unavailable");
@@ -239,7 +248,7 @@ describe("revenue: recurring, one-off, cash", () => {
     expect(body.unreadableOrgs).toEqual([]);
     const counts = body.classCounts;
     expect(counts.recurring + counts.one_off + counts.none).toBe(6);
-    expect(counts).toEqual({ recurring: 4, one_off: 1, none: 1 });
+    expect(counts).toEqual({ recurring: 3, one_off: 1, none: 2 });
 
     const known = body.orgs.filter((o: { mrrCents: string | null }) => o.mrrCents !== null);
     const mrrSum = known.reduce((s: Decimal, o: { mrrCents: string }) => s.plus(o.mrrCents), new Decimal(0));
@@ -268,6 +277,40 @@ describe("revenue: recurring, one-off, cash", () => {
       .flatMap((o) => o.cashEvents)
       .reduce((s, e) => s.plus(e.expectedAmountCents ?? "0"), new Decimal(0));
     expect(bucketSum.equals(allEvents)).toBe(true);
+  });
+
+  it("a card whose retries are exhausted is not chargeable, whatever the org spends", async () => {
+    await db.insert(campaignReloadSweepAttempts).values({
+      orgId: RECURRING,
+      creditedCentsAtAttempt: PAID[RECURRING],
+      lastOutcome: "failed",
+      attemptCount: 5,
+      firstFailedAt: new Date(Date.now() - 20 * 86_400_000),
+    });
+    const res = await request(app).get(`/internal/revenue/by-org/${RECURRING}`).set(apiKeyHeaders);
+    expect(res.body.cash.state).toBe("charge_blocked");
+    expect(res.body.cash.blockedReason).toBe("retries_exhausted");
+    expect(res.body.chargeableCard).toBe(false);
+    expect(res.body.revenueClass).toBe("none");
+    expect(res.body.classReason).toBe("postpaid_charge_retries_exhausted");
+    expect(res.body.drrCents).toBe("0.0000000000");
+  });
+
+  it("an idle prepaid org with auto top-up is none / prepaid_auto_topup_idle", async () => {
+    const { classify } = await import("../../src/lib/revenue.js");
+    const base = {
+      paymentMode: "prepaid" as const,
+      hasCardPm: true,
+      autoReloadSupported: true,
+      cardUnusable: false,
+      chargeRetriesExhausted: false,
+      autoTopupEnabled: true,
+      balanceCents: "1000",
+    };
+    expect(classify({ ...base, proactiveDailyBudgetCents: "0" }).reason).toBe("prepaid_auto_topup_idle");
+    expect(classify({ ...base, proactiveDailyBudgetCents: "0" }).revenueClass).toBe("none");
+    expect(classify({ ...base, proactiveDailyBudgetCents: "500" }).revenueClass).toBe("recurring");
+    expect(classify({ ...base, proactiveDailyBudgetCents: null }).revenueClass).toBe("recurring");
   });
 
   it("a campaign-service that fails once is asked again before the figure goes unknown", async () => {

@@ -339,6 +339,8 @@ export interface PaymentOutlookInputs {
   autoTopupEnabled: boolean;
   /** The issuer called the card lost / stolen / closed on a live streak. */
   cardUnusable: boolean;
+  /** A live refusal streak has used every retry rung (`retries_exhausted`). */
+  chargeRetriesExhausted: boolean;
   /**
    * SUBSCRIPTION orgs: the live (or latest) subscription and its current charge,
    * which date every charge billing will make (lib/subscription-schedule). Null
@@ -446,6 +448,10 @@ async function decideOutlook(
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,
     cardUnusable: streak?.cardUnusableAt != null,
+    chargeRetriesExhausted:
+      streak != null &&
+      streak.firstFailedAt != null &&
+      nextRetryDueAt(streak.attemptCount, streak.firstFailedAt) === null,
     subscription: plans[0] ?? null,
     subscriptions: plans,
   };
