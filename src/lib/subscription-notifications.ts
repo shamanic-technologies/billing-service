@@ -17,6 +17,14 @@
  * Every performance figure comes ready from features-service (the owner of what
  * the dashboard shows); billing computes none. A figure it could not state drops
  * its sentence, never 0. Fail-soft: nothing here can affect money.
+ *
+ * SENT ONLY WHEN THE UPSELL MAKES THE CUSTOMER MONEY (owner 2026-10-04, Legistai
+ * mailed "Add $100 a month" at a 0.35x return): the email is promotional, so it
+ * goes out only when the period recap's expected return (`expectedRoiMultiple`,
+ * the figure its "expected return" cell shows) is strictly above 1. 1.0x, below,
+ * or unknown/unreadable = NOT SENT, never sent with the upsell stripped. A skip is
+ * logged and does NOT claim the period: a later tick in the same period whose
+ * return went above 1 still sends. The re-read is throttled per (org, period).
  */
 
 import { and, eq, isNull, ne, or } from "drizzle-orm";
@@ -33,6 +41,21 @@ import { composeCreditsUsedEmail } from "./subscription-credits-used-email.js";
 
 export const SUBSCRIPTION_CREDITS_USED_EVENT = "subscription-credits-used";
 export const DASHBOARD_URL = "https://dashboard.distribute.you";
+
+/** Minimum gap between two return reads for one (org, period) after a skip (the
+ * authorize path can call this on every refusal; the hourly sweep still re-reads). */
+export const SKIPPED_RECHECK_MS = 50 * 60 * 1000;
+const lastSkippedAt = new Map<string, number>();
+
+/** Test seam: forget every throttled skip. */
+export function __resetCreditsUsedSkips(): void {
+  lastSkippedAt.clear();
+}
+
+/** Owner rule (2026-10-04): the upsell email goes out only on a return strictly above 1x. */
+export function expectedReturnJustifiesUpsell(roiMultiple: number | null | undefined): boolean {
+  return typeof roiMultiple === "number" && Number.isFinite(roiMultiple) && roiMultiple > 1;
+}
 
 /** Has this org used all the credit it can spend right now (floor 0)? */
 async function creditsUsed(orgId: string): Promise<boolean> {
@@ -63,6 +86,22 @@ export async function notifySubscriptionCreditsUsedIfDue(
       return;
     }
 
+    const skipKey = `${orgId}:${period.getTime()}`;
+    const skippedAt = lastSkippedAt.get(skipKey);
+    if (skippedAt !== undefined && Date.now() - skippedAt < SKIPPED_RECHECK_MS) return;
+
+    const recap = await fetchSubscriptionRecap(orgId, period, new Date());
+    const roi = recap?.expectedRoiMultiple ?? null;
+    if (!expectedReturnJustifiesUpsell(roi)) {
+      lastSkippedAt.set(skipKey, Date.now());
+      console.warn(
+        `[billing-service] credits-used email skipped for org ${orgId} (period ${period.toISOString()}): ` +
+          `expected return ${roi === null ? "unknown" : `${roi}x`} is not above 1x; period left unclaimed`
+      );
+      return;
+    }
+    lastSkippedAt.delete(skipKey);
+
     const runId = await createPlatformRun("subscription-credits-used");
     if (!runId) {
       console.error(`[billing-service] credits-used email for org ${orgId}: no platform run, retried next tick`);
@@ -87,8 +126,7 @@ export async function notifySubscriptionCreditsUsedIfDue(
       return;
     }
 
-    const [recap, identity, brandName] = await Promise.all([
-      fetchSubscriptionRecap(orgId, period, new Date()),
+    const [identity, brandName] = await Promise.all([
       fetchOrgIdentity(orgId),
       sub.brandId ? fetchBrandName(orgId, sub.brandId) : Promise.resolve(null),
     ]);
