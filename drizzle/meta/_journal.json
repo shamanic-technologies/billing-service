@@ -449,6 +449,13 @@
       "when": 1793613600000,
       "tag": "0063_campaign_item_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1793700000000,
+      "tag": "0064_campaign_budget_one_store",
+      "breakpoints": true
     }
   ]
 }

@@ -14,8 +14,6 @@ import {
   brandSalesBudgets,
   brandTransfers,
   campaignDailyBudgets,
-  campaignItemBudgetChanges,
-  campaignItemBudgets,
 } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { fetchRunsBrandTransferMoved, runRunsBrandTransfer } from "./runs-client.js";
@@ -111,20 +109,6 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
         )
         .returning({ id: brandSalesBudgetChanges.id });
 
-      // Campaign item budgets (migration 0063) are the brand's pacing config too.
-      const items = await tx
-        .update(campaignItemBudgets)
-        .set({ orgId: targetOrgId, brandId: newBrandId })
-        .where(and(eq(campaignItemBudgets.orgId, sourceOrgId), eq(campaignItemBudgets.brandId, sourceBrandId)))
-        .returning({ id: campaignItemBudgets.id });
-      const itemChanges = await tx
-        .update(campaignItemBudgetChanges)
-        .set({ orgId: targetOrgId, brandId: newBrandId })
-        .where(
-          and(eq(campaignItemBudgetChanges.orgId, sourceOrgId), eq(campaignItemBudgetChanges.brandId, sourceBrandId))
-        )
-        .returning({ id: campaignItemBudgetChanges.id });
-
       const [existing] = await tx
         .select()
         .from(brandTransfers)
@@ -185,8 +169,6 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
           { tableName: "campaign_daily_budgets", count: ceilings.length },
           { tableName: "brand_sales_budgets", count: salesBudgets.length },
           { tableName: "brand_sales_budget_changes", count: salesChanges.length },
-          { tableName: "campaign_item_budgets", count: items.length },
-          { tableName: "campaign_item_budget_changes", count: itemChanges.length },
           { tableName: "brand_transfers", count: ledgerCount },
         ],
         balanceAdjustment: {
@@ -217,13 +199,11 @@ async function assertNoTargetBudgetConflict(
     SELECT
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
        OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
-       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
-       OR EXISTS (SELECT 1 FROM campaign_item_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId}))
+       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId}))
       AS source_has,
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
        OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
-       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
-       OR EXISTS (SELECT 1 FROM campaign_item_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId}))
+       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId}))
       AS target_has
   `)) as unknown as { source_has: boolean; target_has: boolean }[];
   if (row.source_has && row.target_has) {

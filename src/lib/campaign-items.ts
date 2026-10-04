@@ -39,12 +39,11 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
-  campaignItemBudgetChanges,
-  campaignItemBudgets,
+  campaignDailyBudgets,
   salesPathReactiveCharges,
   brandDailyBudgetChanges,
   subscriptionCreditExpiries,
-  type CampaignItemBudget,
+  type CeilingRow,
   type Subscription,
 } from "../db/schema.js";
 import {
@@ -55,15 +54,21 @@ import {
 } from "./sales-path-terms.js";
 import {
   campaignOnPredicateOf,
-  itemsDailyTotalCents,
+  holdsMonthlyBudget,
+  itemOf,
   itemsPlanPricing,
-  listBrandItems,
+  listBrandCeilingRows,
   listOfferItems,
+  roleOf,
+  type CampaignItem,
   type CampaignOnPredicate,
+  type ItemPeriod,
+  type ItemRoleServed,
   type ItemsPlanPricing,
 } from "./campaign-items-store.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { getBrandDailyBudget } from "./brand-budgets.js";
+import { getBrandSalesBudget, clearBrandSalesBudget } from "./brand-sales-budget.js";
+import { setCampaignDailyBudget, sumCeilings, type SetCampaignBudgetResult } from "./campaign-budgets.js";
 import { getPaymentMode } from "./payment-mode.js";
 import {
   advanceSubscription,
@@ -115,8 +120,7 @@ export class ItemBudgetRefused extends Error {
   }
 }
 
-export type ItemPeriod = "day" | "month";
-export type ItemRoleServed = "proactive" | "reactive";
+export type { ItemPeriod, ItemRoleServed } from "./campaign-items-store.js";
 
 export interface ItemInput {
   featureSlug: string;
@@ -416,13 +420,18 @@ async function chargeReactiveDelta(plan: Subscription, targetReactiveCents: numb
   return delta;
 }
 
-function asOfferItems(rows: CampaignItemBudget[]): OfferItem[] {
-  return rows.map((r) => ({
-    featureSlug: r.featureSlug,
-    legKey: r.legKey,
-    budgetCents: r.budgetCents,
-    role: r.role as ItemRoleServed,
-  }));
+/** The offer's stored budgets, each in the PERIOD being written (a day row read as 30 days in a month write). */
+function asOfferItems(items: CampaignItem[], period: ItemPeriod, terms: SalesPathTerms): OfferItem[] {
+  return items.map((i) => {
+    const budget =
+      i.period === period ? i.budgetCents : period === "month" ? i.budgetCents * DAYS_PER_MONTH : i.budgetCents / DAYS_PER_MONTH;
+    return {
+      featureSlug: i.featureSlug,
+      legKey: i.legKey,
+      budgetCents: budget,
+      role: roleOf(terms, i.featureSlug, i.legKey) ?? "proactive",
+    };
+  });
 }
 
 /**
@@ -469,15 +478,26 @@ export interface SetOfferItemsParams {
   brandId: string;
   offerId: string;
   items: ItemInput[];
-  userId: string | null;
   now?: Date;
 }
 
+export interface SetOfferItemsResult {
+  reactiveChargedCents: number;
+  /** true when the write took the brand out of its global sales budget. */
+  globalBudgetCleared: boolean;
+  /** The ceilings before the first write and after the last (the staff email composes from them). */
+  previousCeilings: CeilingRow[];
+  ceilings: CeilingRow[];
+  previousBrandDailyBudgetCents: string | null;
+  brandDailyBudgetCents: string;
+}
+
 /**
- * State (or restate) one or several campaign budgets of an offer. Refusals are
- * ItemBudgetRefused with a stable code; nothing is written on any refusal.
+ * State (or restate) one or several campaign budgets of an offer, on the ONE store
+ * per campaign (its ceiling row). Refusals are ItemBudgetRefused with a stable
+ * code; nothing is written on any refusal.
  */
-export async function setOfferItems(params: SetOfferItemsParams): Promise<{ reactiveChargedCents: number }> {
+export async function setOfferItems(params: SetOfferItemsParams): Promise<SetOfferItemsResult> {
   const brandId = params.brandId.toLowerCase();
   const offerId = params.offerId.toLowerCase();
   const { orgId } = params;
@@ -486,10 +506,11 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<{ reac
   const terms = await readTerms();
   const written = validateItemInputs(params.items, period, terms);
 
-  const existing = await listOfferItems(orgId, brandId, offerId);
   const writtenKeys = new Set(written.map((i) => itemKey(i.featureSlug, i.legKey)));
   const offer = [
-    ...asOfferItems(existing).filter((i) => !writtenKeys.has(itemKey(i.featureSlug, i.legKey))),
+    ...asOfferItems(await listOfferItems(orgId, brandId, offerId), period, terms).filter(
+      (i) => !writtenKeys.has(itemKey(i.featureSlug, i.legKey))
+    ),
     ...written,
   ];
   assertReactiveCaps(offer, period);
@@ -500,53 +521,40 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<{ reac
     ({ plan, reactiveChargedCents } = await subscriberGate(orgId, brandId, offerId, offer, terms, now));
   }
 
-  await db.transaction(async (tx) => {
-    for (const i of written) {
-      await tx
-        .insert(campaignItemBudgets)
-        .values({
-          orgId,
-          brandId,
-          offerId,
-          featureSlug: i.featureSlug,
-          legKey: i.legKey,
-          role: i.role,
-          period,
-          budgetCents: i.budgetCents,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [
-            campaignItemBudgets.orgId,
-            campaignItemBudgets.brandId,
-            campaignItemBudgets.offerId,
-            campaignItemBudgets.featureSlug,
-            campaignItemBudgets.legKey,
-          ],
-          set: { role: i.role, period, budgetCents: i.budgetCents, updatedAt: now },
-        });
-      await tx.insert(campaignItemBudgetChanges).values({
-        orgId,
-        brandId,
-        offerId,
-        featureSlug: i.featureSlug,
-        legKey: i.legKey,
-        budgetCents: i.budgetCents,
-        period,
-        changedByUserId: params.userId,
-        changedAt: now,
-      });
-    }
-  });
+  // Choosing campaigns replaces "we pick for you": the brand leaves the global pot.
+  let globalBudgetCleared = false;
+  if (await getBrandSalesBudget(orgId, brandId)) {
+    globalBudgetCleared = (await clearBrandSalesBudget(orgId, brandId)).cleared;
+  }
 
-  await afterItemsChanged(orgId, brandId, plan, terms, now);
-  return { reactiveChargedCents };
+  let first: SetCampaignBudgetResult | null = null;
+  let last: SetCampaignBudgetResult | null = null;
+  for (const i of written) {
+    const result = await setCampaignDailyBudget(
+      orgId,
+      brandId,
+      { offerId, legKey: i.legKey, featureSlug: i.featureSlug },
+      period === "month" ? (i.budgetCents / DAYS_PER_MONTH).toFixed(10) : i.budgetCents,
+      { skipChannelFloor: true, monthlyBudgetCents: period === "month" ? i.budgetCents : null }
+    );
+    first ??= result;
+    last = result;
+  }
+  if (plan && plan.status !== "canceled") await syncPlanPricingFromItems(plan, now);
+  return {
+    reactiveChargedCents,
+    globalBudgetCleared,
+    previousCeilings: first!.previousCeilings,
+    ceilings: last!.ceilings,
+    previousBrandDailyBudgetCents: first!.previousBrandDailyBudgetCents,
+    brandDailyBudgetCents: last!.brandDailyBudgetCents,
+  };
 }
 
 /**
- * Remove one campaign's budget (back to "not set"). Idempotent: false when nothing
- * was stored. Refused when it would leave a follow-up budget above its cap.
+ * Remove one campaign's budget (back to "not set": its ceiling row is deleted).
+ * Idempotent: false when nothing was stored. Refused when it would leave a
+ * follow-up budget above its cap.
  */
 export async function removeOfferItem(params: {
   orgId: string;
@@ -554,43 +562,50 @@ export async function removeOfferItem(params: {
   offerId: string;
   featureSlug: string;
   legKey: string;
-  userId: string | null;
   now?: Date;
 }): Promise<boolean> {
   const brandId = params.brandId.toLowerCase();
   const offerId = params.offerId.toLowerCase();
   const { orgId, featureSlug, legKey } = params;
   const now = params.now ?? new Date();
-  const existing = await listOfferItems(orgId, brandId, offerId);
-  const target = existing.find((r) => r.featureSlug === featureSlug && r.legKey === legKey);
+  const items = await listOfferItems(orgId, brandId, offerId);
+  const target = items.find((i) => i.featureSlug === featureSlug && i.legKey === legKey);
   if (!target) return false;
-  const period = target.period as ItemPeriod;
+  const terms = await readTerms();
   assertReactiveCaps(
-    asOfferItems(existing).filter((i) => !(i.featureSlug === featureSlug && i.legKey === legKey)),
-    period
+    asOfferItems(items, target.period, terms).filter((i) => !(i.featureSlug === featureSlug && i.legKey === legKey)),
+    target.period
   );
   await db.transaction(async (tx) => {
-    await tx.delete(campaignItemBudgets).where(eq(campaignItemBudgets.id, target.id));
-    await tx.insert(campaignItemBudgetChanges).values({
-      orgId,
-      brandId,
-      offerId,
-      featureSlug,
-      legKey,
-      budgetCents: null,
-      period,
-      changedByUserId: params.userId,
-      changedAt: now,
-    });
+    await tx
+      .delete(campaignDailyBudgets)
+      .where(
+        and(
+          eq(campaignDailyBudgets.orgId, orgId),
+          eq(campaignDailyBudgets.brandId, brandId),
+          eq(campaignDailyBudgets.offerId, offerId),
+          eq(campaignDailyBudgets.featureSlug, featureSlug),
+          eq(campaignDailyBudgets.legKey, legKey)
+        )
+      );
+    const left = await tx
+      .select()
+      .from(campaignDailyBudgets)
+      .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)));
+    // The brand total timeline (the by-day replay) follows, unless the brand is on a global pot.
+    if (!(await getBrandSalesBudget(orgId, brandId))) {
+      await tx.insert(brandDailyBudgetChanges).values({
+        orgId,
+        brandId,
+        dailyBudgetCents: sumCeilings(left),
+        changedAt: now,
+      });
+    }
   });
-  let terms: SalesPathTerms | null = null;
-  try {
-    terms = await getSalesPathTerms();
-  } catch (err) {
-    console.error("[billing-service] sales-path terms unreadable after a budget removal:", err);
+  if (target.period === "month") {
+    const plan = await planFor(orgId, brandId, offerId);
+    if (plan && plan.status !== "canceled") await syncPlanPricingFromItems(plan, now);
   }
-  const plan = (await periodOf(orgId)) === "month" ? await planFor(orgId, brandId, offerId) : null;
-  await afterItemsChanged(orgId, brandId, plan, terms, now);
   return true;
 }
 
@@ -613,8 +628,8 @@ export async function onCampaignStatusChanged(params: {
   const now = params.now ?? new Date();
   try {
     if (!offerId || (await periodOf(orgId)) !== "month") return;
-    const rows = await listOfferItems(orgId, brandId, offerId);
-    if (rows.length === 0) return;
+    const items = (await listOfferItems(orgId, brandId, offerId)).filter((i) => i.period === "month");
+    if (items.length === 0) return;
     let plan = await planFor(orgId, brandId, offerId);
     if (!plan) return;
     plan = await advanceSubscription(plan, now);
@@ -622,7 +637,10 @@ export async function onCampaignStatusChanged(params: {
     const terms = await getSalesPathTerms();
     if (chargesReactiveNow(plan)) {
       const isOn = await readOnPredicate(orgId);
-      await chargeReactiveDelta(plan, chargedReactiveMonthly(brandId, offerId, asOfferItems(rows), terms, isOn));
+      await chargeReactiveDelta(
+        plan,
+        chargedReactiveMonthly(brandId, offerId, asOfferItems(items, "month", terms), terms, isOn)
+      );
     }
     await syncPlanPricingFromItems(plan, now);
   } catch (err) {
@@ -634,27 +652,6 @@ export async function onCampaignStatusChanged(params: {
   }
 }
 
-/** Re-price the plan and journal the brand's new daily total. */
-async function afterItemsChanged(
-  orgId: string,
-  brandId: string,
-  plan: Subscription | null,
-  terms: SalesPathTerms | null,
-  now: Date
-): Promise<void> {
-  if (plan && plan.status !== "canceled") await syncPlanPricingFromItems(plan, now);
-  // The brand-total timeline (replayed by the by-day read) gets the new effective
-  // total: the items' daily total, or, once the last budget is removed, whatever
-  // the brand is back on (global pot / ceilings), when it has one.
-  const rows = await listBrandItems(orgId, brandId);
-  const total = rows.length > 0
-    ? itemsDailyTotalCents(rows, terms)
-    : (await getBrandDailyBudget(orgId, brandId))?.dailyBudgetCents ?? null;
-  if (total !== null) {
-    await db.insert(brandDailyBudgetChanges).values({ orgId, brandId, dailyBudgetCents: total, changedAt: now });
-  }
-}
-
 // --- reads -----------------------------------------------------------------
 
 export interface ItemView {
@@ -662,8 +659,10 @@ export interface ItemView {
   legKey: string;
   role: ItemRoleServed | null;
   period: ItemPeriod;
-  /** null = not set. A reactive budget is a MAX. */
+  /** null = not set. In the item's period; a reactive budget is a MAX. */
   budgetCents: number | null;
+  /** The daily ceiling campaign-service paces on (decimal string); null = not set. */
+  dailyBudgetCents: string | null;
   /** false = a channel we do not run yet: recorded, charged nothing. */
   managed: boolean | null;
   /** The minimum in this period. */
@@ -681,7 +680,7 @@ export interface OfferItemsView {
   /** The period the org states budgets in now (subscription → month). */
   period: ItemPeriod;
   items: ItemView[];
-  /** Subscriber: the offer's live plan and its pricing from the budgets; null otherwise. */
+  /** Subscriber: the offer's live plan; null otherwise. */
   plan: { subscriptionId: string; monthlyAmountCents: number } | null;
   /** Subscriber: what the budgets cost (null when nothing is charged, or not a subscriber). */
   pricing: ItemsPlanPricing | null;
@@ -700,11 +699,13 @@ export async function getOfferItemsView(
   brandId = brandId.toLowerCase();
   offerId = offerId.toLowerCase();
   const period = await periodOf(orgId);
-  const rows = await listOfferItems(orgId, brandId, offerId);
+  const stored = await listOfferItems(orgId, brandId, offerId);
   const terms = await readTerms();
-  const entries = rows.filter((r) => r.role === "proactive").reduce((sum, r) => sum + r.budgetCents, 0);
+  const entries = asOfferItems(stored, period, terms)
+    .filter((i) => i.role === "proactive")
+    .reduce((sum, i) => sum + i.budgetCents, 0);
 
-  const pairs: Array<{ featureSlug: string; legKey: string }> = rows.map((r) => ({
+  const pairs: Array<{ featureSlug: string; legKey: string }> = stored.map((r) => ({
     featureSlug: r.featureSlug,
     legKey: r.legKey,
   }));
@@ -712,17 +713,17 @@ export async function getOfferItemsView(
     if (!pairs.some((p) => p.featureSlug === c.featureSlug && p.legKey === c.legKey)) pairs.push(c);
   }
   const items: ItemView[] = pairs.map(({ featureSlug, legKey }) => {
-    const row = rows.find((r) => r.featureSlug === featureSlug && r.legKey === legKey) ?? null;
+    const row = stored.find((r) => r.featureSlug === featureSlug && r.legKey === legKey) ?? null;
     const t = terms.termsFor(featureSlug, legKey);
-    const p = (row?.period as ItemPeriod | undefined) ?? period;
-    const role: ItemRoleServed | null =
-      (row?.role as ItemRoleServed | undefined) ?? (t && t.role !== "customer" ? t.role : null);
+    const p = row?.period ?? period;
+    const role = roleOf(terms, featureSlug, legKey);
     return {
       featureSlug,
       legKey,
       role,
       period: p,
       budgetCents: row?.budgetCents ?? null,
+      dailyBudgetCents: row?.dailyBudgetCents ?? null,
       managed: t?.managed ?? null,
       minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, p),
       capCents: role === "reactive" ? reactiveCapCents(entries) : null,
@@ -736,7 +737,9 @@ export async function getOfferItemsView(
   if (period === "month") {
     const live = (await listLiveSubscriptions(orgId)).find((s) => s.brandId === brandId && s.offerId === offerId);
     if (live) plan = { subscriptionId: live.id, monthlyAmountCents: live.monthlyAmountCents };
-    if (rows.length > 0) pricing = itemsPlanPricing(rows, terms, await readOnPredicate(orgId));
+    if (stored.some((i) => i.period === "month")) {
+      pricing = itemsPlanPricing(stored, terms, await readOnPredicate(orgId));
+    }
   }
   return { brandId, offerId, period, items, plan, pricing };
 }
@@ -746,8 +749,9 @@ export interface SpendItemView {
   offerId: string;
   legKey: string;
   featureSlug: string;
-  role: ItemRoleServed;
-  /** Decimal cents. A reactive monthly budget includes the carry-over from last period. */
+  /** null when the published catalogue does not carry the (channel, leg). */
+  role: ItemRoleServed | null;
+  /** Decimal cents in the period. A reactive monthly budget includes last period's carry-over. */
   budgetCents: string;
   period: ItemPeriod;
   /** The plan's current period for a monthly budget; null for a daily one. */
@@ -759,25 +763,28 @@ export interface SpendItemView {
 
 export interface BrandItemsSpendView {
   items: SpendItemView[];
-  /** Daily equivalent of the proactive budgets we run (day + month/30). */
+  /** The brand total: the sum of its daily ceilings (a monthly budget as its 30th). */
   dailyBudgetCents: string;
   updatedAt: Date;
 }
 
-/** The brand's campaign budgets as campaign-service spends them; null when it holds none. */
+/**
+ * The brand's campaign budgets as campaign-service spends them in "items" mode —
+ * only for a brand holding a subscriber's monthly budget; null otherwise (the
+ * brand reads exactly as before: its ceilings in campaigns mode, or the global pot).
+ */
 export async function getBrandItemsSpendView(orgId: string, brandId: string): Promise<BrandItemsSpendView | null> {
   brandId = brandId.toLowerCase();
-  const rows = await listBrandItems(orgId, brandId);
-  if (rows.length === 0) return null;
+  const rows = await listBrandCeilingRows(orgId, brandId);
+  if (!holdsMonthlyBudget(rows)) return null;
   let terms: SalesPathTerms | null = null;
   try {
     terms = await getSalesPathTerms();
   } catch (err) {
     console.error(`[billing-service] sales-path terms unreadable for brand ${brandId}: items served with managed=null`, err);
   }
-  const plans = rows.some((r) => r.period === "month")
-    ? (await listLiveSubscriptions(orgId)).filter((s) => s.brandId === brandId)
-    : [];
+  const all = rows.map(itemOf).filter((i): i is CampaignItem => i !== null);
+  const plans = (await listLiveSubscriptions(orgId)).filter((s) => s.brandId === brandId);
   const carryByOffer = new Map<string, number>();
   for (const plan of plans) {
     const [row] = await db
@@ -795,32 +802,33 @@ export async function getBrandItemsSpendView(orgId: string, brandId: string): Pr
   // A monthly budget funds a campaign only through a live plan's current period;
   // with no plan it funds nothing and is not served (campaign-service holds the
   // whole brand on an incomplete monthly item).
-  const served = rows.filter((r) => r.period === "day" || plans.some((p) => p.offerId === r.offerId));
-  const items: SpendItemView[] = served.map((r) => {
-    const plan = r.period === "month" ? plans.find((p) => p.offerId === r.offerId) ?? null : null;
-    let budget = r.budgetCents;
-    if (r.role === "reactive" && r.period === "month") {
-      const carry = carryByOffer.get(r.offerId) ?? 0;
+  const served = all.filter((i) => i.period === "day" || plans.some((p) => p.offerId === i.offerId));
+  const reactive = (i: CampaignItem) => roleOf(terms, i.featureSlug, i.legKey) === "reactive";
+  const items: SpendItemView[] = served.map((i) => {
+    const plan = i.period === "month" ? plans.find((p) => p.offerId === i.offerId) ?? null : null;
+    let budget = i.budgetCents;
+    if (i.period === "month" && reactive(i)) {
+      const carry = carryByOffer.get(i.offerId) ?? 0;
       const reactiveTotal = served
-        .filter((x) => x.offerId === r.offerId && x.role === "reactive" && x.period === "month")
+        .filter((x) => x.offerId === i.offerId && x.period === "month" && reactive(x))
         .reduce((sum, x) => sum + x.budgetCents, 0);
-      if (carry > 0 && reactiveTotal > 0) budget += (carry * r.budgetCents) / reactiveTotal;
+      if (carry > 0 && reactiveTotal > 0) budget += (carry * i.budgetCents) / reactiveTotal;
     }
     return {
-      offerId: r.offerId,
-      legKey: r.legKey,
-      featureSlug: r.featureSlug,
-      role: r.role as ItemRoleServed,
+      offerId: i.offerId,
+      legKey: i.legKey,
+      featureSlug: i.featureSlug,
+      role: roleOf(terms, i.featureSlug, i.legKey),
       budgetCents: budget.toFixed(10),
-      period: r.period as ItemPeriod,
+      period: i.period,
       periodStart: plan ? plan.currentPeriodStart.toISOString() : null,
       periodEnd: plan ? plan.currentPeriodEnd.toISOString() : null,
-      managed: terms ? terms.managedChannel(r.featureSlug) : null,
+      managed: terms ? terms.managedChannel(i.featureSlug) : null,
     };
   });
   return {
     items,
-    dailyBudgetCents: itemsDailyTotalCents(rows, terms),
+    dailyBudgetCents: sumCeilings(rows),
     updatedAt: rows.reduce((latest, r) => (r.updatedAt > latest ? r.updatedAt : latest), rows[0].updatedAt),
   };
 }
