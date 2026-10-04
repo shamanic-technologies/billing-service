@@ -216,6 +216,8 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
       raiseAdditionalRevenueUsd: 701.75,
       raiseAdditionalPositiveReplies: 1.26,
       raiseAdditionalRecipients: 305,
+      actualPositiveReplies: null,
+      actualMeetingsBooked: null,
     });
   });
 });

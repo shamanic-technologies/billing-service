@@ -101,3 +101,54 @@ describe("monthly update email", () => {
     ).toBe(false);
   });
 });
+
+describe("actualOutcomes (features-service period recap, the window's real results)", () => {
+  const outcomes = (positiveReplies: unknown, meetingsBooked: unknown) => ({
+    actualOutcomes: { basis: "dashboard_dated_series", positiveReplies, meetingsBooked },
+  });
+
+  it.each([
+    ["present", outcomes(7, 2), 7, 2],
+    ["measured zero", outcomes(0, 0), 0, 0],
+    ["null (unknown)", outcomes(null, null), null, null],
+    ["non-number", outcomes("7", undefined), null, null],
+    ["block absent (older features-service)", {}, null, null],
+    ["block null", { actualOutcomes: null }, null, null],
+  ])("client maps %s", (_l, wire, replies, meetings) => {
+    const r = toSubscriptionRecap(wire as never);
+    expect(r.actualPositiveReplies).toBe(replies);
+    expect(r.actualMeetingsBooked).toBe(meetings);
+  });
+
+  it("both shown, as their own row, before the existing cells", () => {
+    const e = composeMonthlyUpdateEmail({ recap: recap(null, outcomes(7, 2)), brandName: "Doc Dinners", ctaUrl: CTA });
+    expect(e.bodyText).toContain("\n7 positive replies\n2 meetings booked\n\n180 decision-makers");
+    expect(e.bodyHtml).toContain(">7</div>");
+    expect(e.bodyHtml).toContain(">positive replies</div>");
+    expect(e.bodyHtml).toContain(">meetings booked</div>");
+    expect(e.bodyHtml.match(/<table role="presentation"/g)).toHaveLength(2);
+  });
+
+  it("singular labels at 1", () => {
+    const e = composeMonthlyUpdateEmail({ recap: recap(null, outcomes(1, 1)), brandName: null, ctaUrl: CTA });
+    expect(e.bodyText).toContain("\n1 positive reply\n1 meeting booked\n");
+  });
+
+  it("one null drops only its cell", () => {
+    const e = composeMonthlyUpdateEmail({ recap: recap(null, outcomes(7, null)), brandName: null, ctaUrl: CTA });
+    expect(e.bodyText).toContain("\n7 positive replies\n");
+    expect(e.bodyText).not.toContain("meeting");
+  });
+
+  it.each([
+    ["both null", outcomes(null, null)],
+    ["both measured zero", outcomes(0, 0)],
+    ["block absent", {}],
+  ])("%s: no outcome cells, never a 0, email otherwise unchanged", (_l, wire) => {
+    const base = composeMonthlyUpdateEmail({ recap: recap(null), brandName: "Legistai", ctaUrl: CTA });
+    const e = composeMonthlyUpdateEmail({ recap: recap(null, wire), brandName: "Legistai", ctaUrl: CTA });
+    expect(e).toEqual(base);
+    expect(e.bodyText).not.toMatch(/positive replies\n|meetings? booked/);
+    expect(e.bodyText).not.toMatch(/(^|\n)0 /);
+  });
+});
