@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   composeCreditsUsedEmail,
   expectedRepliesStat,
-  CREDITS_USED_LAYOUT_HTML,
 } from "../../src/lib/subscription-credits-used-email.js";
 import { toSubscriptionRecap, type SubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
 
@@ -34,15 +33,18 @@ const LEGISTAI: SubscriptionRecap = {
 
 const URL = "https://dashboard.distribute.you/orgs/org_1/billing";
 
+/** The card as registered: bare content, wrapped by transactional-email-service. */
 function render(e: { bodyHtml: string; subject: string }): string {
-  return CREDITS_USED_LAYOUT_HTML.replace("{{bodyHtml}}", e.bodyHtml);
+  return e.bodyHtml;
 }
 
 describe("composeCreditsUsedEmail", () => {
   it("queued (nothing sent yet): booked, never 'went out'", () => {
     const e = composeCreditsUsedEmail({ recap: LEGISTAI, brandName: "Legistai", ctaUrl: URL });
-    expect(e.subject).toBe("Your month of outreach is booked");
-    expect(e.heading).toBe("Your month of outreach is booked.");
+    expect(e.subject).toBe("Your month of outreach is booked ✅");
+    expect(e.heading).toBe("Your month of outreach is booked ✅");
+    expect(e.bodyHtml).toContain(">Your month of outreach is booked ✅</h1>");
+    expect(e.bodyText.split("\n")[0]).toBe("Your month of outreach is booked ✅");
     const all = JSON.stringify(e);
     expect(all).not.toMatch(/went out|were sent|we sent/i);
     expect(e.bodyText).toContain(
@@ -76,17 +78,17 @@ describe("composeCreditsUsedEmail", () => {
       brandName: "Legistai",
       ctaUrl: URL,
     });
-    expect(e.subject).toBe("Your month of outreach went out");
+    expect(e.subject).toBe("Your month of outreach went out ✅");
     expect(e.bodyText).toContain("We sent 1,240 emails to 290 decision-makers for Legistai this month. 99% were delivered.");
   });
 
   it("an older recap without sendStatus still needs emailsSent > 0 to say 'went out'", () => {
     const old = { ...LEGISTAI, sendStatus: null, recipientsEmailedCount: null };
     expect(composeCreditsUsedEmail({ recap: old, brandName: null, ctaUrl: URL }).subject).toBe(
-      "Your month of outreach is booked"
+      "Your month of outreach is booked ✅"
     );
     const sentOld = composeCreditsUsedEmail({ recap: { ...old, sentCount: 40 }, brandName: null, ctaUrl: URL });
-    expect(sentOld.subject).toBe("Your month of outreach went out");
+    expect(sentOld.subject).toBe("Your month of outreach went out ✅");
   });
 
   it("0.2 expected replies never renders 'about 1': it becomes a cadence", () => {
@@ -107,7 +109,7 @@ describe("composeCreditsUsedEmail", () => {
 
   it("a null figure drops its sentence or cell, never a 0 or a placeholder", () => {
     const e = composeCreditsUsedEmail({ recap: null, brandName: null, ctaUrl: "u" });
-    expect(e.subject).toBe("Your month of outreach is booked");
+    expect(e.subject).toBe("Your month of outreach is booked ✅");
     expect(e.bodyText).toContain("We lined up this month's decision-makers.");
     expect(e.bodyHtml).not.toContain("<table");
     expect(e.bodyText).not.toContain("Based on");
@@ -134,22 +136,23 @@ describe("composeCreditsUsedEmail", () => {
     expect(averaged.bodyText).toContain("Based on a $2,500 lifetime revenue per client");
   });
 
-  it("delivers the distribute.you layout: wordmark, blue dot, card, button, footer, presentation table", () => {
-    const e = composeCreditsUsedEmail({ recap: LEGISTAI, brandName: "Legistai", ctaUrl: URL });
-    const html = render(e);
-    expect(html).toMatch(/^<!DOCTYPE html>/);
-    expect(html).toContain(">distribute.you</span>");
-    expect(html).toContain("background:#3D80FF");
-    expect(html).toContain("border-radius:12px");
-    expect(html).toContain("background:#2563EB");
-    expect(html).toContain("border-radius:10px");
-    expect(html).toContain("Revenue made easy.");
-    expect(html).toContain("Done-for-you cold outreach, sent from our domains on your behalf.");
-    expect(html).toContain('href="https://docs.distribute.you"');
-    expect(html).toContain('<table role="presentation"');
-    expect(html).not.toMatch(/display:\s*(flex|grid)/);
-    expect(html).not.toContain("{{");
-    expect(e.bodyHtml).toContain("Kevin<br />Founder, distribute.you");
+  it("is bare card content: no logo, no blue-dot wordmark, no layout of its own (owner 2026-10-04)", () => {
+    for (const recap of [LEGISTAI, { ...LEGISTAI, sentCount: 1240, sendStatus: "emails_sent" as const }]) {
+      const e = composeCreditsUsedEmail({ recap, brandName: "Legistai", ctaUrl: URL });
+      const html = render(e);
+      // The official logo comes from transactional-email-service's layout; a
+      // full document would be sent unwrapped, so the card must stay a fragment.
+      expect(html).not.toMatch(/<!doctype|<html[\s>]|<body/i);
+      expect(html).not.toContain(">distribute.you</span>");
+      expect(html).not.toMatch(/#3D80FF|border-radius:50%/i);
+      expect(html).toContain("background:#2563EB");
+      expect(html).toContain('<table role="presentation"');
+      expect(html).not.toMatch(/display:\s*(flex|grid)/);
+      expect(html).not.toContain("{{");
+      expect(e.bodyHtml).toContain("Kevin<br />Founder, distribute.you");
+      // Its text already signs with the why, so the wrap adds no second sign-off.
+      expect(e.bodyText).toContain("Revenue made easy.");
+    }
   });
 
   it("escapes a brand name from another service", () => {
