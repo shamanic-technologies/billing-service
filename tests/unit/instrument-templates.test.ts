@@ -24,7 +24,7 @@ const ENV_URL = "TRANSACTIONAL_EMAIL_SERVICE_URL";
 const ENV_KEY = "TRANSACTIONAL_EMAIL_SERVICE_API_KEY";
 
 function lastBody(fetchMock: ReturnType<typeof vi.fn>): {
-  templates: { name: string; subject: string; htmlBody: string; textBody?: string }[];
+  templates: { name: string; subject: string; htmlBody: string; textBody?: string; layout?: string }[];
 } {
   const init = fetchMock.mock.calls.at(-1)?.[1] as RequestInit;
   return JSON.parse(init.body as string);
@@ -255,5 +255,13 @@ describe("boot-time email template registration", () => {
       expect(t.textBody).not.toContain("—");
       expect(t.htmlBody).not.toContain("—");
     }
+  });
+
+  it("registers the month-of-outreach email as bare content for the official layout to wrap", async () => {
+    await deployEmailTemplates();
+    const t = lastBody(fetchMock).templates.find((x) => x.name === SUBSCRIPTION_CREDITS_USED_EVENT)!;
+    expect(t.htmlBody).toBe("{{bodyHtml}}");
+    expect(t.layout).toBe("brand");
+    expect(t.htmlBody).not.toMatch(/<html|#3D80FF/i);
   });
 });
