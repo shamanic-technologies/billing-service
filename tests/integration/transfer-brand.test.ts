@@ -165,8 +165,8 @@ describe("POST /internal/transfer-brand", () => {
       { tableName: "campaign_daily_budgets", count: 2 },
       { tableName: "brand_sales_budgets", count: 0 },
       { tableName: "brand_sales_budget_changes", count: 0 },
-      { tableName: "sales_path_item_budgets", count: 0 },
-      { tableName: "sales_path_item_budget_changes", count: 0 },
+      { tableName: "campaign_item_budgets", count: 0 },
+      { tableName: "campaign_item_budget_changes", count: 0 },
       { tableName: "brand_transfers", count: 1 },
     ]);
 
@@ -213,8 +213,8 @@ describe("POST /internal/transfer-brand", () => {
       { tableName: "campaign_daily_budgets", count: 0 },
       { tableName: "brand_sales_budgets", count: 0 },
       { tableName: "brand_sales_budget_changes", count: 0 },
-      { tableName: "sales_path_item_budgets", count: 0 },
-      { tableName: "sales_path_item_budget_changes", count: 0 },
+      { tableName: "campaign_item_budgets", count: 0 },
+      { tableName: "campaign_item_budget_changes", count: 0 },
       { tableName: "brand_transfers", count: 0 },
     ]);
     expect(await db.select().from(brandTransfers)).toHaveLength(1);
