@@ -22,6 +22,7 @@ import {
   setBrandSalesBudget,
   viewOf,
 } from "../lib/brand-sales-budget.js";
+import { getBrandItemsSpendView } from "../lib/sales-path-items.js";
 import {
   MAX_DAY_RANGE_DAYS,
   currentUtcDay,
@@ -808,6 +809,18 @@ router.put(
 // Every answer carries the mode, so a reader never infers it from a null.
 
 async function composeSalesBudgetView(orgId: string, brandId: string) {
+  // ITEMS mode outranks the global pot: the brand budgets each item of the sales
+  // paths it activated (lib/sales-path-items). Only a brand that wrote an item
+  // ever reads it; every other brand answers exactly as before.
+  const items = await getBrandItemsSpendView(orgId, brandId);
+  if (items) {
+    return {
+      mode: "items" as const,
+      dailyBudgetCents: items.dailyBudgetCents,
+      updatedAt: items.updatedAt.toISOString(),
+      items: items.items,
+    };
+  }
   const view = viewOf(await getBrandSalesBudget(orgId, brandId));
   return {
     mode: view.mode,
