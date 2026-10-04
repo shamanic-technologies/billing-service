@@ -38,7 +38,6 @@ import {
 } from "./lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
 import { SUBSCRIPTION_CREDITS_USED_EVENT } from "./lib/subscription-notifications.js";
-import { CREDITS_USED_LAYOUT_HTML } from "./lib/subscription-credits-used-email.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -63,11 +62,14 @@ const TEMPLATES = [
     // celebrate (owner rule), never a shortage, and never a send claimed before it
     // happened. Subject, card and plain text are composed in code
     // (lib/subscription-credits-used-email), so no variable can render as a
-    // literal placeholder; the layout is the distribute.you transactional one.
+    // literal placeholder. The card's content only: transactional-email-service
+    // wraps it in the official distribute.you layout (logo, card, footer), so
+    // this email never draws a logo of its own (owner 2026-10-04).
     name: SUBSCRIPTION_CREDITS_USED_EVENT,
     subject: "{{subject}}",
-    htmlBody: CREDITS_USED_LAYOUT_HTML,
+    htmlBody: "{{bodyHtml}}",
     textBody: "{{bodyText}}",
+    layout: "brand",
   },
   {
     // The card is still on file and can never be charged again: the bank called
