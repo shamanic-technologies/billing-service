@@ -36,6 +36,10 @@ export interface SubscriptionRecap {
   raiseAdditionalPositiveReplies: number | null;
   /** Extra decision-makers lined up if the plan is raised by $100/month (features-service #1306; null on an older one). */
   raiseAdditionalRecipients: number | null;
+  /** Positive replies actually received in the window (features-service `actualOutcomes`, dashboard dated series). 0 = measured zero, null = unknown or an older features-service. */
+  actualPositiveReplies: number | null;
+  /** Meetings actually booked in the window (same source and null rule). */
+  actualMeetingsBooked: number | null;
 }
 
 /** The wire fields billing reads (features-service `OrgPeriodRecapResponse`). */
@@ -60,6 +64,13 @@ interface PeriodRecapWire {
     expectedAdditionalPositiveReplies?: number | null;
     expectedAdditionalRecipientsEnrolled?: number | null;
   };
+  actualOutcomes?: {
+    basis?: string;
+    positiveReplies?: number | null;
+    positiveRepliesNullReason?: string | null;
+    meetingsBooked?: number | null;
+    meetingsBookedNullReason?: string | null;
+  } | null;
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -96,6 +107,8 @@ export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
     raiseAdditionalRevenueUsd: num(w.budgetIncrease?.expectedAdditionalRevenueUsd),
     raiseAdditionalPositiveReplies: num(w.budgetIncrease?.expectedAdditionalPositiveReplies),
     raiseAdditionalRecipients: num(w.budgetIncrease?.expectedAdditionalRecipientsEnrolled),
+    actualPositiveReplies: num(w.actualOutcomes?.positiveReplies),
+    actualMeetingsBooked: num(w.actualOutcomes?.meetingsBooked),
   };
 }
 
