@@ -12,6 +12,10 @@
  *  - Same truth rules as the promotional email: "sent" only on positive evidence a
  *    send happened, a figure below 1 is never inflated, a null figure drops its
  *    sentence or its cell, never a 0.
+ *  - The window's REAL outcomes (features-service `actualOutcomes`: positive replies
+ *    received, meetings booked) lead, as their own stat row. Only a positive count
+ *    is shown: unknown (null) and a measured 0 drop the cell (client-comms: never
+ *    surface a negative; the existing "still learning" line carries a quiet month).
  *
  * The card is registered bare (src/instrument.ts) and wrapped by
  * transactional-email-service in the official layout. Values from other services
@@ -49,6 +53,20 @@ export function recapHasActivity(r: SubscriptionRecap): boolean {
   return positive(r.sentCount) || positive(r.recipientsCount);
 }
 
+/** The window's real outcomes as stat cells, positive counts only (0 and null dropped). */
+export function actualOutcomeCells(r: SubscriptionRecap): Array<{ value: string; label: string }> {
+  const cells: Array<{ value: string; label: string }> = [];
+  if (positive(r.actualPositiveReplies)) {
+    const n = Math.round(r.actualPositiveReplies);
+    cells.push({ value: count(n), label: n === 1 ? "positive reply" : "positive replies" });
+  }
+  if (positive(r.actualMeetingsBooked)) {
+    const n = Math.round(r.actualMeetingsBooked);
+    cells.push({ value: count(n), label: n === 1 ? "meeting booked" : "meetings booked" });
+  }
+  return cells;
+}
+
 export function composeMonthlyUpdateEmail(params: {
   recap: SubscriptionRecap;
   brandName: string | null;
@@ -80,6 +98,7 @@ export function composeMonthlyUpdateEmail(params: {
     lines.push("Their emails go out during each prospect's business hours, for the best reply rate.");
   }
 
+  const outcomeCells = actualOutcomeCells(r);
   const cells: Array<{ value: string; label: string }> = [];
   if (recipients !== null) cells.push({ value: count(recipients), label: "decision-makers" });
   const replies = expectedRepliesStat(r.expectedPositiveReplies);
@@ -108,6 +127,7 @@ export function composeMonthlyUpdateEmail(params: {
     `<h1 style="color:#0a0a14;font-size:24px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;margin:0 0 20px;">${escapeHtml(heading)}</h1>`,
   ];
   if (lines.length > 0) html.push(`<p ${P}>${lines.map(escapeHtml).join(" ")}</p>`);
+  if (outcomeCells.length > 0) html.push(statRowHtml(outcomeCells));
   if (cells.length > 0) html.push(statRowHtml(cells));
   if (finePrint) {
     html.push(`<p style="color:#8b8e98;font-size:13px;line-height:1.5;margin:0 0 24px;">${escapeHtml(finePrint)}</p>`);
@@ -120,6 +140,7 @@ export function composeMonthlyUpdateEmail(params: {
 
   const text: string[] = [heading];
   if (lines.length > 0) text.push("", lines.join(" "));
+  if (outcomeCells.length > 0) text.push("", ...outcomeCells.map((c) => `${c.value} ${c.label}`));
   if (cells.length > 0) text.push("", ...cells.map((c) => `${c.value} ${c.label}`));
   if (finePrint) text.push(finePrint);
   text.push("", status, "", `${ctaLabel}: ${params.ctaUrl}`, "", "Kevin", "Founder, distribute.you", "", "--", "distribute.you", "Revenue made easy.");
