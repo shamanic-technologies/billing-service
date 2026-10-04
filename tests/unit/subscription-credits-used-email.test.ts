@@ -40,7 +40,7 @@ function render(e: { bodyHtml: string; subject: string }): string {
 
 describe("composeCreditsUsedEmail", () => {
   it("queued (nothing sent yet): booked, never 'went out'", () => {
-    const e = composeCreditsUsedEmail({ recap: LEGISTAI, monthlyAmountCents: 9900, brandName: "Legistai", ctaUrl: URL });
+    const e = composeCreditsUsedEmail({ recap: LEGISTAI, brandName: "Legistai", ctaUrl: URL });
     expect(e.subject).toBe("Your month of outreach is booked");
     expect(e.heading).toBe("Your month of outreach is booked.");
     const all = JSON.stringify(e);
@@ -55,8 +55,16 @@ describe("composeCreditsUsedEmail", () => {
     expect(e.bodyText).toContain(
       "Add $100 a month and we expect about 1 more positive reply. That is about $702 more expected revenue."
     );
-    expect(e.ctaLabel).toBe("Raise my plan to $199/month");
-    expect(e.bodyText).toContain("Raise my plan to $199/month: " + URL);
+    // The gain sentence is bold in the rendered email, the raise sentence is not.
+    expect(e.bodyHtml).toContain(
+      'Add $100 a month and we expect about 1 more positive reply. <strong style="color:#0a0a14;font-weight:700;">That is about $702 more expected revenue.</strong>'
+    );
+    expect(render(e)).toContain("<strong");
+    expect(render(e)).not.toContain("&lt;strong");
+    expect(e.ctaLabel).toBe("Add more revenue");
+    expect(e.bodyHtml).toContain(`>Add more revenue</a>`);
+    expect(e.bodyText).toContain("Add more revenue: " + URL);
+    expect(all).not.toContain("Raise my plan");
     expect(e.bodyText.endsWith("--\ndistribute.you\nRevenue made easy.")).toBe(true);
     expect(all).not.toMatch(SHORTAGE);
     expect(all).not.toMatch(DASHES);
@@ -65,7 +73,6 @@ describe("composeCreditsUsedEmail", () => {
   it("sent variant only when emails were actually sent, with the delivery rate", () => {
     const e = composeCreditsUsedEmail({
       recap: { ...LEGISTAI, sentCount: 1240, recipientsEmailedCount: 290, sendStatus: "emails_sent", deliveryRatePct: 99.2 },
-      monthlyAmountCents: 9900,
       brandName: "Legistai",
       ctaUrl: URL,
     });
@@ -75,17 +82,16 @@ describe("composeCreditsUsedEmail", () => {
 
   it("an older recap without sendStatus still needs emailsSent > 0 to say 'went out'", () => {
     const old = { ...LEGISTAI, sendStatus: null, recipientsEmailedCount: null };
-    expect(composeCreditsUsedEmail({ recap: old, monthlyAmountCents: 9900, brandName: null, ctaUrl: URL }).subject).toBe(
+    expect(composeCreditsUsedEmail({ recap: old, brandName: null, ctaUrl: URL }).subject).toBe(
       "Your month of outreach is booked"
     );
-    const sentOld = composeCreditsUsedEmail({ recap: { ...old, sentCount: 40 }, monthlyAmountCents: 9900, brandName: null, ctaUrl: URL });
+    const sentOld = composeCreditsUsedEmail({ recap: { ...old, sentCount: 40 }, brandName: null, ctaUrl: URL });
     expect(sentOld.subject).toBe("Your month of outreach went out");
   });
 
   it("0.2 expected replies never renders 'about 1': it becomes a cadence", () => {
     const e = composeCreditsUsedEmail({
       recap: { ...LEGISTAI, expectedPositiveReplies: 0.2, raiseAdditionalPositiveReplies: 0.2 },
-      monthlyAmountCents: 9900,
       brandName: null,
       ctaUrl: URL,
     });
@@ -100,19 +106,19 @@ describe("composeCreditsUsedEmail", () => {
   });
 
   it("a null figure drops its sentence or cell, never a 0 or a placeholder", () => {
-    const e = composeCreditsUsedEmail({ recap: null, monthlyAmountCents: 19900, brandName: null, ctaUrl: "u" });
+    const e = composeCreditsUsedEmail({ recap: null, brandName: null, ctaUrl: "u" });
     expect(e.subject).toBe("Your month of outreach is booked");
     expect(e.bodyText).toContain("We lined up this month's decision-makers.");
     expect(e.bodyHtml).not.toContain("<table");
     expect(e.bodyText).not.toContain("Based on");
     expect(e.bodyText).not.toContain("more expected revenue");
-    expect(e.ctaLabel).toBe("Raise my plan to $299/month");
+    expect(e.ctaLabel).toBe("Add more revenue");
+    expect(e.bodyHtml).not.toContain("<strong");
     expect(JSON.stringify(e)).not.toMatch(/null|undefined|NaN|\{\{/);
     expect(e.bodyText).not.toMatch(/\b0 /);
 
     const noRoi = composeCreditsUsedEmail({
       recap: { ...LEGISTAI, expectedRoiMultiple: null, lifetimeRevenueUsd: null, raiseAdditionalRevenueUsd: null },
-      monthlyAmountCents: 9900,
       brandName: "Legistai",
       ctaUrl: URL,
     });
@@ -122,7 +128,6 @@ describe("composeCreditsUsedEmail", () => {
 
     const averaged = composeCreditsUsedEmail({
       recap: { ...LEGISTAI, lifetimeRevenueSource: "brand_economics" },
-      monthlyAmountCents: 9900,
       brandName: null,
       ctaUrl: URL,
     });
@@ -130,7 +135,7 @@ describe("composeCreditsUsedEmail", () => {
   });
 
   it("delivers the distribute.you layout: wordmark, blue dot, card, button, footer, presentation table", () => {
-    const e = composeCreditsUsedEmail({ recap: LEGISTAI, monthlyAmountCents: 9900, brandName: "Legistai", ctaUrl: URL });
+    const e = composeCreditsUsedEmail({ recap: LEGISTAI, brandName: "Legistai", ctaUrl: URL });
     const html = render(e);
     expect(html).toMatch(/^<!DOCTYPE html>/);
     expect(html).toContain(">distribute.you</span>");
@@ -148,7 +153,7 @@ describe("composeCreditsUsedEmail", () => {
   });
 
   it("escapes a brand name from another service", () => {
-    const e = composeCreditsUsedEmail({ recap: LEGISTAI, monthlyAmountCents: 9900, brandName: "A&B <x>", ctaUrl: URL });
+    const e = composeCreditsUsedEmail({ recap: LEGISTAI, brandName: "A&B <x>", ctaUrl: URL });
     expect(e.bodyHtml).toContain("A&amp;B &lt;x&gt;");
     expect(e.bodyHtml).not.toContain("<x>");
   });

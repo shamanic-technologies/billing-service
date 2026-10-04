@@ -97,7 +97,6 @@ export async function notifySubscriptionCreditsUsedIfDue(
       : DASHBOARD_URL;
     const email = composeCreditsUsedEmail({
       recap,
-      monthlyAmountCents: sub.monthlyAmountCents,
       brandName,
       ctaUrl,
     });
