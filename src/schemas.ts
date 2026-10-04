@@ -4415,8 +4415,15 @@ const CampaignItemViewSchema = z
     legKey: z.string(),
     /** proactive = finds leads (daily/monthly spend); reactive = fires on a step (a MAX); null = unknown leg. */
     role: z.enum(["proactive", "reactive"]).nullable(),
+    /** Always the org's period: every figure of the row (budget, minimum, cap) is in it. */
     period: ItemPeriodSchema,
-    /** null = not set. In the item's period (a daily one may be fractional cents). */
+    /**
+     * The period the budget was STATED in; null = not set. Differs from period for a row
+     * not yet restated (a subscriber's legacy daily ceiling, served as its monthly
+     * equivalent x30). Writing the row in the org's period restates it.
+     */
+    statedPeriod: ItemPeriodSchema.nullable(),
+    /** null = not set. In period (may be fractional cents when converted). */
     budgetCents: z.number().nullable(),
     /** The daily ceiling campaign-service paces on (monthly / 30 for a subscriber); null = not set. */
     dailyBudgetCents: CentsStringSchema.nullable(),
