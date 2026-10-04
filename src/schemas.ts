@@ -1011,7 +1011,7 @@ export const SpendableCampaignItemSchema = z
     offerId: z.string().uuid(),
     legKey: z.string(),
     featureSlug: z.string(),
-    role: z.enum(["proactive", "reactive"]),
+    role: z.enum(["proactive", "reactive"]).nullable(),
     /** Decimal cents. A reactive monthly item includes last period's carry-over. */
     budgetCents: CentsStringSchema,
     period: ItemPeriodSchema,
@@ -4416,8 +4416,10 @@ const CampaignItemViewSchema = z
     /** proactive = finds leads (daily/monthly spend); reactive = fires on a step (a MAX); null = unknown leg. */
     role: z.enum(["proactive", "reactive"]).nullable(),
     period: ItemPeriodSchema,
-    /** null = not set. */
-    budgetCents: z.number().int().nullable(),
+    /** null = not set. In the item's period (a daily one may be fractional cents). */
+    budgetCents: z.number().nullable(),
+    /** The daily ceiling campaign-service paces on (monthly / 30 for a subscriber); null = not set. */
+    dailyBudgetCents: CentsStringSchema.nullable(),
     /** false = a channel we do not run yet: recorded, charged nothing until it launches. */
     managed: z.boolean().nullable(),
     /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
@@ -4456,6 +4458,8 @@ export const CampaignItemBudgetsSchema = z
 export const SetCampaignItemBudgetsResponseSchema = CampaignItemBudgetsSchema.extend({
   /** Follow-up (reactive) budget charged on the card now (subscriber, active plan). */
   reactiveChargedCents: z.number().int(),
+  /** true when this write took the brand out of its global sales budget. */
+  globalBudgetCleared: z.boolean(),
 }).openapi("SetCampaignItemBudgetsResponse");
 
 export const ItemBudgetRefusalSchema = z

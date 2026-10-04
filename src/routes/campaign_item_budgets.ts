@@ -1,6 +1,7 @@
 /**
- * Item budgets PER CAMPAIGN (lib/campaign-items): the dashboard reads and states,
- * per brand x offer, one budget per campaign (offer x leg x channel).
+ * Budgets PER CAMPAIGN (lib/campaign-items): the dashboard reads and states, per
+ * brand x offer, one budget per campaign (offer x leg x channel), on the ONE store
+ * per campaign (its ceiling row, shared with PUT /v1/brands/:id/campaign-budget).
  * campaign-service reads them through GET /internal/brands/:brandId/sales-budget
  * (mode "items"). On/off is campaign-service's campaign status, not stored here.
  */
@@ -14,6 +15,8 @@ import {
   removeOfferItem,
   setOfferItems,
 } from "../lib/campaign-items.js";
+import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
+import { ceilingChangesBetween } from "../lib/brand-running-budget.js";
 
 const router = Router();
 
@@ -101,9 +104,24 @@ router.put(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
       brandId: p.brandId,
       offerId: p.offerId,
       items: parsed.data.items,
-      userId: req.headers["x-user-id"] as string,
     });
-    res.json({ ...(await view(orgId, p.brandId, p.offerId)), ...result });
+    // The same staff email as every other budget change (one composition).
+    void notifyBrandDailyBudgetChanged({
+      orgId,
+      userId: req.headers["x-user-id"] as string,
+      runId: req.headers["x-run-id"] as string,
+      brandId: p.brandId,
+      previousDailyBudgetCents: result.previousBrandDailyBudgetCents,
+      newDailyBudgetCents: result.brandDailyBudgetCents,
+      changes: ceilingChangesBetween(result.previousCeilings, result.ceilings),
+      ceilings: result.ceilings,
+      actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
+    });
+    res.json({
+      ...(await view(orgId, p.brandId, p.offerId)),
+      reactiveChargedCents: result.reactiveChargedCents,
+      globalBudgetCleared: result.globalBudgetCleared,
+    });
   } catch (err) {
     if (refuse(res, err)) return;
     throw err;
@@ -129,7 +147,6 @@ router.delete(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
       offerId: p.offerId,
       featureSlug,
       legKey,
-      userId: req.headers["x-user-id"] as string,
     });
     res.json({ ...(await view(orgId, p.brandId, p.offerId)), removed });
   } catch (err) {

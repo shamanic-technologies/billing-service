@@ -20,8 +20,6 @@ import {
   subscriptions,
   subscriptionCreditExpiries,
   localPromos,
-  campaignItemBudgets,
-  campaignItemBudgetChanges,
   salesPathReactiveCharges,
   ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
@@ -176,13 +174,7 @@ async function deleteBillingStateByOrg(
       .where(eq(subscriptions.orgId, orgId))
       .returning({ id: subscriptions.id });
 
-    // Campaign item budgets (migrations 0062/0063): this org's pacing config, its
-    // journal and its reactive charges (charges cascade like subscription charges).
-    const deletedItemBudgets = await tx
-      .delete(campaignItemBudgets)
-      .where(eq(campaignItemBudgets.orgId, orgId))
-      .returning({ id: campaignItemBudgets.id });
-    await tx.delete(campaignItemBudgetChanges).where(eq(campaignItemBudgetChanges.orgId, orgId));
+    // A subscriber's follow-up charges (migration 0062) go with the org.
     await tx.delete(salesPathReactiveCharges).where(eq(salesPathReactiveCharges.orgId, orgId));
 
     const deletedBillingAccounts = await tx
@@ -204,7 +196,6 @@ async function deleteBillingStateByOrg(
       staffDebits: deletedStaffDebits.length,
       subscriptions: deletedSubscriptions.length,
       subscriptionCreditExpiries: deletedExpiries.length,
-      campaignItemBudgets: deletedItemBudgets.length,
     };
   });
 }

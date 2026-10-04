@@ -1,65 +1,74 @@
 /**
- * Reads and pure arithmetic over item budgets PER CAMPAIGN (migration 0063). Kept
+ * A campaign's budget as the "you choose, we run" model reads it (migration 0064):
+ * ONE store per campaign, the ceiling row (campaign_daily_budgets). A row carrying
+ * `monthly_budget_cents` is a subscriber's MONTHLY budget (its daily ceiling being
+ * monthly / 30); any other row is a DAILY budget. Pure reads and arithmetic, kept
  * apart from lib/campaign-items (the writes, which charge cards through the
- * subscription engine) so the brand-total read and the subscription engine can use
- * it without an import cycle.
+ * subscription engine) so the subscription engine can use it without a cycle.
  */
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaignItemBudgets, type CampaignItemBudget } from "../db/schema.js";
-import { DAYS_PER_MONTH, type SalesPathTerms } from "./sales-path-terms.js";
+import { campaignDailyBudgets, type CeilingRow } from "../db/schema.js";
+import type { SalesPathTerms } from "./sales-path-terms.js";
 import type { RecurringCampaignStatus } from "./campaign-service-client.js";
 
-/** The smallest monthly plan a subscriber pays when it is priced from items. */
+/** The smallest monthly plan a subscriber pays when it is priced from campaign budgets. */
 export const ITEMS_PLAN_MIN_MONTHLY_CENTS = 9900;
 
-export async function listBrandItems(orgId: string, brandId: string): Promise<CampaignItemBudget[]> {
+export type ItemPeriod = "day" | "month";
+export type ItemRoleServed = "proactive" | "reactive";
+
+/** One campaign's budget, read off its ceiling row. */
+export interface CampaignItem {
+  brandId: string;
+  offerId: string;
+  featureSlug: string;
+  legKey: string;
+  period: ItemPeriod;
+  /** In the item's period: monthly cents (whole) or daily cents (may be fractional). */
+  budgetCents: number;
+  /** The daily ceiling as stored (decimal string). */
+  dailyBudgetCents: string;
+  updatedAt: Date;
+}
+
+/** A ceiling row as a campaign item; null for a legacy row not scoped to an offer and a leg. */
+export function itemOf(row: CeilingRow): CampaignItem | null {
+  if (!row.offerId || !row.legKey) return null;
+  const month = row.monthlyBudgetCents !== null && row.monthlyBudgetCents !== undefined;
+  return {
+    brandId: row.brandId,
+    offerId: row.offerId,
+    featureSlug: row.featureSlug,
+    legKey: row.legKey,
+    period: month ? "month" : "day",
+    budgetCents: month ? (row.monthlyBudgetCents as number) : Number(row.dailyBudgetCents),
+    dailyBudgetCents: row.dailyBudgetCents,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export async function listBrandCeilingRows(orgId: string, brandId: string): Promise<CeilingRow[]> {
   return db
     .select()
-    .from(campaignItemBudgets)
-    .where(and(eq(campaignItemBudgets.orgId, orgId), eq(campaignItemBudgets.brandId, brandId)))
-    .orderBy(
-      asc(campaignItemBudgets.offerId),
-      asc(campaignItemBudgets.role),
-      asc(campaignItemBudgets.featureSlug),
-      asc(campaignItemBudgets.legKey)
-    );
+    .from(campaignDailyBudgets)
+    .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)));
 }
 
-export async function listOfferItems(
-  orgId: string,
-  brandId: string,
-  offerId: string
-): Promise<CampaignItemBudget[]> {
-  return (await listBrandItems(orgId, brandId)).filter((r) => r.offerId === offerId);
+export async function listOfferItems(orgId: string, brandId: string, offerId: string): Promise<CampaignItem[]> {
+  return (await listBrandCeilingRows(orgId, brandId))
+    .map(itemOf)
+    .filter((i): i is CampaignItem => i !== null && i.offerId === offerId);
 }
 
-/** Is this channel one we run today? Unknown (catalogue silent / unreadable) is NOT run. */
-function runs(terms: SalesPathTerms | null, featureSlug: string): boolean | null {
-  return terms ? terms.managedChannel(featureSlug) : null;
-}
-
-/**
- * The brand's daily total in items mode: proactive items of channels we run (or
- * whose status is unknown, so a catalogue outage never reads as "zero budget"),
- * a monthly item counted as its 30th. Reactive items are MAX budgets that fire on
- * leads, never daily spend, and are not added.
- */
-export function itemsDailyTotalCents(rows: CampaignItemBudget[], terms: SalesPathTerms | null): string {
-  let total = 0;
-  for (const r of rows) {
-    if (r.role !== "proactive") continue;
-    if (runs(terms, r.featureSlug) === false) continue;
-    total += r.period === "day" ? r.budgetCents : r.budgetCents / DAYS_PER_MONTH;
-  }
-  return total.toFixed(10);
+/** Does the brand hold a subscriber's monthly campaign budget (→ "items" mode)? */
+export function holdsMonthlyBudget(rows: CeilingRow[]): boolean {
+  return rows.some((r) => r.monthlyBudgetCents !== null && r.monthlyBudgetCents !== undefined);
 }
 
 /** Which campaigns are ON: campaign-service's status, the customer's statement of intent. */
-export type CampaignOnPredicate = (
-  item: Pick<CampaignItemBudget, "brandId" | "offerId" | "featureSlug" | "legKey">
-) => boolean;
+export type CampaignOnPredicate = (item: Pick<CampaignItem, "brandId" | "offerId" | "featureSlug" | "legKey">) => boolean;
 
 /** ON = a campaign of that (brand, offer, leg, channel) is `ongoing`. No campaign = off. */
 export function campaignOnPredicateOf(campaigns: RecurringCampaignStatus[]): CampaignOnPredicate {
@@ -71,8 +80,14 @@ export function campaignOnPredicateOf(campaigns: RecurringCampaignStatus[]): Cam
   return (i) => on.has([i.brandId, i.offerId, i.featureSlug, i.legKey].join("\u0000").toLowerCase());
 }
 
+/** The item's role from the published terms; null when the catalogue does not carry it. */
+export function roleOf(terms: SalesPathTerms | null, featureSlug: string, legKey: string): ItemRoleServed | null {
+  const t = terms?.termsFor(featureSlug, legKey);
+  return t && t.role !== "customer" ? t.role : null;
+}
+
 export interface ItemsPlanPricing {
-  /** The plan's monthly amount: SUM of the charged items, at least $99. */
+  /** The plan's monthly amount: SUM of the charged budgets, at least $99. */
   monthlyAmountCents: number;
   /** The reactive part of it. */
   reactiveMonthlyCents: number;
@@ -83,12 +98,12 @@ export interface ItemsPlanPricing {
 }
 
 /**
- * What one brand x offer's plan costs, from its MONTHLY item budgets. Charged =
+ * What one brand x offer's plan costs, from its MONTHLY campaign budgets. Charged =
  * a channel we run AND a campaign that is ON. Null when nothing is charged: the
  * plan keeps the amount it had.
  */
 export function itemsPlanPricing(
-  rows: CampaignItemBudget[],
+  items: CampaignItem[],
   terms: SalesPathTerms,
   isOn: CampaignOnPredicate
 ): ItemsPlanPricing | null {
@@ -96,15 +111,15 @@ export function itemsPlanPricing(
   let reactive = 0;
   let deferred = 0;
   let off = 0;
-  for (const r of rows) {
-    if (r.period !== "month") continue;
-    if (runs(terms, r.featureSlug) !== true) {
-      deferred += r.budgetCents;
-    } else if (!isOn(r)) {
-      off += r.budgetCents;
+  for (const i of items) {
+    if (i.period !== "month") continue;
+    if (terms.managedChannel(i.featureSlug) !== true) {
+      deferred += i.budgetCents;
+    } else if (!isOn(i)) {
+      off += i.budgetCents;
     } else {
-      charged += r.budgetCents;
-      if (r.role === "reactive") reactive += r.budgetCents;
+      charged += i.budgetCents;
+      if (roleOf(terms, i.featureSlug, i.legKey) === "reactive") reactive += i.budgetCents;
     }
   }
   if (charged === 0) return null;
