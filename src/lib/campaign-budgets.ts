@@ -399,12 +399,29 @@ export interface SetCampaignBudgetResult {
  * (the brand is ceiling-funded from now on) and one history row carrying the new
  * brand TOTAL is appended.
  */
+export interface SetCampaignBudgetOptions {
+  /**
+   * The caller already judged the budget against the per (channel x leg)
+   * minimums (lib/campaign-items): the channel daily-operating-cost floor is
+   * not applied on top.
+   */
+  skipChannelFloor?: boolean;
+  /**
+   * A subscriber's monthly budget stored on the row (its daily ceiling being
+   * monthly / 30). Omitted / null = a daily-only ceiling, which clears any
+   * monthly figure the row held: one row, one figure.
+   */
+  monthlyBudgetCents?: number | null;
+}
+
 export async function setCampaignDailyBudget(
   orgId: string,
   brandId: string,
   key: CampaignKey,
-  dailyBudgetCentsInput: unknown
+  dailyBudgetCentsInput: unknown,
+  options: SetCampaignBudgetOptions = {}
 ): Promise<SetCampaignBudgetResult> {
+  const monthlyBudgetCents = options.monthlyBudgetCents ?? null;
   let dailyBudgetCents: string;
   try {
     dailyBudgetCents = parseNonNegativeCents(dailyBudgetCentsInput);
@@ -415,7 +432,7 @@ export async function setCampaignDailyBudget(
   }
 
   // Read before the lock — a network read has no business inside one.
-  const minimums = await getChannelMinimums();
+  const minimums = options.skipChannelFloor ? null : await getChannelMinimums();
 
   return db.transaction(async (tx) => {
     const changedAt = new Date();
@@ -445,15 +462,17 @@ export async function setCampaignDailyBudget(
     const channelRows = existing.filter(
       (row) => row.featureSlug === key.featureSlug
     );
-    assertChannelMeetsMinimum(
-      key.featureSlug,
-      addCents(
-        sumCeilings(channelRows.filter((row) => !ownedSet.has(row))),
-        dailyBudgetCents
-      ),
-      channelRows.length > 0 ? sumCeilings(channelRows) : null,
-      minimums
-    );
+    if (!options.skipChannelFloor) {
+      assertChannelMeetsMinimum(
+        key.featureSlug,
+        addCents(
+          sumCeilings(channelRows.filter((row) => !ownedSet.has(row))),
+          dailyBudgetCents
+        ),
+        channelRows.length > 0 ? sumCeilings(channelRows) : null,
+        minimums!
+      );
+    }
 
     const previousBrandDailyBudgetCents =
       existing.length > 0
@@ -473,6 +492,7 @@ export async function setCampaignDailyBudget(
           offerId: key.offerId,
           legKey: key.legKey,
           dailyBudgetCents,
+          monthlyBudgetCents,
           updatedAt: changedAt,
         })
         .where(identityOf(orgId, brandId, keeper));
@@ -484,6 +504,7 @@ export async function setCampaignDailyBudget(
         offerId: key.offerId,
         legKey: key.legKey,
         dailyBudgetCents,
+        monthlyBudgetCents,
         updatedAt: changedAt,
       });
     }

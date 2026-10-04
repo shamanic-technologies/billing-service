@@ -22,7 +22,7 @@ import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import {
-  campaignItemBudgets,
+  campaignDailyBudgets,
   salesPathReactiveCharges,
   subscriptionCharges,
   subscriptionCreditExpiries,
@@ -250,7 +250,7 @@ describe("item budgets per campaign", () => {
     res = await put([[COLD, "no_such_leg", 1000]]);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("unknown_item");
-    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
+    expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
   });
 
   it("reactive MAX is capped at half the SUM of the offer's entry budgets; two entries coexist", async () => {
@@ -271,18 +271,16 @@ describe("item budgets per campaign", () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("reactive_above_cap");
 
+    // ONE store: a daily budget IS the campaign's ceiling row, read by every existing
+    // reader exactly as a ceiling (campaigns mode), never a second figure.
     const body = await salesBudget();
-    expect(body.mode).toBe("items");
-    // Reactive budgets are MAX budgets that fire on leads: never added to the daily total.
-    expect(body.dailyBudgetCents).toBe("1400.0000000000");
-    expect(body.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ offerId: OFFER, featureSlug: COLD, legKey: REPLY, budgetCents: "1000.0000000000", period: "day", periodStart: null, role: "proactive", managed: true }),
-        expect.objectContaining({ featureSlug: MEET, role: "reactive", budgetCents: "700.0000000000" }),
-      ])
-    );
+    expect(body.mode).toBe("campaigns");
+    const one = await request(app)
+      .get(`/internal/brands/${BRAND}/campaign-budget?offerId=${OFFER}&legKey=${REPLY}&featureSlug=${COLD}`)
+      .set(internal);
+    expect(one.body.dailyBudgetCents).toBe("1000.0000000000");
     const total = await request(app).get(`/internal/brands/${BRAND}/daily-budget`).set(internal);
-    expect(total.body.dailyBudgetCents).toBe("1400.0000000000");
+    expect(total.body.dailyBudgetCents).toBe("2100.0000000000");
 
     // Lower the follow-up, then the entry can go; DELETE is idempotent.
     expect((await put([[MEET, MEET_LEG, 500]])).status).toBe(200);
@@ -293,6 +291,34 @@ describe("item budgets per campaign", () => {
     expect(res.body.removed).toBe(false);
   });
 
+  it("one row per campaign: the old ceiling route and the new one write the same row", async () => {
+    await insertTestAccount({ orgId });
+    const old = await request(app)
+      .put(`/v1/brands/${BRAND}/campaign-budget`)
+      .set(headers)
+      .send({ offerId: OFFER, legKey: REPLY, featureSlug: COLD, dailyBudgetCents: 800 });
+    expect(old.status).toBe(200);
+    let res = await request(app).get(itemsPath).set(headers);
+    expect(res.body.items).toHaveLength(1);
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 800, period: "day" });
+
+    res = await put([[COLD, REPLY, 1200]]);
+    expect(res.status).toBe(200);
+    const rows = await db.select().from(campaignDailyBudgets);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dailyBudgetCents).toBe("1200.0000000000");
+  });
+
+  it("a write takes the brand out of its global sales budget", async () => {
+    await insertTestAccount({ orgId });
+    expect((await request(app).put(`/v1/brands/${BRAND}/sales-budget`).set(headers).send({ dailyBudgetCents: 5000 })).status).toBe(200);
+    expect((await salesBudget()).mode).toBe("global");
+    const res = await put([[COLD, REPLY, 1000]]);
+    expect(res.status).toBe(200);
+    expect(res.body.globalBudgetCleared).toBe(true);
+    expect((await salesBudget()).mode).toBe("campaigns");
+  });
+
   it("an unreadable catalogue refuses the write (502 minimums_unavailable), nothing stored", async () => {
     await insertTestAccount({ orgId });
     __resetSalesPathTerms();
@@ -300,7 +326,7 @@ describe("item budgets per campaign", () => {
     const res = await put([[COLD, REPLY, 1000]]);
     expect(res.status).toBe(502);
     expect(res.body.code).toBe("minimums_unavailable");
-    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
+    expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
   });
 
   // --- subscriber -------------------------------------------------------------
@@ -329,14 +355,19 @@ describe("item budgets per campaign", () => {
     expect(res.body.plan.monthlyAmountCents).toBe(40000);
 
     const body = await salesBudget();
+    expect(body.mode).toBe("items");
     const entry = body.items.find((i: { featureSlug: string }) => i.featureSlug === COLD);
     expect(entry).toMatchObject({
       period: "month",
       budgetCents: "30000.0000000000",
+      role: "proactive",
+      managed: true,
       periodStart: plan.currentPeriodStart.toISOString(),
       periodEnd: plan.currentPeriodEnd.toISOString(),
     });
-    expect(body.dailyBudgetCents).toBe("1000.0000000000");
+    // The same row's daily ceiling is the monthly budget over 30 days.
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 30000, dailyBudgetCents: "1000.0000000000" });
+    expect(body.dailyBudgetCents).toBe("1333.3333333333");
   });
 
   it("subscriber: an OFF campaign keeps its budget and is charged nothing; turning it ON charges its follow-up", async () => {
@@ -392,7 +423,7 @@ describe("item budgets per campaign", () => {
     res = await put([[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ code: "reactive_charge_declined", error: "Your card has insufficient funds." });
-    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
+    expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
     expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(9900);
   });
 

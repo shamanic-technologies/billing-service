@@ -764,6 +764,12 @@ export const campaignDailyBudgets = pgTable(
       precision: FRACTIONAL_PRECISION,
       scale: FRACTIONAL_SCALE,
     }).notNull(),
+    /**
+     * A subscriber's MONTHLY budget for this campaign (migration 0064,
+     * lib/campaign-items); the daily ceiling is then monthly / 30. NULL = a
+     * daily-only ceiling (prepaid / postpaid, and every older row).
+     */
+    monthlyBudgetCents: integer("monthly_budget_cents"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1082,52 +1088,6 @@ export const platformOrgs = pgTable("platform_orgs", {
   reason: text("reason").notNull(),
   addedBy: text("added_by").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-// Item budgets PER CAMPAIGN (migration 0063, lib/campaign-items): one budget per
-// campaign = (offer x leg x channel). On/off is campaign-service's campaign status.
-export const campaignItemBudgets = pgTable(
-  "campaign_item_budgets",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    orgId: uuid("org_id").notNull(),
-    brandId: uuid("brand_id").notNull(),
-    offerId: uuid("offer_id").notNull(),
-    featureSlug: text("feature_slug").notNull(),
-    legKey: text("leg_key").notNull(),
-    /** proactive (entry leg) | reactive (fires on a step a lead reaches; a MAX budget) */
-    role: text("role").notNull(),
-    /** day (prepaid / postpaid) | month (subscriber) */
-    period: text("period").notNull(),
-    budgetCents: integer("budget_cents").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    unique("campaign_item_budgets_campaign_unique").on(
-      table.orgId,
-      table.brandId,
-      table.offerId,
-      table.featureSlug,
-      table.legKey
-    ),
-    index("idx_campaign_item_budgets_org_brand").on(table.orgId, table.brandId),
-  ]
-);
-export type CampaignItemBudget = typeof campaignItemBudgets.$inferSelect;
-
-export const campaignItemBudgetChanges = pgTable("campaign_item_budget_changes", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  orgId: uuid("org_id").notNull(),
-  brandId: uuid("brand_id").notNull(),
-  offerId: uuid("offer_id").notNull(),
-  featureSlug: text("feature_slug").notNull(),
-  legKey: text("leg_key").notNull(),
-  /** The budget after the change; null = removed (not set). */
-  budgetCents: integer("budget_cents"),
-  period: text("period"),
-  changedByUserId: uuid("changed_by_user_id"),
-  changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // A subscriber's reactive budget charged NOW for the current period (migration 0062).

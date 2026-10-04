@@ -2509,6 +2509,7 @@
           },
           "role": {
             "type": "string",
+            "nullable": true,
             "enum": [
               "proactive",
               "reactive"
@@ -3863,7 +3864,11 @@
             "$ref": "#/components/schemas/CampaignItemPeriod"
           },
           "budgetCents": {
-            "type": "integer",
+            "type": "number",
+            "nullable": true
+          },
+          "dailyBudgetCents": {
+            "type": "string",
             "nullable": true
           },
           "managed": {
@@ -3892,6 +3897,7 @@
           "role",
           "period",
           "budgetCents",
+          "dailyBudgetCents",
           "managed",
           "minimumCents",
           "capCents",
@@ -4039,10 +4045,14 @@
             "properties": {
               "reactiveChargedCents": {
                 "type": "integer"
+              },
+              "globalBudgetCleared": {
+                "type": "boolean"
               }
             },
             "required": [
-              "reactiveChargedCents"
+              "reactiveChargedCents",
+              "globalBudgetCleared"
             ]
           }
         ]
