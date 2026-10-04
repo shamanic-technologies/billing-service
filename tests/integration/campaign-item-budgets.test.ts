@@ -1,13 +1,14 @@
 /**
- * SALES-PATH ITEM BUDGETS (owner 2026-10-04, lib/sales-path-items). Pins:
- *   - a daily (prepaid / postpaid) item clears its published minimum over 30 days;
- *     a reactive item is at most 50% of its path's entry item; customer-team legs
- *     and a second entry are refused, each with a legible code;
- *   - one active path per entry: entry_taken, unless replacePathKey names the holder;
+ * ITEM BUDGETS PER CAMPAIGN (owner 2026-10-04, lib/campaign-items). Pins:
+ *   - a daily (prepaid / postpaid) budget clears its published minimum over 30 days;
+ *     a reactive MAX is at most 50% of the offer's entry budgets; customer-team legs
+ *     and a reactive with no entry are refused, each with a legible code;
+ *   - a campaign not set reads as budgetCents null; DELETE puts it back;
  *   - campaign-service reads mode "items" on the sales-budget read; a brand with no
  *     item reads exactly as before;
- *   - subscriber: the plan becomes the SUM of its items (min $99), the reactive part
- *     is charged NOW (once), a refused card writes nothing;
+ *   - subscriber: the plan becomes the SUM of its ON budgets (min $99), an ON
+ *     reactive part is charged NOW (once), OFF budgets are kept and not charged,
+ *     a refused card writes nothing, a campaign turned ON charges its follow-up;
  *   - a channel we do not run is recorded and charged nothing, then enters the plan
  *     at the first renewal after it launches;
  *   - unspent reactive credit carries over at the boundary instead of expiring.
@@ -21,12 +22,13 @@ import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import {
-  salesPathItemBudgets,
+  campaignItemBudgets,
   salesPathReactiveCharges,
   subscriptionCharges,
   subscriptionCreditExpiries,
 } from "../../src/db/schema.js";
 import { advanceSubscription, listLiveSubscriptions } from "../../src/lib/subscription.js";
+import { onCampaignStatusChanged } from "../../src/lib/campaign-items.js";
 import {
   __primeSalesPathTerms,
   __resetSalesPathTerms,
@@ -93,16 +95,22 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-describe("sales-path item budgets", () => {
+
+describe("item budgets per campaign", () => {
   const app = createTestApp();
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let setUsage: (cents: string) => void;
+  /** Campaigns that are ON (campaign-service status ongoing), as `featureSlug:legKey`. */
+  let onCampaigns: Set<string>;
+  let campaignStatusDown: boolean;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     await cleanTestData();
     __resetSalesPathTerms();
     __primeSalesPathTerms(catalogue());
+    onCampaigns = new Set([`${COLD}:${REPLY}`, `${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`, `${META}:${VISIT}`]);
+    campaignStatusDown = false;
 
     ssMocks = setupStripeMocks();
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithEmail("founder@new.test"));
@@ -121,6 +129,32 @@ describe("sales-path item budgets", () => {
         return json({ offers: [{ offerId: OFFER, status: "active" }] });
       }
       return json({ offers: [] });
+    });
+
+    const cs = await import("../../src/lib/campaign-service-client.js");
+    vi.spyOn(cs, "fetchRecurringCampaignStatuses").mockImplementation(async () => {
+      if (campaignStatusDown) return { ok: false, reason: "campaign_service_unavailable" };
+      return {
+        ok: true,
+        campaigns: [...onCampaigns].map((k, i) => {
+          const [featureSlug, legKey] = k.split(":");
+          return {
+            campaignId: `00000000-0000-4000-8000-00000000000${i}`,
+            orgId,
+            brandId: BRAND,
+            offerId: OFFER,
+            legKey,
+            featureSlug,
+            status: "ongoing",
+            running: true,
+            executedByPlatform: true,
+            kind: null,
+            audience: "available" as const,
+            allAudiencesExhausted: false,
+            recurring: true,
+          };
+        }),
+      };
     });
 
     const runsClient = await import("../../src/lib/runs-client.js");
@@ -150,17 +184,17 @@ describe("sales-path item budgets", () => {
     await closeDb();
   });
 
-  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/sales-path-budgets`;
+  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
-  function put(pathKey: string, items: Array<[string, string, number]>, replacePathKey?: string) {
+  function put(items: Array<[string, string, number]>) {
     return request(app)
       .put(itemsPath)
       .set(headers)
-      .send({
-        pathKey,
-        items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })),
-        ...(replacePathKey ? { replacePathKey } : {}),
-      });
+      .send({ items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })) });
+  }
+
+  function item(body: { items: Array<{ featureSlug: string; legKey: string }> }, slug: string, leg: string) {
+    return body.items.find((i) => i.featureSlug === slug && i.legKey === leg);
   }
 
   async function salesBudget() {
@@ -184,131 +218,117 @@ describe("sales-path item budgets", () => {
 
   // --- daily (prepaid / postpaid) ---------------------------------------------
 
-  it("a brand with no item reads exactly as before (campaigns mode, no items field)", async () => {
+  it("a brand with no budget reads exactly as before (campaigns mode, no items field)", async () => {
     await insertTestAccount({ orgId });
     const body = await salesBudget();
     expect(body).toEqual({ brandId: BRAND, orgId, mode: "campaigns", dailyBudgetCents: null, updatedAt: null });
   });
 
-  it("daily items: minimum over 30 days, 50% reactive cap, customer leg and second entry refused", async () => {
+  it("not set reads as null; minimum over 30 days; customer leg and reactive-without-entry refused", async () => {
     await insertTestAccount({ orgId });
-    let res = await put("p1", [[COLD, REPLY, 329]]);
+    let res = await request(app)
+      .get(`${itemsPath}?campaigns=${COLD}:${REPLY},${MEET}:${MEET_LEG},${TEAM}:${MEET_LEG}`)
+      .set(headers);
+    expect(res.status).toBe(200);
+    expect(res.body.period).toBe("day");
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null, role: "proactive", minimumCents: 330, managed: true, budgetable: true });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: null, role: "reactive", capCents: 0 });
+    expect(item(res.body, TEAM, MEET_LEG)).toMatchObject({ budgetCents: null, role: null, budgetable: false });
+
+    res = await put([[COLD, REPLY, 329]]);
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "below_minimum", minimumCents: 330, period: "day", featureSlug: COLD });
 
-    res = await put("p1", [[COLD, REPLY, 1000], [MEET, MEET_LEG, 501]]);
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: "reactive_above_cap", capCents: 500, featureSlug: MEET });
-
-    res = await put("p1", [[COLD, REPLY, 1000], [TEAM, MEET_LEG, 100]]);
+    res = await put([[TEAM, MEET_LEG, 100]]);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("customer_leg_has_no_budget");
 
-    res = await put("p1", [[COLD, REPLY, 1000], [COLD, VISIT, 1000]]);
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("one_entry_item_per_path");
-
-    res = await put("p1", [[MEET, MEET_LEG, 500]]);
+    res = await put([[MEET, MEET_LEG, 100]]);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("entry_item_required");
 
-    res = await put("p1", [[COLD, "no_such_leg", 1000]]);
+    res = await put([[COLD, "no_such_leg", 1000]]);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("unknown_item");
+    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
+  });
 
-    expect(await db.select().from(salesPathItemBudgets)).toHaveLength(0);
+  it("reactive MAX is capped at half the SUM of the offer's entry budgets; two entries coexist", async () => {
+    await insertTestAccount({ orgId });
+    expect((await put([[COLD, REPLY, 1000]])).status).toBe(200);
+    let res = await put([[MEET, MEET_LEG, 501]]);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "reactive_above_cap", capCents: 500, featureSlug: MEET });
 
-    res = await put("p1", [[COLD, REPLY, 1000], [MEET, MEET_LEG, 500]]);
+    // A second entry campaign on the same offer raises the cap.
+    res = await put([[COLD, VISIT, 400], [MEET, MEET_LEG, 700]]);
     expect(res.status).toBe(200);
-    expect(res.body.period).toBe("day");
-    expect(res.body.paths).toHaveLength(1);
-    expect(res.body.paths[0].items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ featureSlug: COLD, role: "proactive", budgetCents: 1000, minimumCents: 330, managed: true }),
-        expect.objectContaining({ featureSlug: MEET, role: "reactive", budgetCents: 500, capCents: 500 }),
-      ])
-    );
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 700, capCents: 700 });
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+
+    // Removing an entry that would leave the follow-up over its cap is refused.
+    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("reactive_above_cap");
 
     const body = await salesBudget();
     expect(body.mode).toBe("items");
-    // Reactive items fire on leads: never added to the daily total.
-    expect(body.dailyBudgetCents).toBe("1000.0000000000");
+    // Reactive budgets are MAX budgets that fire on leads: never added to the daily total.
+    expect(body.dailyBudgetCents).toBe("1400.0000000000");
     expect(body.items).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ offerId: OFFER, featureSlug: COLD, legKey: REPLY, budgetCents: "1000.0000000000", period: "day", periodStart: null }),
-        expect.objectContaining({ featureSlug: MEET, role: "reactive", budgetCents: "500.0000000000" }),
+        expect.objectContaining({ offerId: OFFER, featureSlug: COLD, legKey: REPLY, budgetCents: "1000.0000000000", period: "day", periodStart: null, role: "proactive", managed: true }),
+        expect.objectContaining({ featureSlug: MEET, role: "reactive", budgetCents: "700.0000000000" }),
       ])
     );
     const total = await request(app).get(`/internal/brands/${BRAND}/daily-budget`).set(internal);
-    expect(total.body.dailyBudgetCents).toBe("1000.0000000000");
-  });
+    expect(total.body.dailyBudgetCents).toBe("1400.0000000000");
 
-  it("one active path per entry: entry_taken, unless replacePathKey names the holder", async () => {
-    await insertTestAccount({ orgId });
-    expect((await put("p1", [[COLD, REPLY, 1000]])).status).toBe(200);
-    // Another entry on the same offer is a second active path: allowed.
-    expect((await put("p2", [[COLD, VISIT, 400]])).status).toBe(200);
-
-    let res = await put("p3", [[COLD, REPLY, 2000]]);
-    expect(res.status).toBe(409);
-    expect(res.body).toMatchObject({ code: "entry_taken", conflictingPathKey: "p1" });
-
-    res = await put("p3", [[COLD, REPLY, 2000]], "p1");
-    expect(res.status).toBe(200);
-    expect(res.body.replacedPathKey).toBe("p1");
-    expect(res.body.paths.map((p: { pathKey: string }) => p.pathKey).sort()).toEqual(["p2", "p3"]);
-
-    res = await request(app).delete(`${itemsPath}?pathKey=p2`).set(headers);
+    // Lower the follow-up, then the entry can go; DELETE is idempotent.
+    expect((await put([[MEET, MEET_LEG, 500]])).status).toBe(200);
+    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
     expect(res.status).toBe(200);
     expect(res.body.removed).toBe(true);
-    res = await request(app).delete(`${itemsPath}?pathKey=p2`).set(headers);
+    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
     expect(res.body.removed).toBe(false);
-    expect((await salesBudget()).dailyBudgetCents).toBe("2000.0000000000");
   });
 
   it("an unreadable catalogue refuses the write (502 minimums_unavailable), nothing stored", async () => {
     await insertTestAccount({ orgId });
     __resetSalesPathTerms();
     process.env.FEATURES_SERVICE_URL = "http://features.test";
-    const res = await put("p1", [[COLD, REPLY, 1000]]);
+    const res = await put([[COLD, REPLY, 1000]]);
     expect(res.status).toBe(502);
     expect(res.body.code).toBe("minimums_unavailable");
-    expect(await db.select().from(salesPathItemBudgets)).toHaveLength(0);
+    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
   });
 
   // --- subscriber -------------------------------------------------------------
 
-  it("subscriber: the plan becomes the SUM of its items; the reactive part is charged NOW, once", async () => {
+  it("subscriber: the plan becomes the SUM of its ON budgets; an ON reactive part is charged NOW, once", async () => {
     const plan = await subscriber();
 
-    let res = await put("p1", [[COLD, REPLY, 20050]]);
+    let res = await put([[COLD, REPLY, 20050]]);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("amount_not_whole_dollars");
 
-    res = await put("p1", [[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
+    res = await put([[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
     expect(res.status).toBe(200);
     expect(res.body.period).toBe("month");
     expect(res.body.reactiveChargedCents).toBe(10000);
-    expect(res.body.plan).toMatchObject({
-      subscriptionId: plan.id,
-      monthlyAmountCents: 30000,
-      reactiveMonthlyCents: 10000,
-      deferredMonthlyCents: 0,
-      currentMonthlyAmountCents: 30000,
-    });
+    expect(res.body.pricing).toMatchObject({ monthlyAmountCents: 30000, reactiveMonthlyCents: 10000, deferredMonthlyCents: 0, offMonthlyCents: 0 });
+    expect(res.body.plan).toEqual({ subscriptionId: plan.id, monthlyAmountCents: 30000 });
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
     expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(10000);
 
-    // Restating the same reactive budget charges nothing more this period.
-    res = await put("p1", [[COLD, REPLY, 30000], [MEET, MEET_LEG, 10000]]);
+    // Restating the same follow-up budget charges nothing more this period.
+    res = await put([[COLD, REPLY, 30000]]);
     expect(res.status).toBe(200);
     expect(res.body.reactiveChargedCents).toBe(0);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(res.body.plan.currentMonthlyAmountCents).toBe(40000);
+    expect(res.body.plan.monthlyAmountCents).toBe(40000);
 
     const body = await salesBudget();
-    expect(body.mode).toBe("items");
     const entry = body.items.find((i: { featureSlug: string }) => i.featureSlug === COLD);
     expect(entry).toMatchObject({
       period: "month",
@@ -316,92 +336,114 @@ describe("sales-path item budgets", () => {
       periodStart: plan.currentPeriodStart.toISOString(),
       periodEnd: plan.currentPeriodEnd.toISOString(),
     });
-    // The daily total of a monthly item is its 30th.
     expect(body.dailyBudgetCents).toBe("1000.0000000000");
   });
 
-  it("subscriber: a refused reactive charge writes nothing; no plan for the offer is refused", async () => {
+  it("subscriber: an OFF campaign keeps its budget and is charged nothing; turning it ON charges its follow-up", async () => {
+    const plan = await subscriber();
+    onCampaigns.delete(`${MEET}:${MEET_LEG}`);
+    let res = await put([[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
+    expect(res.status).toBe(200);
+    expect(res.body.reactiveChargedCents).toBe(0);
+    expect(res.body.pricing).toMatchObject({ monthlyAmountCents: 20000, reactiveMonthlyCents: 0, offMonthlyCents: 10000 });
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
+
+    // campaign-service reports the follow-up campaign turned ON.
+    onCampaigns.add(`${MEET}:${MEET_LEG}`);
+    const hook = await request(app)
+      .post(`/internal/brands/${BRAND}/mission-status-changed`)
+      .set({ ...internal, "x-user-id": userId })
+      .send({
+        campaignId: "00000000-0000-4000-8000-0000000000c1",
+        featureSlug: MEET,
+        offerId: OFFER,
+        legKey: MEET_LEG,
+        fromStatus: null,
+        toStatus: "ongoing",
+      });
+    expect(hook.status).toBe(202);
+    await vi.waitFor(async () => {
+      expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(30000);
+    });
+    // A second trigger for the same move (concurrent or retried) charges nothing more.
+    await onCampaignStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(10000);
+    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(30000);
+    expect(plan.id).toBeTruthy();
+  });
+
+  it("subscriber: a refused follow-up charge writes nothing; no plan / unreadable status refused", async () => {
     await insertTestAccount({ orgId, paymentMode: "subscription" });
-    let res = await put("p1", [[COLD, REPLY, 20000]]);
+    let res = await put([[COLD, REPLY, 20000]]);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("no_plan_for_offer");
     await cleanTestData();
 
     await subscriber();
+    campaignStatusDown = true;
+    res = await put([[COLD, REPLY, 20000]]);
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("campaign_status_unavailable");
+    campaignStatusDown = false;
+
     ssMocks.reloadOffSession.mockResolvedValueOnce({ status: "failed", failure_code: "insufficient_funds", failure_message: "Your card has insufficient funds." });
-    res = await put("p1", [[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
+    res = await put([[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ code: "reactive_charge_declined", error: "Your card has insufficient funds." });
-    expect(await db.select().from(salesPathItemBudgets)).toHaveLength(0);
-    const [plan] = await listLiveSubscriptions(orgId);
-    expect(plan.monthlyAmountCents).toBe(9900);
+    expect(await db.select().from(campaignItemBudgets)).toHaveLength(0);
+    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(9900);
   });
 
   it("a channel we do not run: recorded, charged nothing, then enters the plan at the renewal after it launches", async () => {
     const plan = await subscriber();
-    const res = await put("ads", [[META, VISIT, 150000]]);
+    const res = await put([[META, VISIT, 150000]]);
     expect(res.status).toBe(200);
-    expect(res.body.paths[0].items[0]).toMatchObject({ managed: false, budgetCents: 150000 });
+    expect(item(res.body, META, VISIT)).toMatchObject({ managed: false, budgetCents: 150000 });
     expect(res.body.pricing).toBeNull();
-    expect(res.body.plan).toBeNull();
+    expect(res.body.plan.monthlyAmountCents).toBe(9900);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
-    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(9900);
 
-    // We launch meta-ads: the next renewal charges the commitment.
     __primeSalesPathTerms(catalogue(true));
     await advanceSubscription(plan, new Date(plan.currentPeriodEnd.getTime() + HOUR));
-    const charges = await db
-      .select()
-      .from(subscriptionCharges)
-      .where(eq(subscriptionCharges.subscriptionId, plan.id));
+    const charges = await db.select().from(subscriptionCharges).where(eq(subscriptionCharges.subscriptionId, plan.id));
     const renewal = charges.find((c) => c.periodStart.getTime() === plan.currentPeriodEnd.getTime());
     expect(renewal?.amountCents).toBe(150000);
     expect(ssMocks.reloadOffSession.mock.calls.at(-1)?.[1]).toBe(150000);
   });
 
-  it("unspent reactive credit carries over at the boundary instead of expiring", async () => {
+  it("unspent follow-up credit carries over at the boundary instead of expiring", async () => {
     const plan = await subscriber();
-    expect((await put("p1", [[COLD, REPLY, 9900], [MEET, MEET_LEG, 4900]])).status).toBe(200);
+    expect((await put([[COLD, REPLY, 9900], [MEET, MEET_LEG, 4900]])).status).toBe(200);
     expect(await db.select().from(salesPathReactiveCharges)).toHaveLength(1);
 
-    // Paid in: the $99 plan + the $49 reactive charge. Spent: the whole proactive month
-    // and $10 of meetings. Left: $39 of reactive credit.
+    // Paid in: the $99 plan + the $49 follow-up charge. Spent: the whole entry month and
+    // $10 of meetings. Left: $39 of follow-up credit.
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("14800.0000000000");
     setUsage("10900.0000000000");
     const boundary = plan.currentPeriodEnd;
     await advanceSubscription(plan, new Date(boundary.getTime() + HOUR));
 
-    const [expiry] = await db
-      .select()
-      .from(subscriptionCreditExpiries)
-      .where(eq(subscriptionCreditExpiries.subscriptionId, plan.id));
+    const [expiry] = await db.select().from(subscriptionCreditExpiries).where(eq(subscriptionCreditExpiries.subscriptionId, plan.id));
     expect(expiry.amountCents).toBe("0.0000000000");
     expect(expiry.carriedOverCents).toBe("3900.0000000000");
 
-    // The renewal charges the full sum, its reactive part recorded on the charge.
-    const [renewal] = await db
-      .select()
-      .from(subscriptionCharges)
-      .where(eq(subscriptionCharges.periodStart, boundary));
+    const [renewal] = await db.select().from(subscriptionCharges).where(eq(subscriptionCharges.periodStart, boundary));
     expect(renewal).toMatchObject({ amountCents: 14800, reactiveCents: 4900 });
 
-    // campaign-service reads the reactive item with the carry-over folded in.
     const body = await salesBudget();
     const meet = body.items.find((i: { featureSlug: string }) => i.featureSlug === MEET);
     expect(meet.budgetCents).toBe("8800.0000000000");
   });
 
-  it("proactive credit left at the boundary still expires (only reactive carries)", async () => {
+  it("entry credit left at the boundary still expires (only follow-up credit carries)", async () => {
     const plan = await subscriber();
-    expect((await put("p1", [[COLD, REPLY, 9900], [MEET, MEET_LEG, 4900]])).status).toBe(200);
-    // Nothing spent: $148 left, of which at most the $49 reactive carries.
+    expect((await put([[COLD, REPLY, 9900], [MEET, MEET_LEG, 4900]])).status).toBe(200);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("14800.0000000000");
     setUsage("0.0000000000");
     await advanceSubscription(plan, new Date(plan.currentPeriodEnd.getTime() + HOUR));
-    const [expiry] = await db
-      .select()
-      .from(subscriptionCreditExpiries)
-      .where(eq(subscriptionCreditExpiries.subscriptionId, plan.id));
+    const [expiry] = await db.select().from(subscriptionCreditExpiries).where(eq(subscriptionCreditExpiries.subscriptionId, plan.id));
     expect(expiry.carriedOverCents).toBe("4900.0000000000");
     expect(expiry.amountCents).toBe("9900.0000000000");
   });

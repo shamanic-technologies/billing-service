@@ -24,7 +24,7 @@ import {
   sumCeilings,
 } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
-import { itemsDailyTotalCents, listBrandItems } from "./sales-path-items-store.js";
+import { itemsDailyTotalCents, listBrandItems } from "./campaign-items-store.js";
 import { getSalesPathTerms } from "./sales-path-terms.js";
 
 /** A brand-scalar write against a brand that stated a global sales budget. */
@@ -195,8 +195,8 @@ export async function getBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
-  // ITEMS mode (lib/sales-path-items): the brand budgets each active sales path
-  // item; its daily total is the proactive items we run (a monthly one as its 30th).
+  // ITEMS mode (lib/campaign-items): the brand budgets each campaign (offer x leg x
+  // channel); its daily total is the proactive items we run (a monthly one as its 30th).
   const items = await listBrandItems(orgId, brandId);
   if (items.length > 0) {
     let terms = null;

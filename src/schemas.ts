@@ -996,17 +996,17 @@ const BrandFundingModeSchema = z
   .enum(["items", "global", "campaigns"])
   .openapi("BrandFundingMode", {
     description:
-      "items = the brand budgets each (channel x leg) item of the sales paths it activated " +
+      "items = the brand budgets each campaign (offer x leg x channel) " +
       "(outranks the global pot; only a brand that stated an item reads it); " +
       "global = one daily sales budget campaign-service allocates; " +
       "campaigns = every campaign paced on its own ceiling (the default).",
   });
 
-const ItemPeriodSchema = z.enum(["day", "month"]).openapi("SalesPathItemPeriod", {
+const ItemPeriodSchema = z.enum(["day", "month"]).openapi("CampaignItemPeriod", {
   description: "day = prepaid / postpaid daily budget; month = subscriber monthly budget.",
 });
 
-export const SpendableSalesPathItemSchema = z
+export const SpendableCampaignItemSchema = z
   .object({
     offerId: z.string().uuid(),
     legKey: z.string(),
@@ -1020,10 +1020,8 @@ export const SpendableSalesPathItemSchema = z
     periodEnd: z.string().nullable(),
     /** false = a channel we do not run yet (recorded, never charged); null = catalogue unreadable. */
     managed: z.boolean().nullable(),
-    /** combinationKeys of the active paths funding this item (summed). */
-    pathKeys: z.array(z.string()),
   })
-  .openapi("SpendableSalesPathItem");
+  .openapi("SpendableCampaignItem");
 
 export const BrandSalesBudgetSchema = z
   .object({
@@ -1037,8 +1035,8 @@ export const BrandSalesBudgetSchema = z
     dailyBudgetCents: CentsStringSchema.nullable(),
     /** When it was stated; null in campaigns mode. */
     updatedAt: z.string().nullable(),
-    /** items mode only: one row per (offer, leg, channel) campaign-service spends. */
-    items: z.array(SpendableSalesPathItemSchema).optional(),
+    /** items mode only: one row per campaign (offer, leg, channel) campaign-service spends. */
+    items: z.array(SpendableCampaignItemSchema).optional(),
   })
   .openapi("BrandSalesBudget");
 
@@ -3573,9 +3571,10 @@ registry.registerPath({
   description:
     "Service-to-service read (x-api-key + x-org-id). mode is global when the brand stated ONE " +
     "daily sales budget (dailyBudgetCents), campaigns when every campaign is paced on its own " +
-    "ceiling (dailyBudgetCents null), items when the brand budgets each item of the sales paths it " +
-    "activated (items[]: one row per offer x leg x channel, period day|month, a monthly item carrying " +
-    "the plan's current period; outranks global). billing stores and serves; campaign-service allocates.",
+    "ceiling (dailyBudgetCents null), items when the brand budgets each campaign (items[]: one row " +
+    "per offer x leg x channel, period day|month, a monthly budget carrying the plan's current " +
+    "period, a reactive one being a MAX; outranks global). billing stores and serves; campaign-service " +
+    "spends, and owns each campaign's on/off.",
   request: { headers: internalOrgHeaders, params: brandIdParam },
   responses: {
     200: { description: "Mode and amount", content: { "application/json": { schema: BrandSalesBudgetSchema } } },
@@ -4389,16 +4388,14 @@ registry.registerPath({
   },
 });
 
-// --- Sales-path item budgets (lib/sales-path-items, migration 0062) -----------
+// --- Item budgets per campaign (lib/campaign-items, migrations 0062 + 0063) ---
 
-export const SetSalesPathItemBudgetsRequestSchema = z
+export const SetCampaignItemBudgetsRequestSchema = z
   .object({
-    /** features-service's combinationKey of the activated path. */
-    pathKey: z.string().trim().min(1).max(500),
     /**
-     * One budget per (channel x leg) item of the path that carries money: the entry
-     * item (exactly one) and any reactive item. Customer-team legs carry none.
-     * Integer cents; per DAY for prepaid / postpaid, per MONTH (whole dollars) for a subscriber.
+     * One budget per campaign (featureSlug x legKey on this offer); listed campaigns
+     * are upserted, the others untouched. Integer cents; per DAY for prepaid / postpaid,
+     * per MONTH (whole dollars) for a subscriber. A reactive campaign's budget is a MAX.
      */
     items: z
       .array(
@@ -4409,54 +4406,57 @@ export const SetSalesPathItemBudgetsRequestSchema = z
         })
       )
       .min(1),
-    /** The path whose entry this one takes over: removed in the same write. */
-    replacePathKey: z.string().trim().min(1).max(500).nullable().optional(),
   })
-  .openapi("SetSalesPathItemBudgetsRequest");
+  .openapi("SetCampaignItemBudgetsRequest");
 
-const SalesPathItemViewSchema = z
+const CampaignItemViewSchema = z
   .object({
     featureSlug: z.string(),
     legKey: z.string(),
-    role: z.enum(["proactive", "reactive"]),
+    /** proactive = finds leads (daily/monthly spend); reactive = fires on a step (a MAX); null = unknown leg. */
+    role: z.enum(["proactive", "reactive"]).nullable(),
     period: ItemPeriodSchema,
-    budgetCents: z.number().int(),
+    /** null = not set. */
+    budgetCents: z.number().int().nullable(),
+    /** false = a channel we do not run yet: recorded, charged nothing until it launches. */
     managed: z.boolean().nullable(),
+    /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
     minimumCents: z.number().int().nullable(),
+    /** Reactive only: the most it may carry, half the offer's entry budgets. */
     capCents: z.number().int().nullable(),
+    /** false for a customer-team leg (carries no budget) or an unknown one. */
+    budgetable: z.boolean(),
+    updatedAt: z.string().nullable(),
   })
-  .openapi("SalesPathItemBudget");
+  .openapi("CampaignItemBudget");
 
-const ItemsPlanPricingSchema = z.object({
-  monthlyAmountCents: z.number().int(),
-  reactiveMonthlyCents: z.number().int(),
-  deferredMonthlyCents: z.number().int(),
-});
+const ItemsPlanPricingSchema = z
+  .object({
+    monthlyAmountCents: z.number().int(),
+    reactiveMonthlyCents: z.number().int(),
+    deferredMonthlyCents: z.number().int(),
+    offMonthlyCents: z.number().int(),
+  })
+  .openapi("CampaignItemsPlanPricing");
 
-export const SalesPathItemBudgetsSchema = z
+export const CampaignItemBudgetsSchema = z
   .object({
     orgId: z.string().uuid(),
     brandId: z.string().uuid(),
     offerId: z.string().uuid(),
     period: ItemPeriodSchema,
-    paths: z.array(
-      z.object({ pathKey: z.string(), updatedAt: z.string(), items: z.array(SalesPathItemViewSchema) })
-    ),
-    /** Subscriber: the offer's plan priced from its items (null when none, or not a subscriber). */
-    plan: ItemsPlanPricingSchema.extend({
-      subscriptionId: z.string().uuid(),
-      currentMonthlyAmountCents: z.number().int(),
-    }).nullable(),
-    /** Subscriber: the items' pricing alone (null when no item is charged). */
+    items: z.array(CampaignItemViewSchema),
+    /** Subscriber: the offer's live plan (null when none, or not a subscriber). */
+    plan: z.object({ subscriptionId: z.string().uuid(), monthlyAmountCents: z.number().int() }).nullable(),
+    /** Subscriber: what the budgets cost; null when nothing is charged (or not a subscriber). */
     pricing: ItemsPlanPricingSchema.nullable(),
   })
-  .openapi("SalesPathItemBudgets");
+  .openapi("CampaignItemBudgets");
 
-export const SetSalesPathItemBudgetsResponseSchema = SalesPathItemBudgetsSchema.extend({
-  replacedPathKey: z.string().nullable(),
-  /** Reactive budget charged on the card now (subscriber, active plan). */
+export const SetCampaignItemBudgetsResponseSchema = CampaignItemBudgetsSchema.extend({
+  /** Follow-up (reactive) budget charged on the card now (subscriber, active plan). */
   reactiveChargedCents: z.number().int(),
-}).openapi("SetSalesPathItemBudgetsResponse");
+}).openapi("SetCampaignItemBudgetsResponse");
 
 export const ItemBudgetRefusalSchema = z
   .object({
@@ -4471,26 +4471,30 @@ export const ItemBudgetRefusalSchema = z
       "amount_not_whole_dollars",
       "below_minimum",
       "entry_item_required",
-      "one_entry_item_per_path",
       "reactive_above_cap",
-      "entry_taken",
       "no_plan_for_offer",
       "subscription_not_active",
       "reactive_charge_declined",
       "charge_unavailable",
       "minimums_unavailable",
+      "campaign_status_unavailable",
     ]),
     featureSlug: z.string().optional(),
     legKey: z.string().optional(),
     minimumCents: z.number().int().optional(),
     capCents: z.number().int().optional(),
     period: ItemPeriodSchema.optional(),
-    conflictingPathKey: z.string().optional(),
     amountCents: z.number().int().optional(),
   })
   .openapi("ItemBudgetRefusal");
 
 const brandOfferParams = z.object({ brandId: z.string().uuid(), offerId: z.string().uuid() });
+const campaignsQuerySchema = z.object({
+  campaigns: z
+    .string()
+    .optional()
+    .openapi({ description: "Comma list of featureSlug:legKey to get a row for even when not set." }),
+});
 const itemRefusal = (description: string) => ({
   description,
   content: { "application/json": { schema: ItemBudgetRefusalSchema } },
@@ -4498,72 +4502,75 @@ const itemRefusal = (description: string) => ({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/brands/{brandId}/offers/{offerId}/sales-path-budgets",
-  summary: "Read this offer's sales-path item budgets",
+  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
+  summary: "Read this offer's budget per campaign (offer x leg x channel)",
   description:
-    "Every activated path's item budgets on the offer, each with its minimum (in the item's " +
-    "period), its cap (reactive: half the entry item) and whether we run the channel. " +
-    "period follows the payment mode (subscription = month, else day).",
-  request: { headers: protectedHeaders, params: brandOfferParams },
+    "Every stored campaign budget of the offer, plus a 'not set' row (budgetCents null) for each " +
+    "featureSlug:legKey listed in ?campaigns=. Each row carries its minimum (in its period), its cap " +
+    "(reactive: half the offer's entry budgets) and whether we run the channel. period follows the " +
+    "payment mode (subscription = month, else day). On/off is the campaign's status in campaign-service.",
+  request: { headers: protectedHeaders, params: brandOfferParams, query: campaignsQuerySchema },
   responses: {
-    200: { description: "Item budgets", content: { "application/json": { schema: SalesPathItemBudgetsSchema } } },
-    400: itemRefusal("Invalid ids"),
-    502: itemRefusal("minimums_unavailable: the published minimums could not be read"),
+    200: { description: "Campaign budgets", content: { "application/json": { schema: CampaignItemBudgetsSchema } } },
+    400: itemRefusal("Invalid ids or campaigns query"),
+    502: itemRefusal("minimums_unavailable | campaign_status_unavailable"),
   },
 });
 
 registry.registerPath({
   method: "put",
-  path: "/v1/brands/{brandId}/offers/{offerId}/sales-path-budgets",
-  summary: "State one sales path's item budgets",
+  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
+  summary: "Set one or several campaign budgets of an offer",
   description:
-    "One budget per (channel x leg) item of the path: exactly one entry item, reactive items at most " +
-    "50% of it, customer-team legs none. Each clears its published minimum (a daily item: the monthly " +
-    "minimum / 30, rounded up). One active path per entry: an entry held by another path is 409 " +
-    "entry_taken unless replacePathKey names it. Subscriber: the offer's plan becomes the SUM of its " +
-    "items on channels we run (min $99) from the next charge, and a raise of the reactive part is " +
-    "charged now (unspent reactive credit carries over to the next period). A channel we do not run " +
-    "is recorded and charged nothing until it launches. Nothing is written on any refusal.",
+    "Upserts the listed campaigns. Each clears its published minimum (a daily budget: monthly " +
+    "minimum / 30, rounded up); a reactive campaign's MAX is at most 50% of the SUM of the offer's " +
+    "entry (proactive) budgets; customer-team legs carry none. Subscriber: monthly budgets; the " +
+    "offer's plan becomes the SUM of its budgets on channels we run whose campaign is ON (min $99) " +
+    "from the next charge, and ON follow-up budgets not yet collected this period are charged now " +
+    "(unspent follow-up credit carries over). A channel we do not run is recorded and charged " +
+    "nothing until it launches. Nothing is written on any refusal.",
   request: {
     headers: protectedHeaders,
     params: brandOfferParams,
-    body: { content: { "application/json": { schema: SetSalesPathItemBudgetsRequestSchema } } },
+    body: { content: { "application/json": { schema: SetCampaignItemBudgetsRequestSchema } } },
   },
   responses: {
-    200: { description: "Stated", content: { "application/json": { schema: SetSalesPathItemBudgetsResponseSchema } } },
-    400: itemRefusal("A refused item (below_minimum, reactive_above_cap, unknown_item, ...)"),
-    409: itemRefusal("entry_taken | no_plan_for_offer | subscription_not_active | reactive_charge_declined"),
-    502: itemRefusal("minimums_unavailable | charge_unavailable"),
+    200: { description: "Set", content: { "application/json": { schema: SetCampaignItemBudgetsResponseSchema } } },
+    400: itemRefusal("below_minimum | reactive_above_cap | entry_item_required | unknown_item | ..."),
+    409: itemRefusal("no_plan_for_offer | subscription_not_active | reactive_charge_declined"),
+    502: itemRefusal("minimums_unavailable | campaign_status_unavailable | charge_unavailable"),
   },
 });
 
 registry.registerPath({
   method: "delete",
-  path: "/v1/brands/{brandId}/offers/{offerId}/sales-path-budgets",
-  summary: "Remove one sales path's item budgets (path deactivated)",
-  description: "Idempotent (removed: false when nothing was stored). A subscriber's plan is re-priced from the items left.",
+  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
+  summary: "Remove one campaign's budget (back to not set)",
+  description:
+    "Idempotent (removed: false when nothing was stored). Refused (400 reactive_above_cap) when it " +
+    "would leave a follow-up budget above half of the entry budgets left.",
   request: {
     headers: protectedHeaders,
     params: brandOfferParams,
-    query: z.object({ pathKey: z.string() }),
+    query: z.object({ featureSlug: z.string(), legKey: z.string() }),
   },
   responses: {
     200: {
       description: "Removed",
-      content: { "application/json": { schema: SalesPathItemBudgetsSchema.extend({ removed: z.boolean() }) } },
+      content: { "application/json": { schema: CampaignItemBudgetsSchema.extend({ removed: z.boolean() }) } },
     },
-    400: itemRefusal("Invalid ids or missing pathKey"),
+    400: itemRefusal("Invalid ids, missing featureSlug/legKey, or reactive_above_cap"),
   },
 });
 
 registry.registerPath({
   method: "get",
-  path: "/internal/brands/{brandId}/offers/{offerId}/sales-path-budgets",
-  summary: "Read an offer's sales-path item budgets (service)",
-  request: { headers: internalOrgHeaders, params: brandOfferParams },
+  path: "/internal/brands/{brandId}/offers/{offerId}/campaign-budgets",
+  summary: "Read an offer's budget per campaign (service)",
+  request: { headers: internalOrgHeaders, params: brandOfferParams, query: campaignsQuerySchema },
   responses: {
-    200: { description: "Item budgets", content: { "application/json": { schema: SalesPathItemBudgetsSchema } } },
-    400: itemRefusal("Invalid ids or x-org-id"),
-    502: itemRefusal("minimums_unavailable"),
+    200: { description: "Campaign budgets", content: { "application/json": { schema: CampaignItemBudgetsSchema } } },
+    400: itemRefusal("Invalid ids, campaigns query or x-org-id"),
+    502: itemRefusal("minimums_unavailable | campaign_status_unavailable"),
   },
 });
