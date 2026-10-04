@@ -343,6 +343,7 @@ beforeAll(async () => {
     "0058_plan_per_brand_offer.sql",
     "0059_subscription_pause.sql",
     "0060_subscription_min_29.sql",
+    "0061_subscription_monthly_update.sql",
   ]) {
     const { readFileSync } = await import("fs");
     const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
