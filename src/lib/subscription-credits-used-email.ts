@@ -14,9 +14,9 @@
  *  - It reads in 10 seconds: one heading, two lines, three figures, one upsell,
  *    one button. No dashes in copy.
  *
- * The card goes into the distribute.you transactional layout registered in
- * src/instrument.ts (CREDITS_USED_LAYOUT_HTML). transactional-email-service
- * interpolates `{{var}}` WITHOUT escaping, so every value composed here that came
+ * The card is registered bare (src/instrument.ts): transactional-email-service
+ * wraps it in the official distribute.you layout, so this email draws no logo of
+ * its own (owner 2026-10-04). transactional-email-service interpolates `{{var}}` WITHOUT escaping, so every value composed here that came
  * from another service (the brand name) is HTML-escaped.
  */
 import type { SubscriptionRecap } from "./subscription-recap-client.js";
@@ -110,8 +110,9 @@ export function composeCreditsUsedEmail(params: {
   const emailed = positive(r?.recipientsEmailedCount) ? r!.recipientsEmailedCount! : null;
   const forBrand = params.brandName ? ` for ${params.brandName}` : "";
 
-  const subject = sent !== null ? "Your month of outreach went out" : "Your month of outreach is booked";
-  const heading = `${subject}.`;
+  // Owner copy 2026-10-04: the heading and the subject carry the same words.
+  const subject = sent !== null ? "Your month of outreach went out ✅" : "Your month of outreach is booked ✅";
+  const heading = subject;
 
   // The lines (plain text; escaped once when rendered to HTML).
   const lines: string[] = [];
@@ -202,29 +203,3 @@ export function composeCreditsUsedEmail(params: {
     ctaUrl: params.ctaUrl,
   };
 }
-
-/**
- * The distribute.you transactional layout (same as the dashboard-owned
- * `welcome` / `goal_launched` templates): CSS text wordmark + blue dot, white
- * card, footer. A full `<html>` document, so it is delivered with the layout
- * whether or not transactional-email-service wraps bare bodies.
- */
-export const CREDITS_USED_LAYOUT_HTML = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;600&display=swap" rel="stylesheet"></head>
-<body style="margin:0;padding:0;background-color:#fafaf8;font-family:'Space Grotesk','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;">
-  <div style="max-width:560px;margin:0 auto;padding:40px 24px;">
-    <div style="margin-bottom:28px;">
-      <span style="font-size:26px;font-weight:700;letter-spacing:-0.03em;color:#0a0a14;">distribute.you</span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3D80FF;margin-left:3px;"></span>
-    </div>
-    <div style="background:#ffffff;border:1px solid rgba(10,10,20,0.08);border-radius:12px;padding:36px 32px;">
-{{bodyHtml}}
-    </div>
-    <p style="color:#0a0a14;font-size:15px;font-weight:600;line-height:1.5;margin:28px 0 0;text-align:center;">Revenue made easy.</p>
-    <p style="color:#8b8e98;font-size:13px;line-height:1.6;margin-top:6px;text-align:center;">
-      Done-for-you cold outreach, sent from our domains on your behalf.<br />
-      <a href="https://dashboard.distribute.you" style="color:#8b8e98;">Dashboard</a> &nbsp;·&nbsp; <a href="https://docs.distribute.you" style="color:#8b8e98;">Docs</a>
-    </p>
-  </div>
-</body>
-</html>`;
