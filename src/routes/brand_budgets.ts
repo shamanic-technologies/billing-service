@@ -22,7 +22,7 @@ import {
   setBrandSalesBudget,
   viewOf,
 } from "../lib/brand-sales-budget.js";
-import { getBrandItemsSpendView } from "../lib/sales-path-items.js";
+import { getBrandItemsSpendView, onCampaignStatusChanged } from "../lib/campaign-items.js";
 import {
   MAX_DAY_RANGE_DAYS,
   currentUtcDay,
@@ -450,6 +450,9 @@ router.post(
         ...body,
         actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
       });
+      // A campaign turned on/off re-prices a subscriber's plan from its campaign
+      // budgets, and charges follow-up budgets that just went ON (lib/campaign-items).
+      void onCampaignStatusChanged({ orgId, brandId, offerId: body.offerId });
     }
     res.status(202).json({ notified: move !== null, move });
   }
@@ -809,8 +812,8 @@ router.put(
 // Every answer carries the mode, so a reader never infers it from a null.
 
 async function composeSalesBudgetView(orgId: string, brandId: string) {
-  // ITEMS mode outranks the global pot: the brand budgets each item of the sales
-  // paths it activated (lib/sales-path-items). Only a brand that wrote an item
+  // ITEMS mode outranks the global pot: the brand budgets each campaign
+  // (offer x leg x channel, lib/campaign-items). Only a brand that wrote an item
   // ever reads it; every other brand answers exactly as before.
   const items = await getBrandItemsSpendView(orgId, brandId);
   if (items) {

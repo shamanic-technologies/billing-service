@@ -11,7 +11,6 @@ import {
   unique,
   bigserial,
   boolean,
-  jsonb,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -1022,7 +1021,7 @@ export const subscriptions = pgTable(
     startedByUserId: uuid("started_by_user_id"),
     /**
      * Reactive part of `monthlyAmountCents` when the plan is priced from sales-path
-     * item budgets (migration 0062, lib/sales-path-items); 0 otherwise.
+     * per-campaign item budgets (migrations 0062/0063, lib/campaign-items); 0 otherwise.
      */
     itemReactiveMonthlyCents: integer("item_reactive_monthly_cents").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1085,20 +1084,18 @@ export const platformOrgs = pgTable("platform_orgs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Sales-path ITEM budgets (migration 0062, lib/sales-path-items): one budget per
-// (channel x leg) item of each sales path a customer activated on an offer.
-export const salesPathItemBudgets = pgTable(
-  "sales_path_item_budgets",
+// Item budgets PER CAMPAIGN (migration 0063, lib/campaign-items): one budget per
+// campaign = (offer x leg x channel). On/off is campaign-service's campaign status.
+export const campaignItemBudgets = pgTable(
+  "campaign_item_budgets",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
     offerId: uuid("offer_id").notNull(),
-    /** features-service's combinationKey for the path. */
-    pathKey: text("path_key").notNull(),
     featureSlug: text("feature_slug").notNull(),
     legKey: text("leg_key").notNull(),
-    /** proactive (entry leg) | reactive (fires on a step a lead reaches) */
+    /** proactive (entry leg) | reactive (fires on a step a lead reaches; a MAX budget) */
     role: text("role").notNull(),
     /** day (prepaid / postpaid) | month (subscriber) */
     period: text("period").notNull(),
@@ -1107,31 +1104,33 @@ export const salesPathItemBudgets = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    unique("sales_path_item_budgets_item_unique").on(
+    unique("campaign_item_budgets_campaign_unique").on(
       table.orgId,
       table.brandId,
       table.offerId,
-      table.pathKey,
       table.featureSlug,
       table.legKey
     ),
-    index("idx_sales_path_item_budgets_org_brand").on(table.orgId, table.brandId),
+    index("idx_campaign_item_budgets_org_brand").on(table.orgId, table.brandId),
   ]
 );
-export type SalesPathItemBudget = typeof salesPathItemBudgets.$inferSelect;
+export type CampaignItemBudget = typeof campaignItemBudgets.$inferSelect;
 
-export const salesPathItemBudgetChanges = pgTable("sales_path_item_budget_changes", {
+export const campaignItemBudgetChanges = pgTable("campaign_item_budget_changes", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   orgId: uuid("org_id").notNull(),
   brandId: uuid("brand_id").notNull(),
   offerId: uuid("offer_id").notNull(),
-  pathKey: text("path_key").notNull(),
-  /** The path's items after the change; null = the path's budgets were removed. */
-  items: jsonb("items"),
+  featureSlug: text("feature_slug").notNull(),
+  legKey: text("leg_key").notNull(),
+  /** The budget after the change; null = removed (not set). */
+  budgetCents: integer("budget_cents"),
+  period: text("period"),
   changedByUserId: uuid("changed_by_user_id"),
   changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// A subscriber's reactive budget charged NOW for the current period (migration 0062).
 export const salesPathReactiveCharges = pgTable("sales_path_reactive_charges", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: uuid("org_id").notNull(),
@@ -1140,9 +1139,15 @@ export const salesPathReactiveCharges = pgTable("sales_path_reactive_charges", {
   /** Reactive total collected for the period once this charge is paid. */
   cumulativeCents: integer("cumulative_cents").notNull(),
   amountCents: integer("amount_cents").notNull(),
-  /** paid | failed */
+  /** pending (claimed, charge in flight) | paid | failed */
   status: text("status").notNull(),
   reference: text("reference"),
   failureCode: text("failure_code"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("idx_sales_path_reactive_charges_claim").on(
+    table.subscriptionId,
+    table.periodStart,
+    table.cumulativeCents
+  ),
+]);

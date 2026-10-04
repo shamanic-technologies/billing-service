@@ -82,8 +82,9 @@ import {
 import { ensureOrgStripeCustomer } from "./account.js";
 import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
-import { itemsPlanPricing, listOfferItems } from "./sales-path-items-store.js";
+import { campaignOnPredicateOf, itemsPlanPricing, listOfferItems } from "./campaign-items-store.js";
 import { getSalesPathTerms } from "./sales-path-terms.js";
+import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
@@ -657,7 +658,7 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
     Number(paidSince?.total ?? 0) -
     Number(grantedSince?.total ?? 0) -
     Number(reactivePaidSince?.total ?? 0);
-  // Reactive item budgets (lib/sales-path-items) are paid for the month but only
+  // Reactive item budgets (lib/campaign-items) are paid for the month but only
   // spent when leads reach their step: what is left of them CARRIES OVER instead
   // of expiring, up to what the ending period collected for reactive items.
   const carry = Math.max(0, Math.min(unspent, await reactiveCollectedInPeriod(sub)));
@@ -702,7 +703,7 @@ async function otherPlansLive(sub: Subscription): Promise<boolean> {
   return !!row;
 }
 
-/** Reactive item budget charged NOW during this plan's current period (lib/sales-path-items). */
+/** Reactive item budget charged NOW during this plan's current period (lib/campaign-items). */
 export async function reactiveChargedNowInPeriod(sub: Subscription): Promise<number> {
   const [row] = await db
     .select({ total: rawSql<string>`COALESCE(SUM(${salesPathReactiveCharges.amountCents}), 0)::text` })
@@ -845,10 +846,11 @@ async function endSubscription(sub: Subscription, at: Date, now: Date): Promise<
 }
 
 /**
- * A plan priced from sales-path item budgets follows them: its monthly amount is
- * the SUM of the items on channels we run (at least $99), so a channel that
- * launched since the last write enters the plan here. A plan whose offer holds no
- * charged item keeps its amount. The catalogue being unreadable keeps the amount
+ * A plan priced from per-campaign item budgets (lib/campaign-items) follows them:
+ * its monthly amount is the SUM of the items on channels we run whose campaign is
+ * ON (at least $99), so a channel that launched, or a campaign turned on or off,
+ * since the last write is reflected here. A plan whose offer holds no charged item
+ * keeps its amount. An unreadable catalogue or campaign status keeps the amount
  * last computed (loudly): a renewal is never blocked by a read about pricing.
  */
 export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Promise<Subscription> {
@@ -857,10 +859,12 @@ export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Pr
   if (rows.length === 0) return sub;
   let pricing;
   try {
-    pricing = itemsPlanPricing(rows, await getSalesPathTerms());
+    const statuses = await fetchRecurringCampaignStatuses(sub.orgId);
+    if (!statuses.ok) throw new Error(`campaign status unreadable: ${statuses.reason}`);
+    pricing = itemsPlanPricing(rows, await getSalesPathTerms(), campaignOnPredicateOf(statuses.campaigns));
   } catch (err) {
     console.error(
-      `[billing-service] plan ${sub.id}: sales-path terms unreadable, keeping ${sub.monthlyAmountCents} cents/month`,
+      `[billing-service] plan ${sub.id}: item pricing inputs unreadable, keeping ${sub.monthlyAmountCents} cents/month`,
       err
     );
     return sub;
@@ -883,7 +887,7 @@ export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Pr
     .returning();
   console.log(
     `[billing-service] plan ${sub.id}: priced from items at ${pricing.monthlyAmountCents} cents/month ` +
-      `(reactive ${pricing.reactiveMonthlyCents}, deferred ${pricing.deferredMonthlyCents})`
+      `(reactive ${pricing.reactiveMonthlyCents}, deferred ${pricing.deferredMonthlyCents}, off ${pricing.offMonthlyCents})`
   );
   return updated;
 }
