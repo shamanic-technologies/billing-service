@@ -1003,6 +1003,14 @@ export const subscriptions = pgTable(
     creditsUsedNotifiedPeriodStart: timestamp("credits_used_notified_period_start", {
       withTimezone: true,
     }),
+    /**
+     * End of the last period the informational monthly update reported (migration
+     * 0061, lib/subscription-monthly-update). NULL = never reported: the next report
+     * starts at the plan's first period.
+     */
+    monthlyUpdateReportedThrough: timestamp("monthly_update_reported_through", {
+      withTimezone: true,
+    }),
     /** Set while the customer paused the plan (migration 0059): clock frozen, no charge. */
     pausedAt: timestamp("paused_at", { withTimezone: true }),
     /** When the pause ends on its own. */

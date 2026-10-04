@@ -17,6 +17,7 @@ import {
 } from "../../src/lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "../../src/lib/card-usability.js";
 import { SUBSCRIPTION_CREDITS_USED_EVENT } from "../../src/lib/subscription-notifications.js";
+import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "../../src/lib/subscription-monthly-update.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +88,7 @@ describe("boot-time email template registration", () => {
     expect(names).toEqual([
       "credits-reload-failed",
       SUBSCRIPTION_CREDITS_USED_EVENT,
+      SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
       CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,
@@ -263,5 +265,14 @@ describe("boot-time email template registration", () => {
     expect(t.htmlBody).toBe("{{bodyHtml}}");
     expect(t.layout).toBe("brand");
     expect(t.htmlBody).not.toMatch(/<html|#3D80FF/i);
+  });
+
+  it("registers the monthly update as bare content for the official layout to wrap", async () => {
+    await deployEmailTemplates();
+    const t = lastBody(fetchMock).templates.find((x) => x.name === SUBSCRIPTION_MONTHLY_UPDATE_EVENT)!;
+    expect(t.subject).toBe("{{subject}}");
+    expect(t.htmlBody).toBe("{{bodyHtml}}");
+    expect(t.textBody).toBe("{{bodyText}}");
+    expect(t.layout).toBe("brand");
   });
 });
