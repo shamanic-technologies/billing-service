@@ -3863,6 +3863,16 @@
           "period": {
             "$ref": "#/components/schemas/CampaignItemPeriod"
           },
+          "statedPeriod": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CampaignItemPeriod"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
           "budgetCents": {
             "type": "number",
             "nullable": true
@@ -3896,6 +3906,7 @@
           "legKey",
           "role",
           "period",
+          "statedPeriod",
           "budgetCents",
           "dailyBudgetCents",
           "managed",

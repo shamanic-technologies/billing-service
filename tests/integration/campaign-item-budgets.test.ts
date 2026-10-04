@@ -370,6 +370,29 @@ describe("item budgets per campaign", () => {
     expect(body.dailyBudgetCents).toBe("1333.3333333333");
   });
 
+  it("subscriber: a legacy daily row is served in MONTH with its cap and minimum, then flips when restated", async () => {
+    await subscriber();
+    await db.insert(campaignDailyBudgets).values([
+      { orgId, brandId: BRAND, offerId: OFFER, featureSlug: COLD, legKey: REPLY, dailyBudgetCents: "5000", updatedAt: new Date() },
+      { orgId, brandId: BRAND, offerId: OFFER, featureSlug: MEET, legKey: MEET_LEG, dailyBudgetCents: "5000", updatedAt: new Date() },
+    ]);
+    let res = await request(app).get(itemsPath).set(headers);
+    expect(res.body.period).toBe("month");
+    expect(item(res.body, COLD, REPLY)).toMatchObject({
+      period: "month",
+      statedPeriod: "day",
+      budgetCents: 150000,
+      dailyBudgetCents: "5000.0000000000",
+      minimumCents: 9900,
+    });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", statedPeriod: "day", budgetCents: 150000, capCents: 75000 });
+
+    res = await put([[COLD, REPLY, 30000], [MEET, MEET_LEG, 15000]]);
+    expect(res.status).toBe(200);
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", statedPeriod: "month", budgetCents: 30000, dailyBudgetCents: "1000.0000000000" });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ statedPeriod: "month", budgetCents: 15000, capCents: 15000 });
+  });
+
   it("subscriber: an OFF campaign keeps its budget and is charged nothing; turning it ON charges its follow-up", async () => {
     const plan = await subscriber();
     onCampaigns.delete(`${MEET}:${MEET_LEG}`);

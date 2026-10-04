@@ -420,11 +420,16 @@ async function chargeReactiveDelta(plan: Subscription, targetReactiveCents: numb
   return delta;
 }
 
+/** A budget stated in one period, expressed in another (30 days a month). */
+export function inPeriod(cents: number, from: ItemPeriod, to: ItemPeriod): number {
+  if (from === to) return cents;
+  return to === "month" ? cents * DAYS_PER_MONTH : cents / DAYS_PER_MONTH;
+}
+
 /** The offer's stored budgets, each in the PERIOD being written (a day row read as 30 days in a month write). */
 function asOfferItems(items: CampaignItem[], period: ItemPeriod, terms: SalesPathTerms): OfferItem[] {
   return items.map((i) => {
-    const budget =
-      i.period === period ? i.budgetCents : period === "month" ? i.budgetCents * DAYS_PER_MONTH : i.budgetCents / DAYS_PER_MONTH;
+    const budget = inPeriod(i.budgetCents, i.period, period);
     return {
       featureSlug: i.featureSlug,
       legKey: i.legKey,
@@ -658,8 +663,14 @@ export interface ItemView {
   featureSlug: string;
   legKey: string;
   role: ItemRoleServed | null;
+  /** Always the org's period (the view's): every figure of the row is in it. */
   period: ItemPeriod;
-  /** null = not set. In the item's period; a reactive budget is a MAX. */
+  /**
+   * The period the budget was STATED in; null = not set. Differs from `period` for
+   * a row not yet restated (a subscriber's legacy daily ceiling, served x30).
+   */
+  statedPeriod: ItemPeriod | null;
+  /** null = not set. In `period`; a reactive budget is a MAX. */
   budgetCents: number | null;
   /** The daily ceiling campaign-service paces on (decimal string); null = not set. */
   dailyBudgetCents: string | null;
@@ -715,17 +726,21 @@ export async function getOfferItemsView(
   const items: ItemView[] = pairs.map(({ featureSlug, legKey }) => {
     const row = stored.find((r) => r.featureSlug === featureSlug && r.legKey === legKey) ?? null;
     const t = terms.termsFor(featureSlug, legKey);
-    const p = row?.period ?? period;
     const role = roleOf(terms, featureSlug, legKey);
+    // Every figure of every row is in the ORG's period: a row stored in the other
+    // period (a subscriber's legacy daily ceiling, or a monthly figure left after a
+    // switch to prepaid / postpaid) is converted (x30 / /30) and flagged by
+    // statedPeriod, never served beside a cap or minimum in another unit.
     return {
       featureSlug,
       legKey,
       role,
-      period: p,
-      budgetCents: row?.budgetCents ?? null,
+      period,
+      statedPeriod: row?.period ?? null,
+      budgetCents: row ? inPeriod(row.budgetCents, row.period, period) : null,
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
       managed: t?.managed ?? null,
-      minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, p),
+      minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, period),
       capCents: role === "reactive" ? reactiveCapCents(entries) : null,
       budgetable: t ? t.role !== "customer" : false,
       updatedAt: row ? row.updatedAt.toISOString() : null,
