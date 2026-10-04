@@ -29,6 +29,7 @@ const LEGISTAI: SubscriptionRecap = {
   raiseRevenueMultiple: 2.01,
   raiseAdditionalRevenueUsd: 701.75,
   raiseAdditionalPositiveReplies: 1.26,
+  raiseAdditionalRecipients: 305,
 };
 
 const URL = "https://dashboard.distribute.you/orgs/org_1/billing";
@@ -55,11 +56,11 @@ describe("composeCreditsUsedEmail", () => {
     expect(e.bodyText).toContain("7.0x expected return");
     expect(e.bodyText).toContain("Based on your $2,500 lifetime revenue per client and our current reply rates.");
     expect(e.bodyText).toContain(
-      "Add $100 a month and we expect about 1 more positive reply. That is about $702 more expected revenue."
+      "Add $100 a month and we reach about 305 more decision-makers. That is about $702 more expected revenue."
     );
     // The gain sentence is bold in the rendered email, the raise sentence is not.
     expect(e.bodyHtml).toContain(
-      'Add $100 a month and we expect about 1 more positive reply. <strong style="color:#0a0a14;font-weight:700;">That is about $702 more expected revenue.</strong>'
+      'Add $100 a month and we reach about 305 more decision-makers. <strong style="color:#0a0a14;font-weight:700;">That is about $702 more expected revenue.</strong>'
     );
     expect(render(e)).toContain("<strong");
     expect(render(e)).not.toContain("&lt;strong");
@@ -91,9 +92,20 @@ describe("composeCreditsUsedEmail", () => {
     expect(sentOld.subject).toBe("Your month of outreach went out ✅");
   });
 
+  it("no stated extra decision-makers: falls back to extra replies, never computes one", () => {
+    const e = composeCreditsUsedEmail({
+      recap: { ...LEGISTAI, raiseAdditionalRecipients: null },
+      monthlyAmountCents: 9900,
+      brandName: null,
+      ctaUrl: URL,
+    });
+    expect(e.bodyText).toContain("Add $100 a month and we expect about 1 more positive reply.");
+    expect(e.bodyText).not.toContain("more decision-makers");
+  });
+
   it("0.2 expected replies never renders 'about 1': it becomes a cadence", () => {
     const e = composeCreditsUsedEmail({
-      recap: { ...LEGISTAI, expectedPositiveReplies: 0.2, raiseAdditionalPositiveReplies: 0.2 },
+      recap: { ...LEGISTAI, expectedPositiveReplies: 0.2, raiseAdditionalPositiveReplies: 0.2, raiseAdditionalRecipients: null },
       brandName: null,
       ctaUrl: URL,
     });
@@ -183,7 +195,12 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
         },
         expectedPositiveReplies: 1.24,
         expectedReturn: { roiMultiple: 7.02, lifetimeRevenuePerClientUsd: 2500, lifetimeRevenueSource: "offer_stated" },
-        budgetIncrease: { revenueMultiple: null, expectedAdditionalRevenueUsd: 701.75, expectedAdditionalPositiveReplies: 1.26 },
+        budgetIncrease: {
+          revenueMultiple: null,
+          expectedAdditionalRevenueUsd: 701.75,
+          expectedAdditionalPositiveReplies: 1.26,
+          expectedAdditionalRecipientsEnrolled: 305,
+        },
       })
     ).toEqual({
       sentCount: 0,
@@ -198,6 +215,7 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
       raiseRevenueMultiple: null,
       raiseAdditionalRevenueUsd: 701.75,
       raiseAdditionalPositiveReplies: 1.26,
+      raiseAdditionalRecipients: 305,
     });
   });
 });
