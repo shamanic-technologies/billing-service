@@ -21,9 +21,6 @@
  */
 import type { SubscriptionRecap } from "./subscription-recap-client.js";
 
-/** What +$100/month buys, as features-service prices it (`budgetIncrease.amountUsd`). */
-export const RAISE_STEP_CENTS = 10000;
-
 /** Beyond this, a below-1 cadence is too slow to be worth a sentence. */
 const MAX_CADENCE_MONTHS = 12;
 
@@ -45,11 +42,6 @@ export function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function dollars(cents: number): string {
-  const d = cents / 100;
-  return Number.isInteger(d) ? `$${d.toLocaleString("en-US")}` : `$${d.toFixed(2)}`;
 }
 
 function wholeDollars(usd: number): string {
@@ -106,7 +98,6 @@ function statRowHtml(cells: Array<{ value: string; label: string }>): string {
 
 export function composeCreditsUsedEmail(params: {
   recap: SubscriptionRecap | null;
-  monthlyAmountCents: number;
   brandName: string | null;
   ctaUrl: string;
 }): CreditsUsedEmail {
@@ -159,20 +150,22 @@ export function composeCreditsUsedEmail(params: {
       ? "Based on our current reply rates."
       : null;
 
-  const nextPlanCents = params.monthlyAmountCents + RAISE_STEP_CENTS;
   const moreReplies = r?.raiseAdditionalPositiveReplies ?? null;
-  const upsellParts: string[] = [];
-  if (positive(moreReplies) && moreReplies >= 1) {
-    const n = Math.round(moreReplies);
-    upsellParts.push(`Add $100 a month and we expect about ${n} more positive ${n === 1 ? "reply" : "replies"}.`);
-  } else {
-    upsellParts.push("Add $100 a month and we reach more decision-makers.");
-  }
-  if (positive(r?.raiseAdditionalRevenueUsd)) {
-    upsellParts.push(`That is about ${wholeDollars(r!.raiseAdditionalRevenueUsd!)} more expected revenue.`);
-  }
-  const upsell = upsellParts.join(" ");
-  const ctaLabel = `Raise my plan to ${dollars(nextPlanCents)}/month`;
+  const raiseSentence =
+    positive(moreReplies) && moreReplies >= 1
+      ? `Add $100 a month and we expect about ${Math.round(moreReplies)} more positive ${
+          Math.round(moreReplies) === 1 ? "reply" : "replies"
+        }.`
+      : "Add $100 a month and we reach more decision-makers.";
+  // The gain sells the upgrade at a glance: bold in the HTML (owner review 2026-10-04).
+  const gainSentence = positive(r?.raiseAdditionalRevenueUsd)
+    ? `That is about ${wholeDollars(r!.raiseAdditionalRevenueUsd!)} more expected revenue.`
+    : null;
+  const upsell = gainSentence ? `${raiseSentence} ${gainSentence}` : raiseSentence;
+  const upsellHtml = gainSentence
+    ? `${escapeHtml(raiseSentence)} <strong style="color:#0a0a14;font-weight:700;">${escapeHtml(gainSentence)}</strong>`
+    : escapeHtml(raiseSentence);
+  const ctaLabel = "Add more revenue";
 
   const html: string[] = [
     `<h1 style="color:#0a0a14;font-size:24px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;margin:0 0 20px;">${escapeHtml(heading)}</h1>`,
@@ -183,7 +176,7 @@ export function composeCreditsUsedEmail(params: {
     html.push(`<p style="color:#8b8e98;font-size:13px;line-height:1.5;margin:0 0 24px;">${escapeHtml(finePrint)}</p>`);
   }
   html.push(
-    `<p ${P}>${escapeHtml(upsell)}</p>`,
+    `<p ${P}>${upsellHtml}</p>`,
     `<p style="margin:0 0 28px;"><a href="${escapeHtml(params.ctaUrl)}" style="display:inline-block;background:#2563EB;color:#ffffff;padding:13px 28px;border-radius:10px;text-decoration:none;font-size:16px;font-weight:600;">${escapeHtml(ctaLabel)}</a></p>`,
     `<p style="color:#3a3d47;font-size:16px;line-height:1.65;margin:0;">Kevin<br />Founder, distribute.you</p>`
   );
