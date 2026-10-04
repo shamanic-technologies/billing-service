@@ -1,6 +1,6 @@
 /**
  * The words a staff budget-change email needs, read from the services that own
- * them: crew names and leg shapes (features-service), brand and offer names
+ * them: channel names and leg shapes (features-service), brand and offer names
  * (brand-service), the org's name (client-service, else Clerk through
  * key-service).
  *
@@ -24,11 +24,13 @@ import { fetchWithRetry } from "./fetch-retry.js";
 
 const READ_TIMEOUT_MS = 5_000;
 
-// --- crews (features-service GET /public/channels) ---------------------------
+// --- channels (features-service GET /public/channels) ------------------------
+// A mission is named by its CHANNEL and leg outcome. Crew names (Herald, Pilot,
+// ...) were retired on 2026-10-04: they now name sales path combinations, not a
+// (channel, leg). `stepTransitions[].crewName` is ignored whether present, null
+// or absent, so the deploy order with features-service does not matter.
 
 export interface CatalogueLeg {
-  /** The teammate name of the crew performing this leg; null when unnamed. */
-  crewName: string | null;
   /** The step the leg starts from; null for an entry leg, which spends daily. */
   fromLabel: string | null;
   toLabel: string | null;
@@ -40,7 +42,7 @@ export interface CatalogueChannel {
 }
 
 /** featureSlug → channel. */
-export type CrewCatalogue = Map<string, CatalogueChannel>;
+export type ChannelCatalogue = Map<string, CatalogueChannel>;
 
 interface PublishedStep {
   label?: string | null;
@@ -49,7 +51,6 @@ interface PublishedLeg {
   legKey?: string | null;
   from?: PublishedStep | null;
   to?: PublishedStep | null;
-  crewName?: string | null;
 }
 interface PublishedChannel {
   slug?: string | null;
@@ -58,8 +59,8 @@ interface PublishedChannel {
 }
 
 /** Pure: shape the published catalogue into what the email reads. */
-export function crewCatalogueFrom(channels: PublishedChannel[]): CrewCatalogue {
-  const catalogue: CrewCatalogue = new Map();
+export function channelCatalogueFrom(channels: PublishedChannel[]): ChannelCatalogue {
+  const catalogue: ChannelCatalogue = new Map();
   for (const channel of channels) {
     const slug = typeof channel?.slug === "string" ? channel.slug : "";
     if (!slug) continue;
@@ -67,10 +68,6 @@ export function crewCatalogueFrom(channels: PublishedChannel[]): CrewCatalogue {
     for (const leg of channel.stepTransitions ?? []) {
       if (typeof leg?.legKey !== "string" || !leg.legKey) continue;
       legs.set(leg.legKey, {
-        crewName:
-          typeof leg.crewName === "string" && leg.crewName.trim()
-            ? leg.crewName.trim()
-            : null,
         fromLabel: leg.from ? (leg.from.label ?? null) : null,
         toLabel: leg.to?.label ?? null,
       });
@@ -83,11 +80,11 @@ export function crewCatalogueFrom(channels: PublishedChannel[]): CrewCatalogue {
   return catalogue;
 }
 
-export async function fetchCrewCatalogue(): Promise<CrewCatalogue | null> {
+export async function fetchChannelCatalogue(): Promise<ChannelCatalogue | null> {
   const url = process.env.FEATURES_SERVICE_URL;
   if (!url) {
     console.warn(
-      "[billing-service] FEATURES_SERVICE_URL unset — the budget-change email cannot name crews"
+      "[billing-service] FEATURES_SERVICE_URL unset — the budget-change email cannot name channels"
     );
     return null;
   }
@@ -108,7 +105,7 @@ export async function fetchCrewCatalogue(): Promise<CrewCatalogue | null> {
       );
       return null;
     }
-    return crewCatalogueFrom(body.channels);
+    return channelCatalogueFrom(body.channels);
   } catch (err) {
     console.error(
       "[billing-service] features-service /public/channels unreachable for the budget-change email:",

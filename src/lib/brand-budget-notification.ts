@@ -42,7 +42,7 @@ import { fetchSpendableBudget } from "./campaign-service-client.js";
 import type { CeilingChange } from "./brand-running-budget.js";
 import {
   fetchBrandName,
-  fetchCrewCatalogue,
+  fetchChannelCatalogue,
   fetchOfferNames,
   fetchOrgIdentity,
 } from "./budget-change-context.js";
@@ -152,7 +152,7 @@ export async function notifyBrandDailyBudgetChanged(
     // five are fail-soft; the email says in words which part is missing.
     const [spendable, catalogue, brandName, offerNames, org] = await Promise.all([
       fetchSpendableBudget(params.orgId, params.brandId),
-      fetchCrewCatalogue(),
+      fetchChannelCatalogue(),
       fetchBrandName(params.orgId, params.brandId),
       fetchOfferNames(params.orgId, params.brandId),
       fetchOrgIdentity(params.orgId),
@@ -251,7 +251,7 @@ export async function notifyMissionStatusChanged(
     const [ceilings, spendable, catalogue, brandName, offerNames, org] = await Promise.all([
       readCeilingsAfter(params.orgId, params.brandId),
       fetchSpendableBudget(params.orgId, params.brandId),
-      fetchCrewCatalogue(),
+      fetchChannelCatalogue(),
       fetchBrandName(params.orgId, params.brandId),
       fetchOfferNames(params.orgId, params.brandId),
       fetchOrgIdentity(params.orgId),
