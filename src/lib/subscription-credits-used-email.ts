@@ -150,9 +150,14 @@ export function composeCreditsUsedEmail(params: {
       ? "Based on our current reply rates."
       : null;
 
+  // Who +$100 reaches reads first (owner-approved copy); replies are the
+  // fallback on a recap that does not state it. Never computed here.
+  const moreRecipients = r?.raiseAdditionalRecipients ?? null;
   const moreReplies = r?.raiseAdditionalPositiveReplies ?? null;
   const raiseSentence =
-    positive(moreReplies) && moreReplies >= 1
+    positive(moreRecipients) && moreRecipients >= 1
+      ? `Add $100 a month and we reach about ${count(moreRecipients)} more decision-makers.`
+      : positive(moreReplies) && moreReplies >= 1
       ? `Add $100 a month and we expect about ${Math.round(moreReplies)} more positive ${
           Math.round(moreReplies) === 1 ? "reply" : "replies"
         }.`

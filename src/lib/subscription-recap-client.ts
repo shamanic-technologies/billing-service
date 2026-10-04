@@ -34,6 +34,8 @@ export interface SubscriptionRecap {
   raiseAdditionalRevenueUsd: number | null;
   /** Extra positive replies at current results if the plan is raised by $100/month. */
   raiseAdditionalPositiveReplies: number | null;
+  /** Extra decision-makers lined up if the plan is raised by $100/month (features-service #1306; null on an older one). */
+  raiseAdditionalRecipients: number | null;
 }
 
 /** The wire fields billing reads (features-service `OrgPeriodRecapResponse`). */
@@ -56,6 +58,7 @@ interface PeriodRecapWire {
     revenueMultiple?: number | null;
     expectedAdditionalRevenueUsd?: number | null;
     expectedAdditionalPositiveReplies?: number | null;
+    expectedAdditionalRecipientsEnrolled?: number | null;
   };
 }
 
@@ -92,6 +95,7 @@ export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
     raiseRevenueMultiple: num(w.budgetIncrease?.revenueMultiple),
     raiseAdditionalRevenueUsd: num(w.budgetIncrease?.expectedAdditionalRevenueUsd),
     raiseAdditionalPositiveReplies: num(w.budgetIncrease?.expectedAdditionalPositiveReplies),
+    raiseAdditionalRecipients: num(w.budgetIncrease?.expectedAdditionalRecipientsEnrolled),
   };
 }
 
