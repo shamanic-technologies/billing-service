@@ -21,6 +21,9 @@ import {
   subscriptionCharges,
   subscriptionCreditExpiries,
   platformOrgs,
+  salesPathItemBudgets,
+  salesPathItemBudgetChanges,
+  salesPathReactiveCharges,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -60,6 +63,9 @@ export const SEEDED_PLATFORM_ORG_ID = "f0420eb5-8f72-4f0a-a150-f473746df1e6";
 export async function cleanTestData() {
   // Keep 0057's seeded row; drop any a test added.
   await db.delete(platformOrgs).where(notInArray(platformOrgs.orgId, [SEEDED_PLATFORM_ORG_ID]));
+  await db.delete(salesPathReactiveCharges);
+  await db.delete(salesPathItemBudgetChanges);
+  await db.delete(salesPathItemBudgets);
   await db.delete(subscriptionCreditExpiries);
   await db.delete(subscriptionCharges);
   await db.delete(subscriptions);

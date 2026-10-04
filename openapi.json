@@ -2477,13 +2477,80 @@
           "dailyBudgetCents"
         ]
       },
-      "BrandBudgetMode": {
+      "BrandFundingMode": {
         "type": "string",
         "enum": [
+          "items",
           "global",
           "campaigns"
         ],
-        "description": "global = the brand stated one daily sales budget that campaign-service allocates; campaigns = every campaign is paced on its own ceiling (the default)."
+        "description": "items = the brand budgets each (channel x leg) item of the sales paths it activated (outranks the global pot; only a brand that stated an item reads it); global = one daily sales budget campaign-service allocates; campaigns = every campaign paced on its own ceiling (the default)."
+      },
+      "SalesPathItemPeriod": {
+        "type": "string",
+        "enum": [
+          "day",
+          "month"
+        ],
+        "description": "day = prepaid / postpaid daily budget; month = subscriber monthly budget."
+      },
+      "SpendableSalesPathItem": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "proactive",
+              "reactive"
+            ]
+          },
+          "budgetCents": {
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesPathItemPeriod"
+          },
+          "periodStart": {
+            "type": "string",
+            "nullable": true
+          },
+          "periodEnd": {
+            "type": "string",
+            "nullable": true
+          },
+          "managed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "pathKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "offerId",
+          "legKey",
+          "featureSlug",
+          "role",
+          "budgetCents",
+          "period",
+          "periodStart",
+          "periodEnd",
+          "managed",
+          "pathKeys"
+        ]
       },
       "BrandSalesBudget": {
         "type": "object",
@@ -2497,7 +2564,7 @@
             "format": "uuid"
           },
           "mode": {
-            "$ref": "#/components/schemas/BrandBudgetMode"
+            "$ref": "#/components/schemas/BrandFundingMode"
           },
           "dailyBudgetCents": {
             "type": "string",
@@ -2506,6 +2573,12 @@
           "updatedAt": {
             "type": "string",
             "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpendableSalesPathItem"
+            }
           }
         },
         "required": [
@@ -2515,6 +2588,14 @@
           "dailyBudgetCents",
           "updatedAt"
         ]
+      },
+      "BrandBudgetMode": {
+        "type": "string",
+        "enum": [
+          "global",
+          "campaigns"
+        ],
+        "description": "global = the brand stated one daily sales budget that campaign-service allocates; campaigns = every campaign is paced on its own ceiling (the default)."
       },
       "BrandSalesBudgetHistory": {
         "type": "object",
@@ -3767,6 +3848,278 @@
           "monthly_amount_cents"
         ],
         "additionalProperties": false
+      },
+      "SalesPathItemBudget": {
+        "type": "object",
+        "properties": {
+          "featureSlug": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "proactive",
+              "reactive"
+            ]
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesPathItemPeriod"
+          },
+          "budgetCents": {
+            "type": "integer"
+          },
+          "managed": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "minimumCents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "capCents": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "featureSlug",
+          "legKey",
+          "role",
+          "period",
+          "budgetCents",
+          "managed",
+          "minimumCents",
+          "capCents"
+        ]
+      },
+      "SalesPathItemBudgets": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesPathItemPeriod"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pathKey": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SalesPathItemBudget"
+                  }
+                }
+              },
+              "required": [
+                "pathKey",
+                "updatedAt",
+                "items"
+              ]
+            }
+          },
+          "plan": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "monthlyAmountCents": {
+                "type": "integer"
+              },
+              "reactiveMonthlyCents": {
+                "type": "integer"
+              },
+              "deferredMonthlyCents": {
+                "type": "integer"
+              },
+              "subscriptionId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "currentMonthlyAmountCents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "monthlyAmountCents",
+              "reactiveMonthlyCents",
+              "deferredMonthlyCents",
+              "subscriptionId",
+              "currentMonthlyAmountCents"
+            ]
+          },
+          "pricing": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "monthlyAmountCents": {
+                "type": "integer"
+              },
+              "reactiveMonthlyCents": {
+                "type": "integer"
+              },
+              "deferredMonthlyCents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "monthlyAmountCents",
+              "reactiveMonthlyCents",
+              "deferredMonthlyCents"
+            ]
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "offerId",
+          "period",
+          "paths",
+          "plan",
+          "pricing"
+        ]
+      },
+      "ItemBudgetRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_ids",
+              "invalid_items",
+              "duplicate_item",
+              "unknown_item",
+              "customer_leg_has_no_budget",
+              "amount_not_whole_cents",
+              "amount_not_whole_dollars",
+              "below_minimum",
+              "entry_item_required",
+              "one_entry_item_per_path",
+              "reactive_above_cap",
+              "entry_taken",
+              "no_plan_for_offer",
+              "subscription_not_active",
+              "reactive_charge_declined",
+              "charge_unavailable",
+              "minimums_unavailable"
+            ]
+          },
+          "featureSlug": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "minimumCents": {
+            "type": "integer"
+          },
+          "capCents": {
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesPathItemPeriod"
+          },
+          "conflictingPathKey": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ]
+      },
+      "SetSalesPathItemBudgetsResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SalesPathItemBudgets"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "replacedPathKey": {
+                "type": "string",
+                "nullable": true
+              },
+              "reactiveChargedCents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "replacedPathKey",
+              "reactiveChargedCents"
+            ]
+          }
+        ]
+      },
+      "SetSalesPathItemBudgetsRequest": {
+        "type": "object",
+        "properties": {
+          "pathKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "featureSlug": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "legKey": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "budgetCents": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "featureSlug",
+                "legKey",
+                "budgetCents"
+              ]
+            },
+            "minItems": 1
+          },
+          "replacePathKey": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "pathKey",
+          "items"
+        ]
       }
     },
     "parameters": {}
@@ -8835,7 +9188,7 @@
     "/internal/brands/{brandId}/sales-budget": {
       "get": {
         "summary": "Read a brand's funding mode and global sales budget",
-        "description": "Service-to-service read (x-api-key + x-org-id). mode is global when the brand stated ONE daily sales budget (dailyBudgetCents), campaigns when every campaign is paced on its own ceiling (dailyBudgetCents null). billing stores and serves; campaign-service allocates.",
+        "description": "Service-to-service read (x-api-key + x-org-id). mode is global when the brand stated ONE daily sales budget (dailyBudgetCents), campaigns when every campaign is paced on its own ceiling (dailyBudgetCents null), items when the brand budgets each item of the sales paths it activated (items[]: one row per offer x leg x channel, period day|month, a monthly item carrying the plan's current period; outranks global). billing stores and serves; campaign-service allocates.",
         "parameters": [
           {
             "schema": {
@@ -11673,6 +12026,525 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/offers/{offerId}/sales-path-budgets": {
+      "get": {
+        "summary": "Read this offer's sales-path item budgets",
+        "description": "Every activated path's item budgets on the offer, each with its minimum (in the item's period), its cap (reactive: half the entry item) and whether we run the channel. period follows the payment mode (subscription = month, else day).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item budgets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesPathItemBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "minimums_unavailable: the published minimums could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State one sales path's item budgets",
+        "description": "One budget per (channel x leg) item of the path: exactly one entry item, reactive items at most 50% of it, customer-team legs none. Each clears its published minimum (a daily item: the monthly minimum / 30, rounded up). One active path per entry: an entry held by another path is 409 entry_taken unless replacePathKey names it. Subscriber: the offer's plan becomes the SUM of its items on channels we run (min $99) from the next charge, and a raise of the reactive part is charged now (unspent reactive credit carries over to the next period). A channel we do not run is recorded and charged nothing until it launches. Nothing is written on any refusal.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesPathItemBudgetsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetSalesPathItemBudgetsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused item (below_minimum, reactive_above_cap, unknown_item, ...)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "entry_taken | no_plan_for_offer | subscription_not_active | reactive_charge_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "minimums_unavailable | charge_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove one sales path's item budgets (path deactivated)",
+        "description": "Idempotent (removed: false when nothing was stored). A subscriber's plan is re-priced from the items left.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "pathKey",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SalesPathItemBudgets"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "removed": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "removed"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or missing pathKey",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/offers/{offerId}/sales-path-budgets": {
+      "get": {
+        "summary": "Read an offer's sales-path item budgets (service)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item budgets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesPathItemBudgets"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "minimums_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemBudgetRefusal"
                 }
               }
             }
