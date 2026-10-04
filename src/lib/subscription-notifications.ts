@@ -1,8 +1,9 @@
 /**
- * "All your outbound went out" — the email a SUBSCRIPTION org gets when it has
+ * "Your month of outreach is booked" — the email a SUBSCRIPTION org gets when it has
  * used all of a period's credit (lib/subscription). Owner rule (2026-10-01): a
- * limit reached is a SUCCESS to celebrate, never a shortage. It states what went
- * out, the results to expect, and invites a bigger plan. Never "credits exhausted".
+ * limit reached is a SUCCESS to celebrate, never a shortage. It states what was
+ * lined up (or sent, once it was), the results to expect, and invites a bigger
+ * plan. Never "credits exhausted". Copy + layout: lib/subscription-credits-used-email.
  *
  * It REPLACES the generic out-of-credit dunning for subscription orgs (no
  * depletion episode is opened for them, lib/dunning): running out of the month's
@@ -24,91 +25,14 @@ import { PLATFORM_USER_ID, subscriptions, type Subscription } from "../db/schema
 import { computeBalance } from "./balance.js";
 import { resolveSpendBlock, cannotSpend } from "./spend-block.js";
 import { fetchOrgCustomerOrNull } from "./stripe-service-client.js";
-import { fetchOrgIdentity } from "./budget-change-context.js";
+import { fetchBrandName, fetchOrgIdentity } from "./budget-change-context.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
-import { fetchSubscriptionRecap, type SubscriptionRecap } from "./subscription-recap-client.js";
-import { SUBSCRIPTION_STEP_CENTS } from "./subscription.js";
+import { fetchSubscriptionRecap } from "./subscription-recap-client.js";
+import { composeCreditsUsedEmail } from "./subscription-credits-used-email.js";
 
 export const SUBSCRIPTION_CREDITS_USED_EVENT = "subscription-credits-used";
 export const DASHBOARD_URL = "https://dashboard.distribute.you";
-
-function dollars(cents: number): string {
-  const d = cents / 100;
-  return Number.isInteger(d) ? `$${d.toLocaleString("en-US")}` : `$${d.toFixed(2)}`;
-}
-
-function times(x: number): string {
-  return `${x.toFixed(1).replace(/\.0$/, "")}x`;
-}
-
-export interface CreditsUsedEmail {
-  subject: string;
-  intro: string;
-  results: string;
-  upsell: string;
-  ctaLabel: string;
-  ctaUrl: string;
-}
-
-/**
- * The email, composed in code so every template variable is always a non-empty
- * sentence (an unset `{{var}}` renders literally in a customer's inbox). Pure.
- */
-export function composeCreditsUsedEmail(params: {
-  recap: SubscriptionRecap | null;
-  monthlyAmountCents: number;
-  ctaUrl: string;
-}): CreditsUsedEmail {
-  const r = params.recap;
-  const sent = r?.sentCount ?? null;
-  const intro =
-    sent !== null && sent > 0
-      ? `Congratulations, all ${sent.toLocaleString("en-US")} emails of this month's outbound went out successfully.` +
-        (r?.deliveryRatePct != null ? ` ${Math.round(r.deliveryRatePct)}% were delivered.` : "")
-      : "Congratulations, all of this month's outbound went out successfully." +
-        (r?.deliveryRatePct != null ? ` ${Math.round(r.deliveryRatePct)}% was delivered.` : "");
-
-  let results = "";
-  if (r?.expectedPositiveReplies != null && r.expectedPositiveReplies > 0) {
-    const n = Math.max(1, Math.round(r.expectedPositiveReplies));
-    results = `On this volume we expect about ${n} positive ${n === 1 ? "reply" : "replies"}`;
-    if (r.expectedRoiMultiple != null && r.lifetimeRevenueUsd != null) {
-      results += `, for a ${times(r.expectedRoiMultiple)} return based on your ${dollars(
-        r.lifetimeRevenueUsd * 100
-      )} lifetime revenue per client.`;
-    } else {
-      results += ".";
-    }
-  } else if (r?.expectedRoiMultiple != null && r.lifetimeRevenueUsd != null) {
-    results = `We expect a ${times(r.expectedRoiMultiple)} return on this month, based on your ${dollars(
-      r.lifetimeRevenueUsd * 100
-    )} lifetime revenue per client.`;
-  }
-
-  const nextPlan = params.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS;
-  // The gain in DOLLARS reads strongest and is exactly what features-service
-  // states; the multiple is the fallback.
-  const upsell =
-    r?.raiseAdditionalRevenueUsd != null && r.raiseAdditionalRevenueUsd > 0
-      ? `We strongly recommend raising your plan: +$100 a month would bring about ${dollars(
-          Math.round(r.raiseAdditionalRevenueUsd) * 100
-        )} more revenue at your current results.`
-      : r?.raiseRevenueMultiple != null
-      ? `We strongly recommend raising your plan: +$100 a month would bring about ${times(
-          r.raiseRevenueMultiple
-        )} the revenue at your current results.`
-      : `We strongly recommend raising your plan to ${dollars(nextPlan)} a month to reach more prospects while your campaigns are performing.`;
-
-  return {
-    subject: "All your outbound went out 🎉",
-    intro,
-    results,
-    upsell,
-    ctaLabel: `Raise my plan to ${dollars(nextPlan)}/month`,
-    ctaUrl: params.ctaUrl,
-  };
-}
 
 /** Has this org used all the credit it can spend right now (floor 0)? */
 async function creditsUsed(orgId: string): Promise<boolean> {
@@ -163,9 +87,10 @@ export async function notifySubscriptionCreditsUsedIfDue(
       return;
     }
 
-    const [recap, identity] = await Promise.all([
+    const [recap, identity, brandName] = await Promise.all([
       fetchSubscriptionRecap(orgId, period, new Date()),
       fetchOrgIdentity(orgId),
+      sub.brandId ? fetchBrandName(orgId, sub.brandId) : Promise.resolve(null),
     ]);
     const ctaUrl = identity?.externalId
       ? `${DASHBOARD_URL}/orgs/${identity.externalId}/billing`
@@ -173,6 +98,7 @@ export async function notifySubscriptionCreditsUsedIfDue(
     const email = composeCreditsUsedEmail({
       recap,
       monthlyAmountCents: sub.monthlyAmountCents,
+      brandName,
       ctaUrl,
     });
     sendEmail({

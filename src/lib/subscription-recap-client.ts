@@ -12,23 +12,51 @@ import { fetchWithRetry } from "./fetch-retry.js";
 
 export interface SubscriptionRecap {
   sentCount: number | null;
+  /** Decision-makers lined up in the window (lead grain), sent or still queued. */
+  recipientsCount: number | null;
+  /** Decision-makers who got at least one email in the window (features-service #1301; null on an older one). */
+  recipientsEmailedCount: number | null;
+  /**
+   * features-service's verdict: did anything actually go out (`emails_sent`), or is
+   * it only lined up (`lined_up_not_sent`)? null on a features-service older than #1301.
+   */
+  sendStatus: "emails_sent" | "lined_up_not_sent" | "nothing_sent" | null;
   deliveryRatePct: number | null;
   expectedPositiveReplies: number | null;
   expectedRoiMultiple: number | null;
   /** The lifetime revenue per client (USD) the return is based on. */
   lifetimeRevenueUsd: number | null;
+  /** Where it was read: the customer's own offer (`offer_stated`) or brand economics. null when unknown. */
+  lifetimeRevenueSource: "offer_stated" | "brand_economics" | null;
   /** Revenue multiple at current results if the plan is raised by $100/month. */
   raiseRevenueMultiple: number | null;
   /** Extra revenue (USD) at current results if the plan is raised by $100/month. */
   raiseAdditionalRevenueUsd: number | null;
+  /** Extra positive replies at current results if the plan is raised by $100/month. */
+  raiseAdditionalPositiveReplies: number | null;
 }
 
 /** The wire fields billing reads (features-service `OrgPeriodRecapResponse`). */
 interface PeriodRecapWire {
-  outbound?: { emailsSent?: number; deliveryRatePct?: number | null };
+  outbound?: {
+    emailsSent?: number;
+    recipientsContacted?: number;
+    recipientsEnrolled?: number;
+    recipientsEmailed?: number;
+    sendStatus?: string;
+    deliveryRatePct?: number | null;
+  };
   expectedPositiveReplies?: number | null;
-  expectedReturn?: { roiMultiple?: number | null; lifetimeRevenuePerClientUsd?: number | null };
-  budgetIncrease?: { revenueMultiple?: number | null; expectedAdditionalRevenueUsd?: number | null };
+  expectedReturn?: {
+    roiMultiple?: number | null;
+    lifetimeRevenuePerClientUsd?: number | null;
+    lifetimeRevenueSource?: string | null;
+  };
+  budgetIncrease?: {
+    revenueMultiple?: number | null;
+    expectedAdditionalRevenueUsd?: number | null;
+    expectedAdditionalPositiveReplies?: number | null;
+  };
 }
 
 const READ_TIMEOUT_MS = 15_000;
@@ -41,16 +69,29 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+function sendStatus(v: unknown): SubscriptionRecap["sendStatus"] {
+  return v === "emails_sent" || v === "lined_up_not_sent" || v === "nothing_sent" ? v : null;
+}
+
 /** Pure mapping, exported so the wire contract is pinned by a test. */
 export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
   return {
     sentCount: num(w.outbound?.emailsSent),
+    recipientsCount: num(w.outbound?.recipientsEnrolled ?? w.outbound?.recipientsContacted),
+    recipientsEmailedCount: num(w.outbound?.recipientsEmailed),
+    sendStatus: sendStatus(w.outbound?.sendStatus),
     deliveryRatePct: num(w.outbound?.deliveryRatePct),
     expectedPositiveReplies: num(w.expectedPositiveReplies),
     expectedRoiMultiple: num(w.expectedReturn?.roiMultiple),
     lifetimeRevenueUsd: num(w.expectedReturn?.lifetimeRevenuePerClientUsd),
+    lifetimeRevenueSource:
+      w.expectedReturn?.lifetimeRevenueSource === "offer_stated" ||
+      w.expectedReturn?.lifetimeRevenueSource === "brand_economics"
+        ? w.expectedReturn.lifetimeRevenueSource
+        : null,
     raiseRevenueMultiple: num(w.budgetIncrease?.revenueMultiple),
     raiseAdditionalRevenueUsd: num(w.budgetIncrease?.expectedAdditionalRevenueUsd),
+    raiseAdditionalPositiveReplies: num(w.budgetIncrease?.expectedAdditionalPositiveReplies),
   };
 }
 
