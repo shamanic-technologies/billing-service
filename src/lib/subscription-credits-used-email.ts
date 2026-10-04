@@ -44,19 +44,19 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function wholeDollars(usd: number): string {
+export function wholeDollars(usd: number): string {
   return `$${Math.round(usd).toLocaleString("en-US")}`;
 }
 
-function count(n: number): string {
+export function count(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
-function times(x: number): string {
+export function times(x: number): string {
   return `${x.toFixed(1)}x`;
 }
 
-function positive(v: number | null | undefined): v is number {
+export function positive(v: number | null | undefined): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
 }
 
@@ -78,9 +78,9 @@ export function expectedRepliesStat(x: number | null): { value: string; label: s
   };
 }
 
-const P = 'style="color:#3a3d47;font-size:16px;line-height:1.65;margin:0 0 18px;"';
+export const P = 'style="color:#3a3d47;font-size:16px;line-height:1.65;margin:0 0 18px;"';
 
-function statRowHtml(cells: Array<{ value: string; label: string }>): string {
+export function statRowHtml(cells: Array<{ value: string; label: string }>): string {
   const width = Math.floor(100 / cells.length);
   const tds = cells
     .map(

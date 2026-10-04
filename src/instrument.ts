@@ -38,6 +38,7 @@ import {
 } from "./lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
 import { SUBSCRIPTION_CREDITS_USED_EVENT } from "./lib/subscription-notifications.js";
+import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "./lib/subscription-monthly-update.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -66,6 +67,16 @@ const TEMPLATES = [
     // wraps it in the official distribute.you layout (logo, card, footer), so
     // this email never draws a logo of its own (owner 2026-10-04).
     name: SUBSCRIPTION_CREDITS_USED_EVENT,
+    subject: "{{subject}}",
+    htmlBody: "{{bodyHtml}}",
+    textBody: "{{bodyText}}",
+    layout: "brand",
+  },
+  {
+    // The informational monthly update: results of the period that just closed,
+    // no upsell (owner 2026-10-04). Composed in code like the one above
+    // (lib/subscription-monthly-update-email), wrapped in the official layout.
+    name: SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
     subject: "{{subject}}",
     htmlBody: "{{bodyHtml}}",
     textBody: "{{bodyText}}",

@@ -428,6 +428,13 @@
       "when": 1793354400000,
       "tag": "0060_subscription_min_29",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1793440800000,
+      "tag": "0061_subscription_monthly_update",
+      "breakpoints": true
     }
   ]
 }
