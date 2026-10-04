@@ -159,14 +159,17 @@ describe("brand budget notification → running headline", () => {
     expect(res.status).toBe(200);
 
     const { subject, summaryText } = await sentMetadata();
-    expect(subject).toContain("raised Herald: $200/day → $210/day");
+    expect(subject).toContain("raised Sales Cold Email Outreach · Positive reply: $200/day → $210/day");
     expect(summaryText).toContain(
-      "Herald · Sales Cold Email Outreach · Positive reply"
+      "Sales Cold Email Outreach · Positive reply"
     );
+    // Crew names retired 2026-10-04: a legacy "Herald" or a null crewName in the
+    // catalogue never reaches the email.
+    expect(`${subject}${summaryText}`).not.toMatch(/Herald|crew/i);
     expect(summaryText).toContain("$200/day → $210/day (+$10, +5%)");
     expect(summaryText).toContain("Daily spend now: $210/day");
     expect(summaryText).toContain("Paused (amount kept, not spending)");
-    expect(summaryText).toMatch(/Unnamed crew · Feedback Request .*: \$10\/day kept/);
+    expect(summaryText).toMatch(/Feedback Request Cold Email Outreach · Positive reply · .*: \$10\/day kept/);
     expect(summaryText).not.toContain("$220");
   });
 

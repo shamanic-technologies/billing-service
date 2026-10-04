@@ -9,8 +9,9 @@
  * REACTIVE cap that only spends when a positive reply triggers it) was folded in.
  *
  * THREE RULES THIS MODULE HOLDS:
- *  - One line per mission this write changed, named by its crew, channel,
- *    outcome and offer — never a brand-wide sum standing in for them.
+ *  - One line per mission this write changed, named by its channel, outcome
+ *    and offer — never a brand-wide sum standing in for them. (Crew names were
+ *    retired 2026-10-04; they now name sales path combinations.)
  *  - The daily total counts ONLY running entry-leg missions (they spend every
  *    day). A reactive leg's figure is a CAP and is listed on its own, never
  *    added. A mission we cannot classify is listed apart and never added either.
@@ -26,7 +27,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import type { CrewCatalogue, OrgIdentity } from "./budget-change-context.js";
+import type { ChannelCatalogue, OrgIdentity } from "./budget-change-context.js";
 import type { SpendableBudget } from "./campaign-service-client.js";
 
 export const ADMIN_CONSOLE_URL = "https://admin.distribute.you";
@@ -69,7 +70,7 @@ export interface BudgetChangeEmailInput {
   brandName: string | null;
   org: OrgIdentity | null;
   offerNames: Map<string, string> | null;
-  catalogue: CrewCatalogue | null;
+  catalogue: ChannelCatalogue | null;
   /** campaign-service's answer; null when it could not be read. */
   spendable: SpendableBudget | null;
 }
@@ -86,7 +87,8 @@ export interface BudgetChangeEmail {
 export type MissionKind = "daily" | "reactive" | "brand" | "unknown";
 
 interface Described {
-  crew: string;
+  /** Short mission name for the subject: `channel · outcome`. */
+  name: string;
   label: string;
   kind: MissionKind;
 }
@@ -121,12 +123,12 @@ export function formatAmount(cents: string | Decimal, kind: MissionKind): string
 
 export function describeMission(
   g: MissionGrain,
-  catalogue: CrewCatalogue | null,
+  catalogue: ChannelCatalogue | null,
   offerNames: Map<string, string> | null
 ): Described {
   if (g.featureSlug === null) {
     return {
-      crew: "Brand-wide budget",
+      name: "Brand-wide budget",
       label: "Brand-wide budget (no mission)",
       kind: "brand",
     };
@@ -138,18 +140,14 @@ export function describeMission(
   let kind: MissionKind = "unknown";
   if (leg) kind = leg.fromLabel === null ? "daily" : "reactive";
 
-  const crew = leg
-    ? (leg.crewName ?? "Unnamed crew")
-    : catalogue === null
-      ? "Crew unavailable"
-      : "Unknown crew";
-
   const outcome = leg
     ? leg.fromLabel
       ? `${leg.fromLabel} → ${leg.toLabel ?? "?"}`
       : (leg.toLabel ?? "?")
     : g.legKey
-      ? `leg ${g.legKey} (not in the crew catalogue)`
+      ? catalogue === null
+        ? `leg ${g.legKey} (channel catalogue unavailable)`
+        : `leg ${g.legKey} (not in the channel catalogue)`
       : "no leg stated";
 
   let offer: string;
@@ -160,7 +158,8 @@ export function describeMission(
     offer = name ? `offer "${name}"` : `unknown offer (${g.offerId.slice(0, 8)})`;
   }
 
-  return { crew, label: `${crew} · ${channelName} · ${outcome} · ${offer}`, kind };
+  const name = `${channelName} · ${outcome}`;
+  return { name, label: `${name} · ${offer}`, kind };
 }
 
 /** `$10/day → $7/day (−$3, −30%)`. */
@@ -230,16 +229,16 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
     return { s, d, amount: ceilingOf(s, input.ceilings, d.kind) };
   });
 
-  // --- subject: direction + brand + crew -------------------------------------
+  // --- subject: direction + brand + mission ----------------------------------
   const described = input.changes.map((c) => ({ change: c, d: describe(c) }));
-  const crews = joinNames(described.map((x) => x.d.crew));
+  const names = joinNames(described.map((x) => x.d.name));
   let subject: string;
   let action = "changed a daily budget";
   if (input.changes.length === 0 && statusDescribed.length > 0) {
     const moves = new Set(statusDescribed.map((x) => x.s.move));
     const move = moves.size === 1 ? [...moves][0] : null;
     action = move === "paused" ? "paused a mission" : move === "restarted" ? "restarted a mission" : "paused and restarted missions";
-    const who = joinNames(statusDescribed.map((x) => x.d.crew));
+    const who = joinNames(statusDescribed.map((x) => x.d.name));
     if (statusDescribed.length === 1) {
       const { s, amount } = statusDescribed[0];
       subject = `${brand} ${formatStatusMove(s.move, amount).replace(/^(\w+)/, `$1 ${who}`)}`;
@@ -249,21 +248,21 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
   } else if (input.firstBudget) {
     const set = described
       .filter((x) => !new Decimal(x.change.newDailyBudgetCents).isZero())
-      .map((x) => `${x.d.crew} ${formatAmount(x.change.newDailyBudgetCents, x.d.kind)}`);
-    subject = `${brand} set a first budget: ${set.join(", ") || crews}`;
+      .map((x) => `${x.d.name} ${formatAmount(x.change.newDailyBudgetCents, x.d.kind)}`);
+    subject = `${brand} set a first budget: ${set.join(", ") || names}`;
   } else {
     const direction = directionOf(input.changes);
     if (described.length === 1) {
       const { change, d } = described[0];
       subject =
         direction === "paused"
-          ? `${brand} paused ${d.crew} ($0)`
-          : `${brand} ${direction} ${d.crew}: ${formatChange(change, d.kind).replace(/ \(.*\)$/, "")}`;
+          ? `${brand} paused ${d.name} ($0)`
+          : `${brand} ${direction} ${d.name}: ${formatChange(change, d.kind).replace(/ \(.*\)$/, "")}`;
     } else {
       subject =
         direction === "paused"
-          ? `${brand} paused ${crews} ($0)`
-          : `${brand} ${direction} ${crews}`;
+          ? `${brand} paused ${names} ($0)`
+          : `${brand} ${direction} ${names}`;
     }
   }
 
@@ -329,7 +328,7 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
   }
   if (!catalogue) {
     notes.push(
-      "The crew catalogue (features-service) could not be read, so crews are unnamed and daily missions cannot be told apart from reactive caps."
+      "The channel catalogue (features-service) could not be read, so channels are shown by slug and daily missions cannot be told apart from reactive caps."
     );
   }
   if (input.ceilingsUnavailable) {
