@@ -163,6 +163,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
         staffDebits: 0,
         subscriptions: 0,
         subscriptionCreditExpiries: 0,
+        salesPathItemBudgets: 0,
       },
     });
     expect(await orgRowCounts(targetOrgId)).toEqual({
@@ -209,6 +210,7 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       staffDebits: 0,
       subscriptions: 0,
       subscriptionCreditExpiries: 0,
+      salesPathItemBudgets: 0,
     });
   });
 

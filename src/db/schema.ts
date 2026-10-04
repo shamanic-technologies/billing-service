@@ -11,6 +11,7 @@ import {
   unique,
   bigserial,
   boolean,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -1019,6 +1020,11 @@ export const subscriptions = pgTable(
     renewalAnchorAt: timestamp("renewal_anchor_at", { withTimezone: true }),
     /** The person who started it; the customer emails go to them. */
     startedByUserId: uuid("started_by_user_id"),
+    /**
+     * Reactive part of `monthlyAmountCents` when the plan is priced from sales-path
+     * item budgets (migration 0062, lib/sales-path-items); 0 otherwise.
+     */
+    itemReactiveMonthlyCents: integer("item_reactive_monthly_cents").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1043,6 +1049,8 @@ export const subscriptionCharges = pgTable(
     paidAt: timestamp("paid_at", { withTimezone: true }),
     reference: text("reference"),
     failureCode: text("failure_code"),
+    /** Reactive item budget inside this period's charge (migration 0062). */
+    reactiveCents: integer("reactive_cents").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -1060,6 +1068,8 @@ export const subscriptionCreditExpiries = pgTable(
     subscriptionId: uuid("subscription_id").notNull(),
     boundaryAt: timestamp("boundary_at", { withTimezone: true }).notNull(),
     amountCents: numeric("amount_cents", { precision: 16, scale: 10 }).notNull(),
+    /** Unspent reactive credit carried into the next period instead of expiring (0062). */
+    carriedOverCents: numeric("carried_over_cents", { precision: 16, scale: 10 }).notNull().default("0"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [unique("subscription_credit_expiries_sub_boundary").on(table.subscriptionId, table.boundaryAt)]
@@ -1072,5 +1082,67 @@ export const platformOrgs = pgTable("platform_orgs", {
   orgId: uuid("org_id").primaryKey(),
   reason: text("reason").notNull(),
   addedBy: text("added_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Sales-path ITEM budgets (migration 0062, lib/sales-path-items): one budget per
+// (channel x leg) item of each sales path a customer activated on an offer.
+export const salesPathItemBudgets = pgTable(
+  "sales_path_item_budgets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    offerId: uuid("offer_id").notNull(),
+    /** features-service's combinationKey for the path. */
+    pathKey: text("path_key").notNull(),
+    featureSlug: text("feature_slug").notNull(),
+    legKey: text("leg_key").notNull(),
+    /** proactive (entry leg) | reactive (fires on a step a lead reaches) */
+    role: text("role").notNull(),
+    /** day (prepaid / postpaid) | month (subscriber) */
+    period: text("period").notNull(),
+    budgetCents: integer("budget_cents").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("sales_path_item_budgets_item_unique").on(
+      table.orgId,
+      table.brandId,
+      table.offerId,
+      table.pathKey,
+      table.featureSlug,
+      table.legKey
+    ),
+    index("idx_sales_path_item_budgets_org_brand").on(table.orgId, table.brandId),
+  ]
+);
+export type SalesPathItemBudget = typeof salesPathItemBudgets.$inferSelect;
+
+export const salesPathItemBudgetChanges = pgTable("sales_path_item_budget_changes", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  brandId: uuid("brand_id").notNull(),
+  offerId: uuid("offer_id").notNull(),
+  pathKey: text("path_key").notNull(),
+  /** The path's items after the change; null = the path's budgets were removed. */
+  items: jsonb("items"),
+  changedByUserId: uuid("changed_by_user_id"),
+  changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const salesPathReactiveCharges = pgTable("sales_path_reactive_charges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid("org_id").notNull(),
+  subscriptionId: uuid("subscription_id").notNull(),
+  periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+  /** Reactive total collected for the period once this charge is paid. */
+  cumulativeCents: integer("cumulative_cents").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  /** paid | failed */
+  status: text("status").notNull(),
+  reference: text("reference"),
+  failureCode: text("failure_code"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

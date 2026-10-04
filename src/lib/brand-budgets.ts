@@ -24,6 +24,8 @@ import {
   sumCeilings,
 } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
+import { itemsDailyTotalCents, listBrandItems } from "./sales-path-items-store.js";
+import { getSalesPathTerms } from "./sales-path-terms.js";
 
 /** A brand-scalar write against a brand that stated a global sales budget. */
 export class BrandBudgetManagedBySalesBudgetError extends Error {}
@@ -193,6 +195,27 @@ export async function getBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
+  // ITEMS mode (lib/sales-path-items): the brand budgets each active sales path
+  // item; its daily total is the proactive items we run (a monthly one as its 30th).
+  const items = await listBrandItems(orgId, brandId);
+  if (items.length > 0) {
+    let terms = null;
+    try {
+      terms = await getSalesPathTerms();
+    } catch (err) {
+      console.error(
+        `[billing-service] sales-path terms unreadable for brand ${brandId}: counting every proactive item`,
+        err
+      );
+    }
+    return {
+      brandId,
+      orgId,
+      dailyBudgetCents: itemsDailyTotalCents(items, terms),
+      updatedAt: items.reduce((latest, r) => (r.updatedAt > latest ? r.updatedAt : latest), items[0].updatedAt),
+    };
+  }
+
   const sales = await getBrandSalesBudget(orgId, brandId);
   if (sales) {
     return {

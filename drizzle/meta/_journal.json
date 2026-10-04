@@ -435,6 +435,13 @@
       "when": 1793440800000,
       "tag": "0061_subscription_monthly_update",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1793527200000,
+      "tag": "0062_sales_path_item_budgets",
+      "breakpoints": true
     }
   ]
 }
