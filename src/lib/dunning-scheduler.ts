@@ -15,7 +15,7 @@ import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 import { runUnpaidDebtScan } from "./unpaid-debt.js";
 import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
 import { runSubscriptionSweep } from "./subscription.js";
-import { restateSubscriberBudgetsFromPlans } from "./subscriber-plan-budgets.js";
+import { reallocateDerivedPlans, restateSubscriberBudgetsFromPlans } from "./subscriber-plan-budgets.js";
 import { notifySubscriptionCreditsUsedIfDue } from "./subscription-notifications.js";
 import { notifySubscriptionMonthlyUpdateIfDue } from "./subscription-monthly-update.js";
 
@@ -126,6 +126,18 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] plan budgets sweep failed:", err);
+      }
+      // Plan-derived offers follow the CURRENT allocation rule (follow-up = 9% of the
+      // plan, entries the rest): an offer already on it writes nothing.
+      try {
+        const d = await reallocateDerivedPlans(new Date());
+        if (d.reallocatedOffers > 0 || d.skipped > 0) {
+          console.log(
+            `[billing-service] derived plans: offers=${d.offers} reallocatedOffers=${d.reallocatedOffers} skipped=${d.skipped}`
+          );
+        }
+      } catch (err) {
+        console.error("[billing-service] derived plans sweep failed:", err);
       }
 
       // Subscription sweep — starts subscriptions whose card is now on file, expires

@@ -7,10 +7,11 @@
  * That figure was never chosen and never paid. For a subscriber the plan is the
  * budget, so each such offer is restated, once, from its live plan:
  *
- *  - ON entry campaigns (proactive, a channel we run, campaign `ongoing`) share the
- *    plan amount, in whole dollars (one ON entry = the plan).
- *  - ON follow-up campaigns (reactive, a channel we run) carry their MAX: half the
- *    entry budgets, rounded UP to the dollar ($99 → $50).
+ *  - ON follow-up campaigns (reactive, a channel we run) carry their MAX: the plan's
+ *    follow-up share (PLAN_FOLLOW_UP_SHARE, 9%, rounded UP to the dollar: $99 → $9).
+ *  - ON entry campaigns (proactive, a channel we run, campaign `ongoing`) share what
+ *    is left of the plan, in whole dollars ($99 − $9 = $90). The figures shown add up
+ *    to the plan: the customer reads how its $99 is shared.
  *  - Every other legacy row (OFF campaign, a channel we do not run, a customer-team
  *    or unknown leg) is DELETED: "not set". An OFF campaign claims no plan money;
  *    the customer states a budget when turning it back on.
@@ -31,7 +32,7 @@ import { billingAccounts, brandDailyBudgetChanges, campaignDailyBudgets, type Ce
 import { DAYS_PER_MONTH, getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import { campaignOnPredicateOf, type CampaignOnPredicate } from "./campaign-items-store.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { onCampaignStatusChanged, reactiveCapCents } from "./campaign-items.js";
+import { onCampaignStatusChanged } from "./campaign-items.js";
 import { getPaymentMode } from "./payment-mode.js";
 import { sumCeilings } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
@@ -55,32 +56,9 @@ export function planBudgetsFor(
   terms: SalesPathTerms,
   isOn: CampaignOnPredicate
 ): PlanBudgetRow[] | null {
-  const runs = (r: { featureSlug: string; legKey: string }) => {
-    const t = terms.termsFor(r.featureSlug, r.legKey);
-    return t && t.role !== "customer" && t.managed === true && terms.managedChannel(r.featureSlug) === true ? t : null;
-  };
-  const sorted = [...rows].sort((a, b) =>
-    a.featureSlug === b.featureSlug ? a.legKey.localeCompare(b.legKey) : a.featureSlug.localeCompare(b.featureSlug)
-  );
-  const entries = sorted.filter((r) => runs(r)?.role === "proactive" && isOn(r));
-  if (entries.length === 0) return null;
-
-  // Whole dollars, split evenly; the leftover dollars go to the first entries.
-  const planDollars = Math.floor(planMonthlyCents / 100);
-  const base = Math.floor(planDollars / entries.length);
-  const extra = planDollars - base * entries.length;
-  const entryCents = new Map<string, number>();
-  entries.forEach((r, i) => entryCents.set(`${r.featureSlug}\u0000${r.legKey}`, (base + (i < extra ? 1 : 0)) * 100));
-  const entryTotal = [...entryCents.values()].reduce((s, c) => s + c, 0);
-  const cap = reactiveCapCents(entryTotal, "month");
-
-  return sorted.map((r) => {
-    const k = `${r.featureSlug}\u0000${r.legKey}`;
-    let monthly: number | null = entryCents.get(k) ?? null;
-    if (monthly === null && runs(r)?.role === "reactive" && isOn(r) && cap > 0) monthly = cap;
-    if (monthly !== null && monthly <= 0) monthly = null;
-    return { featureSlug: r.featureSlug, legKey: r.legKey, monthlyBudgetCents: monthly };
-  });
+  const campaigns = rows.map((r) => ({ featureSlug: r.featureSlug, legKey: r.legKey, on: isOn(r) }));
+  if (!campaigns.some((c) => c.on && runRoleOf(c, terms) === "proactive")) return null;
+  return planAllocationFor(campaigns, planMonthlyCents, terms);
 }
 
 export interface PlanBudgetsSweepResult {
@@ -251,10 +229,11 @@ export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promi
 // ON per offer; when a person switches which one (stops the old, starts the new,
 // and notifies us through mission-status-changed), the plan money MOVES with it:
 //
-//  - each ON proactive campaign on a channel we run carries the plan (several ON,
-//    a legacy state, share it in whole dollars, leftover dollars to the first);
-//  - each ON reactive campaign on a channel we run carries a MAX of half the plan,
-//    rounded UP to the dollar ($99 -> $50);
+//  - each ON reactive campaign on a channel we run carries a MAX of the plan's
+//    follow-up share (9%, rounded UP to the dollar: $99 -> $9; owner 2026-10-05);
+//  - the ON proactive campaign(s) on a channel we run carry the REST of the plan
+//    ($99 - $9 = $90; several ON, a legacy state, share it in whole dollars,
+//    leftover dollars to the first), so the figures add up to the plan;
 //  - every other campaign of the offer is "not set" (row deleted): OFF claims nothing.
 //
 // Every row written is `plan_derived`: it never prices the plan and is never
@@ -266,32 +245,47 @@ export interface OfferCampaign {
   on: boolean;
 }
 
+/**
+ * The share of a subscriber's plan an ON follow-up (reactive) campaign carries as its
+ * MAX (owner 2026-10-05: $9 of a $99 plan, the lead-finding campaign $90).
+ */
+export const PLAN_FOLLOW_UP_SHARE = 0.09;
+
+/** One follow-up's MAX from the plan, in whole dollars rounded UP ($99 -> $9). */
+export function planFollowUpCents(planMonthlyCents: number): number {
+  return Math.ceil(Math.floor(planMonthlyCents / 100) * PLAN_FOLLOW_UP_SHARE) * 100;
+}
+
+function runRoleOf(c: { featureSlug: string; legKey: string }, terms: SalesPathTerms): "proactive" | "reactive" | null {
+  const t = terms.termsFor(c.featureSlug, c.legKey);
+  return t && t.role !== "customer" && t.managed === true && terms.managedChannel(c.featureSlug) === true
+    ? t.role
+    : null;
+}
+
 /** Pure: where one offer's plan money sits, given which of its campaigns are ON. */
 export function planAllocationFor(
   campaigns: OfferCampaign[],
   planMonthlyCents: number,
   terms: SalesPathTerms
 ): PlanBudgetRow[] {
-  const roleOf = (c: OfferCampaign) => {
-    const t = terms.termsFor(c.featureSlug, c.legKey);
-    return t && t.role !== "customer" && t.managed === true && terms.managedChannel(c.featureSlug) === true
-      ? t.role
-      : null;
-  };
   const sorted = [...campaigns].sort((a, b) =>
     a.featureSlug === b.featureSlug ? a.legKey.localeCompare(b.legKey) : a.featureSlug.localeCompare(b.featureSlug)
   );
   const planDollars = Math.floor(planMonthlyCents / 100);
-  const entries = sorted.filter((c) => c.on && roleOf(c) === "proactive");
-  const base = entries.length > 0 ? Math.floor(planDollars / entries.length) : 0;
-  const extra = planDollars - base * entries.length;
+  const followUps = sorted.filter((c) => c.on && runRoleOf(c, terms) === "reactive");
+  const followUpCents = planFollowUpCents(planMonthlyCents);
+  const entries = sorted.filter((c) => c.on && runRoleOf(c, terms) === "proactive");
+  // Entries carry what the follow-ups leave of the plan (never below zero).
+  const entryDollars = Math.max(0, planDollars - (followUps.length * followUpCents) / 100);
+  const base = entries.length > 0 ? Math.floor(entryDollars / entries.length) : 0;
+  const extra = entryDollars - base * entries.length;
   const entryCents = new Map<string, number>();
   entries.forEach((c, i) => entryCents.set(`${c.featureSlug}\u0000${c.legKey}`, (base + (i < extra ? 1 : 0)) * 100));
-  const cap = reactiveCapCents(planDollars * 100, "month");
 
   return sorted.map((c) => {
     let monthly: number | null = entryCents.get(`${c.featureSlug}\u0000${c.legKey}`) ?? null;
-    if (monthly === null && c.on && roleOf(c) === "reactive") monthly = cap;
+    if (monthly === null && c.on && runRoleOf(c, terms) === "reactive") monthly = followUpCents;
     if (monthly !== null && monthly <= 0) monthly = null;
     return { featureSlug: c.featureSlug, legKey: c.legKey, monthlyBudgetCents: monthly };
   });
@@ -426,4 +420,60 @@ export async function onMissionStatusChanged(params: { orgId: string; brandId: s
     );
   }
   await onCampaignStatusChanged(params);
+}
+
+export interface DerivedPlansSweepResult {
+  /** Live plans (brand x offer) whose budget rows are all plan-derived. */
+  offers: number;
+  /** Of those, offers where a row moved (the allocation rule or the ON set changed). */
+  reallocatedOffers: number;
+  skipped: number;
+}
+
+/**
+ * Keep every plan-derived offer on the CURRENT allocation rule (hourly tick). An offer
+ * whose budget rows are ALL plan-derived is re-allocated from its plan and the live
+ * ON campaigns; an offer holding any customer-stated row is left alone (only a
+ * person's on/off switch re-allocates it). Idempotent: an offer already on the rule
+ * writes nothing. Never charges, never re-prices.
+ */
+export async function reallocateDerivedPlans(now = new Date()): Promise<DerivedPlansSweepResult> {
+  const result: DerivedPlansSweepResult = { offers: 0, reallocatedOffers: 0, skipped: 0 };
+  const orgs = await db
+    .select({ orgId: billingAccounts.orgId })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.paymentMode, "subscription"));
+  for (const { orgId } of orgs) {
+    let plans;
+    try {
+      plans = await listLiveSubscriptions(orgId);
+    } catch (err) {
+      console.error(`[billing-service] derived plans: org ${orgId} plans unreadable, retrying next tick`, err);
+      result.skipped++;
+      continue;
+    }
+    for (const plan of plans) {
+      if (!plan.brandId || !plan.offerId) continue;
+      const rows = (
+        await db
+          .select()
+          .from(campaignDailyBudgets)
+          .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, plan.brandId)))
+      ).filter((r) => r.offerId === plan.offerId && r.legKey !== null);
+      if (rows.length === 0 || !rows.every((r) => r.planDerived === true)) continue;
+      result.offers++;
+      try {
+        const outcome = await allocatePlanToOnCampaigns({ orgId, brandId: plan.brandId, offerId: plan.offerId, now });
+        if (outcome.status === "skipped") result.skipped++;
+        else if (outcome.written > 0 || outcome.deleted > 0) result.reallocatedOffers++;
+      } catch (err) {
+        console.error(
+          `[billing-service] derived plans: org ${orgId} brand ${plan.brandId} offer ${plan.offerId} failed, retrying next tick`,
+          err
+        );
+        result.skipped++;
+      }
+    }
+  }
+  return result;
 }
