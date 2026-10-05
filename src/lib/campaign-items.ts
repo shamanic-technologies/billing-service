@@ -134,6 +134,8 @@ interface OfferItem {
   legKey: string;
   budgetCents: number;
   role: ItemRoleServed;
+  /** Derived from the plan (lib/subscriber-plan-budgets): never charged on top of it. */
+  planDerived?: boolean;
 }
 
 function dollars(cents: number): string {
@@ -149,9 +151,15 @@ export function minimumInPeriod(monthlyMinimumCents: number, period: ItemPeriod)
   return period === "month" ? monthlyMinimumCents : Math.ceil(monthlyMinimumCents / DAYS_PER_MONTH);
 }
 
-/** The largest MAX budget a reactive campaign may carry: half the offer's entry budgets. */
-export function reactiveCapCents(entryBudgetsCents: number): number {
-  return Math.floor(entryBudgetsCents * REACTIVE_CAP_RATIO);
+/**
+ * The largest MAX budget a reactive campaign may carry: half the offer's entry
+ * budgets. A MONTHLY budget is whole dollars, so its cap is rounded UP to the dollar
+ * (owner 2026-10-05: a $99 entry allows a $50 follow-up, not $49); a daily cap stays
+ * rounded down to the cent.
+ */
+export function reactiveCapCents(entryBudgetsCents: number, period: ItemPeriod = "day"): number {
+  const half = entryBudgetsCents * REACTIVE_CAP_RATIO;
+  return period === "month" ? Math.ceil(half / 100) * 100 : Math.floor(half);
 }
 
 function itemKey(featureSlug: string, legKey: string): string {
@@ -243,7 +251,7 @@ export function assertReactiveCaps(offer: OfferItem[], period: ItemPeriod): void
       { featureSlug: reactive[0].featureSlug, legKey: reactive[0].legKey }
     );
   }
-  const capCents = reactiveCapCents(entries);
+  const capCents = reactiveCapCents(entries, period);
   for (const r of reactive) {
     if (r.budgetCents > capCents) {
       throw new ItemBudgetRefused(
@@ -327,6 +335,7 @@ function chargedReactiveMonthly(
     .filter(
       (i) =>
         i.role === "reactive" &&
+        !i.planDerived &&
         terms.managedChannel(i.featureSlug) === true &&
         isOn({ brandId, offerId, featureSlug: i.featureSlug, legKey: i.legKey })
     )
@@ -435,6 +444,7 @@ function asOfferItems(items: CampaignItem[], period: ItemPeriod, terms: SalesPat
       legKey: i.legKey,
       budgetCents: budget,
       role: roleOf(terms, i.featureSlug, i.legKey) ?? "proactive",
+      planDerived: i.planDerived,
     };
   });
 }
@@ -741,7 +751,7 @@ export async function getOfferItemsView(
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
       managed: t?.managed ?? null,
       minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, period),
-      capCents: role === "reactive" ? reactiveCapCents(entries) : null,
+      capCents: role === "reactive" ? reactiveCapCents(entries, period) : null,
       budgetable: t ? t.role !== "customer" : false,
       updatedAt: row ? row.updatedAt.toISOString() : null,
     };

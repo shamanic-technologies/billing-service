@@ -1,0 +1,244 @@
+/**
+ * A SUBSCRIBER's campaign budgets come from its PLAN (owner 2026-10-05, migration 0065).
+ *
+ * A subscriber whose campaigns still carry a legacy DAILY ceiling (written before
+ * monthly budgets existed, e.g. a $50/day launch default) used to read it x30 as its
+ * monthly budget: "$1,500/month (from your $50/day)" on a client paying a $99 plan.
+ * That figure was never chosen and never paid. For a subscriber the plan is the
+ * budget, so each such offer is restated, once, from its live plan:
+ *
+ *  - ON entry campaigns (proactive, a channel we run, campaign `ongoing`) share the
+ *    plan amount, in whole dollars (one ON entry = the plan).
+ *  - ON follow-up campaigns (reactive, a channel we run) carry their MAX: half the
+ *    entry budgets, rounded UP to the dollar ($99 → $50).
+ *  - Every other legacy row (OFF campaign, a channel we do not run, a customer-team
+ *    or unknown leg) is DELETED: "not set". An OFF campaign claims no plan money;
+ *    the customer states a budget when turning it back on.
+ *
+ * Restated rows are monthly (daily ceiling = monthly / 30, so campaign-service paces
+ * on the new figure) and stamped `plan_derived`: they never re-price the plan and are
+ * never charged on top of it. NOTHING is charged, refunded or re-priced by this.
+ *
+ * An offer is left alone (logged) when it has no live plan, already holds a monthly
+ * budget (the customer stated some), has no ON entry campaign, or its catalogue /
+ * campaign status is unreadable; the next tick retries. prepaid / postpaid orgs are
+ * never read. Runs on the hourly scheduler tick (first tick a minute after boot).
+ */
+
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { db } from "../db/index.js";
+import { billingAccounts, brandDailyBudgetChanges, campaignDailyBudgets, type CeilingRow } from "../db/schema.js";
+import { DAYS_PER_MONTH, getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
+import { campaignOnPredicateOf, type CampaignOnPredicate } from "./campaign-items-store.js";
+import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
+import { reactiveCapCents } from "./campaign-items.js";
+import { sumCeilings } from "./campaign-budgets.js";
+import { getBrandSalesBudget } from "./brand-sales-budget.js";
+import { listLiveSubscriptions } from "./subscription.js";
+import { attributeUnassignedPlan } from "./subscription-plans.js";
+
+export interface PlanBudgetRow {
+  featureSlug: string;
+  legKey: string;
+  /** The restated monthly budget; null = the row is deleted ("not set"). */
+  monthlyBudgetCents: number | null;
+}
+
+/**
+ * The restatement of one offer's legacy rows from its plan. Pure. Null when the offer
+ * has no ON entry campaign on a channel we run (nothing can carry the plan).
+ */
+export function planBudgetsFor(
+  rows: Array<{ brandId: string; offerId: string; featureSlug: string; legKey: string }>,
+  planMonthlyCents: number,
+  terms: SalesPathTerms,
+  isOn: CampaignOnPredicate
+): PlanBudgetRow[] | null {
+  const runs = (r: { featureSlug: string; legKey: string }) => {
+    const t = terms.termsFor(r.featureSlug, r.legKey);
+    return t && t.role !== "customer" && t.managed === true && terms.managedChannel(r.featureSlug) === true ? t : null;
+  };
+  const sorted = [...rows].sort((a, b) =>
+    a.featureSlug === b.featureSlug ? a.legKey.localeCompare(b.legKey) : a.featureSlug.localeCompare(b.featureSlug)
+  );
+  const entries = sorted.filter((r) => runs(r)?.role === "proactive" && isOn(r));
+  if (entries.length === 0) return null;
+
+  // Whole dollars, split evenly; the leftover dollars go to the first entries.
+  const planDollars = Math.floor(planMonthlyCents / 100);
+  const base = Math.floor(planDollars / entries.length);
+  const extra = planDollars - base * entries.length;
+  const entryCents = new Map<string, number>();
+  entries.forEach((r, i) => entryCents.set(`${r.featureSlug}\u0000${r.legKey}`, (base + (i < extra ? 1 : 0)) * 100));
+  const entryTotal = [...entryCents.values()].reduce((s, c) => s + c, 0);
+  const cap = reactiveCapCents(entryTotal, "month");
+
+  return sorted.map((r) => {
+    const k = `${r.featureSlug}\u0000${r.legKey}`;
+    let monthly: number | null = entryCents.get(k) ?? null;
+    if (monthly === null && runs(r)?.role === "reactive" && isOn(r) && cap > 0) monthly = cap;
+    if (monthly !== null && monthly <= 0) monthly = null;
+    return { featureSlug: r.featureSlug, legKey: r.legKey, monthlyBudgetCents: monthly };
+  });
+}
+
+export interface PlanBudgetsSweepResult {
+  /** (org, brand, offer) groups holding legacy daily rows. */
+  offers: number;
+  /** Groups restated from their plan. */
+  restatedOffers: number;
+  /** Distinct orgs with at least one group restated. */
+  restatedOrgs: number;
+  rowsRestated: number;
+  rowsDeleted: number;
+  skipped: number;
+}
+
+/** Restate every subscriber's legacy daily campaign ceilings from its live plan. */
+export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promise<PlanBudgetsSweepResult> {
+  const result: PlanBudgetsSweepResult = {
+    offers: 0,
+    restatedOffers: 0,
+    restatedOrgs: 0,
+    rowsRestated: 0,
+    rowsDeleted: 0,
+    skipped: 0,
+  };
+  const groups = await db
+    .selectDistinct({
+      orgId: campaignDailyBudgets.orgId,
+      brandId: campaignDailyBudgets.brandId,
+      offerId: campaignDailyBudgets.offerId,
+    })
+    .from(campaignDailyBudgets)
+    .innerJoin(billingAccounts, eq(billingAccounts.orgId, campaignDailyBudgets.orgId))
+    .where(
+      and(
+        eq(billingAccounts.paymentMode, "subscription"),
+        isNull(campaignDailyBudgets.monthlyBudgetCents),
+        isNotNull(campaignDailyBudgets.offerId),
+        isNotNull(campaignDailyBudgets.legKey)
+      )
+    );
+  if (groups.length === 0) return result;
+  result.offers = groups.length;
+
+  let terms: SalesPathTerms;
+  try {
+    terms = await getSalesPathTerms();
+  } catch (err) {
+    console.error("[billing-service] plan budgets: catalogue unreadable, retrying next tick", err);
+    result.skipped = groups.length;
+    return result;
+  }
+
+  const orgs = new Set<string>();
+  for (const g of groups) {
+    const offerId = g.offerId as string;
+    const where = `org ${g.orgId} brand ${g.brandId} offer ${offerId}`;
+    try {
+      try {
+        await attributeUnassignedPlan(g.orgId);
+      } catch (err) {
+        console.error(`[billing-service] plan budgets: could not attribute the onboarding plan of org ${g.orgId}`, err);
+      }
+      const plan = (await listLiveSubscriptions(g.orgId)).find((s) => s.brandId === g.brandId && s.offerId === offerId);
+      if (!plan) {
+        console.warn(`[billing-service] plan budgets: ${where} has legacy daily ceilings but no live plan; left as is`);
+        result.skipped++;
+        continue;
+      }
+      const statuses = await fetchRecurringCampaignStatuses(g.orgId);
+      if (!statuses.ok) {
+        console.error(`[billing-service] plan budgets: ${where}: campaign status unreadable (${statuses.reason}), retrying next tick`);
+        result.skipped++;
+        continue;
+      }
+      const isOn = campaignOnPredicateOf(statuses.campaigns);
+
+      const outcome = await db.transaction(async (tx) => {
+        const rows: CeilingRow[] = await tx
+          .select()
+          .from(campaignDailyBudgets)
+          .where(and(eq(campaignDailyBudgets.orgId, g.orgId), eq(campaignDailyBudgets.brandId, g.brandId)))
+          .for("update");
+        const offerRows = rows.filter((r) => r.offerId === offerId && r.legKey !== null);
+        if (offerRows.some((r) => r.monthlyBudgetCents !== null)) return "mixed" as const;
+        const legacy = offerRows.filter((r) => r.monthlyBudgetCents === null);
+        if (legacy.length === 0) return "done" as const;
+        const restatement = planBudgetsFor(
+          legacy.map((r) => ({ brandId: r.brandId, offerId, featureSlug: r.featureSlug, legKey: r.legKey as string })),
+          plan.monthlyAmountCents,
+          terms,
+          isOn
+        );
+        if (!restatement) return "no_entry" as const;
+
+        let restated = 0;
+        let deleted = 0;
+        for (const p of restatement) {
+          const before = legacy.find((r) => r.featureSlug === p.featureSlug && r.legKey === p.legKey)!;
+          const key = and(
+            eq(campaignDailyBudgets.orgId, g.orgId),
+            eq(campaignDailyBudgets.brandId, g.brandId),
+            eq(campaignDailyBudgets.offerId, offerId),
+            eq(campaignDailyBudgets.featureSlug, p.featureSlug),
+            eq(campaignDailyBudgets.legKey, p.legKey),
+            isNull(campaignDailyBudgets.monthlyBudgetCents)
+          );
+          if (p.monthlyBudgetCents === null) {
+            await tx.delete(campaignDailyBudgets).where(key);
+            deleted++;
+          } else {
+            await tx
+              .update(campaignDailyBudgets)
+              .set({
+                monthlyBudgetCents: p.monthlyBudgetCents,
+                dailyBudgetCents: (p.monthlyBudgetCents / DAYS_PER_MONTH).toFixed(10),
+                planDerived: true,
+                updatedAt: now,
+              })
+              .where(key);
+            restated++;
+          }
+          console.log(
+            `[billing-service] plan budgets: ${where} ${p.featureSlug}:${p.legKey} ` +
+              `daily ${before.dailyBudgetCents} -> ${p.monthlyBudgetCents === null ? "not set (deleted)" : `${p.monthlyBudgetCents}/month from plan ${plan.id} (${plan.monthlyAmountCents}/month)`}`
+          );
+        }
+        // The brand-total timeline (the by-day replay) follows, unless the brand is on a global pot.
+        if (!(await getBrandSalesBudget(g.orgId, g.brandId))) {
+          const left = await tx
+            .select()
+            .from(campaignDailyBudgets)
+            .where(and(eq(campaignDailyBudgets.orgId, g.orgId), eq(campaignDailyBudgets.brandId, g.brandId)));
+          await tx.insert(brandDailyBudgetChanges).values({
+            orgId: g.orgId,
+            brandId: g.brandId,
+            dailyBudgetCents: sumCeilings(left),
+            changedAt: now,
+          });
+        }
+        return { restated, deleted };
+      });
+
+      if (outcome === "done") continue;
+      if (outcome === "mixed" || outcome === "no_entry") {
+        console.warn(
+          `[billing-service] plan budgets: ${where} left as is (${outcome === "mixed" ? "the customer already stated monthly budgets" : "no ON entry campaign on a channel we run"})`
+        );
+        result.skipped++;
+        continue;
+      }
+      result.restatedOffers++;
+      result.rowsRestated += outcome.restated;
+      result.rowsDeleted += outcome.deleted;
+      orgs.add(g.orgId);
+    } catch (err) {
+      console.error(`[billing-service] plan budgets: ${where} failed, retrying next tick`, err);
+      result.skipped++;
+    }
+  }
+  result.restatedOrgs = orgs.size;
+  return result;
+}

@@ -30,6 +30,12 @@ export interface CampaignItem {
   budgetCents: number;
   /** The daily ceiling as stored (decimal string). */
   dailyBudgetCents: string;
+  /**
+   * A subscriber's budget DERIVED FROM ITS PLAN (lib/subscriber-plan-budgets), not
+   * stated by the customer: it IS the plan, so it never prices it and is never
+   * charged on top of it.
+   */
+  planDerived: boolean;
   updatedAt: Date;
 }
 
@@ -45,6 +51,7 @@ export function itemOf(row: CeilingRow): CampaignItem | null {
     period: month ? "month" : "day",
     budgetCents: month ? (row.monthlyBudgetCents as number) : Number(row.dailyBudgetCents),
     dailyBudgetCents: row.dailyBudgetCents,
+    planDerived: row.planDerived === true,
     updatedAt: row.updatedAt,
   };
 }
@@ -99,8 +106,9 @@ export interface ItemsPlanPricing {
 
 /**
  * What one brand x offer's plan costs, from its MONTHLY campaign budgets. Charged =
- * a channel we run AND a campaign that is ON. Null when nothing is charged: the
- * plan keeps the amount it had.
+ * a channel we run AND a campaign that is ON. A budget DERIVED FROM THE PLAN is the
+ * plan itself, never a reason to change it: skipped. Null when nothing is charged:
+ * the plan keeps the amount it had.
  */
 export function itemsPlanPricing(
   items: CampaignItem[],
@@ -112,7 +120,7 @@ export function itemsPlanPricing(
   let deferred = 0;
   let off = 0;
   for (const i of items) {
-    if (i.period !== "month") continue;
+    if (i.period !== "month" || i.planDerived) continue;
     if (terms.managedChannel(i.featureSlug) !== true) {
       deferred += i.budgetCents;
     } else if (!isOn(i)) {
