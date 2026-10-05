@@ -493,6 +493,8 @@ export async function setCampaignDailyBudget(
           legKey: key.legKey,
           dailyBudgetCents,
           monthlyBudgetCents,
+          // A customer write: the figure is theirs now, no longer derived from the plan.
+          planDerived: false,
           updatedAt: changedAt,
         })
         .where(identityOf(orgId, brandId, keeper));
