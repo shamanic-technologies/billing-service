@@ -2492,7 +2492,7 @@
           "day",
           "month"
         ],
-        "description": "day = prepaid / postpaid daily budget; month = subscriber monthly budget."
+        "description": "day = a daily budget (prepaid / postpaid default); month = a monthly budget (always for a subscriber; optional for prepaid / postpaid, covering the UTC calendar month)."
       },
       "SpendableCampaignItem": {
         "type": "object",
@@ -4019,7 +4019,8 @@
               "reactive_charge_declined",
               "charge_unavailable",
               "minimums_unavailable",
-              "campaign_status_unavailable"
+              "campaign_status_unavailable",
+              "period_not_allowed"
             ]
           },
           "featureSlug": {
@@ -4095,6 +4096,13 @@
               ]
             },
             "minItems": 1
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "day",
+              "month"
+            ]
           }
         },
         "required": [
@@ -12285,7 +12293,7 @@
             }
           },
           "400": {
-            "description": "below_minimum | reactive_above_cap | entry_item_required | unknown_item | ...",
+            "description": "below_minimum | reactive_above_cap | entry_item_required | unknown_item | period_not_allowed | ...",
             "content": {
               "application/json": {
                 "schema": {

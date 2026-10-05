@@ -1003,7 +1003,7 @@ const BrandFundingModeSchema = z
   });
 
 const ItemPeriodSchema = z.enum(["day", "month"]).openapi("CampaignItemPeriod", {
-  description: "day = prepaid / postpaid daily budget; month = subscriber monthly budget.",
+  description: "day = a daily budget (prepaid / postpaid default); month = a monthly budget (always for a subscriber; optional for prepaid / postpaid, covering the UTC calendar month).",
 });
 
 export const SpendableCampaignItemSchema = z
@@ -1015,7 +1015,7 @@ export const SpendableCampaignItemSchema = z
     /** Decimal cents. A reactive monthly item includes last period's carry-over. */
     budgetCents: CentsStringSchema,
     period: ItemPeriodSchema,
-    /** The plan's current period for a monthly item; null for a daily one. */
+    /** A monthly item's period (subscriber: the plan's current period; prepaid / postpaid: the UTC calendar month); null for a daily one. */
     periodStart: z.string().nullable(),
     periodEnd: z.string().nullable(),
     /** false = a channel we do not run yet (recorded, never charged); null = catalogue unreadable. */
@@ -4409,6 +4409,13 @@ export const SetCampaignItemBudgetsRequestSchema = z
         })
       )
       .min(1),
+    /**
+     * The period the listed budgets are stated in. Absent = the org's default (month
+     * for a subscriber, day for prepaid / postpaid). A prepaid / postpaid org may state
+     * "month" (whole dollars, a spend cap over the UTC calendar month, nothing charged
+     * by the budget itself); a subscriber may not state "day" (400 period_not_allowed).
+     */
+    period: z.enum(["day", "month"]).optional(),
   })
   .openapi("SetCampaignItemBudgetsRequest");
 
@@ -4418,7 +4425,7 @@ const CampaignItemViewSchema = z
     legKey: z.string(),
     /** proactive = finds leads (daily/monthly spend); reactive = fires on a step (a MAX); null = unknown leg. */
     role: z.enum(["proactive", "reactive"]).nullable(),
-    /** Always the org's period: every figure of the row (budget, minimum, cap) is in it. */
+    /** Every figure of the row (budget, minimum, cap) is in it. Subscriber: always month; prepaid / postpaid: the period the budget was stated in (not set = day). */
     period: ItemPeriodSchema,
     /**
      * The period the budget was STATED in; null = not set. Differs from period for a row
@@ -4492,6 +4499,7 @@ export const ItemBudgetRefusalSchema = z
       "charge_unavailable",
       "minimums_unavailable",
       "campaign_status_unavailable",
+      "period_not_allowed",
     ]),
     featureSlug: z.string().optional(),
     legKey: z.string().optional(),
@@ -4550,7 +4558,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Set", content: { "application/json": { schema: SetCampaignItemBudgetsResponseSchema } } },
-    400: itemRefusal("below_minimum | reactive_above_cap | entry_item_required | unknown_item | ..."),
+    400: itemRefusal("below_minimum | reactive_above_cap | entry_item_required | unknown_item | period_not_allowed | ..."),
     409: itemRefusal("no_plan_for_offer | subscription_not_active | reactive_charge_declined"),
     502: itemRefusal("minimums_unavailable | campaign_status_unavailable | charge_unavailable"),
   },
