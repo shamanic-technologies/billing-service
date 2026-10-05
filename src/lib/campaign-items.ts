@@ -84,8 +84,6 @@ import { reloadOffSession } from "./reload.js";
 /** The acquirer refuses a charge under this; a smaller delta rolls into the renewal. */
 const MIN_CHARGE_CENTS = 50;
 const CHARGE_TIMEOUT_MS = 30_000;
-/** A reactive budget is at most this share of the offer's entry budgets. */
-export const REACTIVE_CAP_RATIO = 0.5;
 
 export type ItemBudgetRefusalCode =
   | "invalid_items"
@@ -96,7 +94,6 @@ export type ItemBudgetRefusalCode =
   | "amount_not_whole_dollars"
   | "below_minimum"
   | "entry_item_required"
-  | "reactive_above_cap"
   | "no_plan_for_offer"
   | "subscription_not_active"
   | "reactive_charge_declined"
@@ -152,17 +149,6 @@ function per(period: ItemPeriod): string {
 /** The minimum in the item's own period: the monthly floor, or its 30th rounded up. */
 export function minimumInPeriod(monthlyMinimumCents: number, period: ItemPeriod): number {
   return period === "month" ? monthlyMinimumCents : Math.ceil(monthlyMinimumCents / DAYS_PER_MONTH);
-}
-
-/**
- * The largest MAX budget a reactive campaign may carry: half the offer's entry
- * budgets. A MONTHLY budget is whole dollars, so its cap is rounded UP to the dollar
- * (owner 2026-10-05: a $99 entry allows a $50 follow-up, not $49); a daily cap stays
- * rounded down to the cent.
- */
-export function reactiveCapCents(entryBudgetsCents: number, period: ItemPeriod = "day"): number {
-  const half = entryBudgetsCents * REACTIVE_CAP_RATIO;
-  return period === "month" ? Math.ceil(half / 100) * 100 : Math.floor(half);
 }
 
 function itemKey(featureSlug: string, legKey: string): string {
@@ -241,30 +227,22 @@ export function validateItemInputs(
   return out;
 }
 
-/** Judge the offer's state once the write lands: every reactive MAX within half its entries. */
-export function assertReactiveCaps(offer: OfferItem[], period: ItemPeriod): void {
-  const entries = offer.filter((i) => i.role === "proactive").reduce((sum, i) => sum + i.budgetCents, 0);
+/**
+ * Judge the offer's state once the write lands: a follow-up (reactive) campaign
+ * needs a lead-finding (entry) budget to follow up on. There is NO maximum on any
+ * budget (owner 2026-10-05: "people can put the numbers they want with no maximum,
+ * only minimums apply"); the per channel x leg minimums are judged per item.
+ */
+export function assertEntryForReactive(offer: OfferItem[]): void {
   const reactive = offer.filter((i) => i.role === "reactive");
   if (reactive.length === 0) return;
-  if (entries === 0) {
-    throw new ItemBudgetRefused(
-      "entry_item_required",
-      "Set a budget on a campaign that finds the leads first; a follow-up campaign is capped at half of it.",
-      400,
-      { featureSlug: reactive[0].featureSlug, legKey: reactive[0].legKey }
-    );
-  }
-  const capCents = reactiveCapCents(entries, period);
-  for (const r of reactive) {
-    if (r.budgetCents > capCents) {
-      throw new ItemBudgetRefused(
-        "reactive_above_cap",
-        `${r.featureSlug} on ${r.legKey} can be at most half of the lead-finding budgets: ${dollars(capCents)}${per(period)}.`,
-        400,
-        { featureSlug: r.featureSlug, legKey: r.legKey, capCents, period }
-      );
-    }
-  }
+  if (offer.some((i) => i.role === "proactive" && i.budgetCents > 0)) return;
+  throw new ItemBudgetRefused(
+    "entry_item_required",
+    "Set a budget on a campaign that finds the leads first; a follow-up campaign follows up on its leads.",
+    400,
+    { featureSlug: reactive[0].featureSlug, legKey: reactive[0].legKey }
+  );
 }
 
 async function readTerms(): Promise<SalesPathTerms> {
@@ -559,7 +537,7 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<SetOff
     ),
     ...written,
   ];
-  assertReactiveCaps(offer, period);
+  assertEntryForReactive(offer);
 
   let plan: Subscription | null = null;
   let reactiveChargedCents = 0;
@@ -600,7 +578,7 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<SetOff
 /**
  * Remove one campaign's budget (back to "not set": its ceiling row is deleted).
  * Idempotent: false when nothing was stored. Refused when it would leave a
- * follow-up budget above its cap.
+ * follow-up budget with no lead-finding budget to follow up on.
  */
 export async function removeOfferItem(params: {
   orgId: string;
@@ -618,9 +596,8 @@ export async function removeOfferItem(params: {
   const target = items.find((i) => i.featureSlug === featureSlug && i.legKey === legKey);
   if (!target) return false;
   const terms = await readTerms();
-  assertReactiveCaps(
-    asOfferItems(items, target.period, terms).filter((i) => !(i.featureSlug === featureSlug && i.legKey === legKey)),
-    target.period
+  assertEntryForReactive(
+    asOfferItems(items, target.period, terms).filter((i) => !(i.featureSlug === featureSlug && i.legKey === legKey))
   );
   await db.transaction(async (tx) => {
     await tx
@@ -707,7 +684,7 @@ export interface ItemView {
   /**
    * The period every figure of the row is in. A subscriber: always month. A prepaid /
    * postpaid org: the period the budget was stated in (a $90/month row reads
-   * $90/month, its minimum and cap in month too); not set = day.
+   * $90/month, its minimum in month too); not set = day.
    */
   period: ItemPeriod;
   /**
@@ -723,8 +700,8 @@ export interface ItemView {
   managed: boolean | null;
   /** The minimum in this period. */
   minimumCents: number | null;
-  /** For a reactive campaign: the most it may carry (half the offer's entry budgets). */
-  capCents: number | null;
+  /** Always null: no budget has a maximum (owner 2026-10-05). Kept for readers of the old shape. */
+  capCents: null;
   /** Customer-team legs carry no budget. */
   budgetable: boolean;
   updatedAt: string | null;
@@ -757,10 +734,6 @@ export async function getOfferItemsView(
   const period = await periodOf(orgId);
   const stored = await listOfferItems(orgId, brandId, offerId);
   const terms = await readTerms();
-  const entriesIn = (p: ItemPeriod) =>
-    asOfferItems(stored, p, terms)
-      .filter((i) => i.role === "proactive")
-      .reduce((sum, i) => sum + i.budgetCents, 0);
 
   const pairs: Array<{ featureSlug: string; legKey: string }> = stored.map((r) => ({
     featureSlug: r.featureSlug,
@@ -788,7 +761,7 @@ export async function getOfferItemsView(
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
       managed: t?.managed ?? null,
       minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, rowPeriod),
-      capCents: role === "reactive" ? reactiveCapCents(entriesIn(rowPeriod), rowPeriod) : null,
+      capCents: null,
       budgetable: t ? t.role !== "customer" : false,
       updatedAt: row ? row.updatedAt.toISOString() : null,
     };

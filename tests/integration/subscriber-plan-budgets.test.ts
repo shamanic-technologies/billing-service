@@ -203,7 +203,7 @@ describe("subscriber campaign budgets from the plan", () => {
       statedPeriod: "month",
       role: "reactive",
       budgetCents: 900,
-      capCents: 4500,
+      capCents: null,
     });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: null, statedPeriod: null, dailyBudgetCents: null });
     // Derived budgets never price the plan: it keeps its amount.
@@ -243,7 +243,7 @@ describe("subscriber campaign budgets from the plan", () => {
     const rows = await db.select().from(campaignDailyBudgets);
     expect(rows.find((r) => r.featureSlug === COLD)?.planDerived).toBe(false);
     expect(rows.find((r) => r.featureSlug === MEET)?.planDerived).toBe(true);
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: 10000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: null });
   });
 
   it("two ON entries share what the follow-up leaves of the plan, in whole dollars", async () => {
@@ -255,7 +255,7 @@ describe("subscriber campaign budgets from the plan", () => {
     // $99 - $9 = $90 over two.
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 4500 });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 4500 });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: 4500 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: null });
   });
 
   it("no ON entry campaign: left as is; a prepaid org is never touched", async () => {

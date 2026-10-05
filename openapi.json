@@ -4013,7 +4013,6 @@
               "amount_not_whole_dollars",
               "below_minimum",
               "entry_item_required",
-              "reactive_above_cap",
               "no_plan_for_offer",
               "subscription_not_active",
               "reactive_charge_declined",
@@ -4030,9 +4029,6 @@
             "type": "string"
           },
           "minimumCents": {
-            "type": "integer"
-          },
-          "capCents": {
             "type": "integer"
           },
           "period": {
@@ -8551,7 +8547,7 @@
     "/internal/brands/{brandId}/mission-status-changed": {
       "post": {
         "summary": "A person paused or restarted a mission: email staff",
-        "description": "campaign-service calls this after a person's status write has committed. billing composes the SAME staff email as a budget change (event `brand_daily_budget_changed`): the mission and its move, then the daily total, reactive caps and paused missions as they stand after the move. Only `ongoing` <-> `stopped` moves send; anything else answers notified:false. For a SUBSCRIBER the plan money then follows the ON campaigns: the ON proactive campaign carries the plan (monthly), each ON reactive one a max of half of it (whole dollars, rounded up), every other campaign is not set; never charged. The email is sent in the background; this answers 202 before it goes out. Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
+        "description": "campaign-service calls this after a person's status write has committed. billing composes the SAME staff email as a budget change (event `brand_daily_budget_changed`): the mission and its move, then the daily total, reactive caps and paused missions as they stand after the move. Only `ongoing` <-> `stopped` moves send; anything else answers notified:false. For a SUBSCRIBER the plan money then follows the ON campaigns: the ON proactive campaign carries the plan (monthly) minus each ON reactive one's share, every other campaign is not set; never charged. The email is sent in the background; this answers 202 before it goes out. Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
         "parameters": [
           {
             "schema": {
@@ -12293,7 +12289,7 @@
             }
           },
           "400": {
-            "description": "below_minimum | reactive_above_cap | entry_item_required | unknown_item | period_not_allowed | ...",
+            "description": "below_minimum | entry_item_required | unknown_item | period_not_allowed | ...",
             "content": {
               "application/json": {
                 "schema": {
@@ -12326,7 +12322,7 @@
       },
       "delete": {
         "summary": "Remove one campaign's budget (back to not set)",
-        "description": "Idempotent (removed: false when nothing was stored). Refused (400 reactive_above_cap) when it would leave a follow-up budget above half of the entry budgets left.",
+        "description": "Idempotent (removed: false when nothing was stored). Refused (400 entry_item_required) when it would leave a follow-up budget with no lead-finding budget left.",
         "parameters": [
           {
             "schema": {
@@ -12471,7 +12467,7 @@
             }
           },
           "400": {
-            "description": "Invalid ids, missing featureSlug/legKey, or reactive_above_cap",
+            "description": "Invalid ids, missing featureSlug/legKey, or entry_item_required",
             "content": {
               "application/json": {
                 "schema": {
