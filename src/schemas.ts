@@ -3398,8 +3398,8 @@ registry.registerPath({
     "total, reactive caps and paused missions as they stand after the move. " +
     "Only `ongoing` <-> `stopped` moves send; anything else answers notified:false. " +
     "For a SUBSCRIBER the plan money then follows the ON campaigns: the ON proactive " +
-    "campaign carries the plan (monthly), each ON reactive one a max of half of it " +
-    "(whole dollars, rounded up), every other campaign is not set; never charged. " +
+    "campaign carries the plan (monthly) minus each ON reactive one's share, every " +
+    "other campaign is not set; never charged. " +
     "The email is sent in the background; this answers 202 before it goes out. " +
     "Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
   request: {
@@ -4441,7 +4441,7 @@ const CampaignItemViewSchema = z
     managed: z.boolean().nullable(),
     /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
     minimumCents: z.number().int().nullable(),
-    /** Reactive only: the most it may carry, half the offer's entry budgets. */
+    /** Always null: no campaign budget has a maximum (removed 2026-10-05). Kept for readers of the old shape. */
     capCents: z.number().int().nullable(),
     /** false for a customer-team leg (carries no budget) or an unknown one. */
     budgetable: z.boolean(),
@@ -4492,7 +4492,6 @@ export const ItemBudgetRefusalSchema = z
       "amount_not_whole_dollars",
       "below_minimum",
       "entry_item_required",
-      "reactive_above_cap",
       "no_plan_for_offer",
       "subscription_not_active",
       "reactive_charge_declined",
@@ -4504,7 +4503,6 @@ export const ItemBudgetRefusalSchema = z
     featureSlug: z.string().optional(),
     legKey: z.string().optional(),
     minimumCents: z.number().int().optional(),
-    capCents: z.number().int().optional(),
     period: ItemPeriodSchema.optional(),
     amountCents: z.number().int().optional(),
   })
@@ -4558,7 +4556,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: "Set", content: { "application/json": { schema: SetCampaignItemBudgetsResponseSchema } } },
-    400: itemRefusal("below_minimum | reactive_above_cap | entry_item_required | unknown_item | period_not_allowed | ..."),
+    400: itemRefusal("below_minimum | entry_item_required | unknown_item | period_not_allowed | ..."),
     409: itemRefusal("no_plan_for_offer | subscription_not_active | reactive_charge_declined"),
     502: itemRefusal("minimums_unavailable | campaign_status_unavailable | charge_unavailable"),
   },
@@ -4569,8 +4567,8 @@ registry.registerPath({
   path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
   summary: "Remove one campaign's budget (back to not set)",
   description:
-    "Idempotent (removed: false when nothing was stored). Refused (400 reactive_above_cap) when it " +
-    "would leave a follow-up budget above half of the entry budgets left.",
+    "Idempotent (removed: false when nothing was stored). Refused (400 entry_item_required) when it " +
+    "would leave a follow-up budget with no lead-finding budget left.",
   request: {
     headers: protectedHeaders,
     params: brandOfferParams,
@@ -4581,7 +4579,7 @@ registry.registerPath({
       description: "Removed",
       content: { "application/json": { schema: CampaignItemBudgetsSchema.extend({ removed: z.boolean() }) } },
     },
-    400: itemRefusal("Invalid ids, missing featureSlug/legKey, or reactive_above_cap"),
+    400: itemRefusal("Invalid ids, missing featureSlug/legKey, or entry_item_required"),
   },
 });
 

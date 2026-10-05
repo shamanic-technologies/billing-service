@@ -155,7 +155,7 @@ describe("monthly campaign budgets in any payment mode", () => {
         dailyBudgetCents: "400.0000000000",
         minimumCents: 9900,
       });
-      expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", budgetCents: 6000, capCents: 6000 });
+      expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", budgetCents: 6000, capCents: null });
       expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
       expect(await db.select().from(subscriptions)).toHaveLength(0);
       const rows = await db.select().from(campaignDailyBudgets);
@@ -166,7 +166,7 @@ describe("monthly campaign budgets in any payment mode", () => {
     });
   }
 
-  it("prepaid: the monthly rules hold (whole dollars, monthly minimum, follow-up cap in month)", async () => {
+  it("prepaid: the monthly rules hold (whole dollars, monthly minimum, no maximum on a follow-up)", async () => {
     await insertTestAccount({ orgId, paymentMode: "prepaid" });
     let res = await put([[COLD, REPLY, 12050]], "month");
     expect(res.status).toBe(400);
@@ -174,10 +174,10 @@ describe("monthly campaign budgets in any payment mode", () => {
     res = await put([[COLD, REPLY, 9000]], "month");
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "below_minimum", minimumCents: 9900, period: "month" });
-    res = await put([[COLD, REPLY, 12000], [MEET, MEET_LEG, 6100]], "month");
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: "reactive_above_cap", capCents: 6000, period: "month" });
     expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
+    res = await put([[COLD, REPLY, 12000], [MEET, MEET_LEG, 50000]], "month");
+    expect(res.status).toBe(200);
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", budgetCents: 50000, capCents: null });
   });
 
   it("prepaid: a daily row next to a monthly one keeps its own period; absent period = day as before", async () => {

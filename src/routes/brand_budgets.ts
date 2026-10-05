@@ -452,7 +452,7 @@ router.post(
         actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
       });
       // A subscriber's plan money follows the ON campaigns (the ON proactive carries
-      // the plan, each ON reactive half of it, OFF ones none; lib/subscriber-plan-budgets),
+      // the plan minus each ON reactive share, OFF ones none; lib/subscriber-plan-budgets),
       // then the usual re-price, a no-op on those plan-derived rows (lib/campaign-items).
       void onMissionStatusChanged({ orgId, brandId, offerId: body.offerId });
     }
