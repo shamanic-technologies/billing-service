@@ -3397,6 +3397,9 @@ registry.registerPath({
     "`brand_daily_budget_changed`): the mission and its move, then the daily " +
     "total, reactive caps and paused missions as they stand after the move. " +
     "Only `ongoing` <-> `stopped` moves send; anything else answers notified:false. " +
+    "For a SUBSCRIBER the plan money then follows the ON campaigns: the ON proactive " +
+    "campaign carries the plan (monthly), each ON reactive one a max of half of it " +
+    "(whole dollars, rounded up), every other campaign is not set; never charged. " +
     "The email is sent in the background; this answers 202 before it goes out. " +
     "Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
   request: {

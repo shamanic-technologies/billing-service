@@ -393,9 +393,10 @@ describe("item budgets per campaign", () => {
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ statedPeriod: "month", budgetCents: 15000, capCents: 15000 });
   });
 
-  it("subscriber: an OFF campaign keeps its budget and is charged nothing; turning it ON charges its follow-up", async () => {
+  it("subscriber: an OFF campaign is charged nothing; turning it ON gives it half the plan, charged nothing (the plan follows)", async () => {
     const plan = await subscriber();
     onCampaigns.delete(`${MEET}:${MEET_LEG}`);
+    onCampaigns.delete(`${COLD}:${VISIT}`); // one proactive campaign ON per offer (campaign-service)
     let res = await put([[COLD, REPLY, 20000], [MEET, MEET_LEG, 10000]]);
     expect(res.status).toBe(200);
     expect(res.body.reactiveChargedCents).toBe(0);
@@ -403,7 +404,9 @@ describe("item budgets per campaign", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
 
-    // campaign-service reports the follow-up campaign turned ON.
+    // campaign-service reports the follow-up campaign turned ON (owner 2026-10-05):
+    // the plan money follows the ON campaigns (lib/subscriber-plan-budgets), the
+    // follow-up carries a MAX of half the plan INSIDE it, and nothing is charged.
     onCampaigns.add(`${MEET}:${MEET_LEG}`);
     const hook = await request(app)
       .post(`/internal/brands/${BRAND}/mission-status-changed`)
@@ -418,13 +421,16 @@ describe("item budgets per campaign", () => {
       });
     expect(hook.status).toBe(202);
     await vi.waitFor(async () => {
-      expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(30000);
+      const rows = await db.select().from(campaignDailyBudgets);
+      expect(rows.every((r) => r.planDerived)).toBe(true);
     });
-    // A second trigger for the same move (concurrent or retried) charges nothing more.
+    res = await request(app).get(itemsPath).set(headers);
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 20000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
+    // A second trigger for the same move (concurrent or retried) changes nothing.
     await onCampaignStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
-    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(10000);
-    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(30000);
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(20000);
     expect(plan.id).toBeTruthy();
   });
 

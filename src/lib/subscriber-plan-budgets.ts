@@ -25,13 +25,14 @@
  * never read. Runs on the hourly scheduler tick (first tick a minute after boot).
  */
 
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, brandDailyBudgetChanges, campaignDailyBudgets, type CeilingRow } from "../db/schema.js";
 import { DAYS_PER_MONTH, getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import { campaignOnPredicateOf, type CampaignOnPredicate } from "./campaign-items-store.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { reactiveCapCents } from "./campaign-items.js";
+import { onCampaignStatusChanged, reactiveCapCents } from "./campaign-items.js";
+import { getPaymentMode } from "./payment-mode.js";
 import { sumCeilings } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { listLiveSubscriptions } from "./subscription.js";
@@ -241,4 +242,188 @@ export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promi
   }
   result.restatedOrgs = orgs.size;
   return result;
+}
+
+// --- The plan FOLLOWS the ON campaigns (owner 2026-10-05) --------------------
+//
+// The customer no longer types a budget on the offer's Campaigns table: for a
+// subscriber the money IS the plan. campaign-service keeps ONE proactive campaign
+// ON per offer; when a person switches which one (stops the old, starts the new,
+// and notifies us through mission-status-changed), the plan money MOVES with it:
+//
+//  - each ON proactive campaign on a channel we run carries the plan (several ON,
+//    a legacy state, share it in whole dollars, leftover dollars to the first);
+//  - each ON reactive campaign on a channel we run carries a MAX of half the plan,
+//    rounded UP to the dollar ($99 -> $50);
+//  - every other campaign of the offer is "not set" (row deleted): OFF claims nothing.
+//
+// Every row written is `plan_derived`: it never prices the plan and is never
+// charged on top of it, so a switch NEVER changes what the customer pays.
+
+export interface OfferCampaign {
+  featureSlug: string;
+  legKey: string;
+  on: boolean;
+}
+
+/** Pure: where one offer's plan money sits, given which of its campaigns are ON. */
+export function planAllocationFor(
+  campaigns: OfferCampaign[],
+  planMonthlyCents: number,
+  terms: SalesPathTerms
+): PlanBudgetRow[] {
+  const roleOf = (c: OfferCampaign) => {
+    const t = terms.termsFor(c.featureSlug, c.legKey);
+    return t && t.role !== "customer" && t.managed === true && terms.managedChannel(c.featureSlug) === true
+      ? t.role
+      : null;
+  };
+  const sorted = [...campaigns].sort((a, b) =>
+    a.featureSlug === b.featureSlug ? a.legKey.localeCompare(b.legKey) : a.featureSlug.localeCompare(b.featureSlug)
+  );
+  const planDollars = Math.floor(planMonthlyCents / 100);
+  const entries = sorted.filter((c) => c.on && roleOf(c) === "proactive");
+  const base = entries.length > 0 ? Math.floor(planDollars / entries.length) : 0;
+  const extra = planDollars - base * entries.length;
+  const entryCents = new Map<string, number>();
+  entries.forEach((c, i) => entryCents.set(`${c.featureSlug}\u0000${c.legKey}`, (base + (i < extra ? 1 : 0)) * 100));
+  const cap = reactiveCapCents(planDollars * 100, "month");
+
+  return sorted.map((c) => {
+    let monthly: number | null = entryCents.get(`${c.featureSlug}\u0000${c.legKey}`) ?? null;
+    if (monthly === null && c.on && roleOf(c) === "reactive") monthly = cap;
+    if (monthly !== null && monthly <= 0) monthly = null;
+    return { featureSlug: c.featureSlug, legKey: c.legKey, monthlyBudgetCents: monthly };
+  });
+}
+
+export type PlanFollowOutcome =
+  | { status: "allocated"; written: number; deleted: number; unchanged: number }
+  | { status: "skipped"; reason: "no_offer" | "not_subscriber" | "no_plan" | "campaign_status_unavailable" };
+
+/**
+ * Move a subscriber's plan money onto the offer's ON campaigns (read LIVE from
+ * campaign-service, under a per-offer lock so a stop and a start racing each
+ * other converge on the latest status). prepaid / postpaid orgs are never touched.
+ */
+export async function allocatePlanToOnCampaigns(params: {
+  orgId: string;
+  brandId: string;
+  offerId: string | null;
+  now?: Date;
+}): Promise<PlanFollowOutcome> {
+  const { orgId } = params;
+  const brandId = params.brandId.toLowerCase();
+  const offerId = params.offerId?.toLowerCase() ?? null;
+  const now = params.now ?? new Date();
+  if (!offerId) return { status: "skipped", reason: "no_offer" };
+  if ((await getPaymentMode(orgId)) !== "subscription") return { status: "skipped", reason: "not_subscriber" };
+  const where = `org ${orgId} brand ${brandId} offer ${offerId}`;
+
+  try {
+    await attributeUnassignedPlan(orgId);
+  } catch (err) {
+    console.error(`[billing-service] plan follows campaigns: could not attribute the onboarding plan of org ${orgId}`, err);
+  }
+  const plan = (await listLiveSubscriptions(orgId)).find((s) => s.brandId === brandId && s.offerId === offerId);
+  if (!plan) {
+    console.warn(`[billing-service] plan follows campaigns: ${where} has no live plan; budgets left as is`);
+    return { status: "skipped", reason: "no_plan" };
+  }
+  const terms = await getSalesPathTerms();
+
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`plan-follows:${orgId}:${brandId}:${offerId}`}))`);
+    const statuses = await fetchRecurringCampaignStatuses(orgId);
+    if (!statuses.ok) {
+      console.error(`[billing-service] plan follows campaigns: ${where}: campaign status unreadable (${statuses.reason}); budgets left as is`);
+      return { status: "skipped", reason: "campaign_status_unavailable" } as const;
+    }
+    const rows: CeilingRow[] = await tx
+      .select()
+      .from(campaignDailyBudgets)
+      .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)))
+      .for("update");
+    const offerRows = rows.filter((r) => r.offerId === offerId && r.legKey !== null);
+
+    const campaigns = new Map<string, OfferCampaign>();
+    const keyOf = (featureSlug: string, legKey: string) => `${featureSlug}\u0000${legKey}`.toLowerCase();
+    for (const r of offerRows) campaigns.set(keyOf(r.featureSlug, r.legKey as string), { featureSlug: r.featureSlug, legKey: r.legKey as string, on: false });
+    for (const c of statuses.campaigns) {
+      if (c.brandId?.toLowerCase() !== brandId || c.offerId?.toLowerCase() !== offerId || !c.featureSlug || !c.legKey) continue;
+      const k = keyOf(c.featureSlug, c.legKey);
+      const known = campaigns.get(k) ?? { featureSlug: c.featureSlug, legKey: c.legKey, on: false };
+      campaigns.set(k, { ...known, on: known.on || c.status === "ongoing" });
+    }
+
+    let written = 0;
+    let deleted = 0;
+    let unchanged = 0;
+    for (const p of planAllocationFor([...campaigns.values()], plan.monthlyAmountCents, terms)) {
+      const before = offerRows.find((r) => keyOf(r.featureSlug, r.legKey as string) === keyOf(p.featureSlug, p.legKey));
+      const key = and(
+        eq(campaignDailyBudgets.orgId, orgId),
+        eq(campaignDailyBudgets.brandId, brandId),
+        eq(campaignDailyBudgets.offerId, offerId),
+        eq(campaignDailyBudgets.featureSlug, before?.featureSlug ?? p.featureSlug),
+        eq(campaignDailyBudgets.legKey, before?.legKey ?? p.legKey)
+      );
+      const was = before ? (before.monthlyBudgetCents !== null ? `${before.monthlyBudgetCents}/month` : `${before.dailyBudgetCents}/day`) : "not set";
+      if (p.monthlyBudgetCents === null) {
+        if (!before) continue;
+        await tx.delete(campaignDailyBudgets).where(key);
+        deleted++;
+      } else if (before && before.monthlyBudgetCents === p.monthlyBudgetCents && before.planDerived === true) {
+        unchanged++;
+        continue;
+      } else {
+        const values = {
+          monthlyBudgetCents: p.monthlyBudgetCents,
+          dailyBudgetCents: (p.monthlyBudgetCents / DAYS_PER_MONTH).toFixed(10),
+          planDerived: true,
+          updatedAt: now,
+        };
+        if (before) await tx.update(campaignDailyBudgets).set(values).where(key);
+        else
+          await tx.insert(campaignDailyBudgets).values({
+            orgId,
+            brandId,
+            offerId,
+            featureSlug: p.featureSlug,
+            legKey: p.legKey,
+            ...values,
+          });
+        written++;
+      }
+      console.log(
+        `[billing-service] plan follows campaigns: ${where} ${p.featureSlug}:${p.legKey} ${was} -> ` +
+          (p.monthlyBudgetCents === null ? "not set" : `${p.monthlyBudgetCents}/month from plan ${plan.id} (${plan.monthlyAmountCents}/month)`)
+      );
+    }
+
+    if ((written > 0 || deleted > 0) && !(await getBrandSalesBudget(orgId, brandId))) {
+      const left = await tx
+        .select()
+        .from(campaignDailyBudgets)
+        .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)));
+      await tx.insert(brandDailyBudgetChanges).values({ orgId, brandId, dailyBudgetCents: sumCeilings(left), changedAt: now });
+    }
+    return { status: "allocated", written, deleted, unchanged } as const;
+  });
+}
+
+/**
+ * mission-status-changed: first move a subscriber's plan money onto the ON
+ * campaigns, then the usual re-price (a no-op on derived rows). Never throws.
+ */
+export async function onMissionStatusChanged(params: { orgId: string; brandId: string; offerId: string | null; now?: Date }): Promise<void> {
+  try {
+    await allocatePlanToOnCampaigns(params);
+  } catch (err) {
+    console.error(
+      `[billing-service] plan follows campaigns: org ${params.orgId} brand ${params.brandId} offer ${params.offerId} failed (budgets left as is):`,
+      err
+    );
+  }
+  await onCampaignStatusChanged(params);
 }
