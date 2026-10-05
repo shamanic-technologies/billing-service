@@ -3,8 +3,8 @@
  * lib/subscriber-plan-budgets, migration 0065). Pins, on the prod reference shape
  * ($99 plan, legacy $50/day ceilings on cold email reply ON, cold email visit OFF,
  * AI meeting booking ON):
- *   - ON entry reads $99/month (the plan), AI meeting booking Max $50/month (half,
- *     rounded UP to the dollar), the OFF campaign reads "not set";
+ *   - AI meeting booking reads Max $9/month (9% of the plan, rounded UP to the
+ *     dollar), the ON entry the rest ($90/month), the OFF campaign "not set";
  *   - daily ceilings = monthly / 30 (campaign-service paces on the new figure);
  *   - NOTHING is charged and the plan amount never moves (sweep, status change,
  *     renewal); a prepaid org is never touched; the sweep is idempotent;
@@ -25,6 +25,8 @@ import {
   restateSubscriberBudgetsFromPlans,
   onMissionStatusChanged,
   planAllocationFor,
+  planFollowUpCents,
+  reallocateDerivedPlans,
 } from "../../src/lib/subscriber-plan-budgets.js";
 import { getSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import {
@@ -179,7 +181,7 @@ describe("subscriber campaign budgets from the plan", () => {
     return plan;
   }
 
-  it("the reference shape: entry ON = the plan, AI meeting booking Max $50, OFF = not set; nothing charged", async () => {
+  it("the reference shape: AI meeting booking Max $9, entry ON = the rest ($90), OFF = not set; nothing charged", async () => {
     const plan = await legacySubscriber();
     let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ statedPeriod: "day", budgetCents: 150000 });
@@ -193,15 +195,15 @@ describe("subscriber campaign budgets from the plan", () => {
     expect(item(res.body, COLD, REPLY)).toMatchObject({
       period: "month",
       statedPeriod: "month",
-      budgetCents: 9900,
-      dailyBudgetCents: "330.0000000000",
+      budgetCents: 9000,
+      dailyBudgetCents: "300.0000000000",
     });
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({
       period: "month",
       statedPeriod: "month",
       role: "reactive",
-      budgetCents: 5000,
-      capCents: 5000,
+      budgetCents: 900,
+      capCents: 4500,
     });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: null, statedPeriod: null, dailyBudgetCents: null });
     // Derived budgets never price the plan: it keeps its amount.
@@ -211,7 +213,7 @@ describe("subscriber campaign budgets from the plan", () => {
     // campaign-service paces on the new figures (items mode, monthly / 30).
     const sb = await request(app).get(`/internal/brands/${BRAND}/sales-budget`).set(internal);
     expect(sb.body.mode).toBe("items");
-    expect(sb.body.dailyBudgetCents).toBe("496.6666666667");
+    expect(sb.body.dailyBudgetCents).toBe("330.0000000000");
 
     // Idempotent: a second tick finds nothing to restate.
     expect((await restateSubscriberBudgetsFromPlans()).offers).toBe(0);
@@ -241,19 +243,19 @@ describe("subscriber campaign budgets from the plan", () => {
     const rows = await db.select().from(campaignDailyBudgets);
     expect(rows.find((r) => r.featureSlug === COLD)?.planDerived).toBe(false);
     expect(rows.find((r) => r.featureSlug === MEET)?.planDerived).toBe(true);
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000, capCents: 10000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: 10000 });
   });
 
-  it("two ON entries share the plan in whole dollars; the follow-up max is half, rounded up", async () => {
+  it("two ON entries share what the follow-up leaves of the plan, in whole dollars", async () => {
     onCampaigns.add(`${COLD}:${VISIT}`);
     await legacySubscriber();
     const sweep = await restateSubscriberBudgetsFromPlans();
     expect(sweep).toMatchObject({ rowsRestated: 3, rowsDeleted: 0 });
     const res = await request(app).get(itemsPath).set(headers);
-    // $99 over two: the leftover dollar goes to the first (by channel, then leg).
-    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 5000 });
-    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 4900 });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000, capCents: 5000 });
+    // $99 - $9 = $90 over two.
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 4500 });
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 4500 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900, capCents: 4500 });
   });
 
   it("no ON entry campaign: left as is; a prepaid org is never touched", async () => {
@@ -293,26 +295,26 @@ describe("subscriber campaign budgets from the plan", () => {
     return plan;
   }
 
-  it("a switch of the ON proactive campaign moves the plan; the follow-up keeps half; nothing charged", async () => {
+  it("a switch of the ON proactive campaign moves the plan; the follow-up keeps its 9%; nothing charged", async () => {
     const plan = await subscriber();
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
     let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
-    expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", budgetCents: 9900, dailyBudgetCents: "330.0000000000" });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000 });
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", budgetCents: 9000, dailyBudgetCents: "300.0000000000" });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: null });
 
     // The person stops "reply" and starts "visit": campaign-service notifies us.
     onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
     res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
-    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 9900 });
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 9000 });
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
     const rows = await db.select().from(campaignDailyBudgets);
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.planDerived)).toBe(true);
 
-    // The follow-up turned OFF: not set.
+    // The follow-up turned OFF: not set, and the entry carries the whole plan again.
     onCampaigns.delete(`${MEET}:${MEET_LEG}`);
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
     expect((await db.select().from(campaignDailyBudgets)).map((r) => `${r.featureSlug}:${r.legKey}:${r.monthlyBudgetCents}`)).toEqual([
@@ -336,9 +338,10 @@ describe("subscriber campaign budgets from the plan", () => {
     onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
     const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
-    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 19900 });
+    // $199 plan: follow-up 9% = $17.91, rounded up to $18; the entry the rest.
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 18100 });
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 1800 });
     expect(res.body.plan.monthlyAmountCents).toBe(19900);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
@@ -367,21 +370,62 @@ describe("subscriber campaign budgets from the plan", () => {
     expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
   });
 
-  it("allocation rules: whole dollars, follow-up max = half the plan rounded up, OFF and unrun = not set", async () => {
+  it("allocation rules: whole dollars, follow-up max = 9% of the plan rounded up, entries the rest, OFF and unrun = not set", async () => {
     const terms = await getSalesPathTerms();
     const on = (featureSlug: string, legKey: string, isOn: boolean) => ({ featureSlug, legKey, on: isOn });
     expect(planAllocationFor([on(COLD, REPLY, true), on(COLD, VISIT, false), on(MEET, MEET_LEG, true)], 9950, terms)).toEqual([
-      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 5000 },
-      { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: 9900 },
+      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 900 },
+      { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: 9000 },
       { featureSlug: COLD, legKey: VISIT, monthlyBudgetCents: null },
     ]);
     // Between a stop and a start: no proactive ON, the follow-up still has its max.
     expect(planAllocationFor([on(COLD, REPLY, false), on(MEET, MEET_LEG, true)], 9900, terms)).toEqual([
-      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 5000 },
+      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 900 },
       { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: null },
     ]);
     expect(planAllocationFor([on("unknown-channel", "x", true)], 9900, terms)).toEqual([
       { featureSlug: "unknown-channel", legKey: "x", monthlyBudgetCents: null },
     ]);
+    // Owner's figures: $99 -> $9 / $90; no follow-up ON -> the entry carries the whole plan.
+    expect([9900, 19900, 2900, 10000].map(planFollowUpCents)).toEqual([900, 1800, 300, 900]);
+    expect(planAllocationFor([on(COLD, REPLY, true), on(MEET, MEET_LEG, false)], 9900, terms)).toEqual([
+      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: null },
+      { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: 9900 },
+    ]);
+  });
+
+  it("the hourly tick moves plan-derived offers onto the current rule ($99/$50 -> $90/$9); customer-stated ones are left alone", async () => {
+    const plan = await subscriber();
+    // The shape Legistai holds in prod: derived $99 entry + derived $50 follow-up (the old half rule).
+    await db.insert(campaignDailyBudgets).values(
+      [
+        [COLD, REPLY, 9900],
+        [MEET, MEET_LEG, 5000],
+      ].map(([featureSlug, legKey, monthly]) => ({
+        orgId,
+        brandId: BRAND,
+        offerId: OFFER,
+        featureSlug: featureSlug as string,
+        legKey: legKey as string,
+        monthlyBudgetCents: monthly as number,
+        dailyBudgetCents: ((monthly as number) / 30).toFixed(10),
+        planDerived: true,
+        updatedAt: new Date(),
+      }))
+    );
+    expect(await reallocateDerivedPlans()).toMatchObject({ offers: 1, reallocatedOffers: 1, skipped: 0 });
+    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 9000, dailyBudgetCents: "300.0000000000" });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
+    expect(res.body.pricing).toBeNull();
+    expect((await db.select().from(campaignDailyBudgets)).every((r) => r.planDerived)).toBe(true);
+    // Idempotent; nothing charged; the plan keeps its $99.
+    expect(await reallocateDerivedPlans()).toMatchObject({ offers: 1, reallocatedOffers: 0 });
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(plan.monthlyAmountCents);
+
+    // One customer-stated row: the tick never touches the offer.
+    await db.update(campaignDailyBudgets).set({ planDerived: false }).where(eq(campaignDailyBudgets.featureSlug, COLD));
+    expect(await reallocateDerivedPlans()).toMatchObject({ offers: 0, reallocatedOffers: 0 });
   });
 });

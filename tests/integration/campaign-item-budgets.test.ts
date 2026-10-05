@@ -393,7 +393,7 @@ describe("item budgets per campaign", () => {
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ statedPeriod: "month", budgetCents: 15000, capCents: 15000 });
   });
 
-  it("subscriber: an OFF campaign is charged nothing; turning it ON gives it half the plan, charged nothing (the plan follows)", async () => {
+  it("subscriber: an OFF campaign is charged nothing; turning it ON gives it 9% of the plan, charged nothing (the plan follows)", async () => {
     const plan = await subscriber();
     onCampaigns.delete(`${MEET}:${MEET_LEG}`);
     onCampaigns.delete(`${COLD}:${VISIT}`); // one proactive campaign ON per offer (campaign-service)
@@ -406,7 +406,8 @@ describe("item budgets per campaign", () => {
 
     // campaign-service reports the follow-up campaign turned ON (owner 2026-10-05):
     // the plan money follows the ON campaigns (lib/subscriber-plan-budgets), the
-    // follow-up carries a MAX of half the plan INSIDE it, and nothing is charged.
+    // follow-up carries a MAX of 9% of the plan INSIDE it ($200 -> $18, the entry the
+    // rest), and nothing is charged.
     onCampaigns.add(`${MEET}:${MEET_LEG}`);
     const hook = await request(app)
       .post(`/internal/brands/${BRAND}/mission-status-changed`)
@@ -425,8 +426,8 @@ describe("item budgets per campaign", () => {
       expect(rows.every((r) => r.planDerived)).toBe(true);
     });
     res = await request(app).get(itemsPath).set(headers);
-    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 20000 });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 18200 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 1800 });
     // A second trigger for the same move (concurrent or retried) changes nothing.
     await onCampaignStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
