@@ -22,7 +22,8 @@ import {
   setBrandSalesBudget,
   viewOf,
 } from "../lib/brand-sales-budget.js";
-import { getBrandItemsSpendView, onCampaignStatusChanged } from "../lib/campaign-items.js";
+import { getBrandItemsSpendView } from "../lib/campaign-items.js";
+import { onMissionStatusChanged } from "../lib/subscriber-plan-budgets.js";
 import {
   MAX_DAY_RANGE_DAYS,
   currentUtcDay,
@@ -450,9 +451,10 @@ router.post(
         ...body,
         actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
       });
-      // A campaign turned on/off re-prices a subscriber's plan from its campaign
-      // budgets, and charges follow-up budgets that just went ON (lib/campaign-items).
-      void onCampaignStatusChanged({ orgId, brandId, offerId: body.offerId });
+      // A subscriber's plan money follows the ON campaigns (the ON proactive carries
+      // the plan, each ON reactive half of it, OFF ones none; lib/subscriber-plan-budgets),
+      // then the usual re-price, a no-op on those plan-derived rows (lib/campaign-items).
+      void onMissionStatusChanged({ orgId, brandId, offerId: body.offerId });
     }
     res.status(202).json({ notified: move !== null, move });
   }
