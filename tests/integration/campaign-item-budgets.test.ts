@@ -232,7 +232,7 @@ describe("item budgets per campaign", () => {
     expect(res.status).toBe(200);
     expect(res.body.period).toBe("day");
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null, role: "proactive", minimumCents: 330, managed: true, budgetable: true });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: null, role: "reactive", capCents: 0 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: null, role: "reactive", capCents: null });
     expect(item(res.body, TEAM, MEET_LEG)).toMatchObject({ budgetCents: null, role: null, budgetable: false });
 
     res = await put([[COLD, REPLY, 329]]);
@@ -253,23 +253,26 @@ describe("item budgets per campaign", () => {
     expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
   });
 
-  it("reactive MAX is capped at half the SUM of the offer's entry budgets; two entries coexist", async () => {
+  it("no maximum: a reactive budget above every entry budget is accepted; only minimums apply", async () => {
     await insertTestAccount({ orgId });
     expect((await put([[COLD, REPLY, 1000]])).status).toBe(200);
-    let res = await put([[MEET, MEET_LEG, 501]]);
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: "reactive_above_cap", capCents: 500, featureSlug: MEET });
+    // A follow-up equal to its entry, then five times larger: no maximum.
+    let res = await put([[MEET, MEET_LEG, 1000]]);
+    expect(res.status).toBe(200);
+    res = await put([[MEET, MEET_LEG, 5000]]);
+    expect(res.status).toBe(200);
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000, capCents: null });
 
-    // A second entry campaign on the same offer raises the cap.
+    // A second entry campaign on the same offer coexists.
     res = await put([[COLD, VISIT, 400], [MEET, MEET_LEG, 700]]);
     expect(res.status).toBe(200);
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 700, capCents: 700 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 700, capCents: null });
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
 
-    // Removing an entry that would leave the follow-up over its cap is refused.
-    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
+    // A minimum still refuses, even with no maximum.
+    res = await put([[COLD, REPLY, 329]]);
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe("reactive_above_cap");
+    expect(res.body).toMatchObject({ code: "below_minimum", minimumCents: 330 });
 
     // ONE store: a daily budget IS the campaign's ceiling row, read by every existing
     // reader exactly as a ceiling (campaigns mode), never a second figure.
@@ -282,13 +285,18 @@ describe("item budgets per campaign", () => {
     const total = await request(app).get(`/internal/brands/${BRAND}/daily-budget`).set(internal);
     expect(total.body.dailyBudgetCents).toBe("2100.0000000000");
 
-    // Lower the follow-up, then the entry can go; DELETE is idempotent.
-    expect((await put([[MEET, MEET_LEG, 500]])).status).toBe(200);
+    // An entry can go while another remains, whatever the follow-up holds; DELETE is idempotent.
     res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
     expect(res.status).toBe(200);
     expect(res.body.removed).toBe(true);
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 700 });
     res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
     expect(res.body.removed).toBe(false);
+
+    // The last entry cannot go while a follow-up still holds a budget.
+    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${REPLY}`).set(headers);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("entry_item_required");
   });
 
   it("one row per campaign: the old ceiling route and the new one write the same row", async () => {
@@ -385,12 +393,12 @@ describe("item budgets per campaign", () => {
       dailyBudgetCents: "5000.0000000000",
       minimumCents: 9900,
     });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", statedPeriod: "day", budgetCents: 150000, capCents: 75000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ period: "month", statedPeriod: "day", budgetCents: 150000, capCents: null });
 
     res = await put([[COLD, REPLY, 30000], [MEET, MEET_LEG, 15000]]);
     expect(res.status).toBe(200);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", statedPeriod: "month", budgetCents: 30000, dailyBudgetCents: "1000.0000000000" });
-    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ statedPeriod: "month", budgetCents: 15000, capCents: 15000 });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ statedPeriod: "month", budgetCents: 15000, capCents: null });
   });
 
   it("subscriber: an OFF campaign is charged nothing; turning it ON gives it 9% of the plan, charged nothing (the plan follows)", async () => {
