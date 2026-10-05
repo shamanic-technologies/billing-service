@@ -7,8 +7,10 @@
  * campaign is unique by nature. billing holds the budgets and turns them into what
  * the customer pays:
  *
- *  - PERIOD follows the payment mode: a subscriber states MONTHLY budgets, a
- *    prepaid / postpaid org DAILY ones.
+ *  - PERIOD: a subscriber states MONTHLY budgets; a prepaid / postpaid org states
+ *    DAILY ones by default and may state any campaign MONTHLY (owner 2026-10-05: a
+ *    spend cap over the UTC calendar month, money still from the balance, nothing
+ *    charged by the budget itself).
  *  - Every campaign clears its own MINIMUM, published per (channel x leg) by
  *    features-service (lib/sales-path-terms; a daily budget clears the monthly
  *    floor over 30 days, rounded up). Never hard-coded here.
@@ -100,7 +102,8 @@ export type ItemBudgetRefusalCode =
   | "reactive_charge_declined"
   | "charge_unavailable"
   | "minimums_unavailable"
-  | "campaign_status_unavailable";
+  | "campaign_status_unavailable"
+  | "period_not_allowed";
 
 export class ItemBudgetRefused extends Error {
   readonly code: ItemBudgetRefusalCode;
@@ -291,8 +294,20 @@ async function readOnPredicate(orgId: string): Promise<CampaignOnPredicate> {
   return campaignOnPredicateOf(statuses.campaigns);
 }
 
+/** The org's DEFAULT period: a subscriber states months, prepaid / postpaid days. */
 async function periodOf(orgId: string): Promise<ItemPeriod> {
   return (await getPaymentMode(orgId)) === "subscription" ? "month" : "day";
+}
+
+/**
+ * The period a prepaid / postpaid MONTHLY budget covers: the UTC calendar month
+ * `now` falls in (a subscriber's monthly budget covers its plan's period instead).
+ */
+export function calendarMonthOf(now: Date): { start: Date; end: Date } {
+  return {
+    start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
+    end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)),
+  };
 }
 
 /** The live plan of this brand x offer (an unattributed onboarding plan is attributed first). */
@@ -493,6 +508,12 @@ export interface SetOfferItemsParams {
   brandId: string;
   offerId: string;
   items: ItemInput[];
+  /**
+   * The period the listed budgets are stated in; absent = the org's default (month
+   * for a subscriber, day otherwise). A prepaid / postpaid org may state "month"; a
+   * subscriber may not state "day".
+   */
+  period?: ItemPeriod;
   now?: Date;
 }
 
@@ -517,7 +538,17 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<SetOff
   const offerId = params.offerId.toLowerCase();
   const { orgId } = params;
   const now = params.now ?? new Date();
-  const period = await periodOf(orgId);
+  const orgPeriod = await periodOf(orgId);
+  const subscriber = orgPeriod === "month";
+  const period = params.period ?? orgPeriod;
+  if (subscriber && period === "day") {
+    throw new ItemBudgetRefused(
+      "period_not_allowed",
+      "This organization pays by plan, so its campaign budgets are monthly.",
+      400,
+      { period }
+    );
+  }
   const terms = await readTerms();
   const written = validateItemInputs(params.items, period, terms);
 
@@ -532,7 +563,7 @@ export async function setOfferItems(params: SetOfferItemsParams): Promise<SetOff
 
   let plan: Subscription | null = null;
   let reactiveChargedCents = 0;
-  if (period === "month") {
+  if (subscriber) {
     ({ plan, reactiveChargedCents } = await subscriberGate(orgId, brandId, offerId, offer, terms, now));
   }
 
@@ -617,7 +648,7 @@ export async function removeOfferItem(params: {
       });
     }
   });
-  if (target.period === "month") {
+  if (target.period === "month" && (await periodOf(orgId)) === "month") {
     const plan = await planFor(orgId, brandId, offerId);
     if (plan && plan.status !== "canceled") await syncPlanPricingFromItems(plan, now);
   }
@@ -673,11 +704,15 @@ export interface ItemView {
   featureSlug: string;
   legKey: string;
   role: ItemRoleServed | null;
-  /** Always the org's period (the view's): every figure of the row is in it. */
+  /**
+   * The period every figure of the row is in. A subscriber: always month. A prepaid /
+   * postpaid org: the period the budget was stated in (a $90/month row reads
+   * $90/month, its minimum and cap in month too); not set = day.
+   */
   period: ItemPeriod;
   /**
    * The period the budget was STATED in; null = not set. Differs from `period` for
-   * a row not yet restated (a subscriber's legacy daily ceiling, served x30).
+   * a subscriber's row not yet restated (a legacy daily ceiling, served x30).
    */
   statedPeriod: ItemPeriod | null;
   /** null = not set. In `period`; a reactive budget is a MAX. */
@@ -698,7 +733,7 @@ export interface ItemView {
 export interface OfferItemsView {
   brandId: string;
   offerId: string;
-  /** The period the org states budgets in now (subscription → month). */
+  /** The org's DEFAULT period (subscription → month, else day); each row carries its own. */
   period: ItemPeriod;
   items: ItemView[];
   /** Subscriber: the offer's live plan; null otherwise. */
@@ -722,9 +757,10 @@ export async function getOfferItemsView(
   const period = await periodOf(orgId);
   const stored = await listOfferItems(orgId, brandId, offerId);
   const terms = await readTerms();
-  const entries = asOfferItems(stored, period, terms)
-    .filter((i) => i.role === "proactive")
-    .reduce((sum, i) => sum + i.budgetCents, 0);
+  const entriesIn = (p: ItemPeriod) =>
+    asOfferItems(stored, p, terms)
+      .filter((i) => i.role === "proactive")
+      .reduce((sum, i) => sum + i.budgetCents, 0);
 
   const pairs: Array<{ featureSlug: string; legKey: string }> = stored.map((r) => ({
     featureSlug: r.featureSlug,
@@ -737,21 +773,22 @@ export async function getOfferItemsView(
     const row = stored.find((r) => r.featureSlug === featureSlug && r.legKey === legKey) ?? null;
     const t = terms.termsFor(featureSlug, legKey);
     const role = roleOf(terms, featureSlug, legKey);
-    // Every figure of every row is in the ORG's period: a row stored in the other
-    // period (a subscriber's legacy daily ceiling, or a monthly figure left after a
-    // switch to prepaid / postpaid) is converted (x30 / /30) and flagged by
-    // statedPeriod, never served beside a cap or minimum in another unit.
+    // Every figure of a row is in ONE period, never a budget beside a cap or minimum
+    // in another unit. A subscriber's rows are all monthly (a legacy daily ceiling is
+    // converted x30 and flagged by statedPeriod); a prepaid / postpaid row is served
+    // in the period it was stated in.
+    const rowPeriod: ItemPeriod = period === "month" ? "month" : row?.period ?? "day";
     return {
       featureSlug,
       legKey,
       role,
-      period,
+      period: rowPeriod,
       statedPeriod: row?.period ?? null,
-      budgetCents: row ? inPeriod(row.budgetCents, row.period, period) : null,
+      budgetCents: row ? inPeriod(row.budgetCents, row.period, rowPeriod) : null,
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
       managed: t?.managed ?? null,
-      minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, period),
-      capCents: role === "reactive" ? reactiveCapCents(entries, period) : null,
+      minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, rowPeriod),
+      capCents: role === "reactive" ? reactiveCapCents(entriesIn(rowPeriod), rowPeriod) : null,
       budgetable: t ? t.role !== "customer" : false,
       updatedAt: row ? row.updatedAt.toISOString() : null,
     };
@@ -779,7 +816,10 @@ export interface SpendItemView {
   /** Decimal cents in the period. A reactive monthly budget includes last period's carry-over. */
   budgetCents: string;
   period: ItemPeriod;
-  /** The plan's current period for a monthly budget; null for a daily one. */
+  /**
+   * The period a monthly budget covers (a subscriber: its plan's current period; a
+   * prepaid / postpaid org: the UTC calendar month); null for a daily one.
+   */
   periodStart: string | null;
   periodEnd: string | null;
   /** false = a channel we do not run yet (never charged); null = catalogue unreadable. */
@@ -798,7 +838,11 @@ export interface BrandItemsSpendView {
  * only for a brand holding a subscriber's monthly budget; null otherwise (the
  * brand reads exactly as before: its ceilings in campaigns mode, or the global pot).
  */
-export async function getBrandItemsSpendView(orgId: string, brandId: string): Promise<BrandItemsSpendView | null> {
+export async function getBrandItemsSpendView(
+  orgId: string,
+  brandId: string,
+  now: Date = new Date()
+): Promise<BrandItemsSpendView | null> {
   brandId = brandId.toLowerCase();
   const rows = await listBrandCeilingRows(orgId, brandId);
   if (!holdsMonthlyBudget(rows)) return null;
@@ -824,13 +868,23 @@ export async function getBrandItemsSpendView(orgId: string, brandId: string): Pr
       .limit(1);
     if (row && plan.offerId) carryByOffer.set(plan.offerId, Number(row.carried));
   }
-  // A monthly budget funds a campaign only through a live plan's current period;
-  // with no plan it funds nothing and is not served (campaign-service holds the
-  // whole brand on an incomplete monthly item).
-  const served = all.filter((i) => i.period === "day" || plans.some((p) => p.offerId === i.offerId));
+  // A subscriber's monthly budget funds a campaign only through a live plan's
+  // current period; with no plan it funds nothing and is not served (campaign-service
+  // holds the whole brand on an incomplete monthly item). A prepaid / postpaid
+  // monthly budget covers the UTC calendar month.
+  const subscriber = (await getPaymentMode(orgId)) === "subscription";
+  const month = calendarMonthOf(now);
+  const served = all.filter(
+    (i) => i.period === "day" || !subscriber || plans.some((p) => p.offerId === i.offerId)
+  );
   const reactive = (i: CampaignItem) => roleOf(terms, i.featureSlug, i.legKey) === "reactive";
   const items: SpendItemView[] = served.map((i) => {
-    const plan = i.period === "month" ? plans.find((p) => p.offerId === i.offerId) ?? null : null;
+    const plan = i.period === "month" && subscriber ? plans.find((p) => p.offerId === i.offerId) ?? null : null;
+    const window = plan
+      ? { start: plan.currentPeriodStart, end: plan.currentPeriodEnd }
+      : i.period === "month"
+        ? month
+        : null;
     let budget = i.budgetCents;
     if (i.period === "month" && reactive(i)) {
       const carry = carryByOffer.get(i.offerId) ?? 0;
@@ -846,8 +900,8 @@ export async function getBrandItemsSpendView(orgId: string, brandId: string): Pr
       role: roleOf(terms, i.featureSlug, i.legKey),
       budgetCents: budget.toFixed(10),
       period: i.period,
-      periodStart: plan ? plan.currentPeriodStart.toISOString() : null,
-      periodEnd: plan ? plan.currentPeriodEnd.toISOString() : null,
+      periodStart: window ? window.start.toISOString() : null,
+      periodEnd: window ? window.end.toISOString() : null,
       managed: terms ? terms.managedChannel(i.featureSlug) : null,
     };
   });

@@ -88,7 +88,8 @@ router.get(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
 });
 
 // PUT /v1/brands/:brandId/offers/:offerId/campaign-budgets
-// Body: { items: [{ featureSlug, legKey, budgetCents }] } — upserts the listed campaigns.
+// Body: { items: [{ featureSlug, legKey, budgetCents }], period? } — upserts the listed
+// campaigns. `period` absent = the org's default (month for a subscriber, else day).
 router.put(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
   const p = ids(req, res);
   if (!p) return;
@@ -104,6 +105,7 @@ router.put(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
       brandId: p.brandId,
       offerId: p.offerId,
       items: parsed.data.items,
+      period: parsed.data.period,
     });
     // The same staff email as every other budget change (one composition).
     void notifyBrandDailyBudgetChanged({
