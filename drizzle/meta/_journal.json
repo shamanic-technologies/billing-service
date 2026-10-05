@@ -456,6 +456,13 @@
       "when": 1793700000000,
       "tag": "0064_campaign_budget_one_store",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1793786400000,
+      "tag": "0065_campaign_budget_plan_derived",
+      "breakpoints": true
     }
   ]
 }

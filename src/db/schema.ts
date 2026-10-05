@@ -770,6 +770,12 @@ export const campaignDailyBudgets = pgTable(
      * daily-only ceiling (prepaid / postpaid, and every older row).
      */
     monthlyBudgetCents: integer("monthly_budget_cents"),
+    /**
+     * true = a subscriber's monthly budget DERIVED FROM ITS PLAN (migration 0065,
+     * lib/subscriber-plan-budgets), not stated by the customer: it never prices
+     * the plan and is never charged on top of it. A customer write clears it.
+     */
+    planDerived: boolean("plan_derived").notNull().default(false),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
