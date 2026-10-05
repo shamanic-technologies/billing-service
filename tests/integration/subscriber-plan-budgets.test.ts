@@ -21,7 +21,12 @@ import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets, subscriptionCharges } from "../../src/db/schema.js";
 import { advanceSubscription, listLiveSubscriptions } from "../../src/lib/subscription.js";
 import { onCampaignStatusChanged } from "../../src/lib/campaign-items.js";
-import { restateSubscriberBudgetsFromPlans } from "../../src/lib/subscriber-plan-budgets.js";
+import {
+  restateSubscriberBudgetsFromPlans,
+  onMissionStatusChanged,
+  planAllocationFor,
+} from "../../src/lib/subscriber-plan-budgets.js";
+import { getSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import {
   __primeSalesPathTerms,
   __resetSalesPathTerms,
@@ -272,5 +277,111 @@ describe("subscriber campaign budgets from the plan", () => {
     expect((await restateSubscriberBudgetsFromPlans()).offers).toBe(0);
     const [row] = await db.select().from(campaignDailyBudgets);
     expect(row).toMatchObject({ dailyBudgetCents: "5000.0000000000", monthlyBudgetCents: null, planDerived: false });
+  });
+
+  // --- The plan FOLLOWS the ON proactive campaign (owner 2026-10-05) ---------
+
+  async function subscriber(monthly = 9900) {
+    await insertTestAccount({ orgId });
+    const res = await request(app)
+      .post("/v1/accounts/subscriptions")
+      .set(headers)
+      .send({ brand_id: BRAND, offer_id: OFFER, monthly_amount_cents: monthly });
+    expect(res.status).toBe(201);
+    ssMocks.reloadOffSession.mockClear();
+    const [plan] = await listLiveSubscriptions(orgId);
+    return plan;
+  }
+
+  it("a switch of the ON proactive campaign moves the plan; the follow-up keeps half; nothing charged", async () => {
+    const plan = await subscriber();
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", budgetCents: 9900, dailyBudgetCents: "330.0000000000" });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000 });
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: null });
+
+    // The person stops "reply" and starts "visit": campaign-service notifies us.
+    onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 9900 });
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 5000 });
+    const rows = await db.select().from(campaignDailyBudgets);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.planDerived)).toBe(true);
+
+    // The follow-up turned OFF: not set.
+    onCampaigns.delete(`${MEET}:${MEET_LEG}`);
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    expect((await db.select().from(campaignDailyBudgets)).map((r) => `${r.featureSlug}:${r.legKey}:${r.monthlyBudgetCents}`)).toEqual([
+      `${COLD}:${VISIT}:9900`,
+    ]);
+
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+    expect((await listLiveSubscriptions(orgId))[0].monthlyAmountCents).toBe(plan.monthlyAmountCents);
+  });
+
+  it("customer-stated budgets: the switch moves the plan amount, the plan and its charge never move", async () => {
+    await subscriber();
+    const put = await request(app)
+      .put(itemsPath)
+      .set(headers)
+      .send({ items: [{ featureSlug: COLD, legKey: REPLY, budgetCents: 19900 }] });
+    expect(put.status).toBe(200);
+    expect(put.body.plan.monthlyAmountCents).toBe(19900);
+    ssMocks.reloadOffSession.mockClear();
+
+    onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 19900 });
+    expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
+    expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 10000 });
+    expect(res.body.plan.monthlyAmountCents).toBe(19900);
+    expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+  });
+
+  it("the route: mission-status-changed allocates the plan; idempotent; a prepaid org is never touched", async () => {
+    await subscriber();
+    const body = {
+      campaignId: "00000000-0000-4000-8000-000000000060",
+      featureSlug: COLD,
+      offerId: OFFER,
+      legKey: REPLY,
+      fromStatus: "stopped",
+      toStatus: "ongoing",
+    };
+    const res = await request(app).post(`/internal/brands/${BRAND}/mission-status-changed`).set(internal).send(body);
+    expect(res.status).toBe(202);
+    await vi.waitFor(async () => expect(await db.select().from(campaignDailyBudgets)).toHaveLength(2), { timeout: 5000 });
+    const before = await db.select().from(campaignDailyBudgets);
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    const after = await db.select().from(campaignDailyBudgets);
+    expect(after.map((r) => r.updatedAt.getTime()).sort()).toEqual(before.map((r) => r.updatedAt.getTime()).sort());
+
+    await cleanTestData();
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
+    await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
+    expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
+  });
+
+  it("allocation rules: whole dollars, follow-up max = half the plan rounded up, OFF and unrun = not set", async () => {
+    const terms = await getSalesPathTerms();
+    const on = (featureSlug: string, legKey: string, isOn: boolean) => ({ featureSlug, legKey, on: isOn });
+    expect(planAllocationFor([on(COLD, REPLY, true), on(COLD, VISIT, false), on(MEET, MEET_LEG, true)], 9950, terms)).toEqual([
+      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 5000 },
+      { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: 9900 },
+      { featureSlug: COLD, legKey: VISIT, monthlyBudgetCents: null },
+    ]);
+    // Between a stop and a start: no proactive ON, the follow-up still has its max.
+    expect(planAllocationFor([on(COLD, REPLY, false), on(MEET, MEET_LEG, true)], 9900, terms)).toEqual([
+      { featureSlug: MEET, legKey: MEET_LEG, monthlyBudgetCents: 5000 },
+      { featureSlug: COLD, legKey: REPLY, monthlyBudgetCents: null },
+    ]);
+    expect(planAllocationFor([on("unknown-channel", "x", true)], 9900, terms)).toEqual([
+      { featureSlug: "unknown-channel", legKey: "x", monthlyBudgetCents: null },
+    ]);
   });
 });
