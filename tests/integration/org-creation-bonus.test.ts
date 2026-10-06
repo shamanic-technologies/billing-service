@@ -76,7 +76,7 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     expect(ledger.body.grants[0]).toMatchObject({
       reason: ORG_CREATION_BONUS_CODE,
       amountCents: "3000.0000000000",
-      note: "Organization creation bonus: $30.00",
+      note: "Onboarding credit advance: $30.00",
     });
   });
 
@@ -103,7 +103,7 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     // First org: its first billing touch lands its $30 (no welcome).
     const first = await request(app).get("/v1/accounts").set(getAuthHeaders(firstOrg, person));
     expect(first.status).toBe(200);
-    expect(first.body.credited_gifted_cents).toBe("3000.0000000000");
+    expect(first.body.credited_advance_cents).toBe("3000.0000000000");
 
     // Second org, bonus asked right after creation, BEFORE its first billing touch.
     const res = await bonus(secondOrg);
@@ -112,9 +112,9 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     const second = await request(app).get("/v1/accounts").set(getAuthHeaders(secondOrg, person));
     expect(second.status).toBe(200);
     // The first touch did not add anything on top, and the offer was not zeroed.
-    expect(second.body.credited_gifted_cents).toBe("3000.0000000000");
-    expect(second.body.free_credit_spendable_cents).toBe("3000.0000000000");
-    expect(second.body.free_credit_pending_cents).toBe("7000.0000000000");
+    expect(second.body.credited_advance_cents).toBe("3000.0000000000");
+    expect(second.body.credited_cents).toBe("3000.0000000000");
+    expect(second.body.free_credit_pending_cents).toBe("10000.0000000000");
 
     const secondLedger = await grants(secondOrg);
     const reasons = secondLedger.body.grants.map((g: { reason: string }) => g.reason);
@@ -123,9 +123,9 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     expect(ssMocks.ensureCustomer).not.toHaveBeenCalled();
   });
 
-  it("counts toward the free-credit offer (it IS its up-front $30)", async () => {
+  it("is an advance, never counted toward the free-credit offer", async () => {
     await bonus(firstOrg);
-    expect(await sumEntitlementGrantsForOrg(firstOrg)).toBe("3000.0000000000");
+    expect(await sumEntitlementGrantsForOrg(firstOrg)).toBe(ZERO);
   });
 
   it("billing owns the amount: a re-priced code row reaches new grants only", async () => {

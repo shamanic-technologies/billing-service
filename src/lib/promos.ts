@@ -130,11 +130,10 @@ export async function sumLocalPromoCreditsForOrg(orgId: string): Promise<string>
  * gifted`, which is what keeps it correct across cohorts and re-prices. Referral
  * rewards are additional money on top of the welcome offer, never a replacement for
  * it (a $500 referral must not swallow a $400 welcome remainder), so they are the one
- * grant kind excluded here. The org-creation bonus COUNTS (migration 0066): for a
- * match_100 org it IS the $30 up-front part of the $100 offer, so the remainder is
- * $70. (It used to be excluded; at 0066's ship the only org holding one had an
- * entitlement of 0, so no existing remainder moved.) For an org holding no referral
- * reward this is byte-identical to `sumLocalPromoCreditsForOrg`.
+ * grant kind excluded here. The org-creation bonus is excluded too: for a legacy org
+ * it is not part of the welcome offer, and for a match_100 org it is an ADVANCE on
+ * the first payment, not a gift (lib/free-credit-offer), so the match is a full
+ * +$100. For an org holding neither this is byte-identical to `sumLocalPromoCreditsForOrg`.
  */
 export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string> {
   const [row] = await db
@@ -146,7 +145,7 @@ export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string>
     .where(
       and(
         eq(localPromos.orgId, orgId),
-        rawSql`${localPromoCodes.code} <> ${REFERRAL_REWARD_CODE}`
+        rawSql`${localPromoCodes.code} NOT IN (${REFERRAL_REWARD_CODE}, ${ORG_CREATION_BONUS_CODE})`
       )
     );
   return row?.total ?? "0.0000000000";
@@ -364,7 +363,10 @@ export async function grantOrgCreationBonus(
       userId: SYSTEM_USER_ID,
       amountCents: String(code.amountCents),
       promoCodeId: code.id,
-      description: `Organization creation bonus: $${(code.amountCents / 100).toFixed(2)}`,
+      // A match_100 org's $30 is an advance on its first payment, never a gift.
+      description: (await isMatchOfferOrg(orgId))
+        ? `Onboarding credit advance: $${(code.amountCents / 100).toFixed(2)}`
+        : `Organization creation bonus: $${(code.amountCents / 100).toFixed(2)}`,
     })
     .onConflictDoNothing({
       target: [localPromos.orgId, localPromos.promoCodeId],

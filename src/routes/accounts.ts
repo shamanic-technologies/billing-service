@@ -11,7 +11,9 @@ import { asPaymentMode } from "../lib/payment-mode-types.js";
 import {
   asFreeCreditOffer,
   assertAutoTopupMinimums,
+  composeCreditedFromParts,
   computeFreeCreditStatus,
+  getOnboardingAdvanceCents,
   configuredReloadFor,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
@@ -79,6 +81,8 @@ async function composeAccountFunds(
   paidTopupsCents: string;
   giftedCreditsCents: string;
   entitlementGrantsCents: string;
+  advanceCents: string;
+  advanceRepaidCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   cardBrand: string | null;
@@ -137,7 +141,11 @@ async function composeAccountFunds(
   // that just landed is in it (free_credit_received_cents).
   const entitlementGrantsCents = await sumEntitlementGrantsForOrg(orgId);
   const cardCountry = cardDisplay?.country ?? null;
-  const creditedCents = addCents(paidTopups, localCredits);
+  // A match_100 org's $30 onboarding advance is repaid by its payments, and shown
+  // as its own line, never as a gift (lib/free-credit-offer).
+  const advance = await getOnboardingAdvanceCents(orgId);
+  const creditParts = composeCreditedFromParts(paidTopups, localCredits, advance);
+  const creditedCents = creditParts.creditedCents;
   // runs-service usage is already NET of the org's usage discount (frozen at
   // cost-write). Billing subtracts it verbatim — no discount is applied here. The
   // discount pct is still read + exposed (usage_discount_pct) for the dashboard
@@ -161,8 +169,10 @@ async function composeAccountFunds(
     actualBalanceCents,
     discountPct,
     paidTopupsCents: paidTopups,
-    giftedCreditsCents: localCredits,
+    giftedCreditsCents: subCents(localCredits, creditParts.advanceCents),
     entitlementGrantsCents,
+    advanceCents: creditParts.advanceCents,
+    advanceRepaidCents: creditParts.advanceRepaidCents,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     cardBrand: cardDisplay?.brand ?? null,
@@ -186,6 +196,8 @@ function buildAccountResponse(
     paidTopupsCents: string;
     giftedCreditsCents: string;
     entitlementGrantsCents: string;
+    advanceCents: string;
+    advanceRepaidCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     cardBrand: string | null;
@@ -230,8 +242,12 @@ function buildAccountResponse(
     // paid = succeeded Stripe payments NET of refunds + lost disputes.
     // gifted = SUM(local_promos): welcome, welcome-completion, first-load match,
     // invite grants, staff grants, redeemed promo codes.
-    credited_paid_cents: funds.paidTopupsCents,
+    // A match_100 org: the part of its payments left after repaying its onboarding
+    // advance ($200 paid → 17000), the advance itself on credited_advance_cents.
+    //   credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents
+    credited_paid_cents: subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
     credited_gifted_cents: funds.giftedCreditsCents,
+    credited_advance_cents: funds.advanceCents,
     usage_cents: funds.usageCents,
     // Credit staff took OFF this org's balance (POST /v1/credits/debit), its own
     // line, never folded into usage_cents. Invariant:

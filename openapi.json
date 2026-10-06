@@ -172,13 +172,17 @@
             "type": "integer",
             "nullable": true
           },
+          "credited_advance_cents": {
+            "type": "string",
+            "description": "A match_100 org's onboarding credit ADVANCE ($30 at creation): repaid by its first payments, never a gift. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents; credited_paid_cents is what the payments left after repaying it ($200 paid → 17000). 0 for a legacy org."
+          },
           "free_credit_offer": {
             "type": "string",
             "enum": [
               "legacy",
               "match_100"
             ],
-            "description": "The free-credit offer this org was created under. `match_100` = 'We match your first $100' ($30 at creation, the rest once $100 is paid; every org created since migration 0066). `legacy` = every older org, unchanged."
+            "description": "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `legacy` = every older org, unchanged."
           },
           "free_credit_entitlement_cents": {
             "type": "integer",
@@ -186,11 +190,11 @@
           },
           "free_credit_received_cents": {
             "type": "string",
-            "description": "Free credit already received that counts toward the offer (3000 right after a match_100 org is created)."
+            "description": "Free credit already received that counts toward the offer (0 right after a match_100 org is created: its $30 is an advance, not a gift)."
           },
           "free_credit_pending_cents": {
             "type": "string",
-            "description": "Free credit still to come (7000 for a new match_100 org; 0 once granted or when nothing more can come)."
+            "description": "Free credit still to come (10000 for a new match_100 org; 0 once granted or when nothing more can come)."
           },
           "free_credit_paid_trigger_cents": {
             "type": "integer",
@@ -245,6 +249,7 @@
           "actual_balance_cents",
           "free_credit_spendable_cents",
           "usage_discount_pct",
+          "credited_advance_cents",
           "free_credit_offer",
           "free_credit_entitlement_cents",
           "free_credit_received_cents",

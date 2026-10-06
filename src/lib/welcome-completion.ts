@@ -356,8 +356,9 @@ export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string
 
   // A match_100 org states what it actually received up front ($30); the MATCH
   // cohorts keep the literal $5 sentence byte for byte.
+  // A match_100 org's $30 is an advance, not a gift: its whole $100 is still coming.
   return account.offer === MATCH_FREE_CREDIT_OFFER
-    ? welcomeCompletionCheckoutNotice(offer, Math.round(Number(giftedCents)))
+    ? `We match your first ${dollars(offer.paidTriggerCents)}. You get ${dollars(Number(remainingCents))} in free credits once your payments reach ${dollars(offer.paidTriggerCents)}.`
     : welcomeCompletionCheckoutNotice(offer);
 }
 

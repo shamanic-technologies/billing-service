@@ -1,7 +1,8 @@
 /**
- * "We match your first $100" (migration 0066, owner 2026-10-06): every NEW org gets
- * $30 at creation, and $70 more once it has PAID $100. Top-ups are at least $100 and
- * the auto-reload threshold at least $5. Existing (legacy) orgs are unchanged.
+ * "We match your first $100" (owner 2026-10-06): every NEW org gets a $30 ADVANCE on
+ * its first payment (repaid by it, never a gift) and +$100 once it has paid $100.
+ * Top-ups are at least $100 and the auto-reload threshold at least $5. Existing
+ * (legacy) orgs are unchanged.
  *
  * Own file: other suites close the shared connection in `afterAll` (see CLAUDE.md).
  */
@@ -68,15 +69,19 @@ describe("We match your first $100", () => {
   const account = (id: string, user = person) =>
     request(app).get("/v1/accounts").set(getAuthHeaders(id, user));
 
-  it("a brand-new org holds $30 right after creation, and the read states the offer", async () => {
+  it("a brand-new org holds a $30 ADVANCE right after creation (not a gift), and the full $100 match to come", async () => {
     const res = await account(orgId);
     expect(res.status).toBe(200);
-    expect(res.body.credited_gifted_cents).toBe(cents(3000));
+    expect(res.body.credited_cents).toBe(cents(3000));
+    expect(res.body.balance_cents).toBe(cents(3000));
+    expect(res.body.credited_advance_cents).toBe(cents(3000));
+    expect(res.body.credited_gifted_cents).toBe(cents(0));
+    expect(res.body.credited_paid_cents).toBe(cents(0));
     expect(res.body).toMatchObject({
       free_credit_offer: "match_100",
       free_credit_entitlement_cents: 10000,
-      free_credit_received_cents: cents(3000),
-      free_credit_pending_cents: cents(7000),
+      free_credit_received_cents: cents(0),
+      free_credit_pending_cents: cents(10000),
       free_credit_paid_trigger_cents: 10000,
       free_credit_remaining_to_pay_cents: cents(10000),
     });
@@ -90,7 +95,8 @@ describe("We match your first $100", () => {
       .set(internal);
     expect(bonus.body.grantedCents).toBe(3000);
     const res = await account(orgId);
-    expect(res.body.credited_gifted_cents).toBe(cents(3000));
+    expect(res.body.credited_advance_cents).toBe(cents(3000));
+    expect(res.body.credited_cents).toBe(cents(3000));
     const again = await request(app)
       .post(`/internal/accounts/by-org/${orgId}/org-creation-bonus`)
       .set(internal);
@@ -109,10 +115,11 @@ describe("We match your first $100", () => {
       .set({ ...internal, "x-user-id": person });
     expect(signup.status).toBe(200);
     expect(signup.body.welcomeGrantedCents).toBe(0);
-    expect(signup.body.totalFreeCreditCents).toBe(3000);
+    expect(signup.body.totalFreeCreditCents).toBe(0);
     const res = await account(orgId);
-    expect(res.body.credited_gifted_cents).toBe(cents(3000));
-    expect(res.body.free_credit_pending_cents).toBe(cents(7000));
+    expect(res.body.credited_cents).toBe(cents(3000));
+    expect(res.body.credited_advance_cents).toBe(cents(3000));
+    expect(res.body.free_credit_pending_cents).toBe(cents(10000));
   });
 
   it("the welcome code cannot be redeemed on top", async () => {
@@ -125,23 +132,41 @@ describe("We match your first $100", () => {
     expect(res.body.code).toBe("welcome_not_offered");
   });
 
-  it("a person's second org gets its own $30 and its own $70 to come", async () => {
+  it("a person's second org gets its own $30 advance and its own $100 match to come", async () => {
     await account(orgId);
     const second = await account(secondOrgId);
-    expect(second.body.credited_gifted_cents).toBe(cents(3000));
-    expect(second.body.free_credit_pending_cents).toBe(cents(7000));
+    expect(second.body.credited_advance_cents).toBe(cents(3000));
+    expect(second.body.free_credit_pending_cents).toBe(cents(10000));
   });
 
-  it("after $100 paid: +$70 lands once ($100 received in total), retries grant nothing", async () => {
+  it("paying $200 repays the $30 advance: $30 + $170 = $200 credited, never $230", async () => {
+    await account(orgId);
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(5000));
+    const half = await account(orgId);
+    expect(half.body.credited_cents).toBe(cents(5000));
+    expect(half.body.credited_paid_cents).toBe(cents(2000));
+    expect(half.body.credited_advance_cents).toBe(cents(3000));
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(20000));
+    const full = await account(orgId);
+    // $200 paid: $30 advance + $170, plus the $100 match it earned.
+    expect(full.body.credited_paid_cents).toBe(cents(17000));
+    expect(full.body.credited_advance_cents).toBe(cents(3000));
+    expect(full.body.credited_gifted_cents).toBe(cents(10000));
+    expect(full.body.credited_cents).toBe(cents(30000));
+  });
+
+  it("after $100 paid: +$100 lands once, retries grant nothing", async () => {
     await account(orgId);
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(9999));
     const below = await account(orgId);
-    expect(below.body.credited_gifted_cents).toBe(cents(3000));
+    expect(below.body.credited_gifted_cents).toBe(cents(0));
+    expect(below.body.credited_cents).toBe(cents(9999));
     expect(below.body.free_credit_remaining_to_pay_cents).toBe(cents(1));
 
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
     const at = await account(orgId);
     expect(at.body.credited_gifted_cents).toBe(cents(10000));
+    expect(at.body.credited_cents).toBe(cents(20000));
     expect(at.body.free_credit_received_cents).toBe(cents(10000));
     expect(at.body.free_credit_pending_cents).toBe(cents(0));
     expect(at.body.free_credit_remaining_to_pay_cents).toBe(cents(0));
@@ -151,7 +176,7 @@ describe("We match your first $100", () => {
     await account(orgId);
     const completions = await rowsByCode(orgId, WELCOME_COMPLETION_CODE);
     expect(completions).toHaveLength(1);
-    expect(completions[0].amountCents).toBe(cents(7000));
+    expect(completions[0].amountCents).toBe(cents(10000));
   });
 
   it("refuses a $99 top-up with a named code, accepts $100", async () => {
