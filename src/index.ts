@@ -25,6 +25,8 @@ import acquirerRoutes from "./routes/acquirer.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 import { deployEmailTemplates } from "./instrument.js";
+import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
+import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +89,9 @@ if (process.env.NODE_ENV !== "test") {
         // PUT upserts by template name, so every restart re-registering is
         // harmless (no marker state anywhere).
         void deployEmailTemplates();
+        // Owner Telegram alert per succeeded payment. Missing vars = a loud warning.
+        warnIfTelegramUnconfigured();
+        startPaymentAlertScheduler();
       });
     })
     .catch((err) => {
