@@ -6,6 +6,7 @@ import {
   LEGACY_FREE_CREDIT_OFFER,
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
+  MATCH_OFFER_ENDS_AT_MS,
   MATCH_MIN_TOPUP_CENTS,
   type FreeCreditOfferKind,
 } from "../db/schema.js";
@@ -62,6 +63,27 @@ export async function getOrgFreeCreditOffer(orgId: string): Promise<FreeCreditOf
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
   return row ? asFreeCreditOffer(row.offer) : MATCH_FREE_CREDIT_OFFER;
+}
+
+/**
+ * Whether this org may receive the match's $30 up-front gift. The match runs until
+ * October 31, 2026 (MATCH_OFFER_ENDS_AT_ISO): an account created at or after it was
+ * created with a ZERO entitlement (migration 0067), so that zero is the answer; an
+ * org with no account yet is being created now, so the clock is. Legacy orgs are not
+ * gated (unchanged).
+ */
+export async function matchUpFrontAllowed(orgId: string, now: Date = new Date()): Promise<boolean> {
+  const [row] = await db
+    .select({
+      offer: billingAccounts.freeCreditOffer,
+      entitlementCents: billingAccounts.freeCreditEntitlementCents,
+    })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+  if (!row) return now.getTime() < MATCH_OFFER_ENDS_AT_MS;
+  if (asFreeCreditOffer(row.offer) !== MATCH_FREE_CREDIT_OFFER) return true;
+  return row.entitlementCents > 0;
 }
 
 export async function isMatchOfferOrg(orgId: string): Promise<boolean> {

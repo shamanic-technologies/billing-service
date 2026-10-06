@@ -470,6 +470,13 @@
       "when": 1793872800000,
       "tag": "0066_match_first_100_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1793959200000,
+      "tag": "0067_match_offer_ends_oct_31",
+      "breakpoints": true
     }
   ]
 }
