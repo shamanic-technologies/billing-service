@@ -46,6 +46,8 @@ export interface StripeServiceMocks {
   authorizeRecurringCharges: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   reloadOffSession: ReturnType<typeof vi.fn>;
+  /** The org's payments across acquirers. Defaults to none. */
+  listOrgPayments: ReturnType<typeof vi.fn>;
 }
 
 const MOCK_CUSTOMER_ID = "cus_mock_123";
@@ -187,6 +189,7 @@ export function setupStripeMocks(): StripeServiceMocks {
       status: "succeeded",
       reference: "pi_mock",
     }),
+    listOrgPayments: vi.fn().mockResolvedValue([]),
   };
 
   // The `*OrNull` reads are the ones production actually makes; the throwing
@@ -238,6 +241,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "createPortalSession").mockImplementation(mocks.createPortalSession);
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
   vi.spyOn(reload, "reloadOffSession").mockImplementation(mocks.reloadOffSession);
+  vi.spyOn(ssClient, "listOrgPayments").mockImplementation(mocks.listOrgPayments);
 
   return mocks;
 }
