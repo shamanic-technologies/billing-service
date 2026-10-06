@@ -3,15 +3,22 @@
  *
  * Owner's model (2026-10-01):
  *  - The customer picks a monthly amount (any whole-dollar amount from $29; $99
- *    is the default, owner 2026-10-03) and saves a card. Card MANDATORY. A 3-day free trial starts at once with $99
+ *    is the default, owner 2026-10-03) and saves a card. Card MANDATORY. A 3-day trial starts at once with $99
  *    of credit (the `subscription_trial` grant, "topped up TO" $99 so no other
- *    gift stacks on it), at our expense if they cancel during the trial.
+ *    gift stacks on it). That credit is a DEBT the trial-end payment repays: if
+ *    they cancel during the trial, nothing is paid and they keep it.
  *  - At trial end, then every month on the ANNIVERSARY of that date, billing
- *    charges the monthly amount on the saved card. PREPAID: the charge is an
- *    ordinary succeeded payment, which `credited` already counts (once, keyed by
+ *    charges the monthly amount on the saved card. The TRIAL-END charge (the first
+ *    paid charge of a plan that had a trial) repays the trial credit and adds NO
+ *    credit (owner 2026-10-06: « the payment of the free trial is a debt due paid,
+ *    it should NEVER add credits »; `getTrialRepaymentCents` in
+ *    lib/free-credit-offer, folded into the one credited composition). Every later
+ *    charge is an ordinary succeeded payment that `credited` counts (once, keyed by
  *    the payment). Nothing here grants credit for it.
- *  - Credits EXPIRE: at every period boundary (trial end included), whatever was
- *    not spent is expired before the new period's charge lands
+ *  - Credits EXPIRE: at every period boundary, whatever was not spent is expired
+ *    before the new period's charge lands. Trial end is the exception: a PAID
+ *    trial-end charge rolls the unspent trial credit into the first month (that
+ *    payment paid for it); a refused one expires it as before
  *    (`subscription_credit_expiries`, applied on the usage side like a staff
  *    debit). A negative balance never expires. A cancelled subscription expires
  *    its remainder when its last paid period ends.
@@ -1012,8 +1019,17 @@ export async function advanceSubscription(sub: Subscription, now: Date = new Dat
 
     const boundary = current.currentPeriodEnd;
     if (current.cancelAtPeriodEnd) return endSubscription(current, boundary, now);
-    await expireAt(current, boundary);
+    // TRIAL END: the charge repays the trial credit and adds none (owner 2026-10-06,
+    // getTrialRepaymentCents), so the unspent trial credit IS the first paid month's
+    // credit and must not expire when that charge is paid. Charge FIRST; expire
+    // the trial remainder only when the charge was refused (the old behaviour for an
+    // unpaid trial). An outage moves nothing and is retried next tick.
+    const trialEnd = current.status === "trialing";
+    if (!trialEnd) await expireAt(current, boundary);
     const next = await billPeriod(current, boundary, now);
+    if (trialEnd && next !== current && next.status !== "active") {
+      await expireAt(current, boundary);
+    }
     if (next === current || next.status !== "active") return next;
     current = next;
   }

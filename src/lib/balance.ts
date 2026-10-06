@@ -8,7 +8,11 @@
 
 import { addCents, subCents } from "./cents.js";
 import { sumLocalPromoCreditsForOrg } from "./promos.js";
-import { composeCreditedFromParts, getOnboardingAdvanceCents } from "./free-credit-offer.js";
+import {
+  composeCreditedFromParts,
+  getOnboardingAdvanceCents,
+  getTrialRepaymentCents,
+} from "./free-credit-offer.js";
 import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "./transfer-usage.js";
 import {
   fetchOrgCustomerOrNull,
@@ -84,15 +88,18 @@ export async function composeCreditedCents(orgId: string): Promise<CreditedCents
   // org that has paid nothing, so it never needs a Stripe customer to exist. An
   // org paying through Revolut has NO Stripe customer by design, and gating this
   // read on one made its completed top-ups vanish from its balance.
-  const [paidTopups, localCredits, advance] = await Promise.all([
+  const [paidTopups, localCredits, advance, trialRepayment] = await Promise.all([
     sumSucceededTopupsForOrg(orgId),
     sumLocalPromoCreditsForOrg(orgId),
     getOnboardingAdvanceCents(orgId),
+    getTrialRepaymentCents(orgId),
   ]);
   return {
     paidTopupsCents: paidTopups,
     // A match_100 org's $30 onboarding advance is repaid by its payments (lib/free-credit-offer).
-    creditedCents: composeCreditedFromParts(paidTopups, localCredits, advance).creditedCents,
+    // The trial-end subscription payment repays the trial credit and adds none.
+    creditedCents: composeCreditedFromParts(paidTopups, localCredits, advance, trialRepayment)
+      .creditedCents,
   };
 }
 

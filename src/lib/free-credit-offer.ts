@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
+  ADMIN_GRANT_CODE,
   billingAccounts,
   localPromoCodes,
   localPromos,
@@ -10,6 +11,7 @@ import {
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
+  SUBSCRIPTION_TRIAL_CODE,
   type FreeCreditOfferKind,
 } from "../db/schema.js";
 
@@ -184,24 +186,82 @@ export async function getOnboardingAdvanceCents(orgId: string): Promise<string> 
   return new Decimal(row?.amountCents ?? 0).toFixed(10);
 }
 
+/**
+ * The subscription payment that ENDS a free trial pays a DEBT, the trial credit
+ * already given; it never adds credit (owner 2026-10-06: « the payment of the free
+ * trial is a debt due paid, it should NEVER add credits »). The trial grants
+ * (`trial_seed`, `subscription_trial`) stay credits, listed and labelled as they
+ * are; it is the PAYMENT that counts 0 toward credited. From the 2nd period on, a
+ * monthly charge adds credit as before.
+ *
+ * Which payment: the FIRST paid charge of every plan that had a trial, capped at
+ * the trial credit it repays (its first
+ * period starts where the trial ended, or now on "start now"). A plan with no trial
+ * (a second plan, charged at start) repays nothing; a trial cancelled before any
+ * payment keeps its trial credit (nothing paid, nothing repaid).
+ */
+export async function getTrialRepaymentCents(orgId: string): Promise<string> {
+  // Capped at the trial credit it repays: the `subscription_trial` grant plus every
+  // non-staff credit the org held before it (the grant tops credit UP TO the trial
+  // amount, so those are part of the trial's $99: a `trial_seed`, a `welcome`). A
+  // plan priced above that adds the difference as credit, as any payment does.
+  const rows = (await db.execute(sql`
+    SELECT LEAST(
+      (SELECT COALESCE(SUM(c.amount_cents), 0)
+         FROM subscription_charges c
+         JOIN subscriptions s ON s.id = c.subscription_id
+        WHERE c.org_id = ${orgId}
+          AND c.status = 'paid'
+          AND s.trial_started_at IS NOT NULL
+          AND c.period_start = (
+            SELECT MIN(c2.period_start) FROM subscription_charges c2
+             WHERE c2.subscription_id = c.subscription_id
+          )),
+      (SELECT COALESCE(SUM(p.amount_cents), 0)
+         FROM local_promos p
+         JOIN local_promo_codes pc ON pc.id = p.promo_code_id
+         JOIN local_promos t ON t.org_id = p.org_id
+         JOIN local_promo_codes tc ON tc.id = t.promo_code_id AND tc.code = ${SUBSCRIPTION_TRIAL_CODE}
+        WHERE p.org_id = ${orgId}
+          AND (p.id = t.id OR (p.created_at < t.created_at AND pc.code <> ${ADMIN_GRANT_CODE})))
+    )::text AS total
+  `)) as unknown as Array<{ total: string }>;
+  return new Decimal(rows[0]?.total ?? 0).toFixed(10);
+}
+
 export interface CreditedParts {
   creditedCents: string;
   /** The org's onboarding advance (0 for a legacy org). */
   advanceCents: string;
   /** How much of it its payments have repaid so far. */
   advanceRepaidCents: string;
+  /** Paid money that repaid a free trial and therefore added no credit. */
+  trialRepaidCents: string;
 }
 
+/**
+ * credited = paid + local credits − (payments that repay a debt): the trial-end
+ * subscription payment first (it repays the trial credit), then the match_100
+ * onboarding advance out of what remains paid. Every credited figure (account read,
+ * balance path, grant route) goes through here, so they cannot disagree.
+ */
 export function composeCreditedFromParts(
   paidTopupsCents: string,
   localCreditsCents: string,
-  advanceCents: string
+  advanceCents: string,
+  trialRepaymentCents: string = "0"
 ): CreditedParts {
   const paid = Decimal.max(0, new Decimal(paidTopupsCents));
-  const repaid = Decimal.min(new Decimal(advanceCents), paid);
+  const trialRepaid = Decimal.min(Decimal.max(0, new Decimal(trialRepaymentCents)), paid);
+  const repaid = Decimal.min(new Decimal(advanceCents), paid.minus(trialRepaid));
   return {
-    creditedCents: new Decimal(paidTopupsCents).plus(localCreditsCents).minus(repaid).toFixed(10),
+    creditedCents: new Decimal(paidTopupsCents)
+      .plus(localCreditsCents)
+      .minus(trialRepaid)
+      .minus(repaid)
+      .toFixed(10),
     advanceCents: new Decimal(advanceCents).toFixed(10),
     advanceRepaidCents: repaid.toFixed(10),
+    trialRepaidCents: trialRepaid.toFixed(10),
   };
 }

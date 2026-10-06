@@ -82,6 +82,10 @@ export const BillingAccountSchema = z
      * already net. Billing never re-applies it.
      */
     usage_discount_pct: z.number().int().nullable(),
+    credited_trial_repaid_cents: CentsStringSchema.openapi({
+      description:
+        "Paid money that repaid a FREE TRIAL and therefore added no credit: the subscription charge that ends a trial pays back the trial credit already given (trial_seed + subscription_trial stay credits). Already excluded from credited_paid_cents and credited_cents. 0 for an org that never paid a trial-end charge.",
+    }),
     credited_advance_cents: CentsStringSchema.openapi({
       description:
         "A match_100 org's onboarding credit ADVANCE ($30 at creation): repaid by its first payments, never a gift. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents; credited_paid_cents is what the payments left after repaying it ($200 paid → 17000). 0 for a legacy org.",
