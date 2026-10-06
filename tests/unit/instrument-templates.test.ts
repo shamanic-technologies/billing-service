@@ -16,7 +16,6 @@ import {
   UNPAID_DEBT_STAFF_EVENT,
 } from "../../src/lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "../../src/lib/card-usability.js";
-import { SUBSCRIPTION_CREDITS_USED_EVENT } from "../../src/lib/subscription-notifications.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "../../src/lib/subscription-monthly-update.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -87,7 +86,6 @@ describe("boot-time email template registration", () => {
     const names = lastBody(fetchMock).templates.map((t) => t.name);
     expect(names).toEqual([
       "credits-reload-failed",
-      SUBSCRIPTION_CREDITS_USED_EVENT,
       SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
       CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
@@ -97,6 +95,8 @@ describe("boot-time email template registration", () => {
       UNPAID_DEBT_STAFF_EVENT,
     ]);
     expect(names).toEqual(REGISTERED_TEMPLATE_NAMES);
+    // Deleted 2026-10-06 (owner): never re-registered at boot.
+    expect(names).not.toContain("subscription-credits-used");
   });
 
   // AC4 — no template for an event this service never sends. `credits-depleted`
@@ -257,14 +257,6 @@ describe("boot-time email template registration", () => {
       expect(t.textBody).not.toContain("—");
       expect(t.htmlBody).not.toContain("—");
     }
-  });
-
-  it("registers the month-of-outreach email as bare content for the official layout to wrap", async () => {
-    await deployEmailTemplates();
-    const t = lastBody(fetchMock).templates.find((x) => x.name === SUBSCRIPTION_CREDITS_USED_EVENT)!;
-    expect(t.htmlBody).toBe("{{bodyHtml}}");
-    expect(t.layout).toBe("brand");
-    expect(t.htmlBody).not.toMatch(/<html|#3D80FF/i);
   });
 
   it("registers the monthly update as bare content for the official layout to wrap", async () => {

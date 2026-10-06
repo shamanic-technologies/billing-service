@@ -22,8 +22,9 @@
  *    (`subscription_credit_expiries`, applied on the usage side like a staff
  *    debit). A negative balance never expires. A cancelled subscription expires
  *    its remainder when its last paid period ends.
- *  - When credit runs out, sending stops (floor 0, no reload) and the customer
- *    gets the "all your outbound went out" email (lib/subscription-notifications).
+ *  - When credit runs out, sending stops (floor 0, no reload). No email: no
+ *    depletion episode, no dunning (lib/dunning); the "credits used" upsell email
+ *    was deleted (owner 2026-10-06).
  *  - Amount change: any ladder value, up or down, from the next charge; not while
  *    trialing. A trialing plan can instead be STARTED NOW (`startSubscriptionNow`):
  *    charged today at the chosen amount, trial over, period restarts. Cancel = no further charge (at period end; immediately when

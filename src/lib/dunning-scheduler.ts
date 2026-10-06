@@ -16,7 +16,6 @@ import { runUnpaidDebtScan } from "./unpaid-debt.js";
 import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
 import { runSubscriptionSweep } from "./subscription.js";
 import { reallocateDerivedPlans, restateSubscriberBudgetsFromPlans } from "./subscriber-plan-budgets.js";
-import { notifySubscriptionCreditsUsedIfDue } from "./subscription-notifications.js";
 import { notifySubscriptionMonthlyUpdateIfDue } from "./subscription-monthly-update.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
@@ -142,13 +141,11 @@ export function startDunningScheduler(): void {
 
       // Subscription sweep — starts subscriptions whose card is now on file, expires
       // unspent credit and bills each renewal, retries refused charges on their rungs,
-      // sends the once-a-period "credits used" email, and the informational monthly
-      // update once each period closes (lib/subscription-monthly-update). Isolated
+      // and sends the informational monthly update once each period closes (lib/subscription-monthly-update). Isolated
       // like the others.
       try {
         const s = await runSubscriptionSweep(new Date(), async (orgId, sub) => {
           await notifySubscriptionMonthlyUpdateIfDue(orgId, sub);
-          await notifySubscriptionCreditsUsedIfDue(orgId, sub);
         });
         if (s.checked > 0) {
           console.log(

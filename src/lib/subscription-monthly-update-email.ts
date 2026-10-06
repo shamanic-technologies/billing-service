@@ -9,8 +9,7 @@
  *    client paid ("$99 invested" was replaced by the delivery rate).
  *  - A return above 1x is shown as a figure. Anything else (below 1x, unknown) is
  *    "still learning", in positive words, never a ratio.
- *  - Same truth rules as the promotional email: "sent" only on positive evidence a
- *    send happened, a figure below 1 is never inflated, a null figure drops its
+ *  - "Sent" only on positive evidence a send happened, a figure below 1 is never inflated, a null figure drops its
  *    sentence or its cell, never a 0.
  *  - The window's REAL outcomes (features-service `actualOutcomes`: positive replies
  *    received, meetings booked) lead, as their own stat row. Only a positive count
@@ -22,7 +21,6 @@
  * (the brand name) are HTML-escaped: interpolation does not escape.
  */
 import type { SubscriptionRecap } from "./subscription-recap-client.js";
-import { expectedReturnJustifiesUpsell } from "./subscription-notifications.js";
 import {
   P,
   count,
@@ -32,7 +30,8 @@ import {
   statRowHtml,
   times,
   wholeDollars,
-} from "./subscription-credits-used-email.js";
+  expectedReturnAboveOne,
+} from "./subscription-email-format.js";
 
 export interface MonthlyUpdateEmail {
   subject: string;
@@ -77,7 +76,7 @@ export function composeMonthlyUpdateEmail(params: {
     positive(r.sentCount) && (r.sendStatus == null || r.sendStatus === "emails_sent") ? r.sentCount : null;
   const recipients = positive(r.recipientsCount) ? r.recipientsCount : null;
   const emailed = positive(r.recipientsEmailedCount) ? r.recipientsEmailedCount : null;
-  const returnShown = expectedReturnJustifiesUpsell(r.expectedRoiMultiple);
+  const returnShown = expectedReturnAboveOne(r.expectedRoiMultiple);
   const delivered = r.deliveryRatePct != null && sent !== null ? Math.round(r.deliveryRatePct) : null;
 
   const subject = params.brandName ? `Your month for ${params.brandName}` : "Your month with distribute.you";

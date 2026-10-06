@@ -22,7 +22,7 @@
  *   - `credit-debt-card-required`  → src/lib/unpaid-debt.ts
  *   - `credit-card-unusable`       → src/lib/card-usability.ts
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
- *   - `subscription-credits-used`  → src/lib/subscription-notifications.ts
+ *   - `subscription-monthly-update` → src/lib/subscription-monthly-update.ts
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
@@ -37,7 +37,6 @@ import {
   UNPAID_DEBT_STAFF_EVENT,
 } from "./lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
-import { SUBSCRIPTION_CREDITS_USED_EVENT } from "./lib/subscription-notifications.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "./lib/subscription-monthly-update.js";
 
 /**
@@ -59,23 +58,9 @@ const TEMPLATES = [
     textBody: "We attempted to automatically reload your account, but the payment failed. Please update your payment method. Visit: {{settingsUrl}}",
   },
   {
-    // A subscription org committed all of this period's credit. A success to
-    // celebrate (owner rule), never a shortage, and never a send claimed before it
-    // happened. Subject, card and plain text are composed in code
-    // (lib/subscription-credits-used-email), so no variable can render as a
-    // literal placeholder. The card's content only: transactional-email-service
-    // wraps it in the official distribute.you layout (logo, card, footer), so
-    // this email never draws a logo of its own (owner 2026-10-04).
-    name: SUBSCRIPTION_CREDITS_USED_EVENT,
-    subject: "{{subject}}",
-    htmlBody: "{{bodyHtml}}",
-    textBody: "{{bodyText}}",
-    layout: "brand",
-  },
-  {
     // The informational monthly update: results of the period that just closed,
-    // no upsell (owner 2026-10-04). Composed in code like the one above
-    // (lib/subscription-monthly-update-email), wrapped in the official layout.
+    // no upsell (owner 2026-10-04). Subject, card and plain text are composed in
+    // code (lib/subscription-monthly-update-email), wrapped in the official layout.
     name: SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
     subject: "{{subject}}",
     htmlBody: "{{bodyHtml}}",

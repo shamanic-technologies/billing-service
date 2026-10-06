@@ -134,8 +134,6 @@ describe("subscription (billing-owned)", () => {
     vi.spyOn(ctx, "fetchOrgIdentity").mockResolvedValue({ name: "Acme", externalId: "org_clerk1" });
     const recapClient = await import("../../src/lib/subscription-recap-client.js");
     recapSpy = vi.spyOn(recapClient, "fetchSubscriptionRecap").mockResolvedValue(recapWithRoi(1.2));
-    const notifications = await import("../../src/lib/subscription-notifications.js");
-    notifications.__resetCreditsUsedSkips();
     const email = await import("../../src/lib/email-client.js");
     sendSpy = vi.fn();
     vi.spyOn(email, "sendEmail").mockImplementation(sendSpy);
@@ -498,7 +496,7 @@ describe("subscription (billing-owned)", () => {
     expect(res.body.nextChargeAttemptAt).toBe(sub.currentPeriodEnd.toISOString());
   });
 
-  it("out of credit: no depletion episode, the celebratory email once per period", async () => {
+  it("out of credit: no depletion episode and NO email (credits-used email deleted 2026-10-06)", async () => {
     await startTrial();
     setUsage("9900.0000000000");
     await insertTestCampaignCost({ campaignId, orgId, lastAuthorizeRequiredCents: "50.0000000000" });
@@ -513,79 +511,8 @@ describe("subscription (billing-owned)", () => {
       .from(creditDepletionEpisodes)
       .where(eq(creditDepletionEpisodes.orgId, orgId));
     expect(episodes).toHaveLength(0);
-
-    const { notifySubscriptionCreditsUsedIfDue } = await import(
-      "../../src/lib/subscription-notifications.js"
-    );
-    await notifySubscriptionCreditsUsedIfDue(orgId, await getLiveSubscription(orgId));
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    const sent = sendSpy.mock.calls[0][0];
-    expect(sent.eventType).toBe("subscription-credits-used");
-    expect(sent.metadata.ctaUrl).toBe("https://dashboard.distribute.you/orgs/org_clerk1/billing");
-    expect(JSON.stringify(sent.metadata)).not.toMatch(/exhaust|used up|run out|ran out/i);
-  });
-
-  async function useUpAndNotify() {
-    const { notifySubscriptionCreditsUsedIfDue } = await import(
-      "../../src/lib/subscription-notifications.js"
-    );
-    await notifySubscriptionCreditsUsedIfDue(orgId, await getLiveSubscription(orgId));
-  }
-
-  async function claimedPeriod() {
-    return (await getLiveSubscription(orgId))!.creditsUsedNotifiedPeriodStart;
-  }
-
-  it.each([
-    ["0.35x", 0.35],
-    ["exactly 1.0x", 1],
-    ["unknown", null],
-  ])("month-booked upsell email: an expected return of %s is NOT sent and leaves the period unclaimed", async (_l, roi) => {
-    await startTrial();
-    setUsage("9900.0000000000");
-    recapSpy.mockResolvedValue(recapWithRoi(roi));
-    const warn = vi.spyOn(console, "warn");
-    await useUpAndNotify();
+    // Silent: neither the deleted upsell nor the generic out-of-credit dunning.
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(await claimedPeriod()).toBeNull();
-    const line = warn.mock.calls.map((c) => String(c[0])).find((m) => m.includes("credits-used email skipped"));
-    expect(line).toMatch(/^\[billing-service\]/);
-    expect(line).toContain(orgId);
-    expect(line).toContain(roi === null ? "unknown" : `${roi}x`);
-  });
-
-  it("month-booked upsell email: an unreadable recap is NOT sent", async () => {
-    await startTrial();
-    setUsage("9900.0000000000");
-    recapSpy.mockResolvedValue(null);
-    await useUpAndNotify();
-    expect(sendSpy).not.toHaveBeenCalled();
-    expect(await claimedPeriod()).toBeNull();
-  });
-
-  it("month-booked upsell email: a skip leaves the period open, a later run above 1x sends once", async () => {
-    const sub = await startTrial();
-    setUsage("9900.0000000000");
-    recapSpy.mockResolvedValue(recapWithRoi(0.35));
-    await useUpAndNotify();
-    expect(sendSpy).not.toHaveBeenCalled();
-
-    // Within the throttle window the return is not re-read.
-    recapSpy.mockClear();
-    await useUpAndNotify();
-    expect(recapSpy).not.toHaveBeenCalled();
-
-    // Next sweep (throttle elapsed): the return is now above 1x, so it goes out.
-    const { __resetCreditsUsedSkips } = await import("../../src/lib/subscription-notifications.js");
-    __resetCreditsUsedSkips();
-    recapSpy.mockResolvedValue(recapWithRoi(1.2));
-    await useUpAndNotify();
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(sendSpy.mock.calls[0][0].metadata.bodyHtml).toContain("1.2x");
-    expect((await claimedPeriod())!.getTime()).toBe(sub.currentPeriodStart.getTime());
-
-    await useUpAndNotify();
-    expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
   it("staff can set subscription; the customer switch cannot; staff leaving ends the subscription", async () => {
