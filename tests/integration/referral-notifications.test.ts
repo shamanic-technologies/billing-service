@@ -1,6 +1,6 @@
 /**
- * Telling the two sides of a referral, exactly once, without ever touching the
- * money.
+ * Telling the REFERRER about a referral, exactly once, without ever touching the
+ * money. The referred org is never told it gets anything: it gets nothing.
  *
  * The money side is covered by referral-promises.test.ts. These cases pin the
  * two guarantees that are easy to break and expensive when broken: the hourly
@@ -28,7 +28,7 @@ import { db } from "../../src/db/index.js";
 import { freeCreditPromises } from "../../src/db/schema.js";
 import {
   claimReferral,
-  settleReferralPromises,
+  settleReferralsEarnedBy,
 } from "../../src/lib/free-credit-promises.js";
 import {
   REFERRAL_REWARD_OPENED_EVENT,
@@ -90,196 +90,111 @@ describe("referral notifications", () => {
 
   afterAll(closeDb);
 
-  it("tells the referrer when someone they invited converts", async () => {
+  type Sent = { eventType: string; orgId: string; runId: string; metadata: Record<string, string> };
+  const sent = (): Sent[] => sendMock.mock.calls.map((c) => c[0] as Sent);
+
+  it("tells the referrer at signup: $500 once the new org has paid $500", async () => {
     await newSignup(inviter);
     await newSignup(invitee);
+
     await claimReferral(invitee, inviter);
 
-    // The invitee crosses its own $900 bar: its referral lands, and that is what
-    // opens the inviter's.
-    await settleReferralPromises(invitee, cents(900));
-
-    expect(eventsSent(sendMock)).toContain(REFERRAL_REWARD_OPENED_EVENT);
-    const opened = sendMock.mock.calls
-      .map((c) => c[0] as { eventType: string; orgId: string; metadata: Record<string, string> })
-      .find((p) => p.eventType === REFERRAL_REWARD_OPENED_EVENT)!;
-    // Addressed to the INVITER, about the org that converted.
-    expect(opened.orgId).toBe(inviter);
-    expect(opened.metadata.referredOrg).toBe("Acme");
-    expect(opened.metadata.amount).toBe("$500");
-    // The inviter's own bar stacks above their $400 welcome: $400 + $500.
-    expect(opened.metadata.unlockAt).toBe("$900");
+    const opened = sent().filter((p) => p.eventType === REFERRAL_REWARD_OPENED_EVENT);
+    expect(opened).toHaveLength(1);
+    expect(opened[0].orgId).toBe(inviter);
+    expect(opened[0].metadata).toEqual({
+      amount: "$500",
+      unlockAt: "$500",
+      referredOrg: "Acme",
+    });
   });
 
-  it("tells the invitee when their own referral credits land", async () => {
+  it("tells the referrer when the credits land, naming who paid; nothing to the referee", async () => {
     await newSignup(inviter);
     await newSignup(invitee);
     await claimReferral(invitee, inviter);
 
-    await settleReferralPromises(invitee, cents(900));
+    await settleReferralsEarnedBy(invitee, cents(500));
 
-    const granted = sendMock.mock.calls
-      .map(
-        (c) => c[0] as { eventType: string; orgId: string; metadata: Record<string, string> }
-      )
-      .filter((p) => p.eventType === REFERRAL_CREDITS_GRANTED_EVENT);
-    const toInvitee = granted.find((p) => p.orgId === invitee)!;
-    expect(toInvitee).toBeDefined();
-    expect(toInvitee.metadata.amount).toBe("$500");
-    // The invitee earned it through their OWN signup, so the sentence explaining
-    // why names nobody — there is no third party in their half of the chain.
-    expect(toInvitee.metadata.reason).toBe(
-      "These are the referral credits for joining through an invite link."
+    const granted = sent().filter((p) => p.eventType === REFERRAL_CREDITS_GRANTED_EVENT);
+    expect(granted).toHaveLength(1);
+    expect(granted[0].orgId).toBe(inviter);
+    expect(granted[0].metadata.amount).toBe("$500");
+    expect(granted[0].metadata.reason).toBe(
+      "This is your referral reward: Acme joined through your invite link and has now paid us."
     );
+    expect(sent().some((p) => p.orgId === invitee)).toBe(false);
   });
 
-  it("names the converted referral in the message the INVITER gets when it lands", async () => {
-    // The brief's rule: when a reward exists because a specific referral
-    // converted, say who. It matters most here, because a referrer already past
-    // their bar never receives the opened message at all.
-    await newSignup(inviter);
-    await newSignup(invitee);
+  it("sends ONLY the granted message when the referee already paid the bar at claim", async () => {
+    vi.spyOn(stripeClient, "sumSucceededTopupsForOrg").mockResolvedValue(cents(500) as never);
+
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
+    expect(sent()).toHaveLength(0);
 
-    // Now the inviter's own payments cross their $900 bar.
-    await settleReferralPromises(inviter, cents(900));
-
-    const toInviter = sendMock.mock.calls
-      .map(
-        (c) => c[0] as { eventType: string; orgId: string; metadata: Record<string, string> }
-      )
-      .find((p) => p.eventType === REFERRAL_CREDITS_GRANTED_EVENT && p.orgId === inviter)!;
-    expect(toInviter).toBeDefined();
-    expect(toInviter.metadata.reason).toBe(
-      "This is your referral reward for Acme joining through your invite link."
-    );
-  });
-
-  it("sends ONLY the granted message when the reward is already earned as it opens", async () => {
-    // A referrer whose own payments are already past the new bar earns the reward
-    // on the very next settle. "$500 is on its way" then "$500 arrived" minutes
-    // later teaches nothing with the second, so the opened one is dropped.
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    // The inviter has long since paid past their own $900 bar.
-    vi.spyOn(stripeClient, "sumSucceededTopupsForOrg").mockResolvedValue(
-      cents(5000) as never
-    );
-
-    await settleReferralPromises(invitee, cents(900));
-    expect(eventsSent(sendMock)).not.toContain(REFERRAL_REWARD_OPENED_EVENT);
-
-    await settleReferralPromises(inviter, cents(5000));
-    const toInviter = eventsSent(sendMock).filter(
-      (e) => e === REFERRAL_CREDITS_GRANTED_EVENT
-    );
-    // One to the invitee, one to the inviter. No opened message anywhere.
-    expect(toInviter).toHaveLength(2);
-    expect(eventsSent(sendMock)).not.toContain(REFERRAL_REWARD_OPENED_EVENT);
-  });
-
-  it("does NOT mail anyone when a promise is merely created at signup", async () => {
-    // Nothing has been earned, and the invitee is mid-onboarding being told the
-    // same thing on screen.
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    expect(sendMock).not.toHaveBeenCalled();
+    await settleReferralsEarnedBy(invitee, cents(500));
+    expect(sent().map((p) => p.eventType)).toEqual([REFERRAL_CREDITS_GRANTED_EVENT]);
   });
 
   it("sends once, however many times the sweep re-examines the promise", async () => {
-    await newSignup(inviter);
-    await newSignup(invitee);
     await claimReferral(invitee, inviter);
+    await claimReferral(invitee, inviter);
+    await settleReferralsEarnedBy(invitee, cents(500));
+    const afterFirst = sent().length;
 
-    await settleReferralPromises(invitee, cents(900));
-    const afterFirst = eventsSent(sendMock).length;
+    await settleReferralsEarnedBy(invitee, cents(500));
+    await settleReferralsEarnedBy(invitee, cents(900));
 
-    // The sweep runs hourly over the same rows, forever.
-    await settleReferralPromises(invitee, cents(900));
-    await settleReferralPromises(invitee, cents(900));
-
-    expect(eventsSent(sendMock)).toHaveLength(afterFirst);
+    expect(afterFirst).toBe(2);
+    expect(sent()).toHaveLength(afterFirst);
   });
 
   it("stamps its own marker, so granting and telling stay separate questions", async () => {
-    await newSignup(inviter);
-    await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
 
-    const rows = await db
+    const [referral] = await db
       .select()
       .from(freeCreditPromises)
       .where(eq(freeCreditPromises.orgId, inviter));
-    const referral = rows.find((r) => r.referredOrgId === invitee)!;
     expect(referral.openedNotifiedAt).not.toBeNull();
-    // Opened, not granted: the inviter has not paid anything yet.
     expect(referral.grantedAt).toBeNull();
     expect(referral.grantedNotifiedAt).toBeNull();
   });
 
   it("skips the send, and does NOT burn the marker, when no recipient resolves", async () => {
-    // Claiming before resolving would lose the notification forever: the marker
-    // would be stamped and no later sweep would ever retry it.
     vi.spyOn(stripeClient, "fetchOrgCustomer").mockRejectedValue(new Error("no customer") as never);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await newSignup(inviter);
-    await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
 
     expect(sendMock).not.toHaveBeenCalled();
-    const rows = await db
+    const [referral] = await db
       .select()
       .from(freeCreditPromises)
       .where(eq(freeCreditPromises.orgId, inviter));
-    const referral = rows.find((r) => r.referredOrgId === invitee)!;
     expect(referral.openedNotifiedAt).toBeNull();
   });
 
-  it("commits the grant even when the notification throws", async () => {
-    // The money is the point and the mail is not. A send that blows up must
-    // leave the credits exactly where they landed.
+  it("commits the claim and the grant even when the notification throws", async () => {
     vi.spyOn(emailClient, "sendEmail").mockImplementation(() => {
       throw new Error("email service exploded");
     });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
+    const claim = await claimReferral(invitee, inviter);
+    const result = await settleReferralsEarnedBy(invitee, cents(500));
 
-    const result = await settleReferralPromises(invitee, cents(900));
-
+    expect(claim.promise.orgId).toBe(inviter);
     expect(result.granted).toHaveLength(1);
-    expect(result.inviterPromisesOpened).toBe(1);
     expect(console.error).toHaveBeenCalled();
   });
 
-  it("hangs every send off a real platform run, never a minted UUID", async () => {
-    // transactional-email-service creates its send as a run CHILD of x-run-id, so
-    // runs-service 400s on a parent that does not exist and the mail is dropped
-    // with {sent:false} — silently, because the send is fire-and-forget. Verified
-    // against prod: a random uuid gives sent:false, a real platform run sent:true.
-    await newSignup(inviter);
-    await newSignup(invitee);
+  it("hangs every send off a real platform run, and closes it", async () => {
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
+    await settleReferralsEarnedBy(invitee, cents(500));
 
-    expect(runsClient.createPlatformRun).toHaveBeenCalled();
-    for (const call of sendMock.mock.calls) {
-      expect((call[0] as { runId: string }).runId).toBe(
-        "dddddddd-1111-4ddd-8ddd-111111111111"
-      );
-    }
-    // And the run it opened is closed again, so notifications do not pile up
-    // `running` platform runs forever.
+    expect(sent().length).toBeGreaterThan(0);
+    for (const p of sent()) expect(p.runId).toBe("dddddddd-1111-4ddd-8ddd-111111111111");
     expect(runsClient.completePlatformRun).toHaveBeenCalled();
   });
 
@@ -287,35 +202,22 @@ describe("referral notifications", () => {
     vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(null as never);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await newSignup(inviter);
-    await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
 
     expect(sendMock).not.toHaveBeenCalled();
-    const rows = await db
+    const [referral] = await db
       .select()
       .from(freeCreditPromises)
       .where(eq(freeCreditPromises.orgId, inviter));
-    const referral = rows.find((r) => r.referredOrgId === invitee)!;
     expect(referral.openedNotifiedAt).toBeNull();
   });
 
   it("still sends when the referred org cannot be named", async () => {
-    // The identity lookup is fail-soft. A referrer whose invitee has no brand
-    // should still be told they earned something.
     vi.spyOn(brandClient, "resolveOrgDisplayIdentity").mockResolvedValue(null as never);
 
-    await newSignup(inviter);
-    await newSignup(invitee);
     await claimReferral(invitee, inviter);
-    await settleReferralPromises(invitee, cents(900));
 
-    const opened = sendMock.mock.calls
-      .map((c) => c[0] as { eventType: string; metadata: Record<string, string | null> })
-      .find((p) => p.eventType === REFERRAL_REWARD_OPENED_EVENT)!;
-    expect(opened).toBeDefined();
-    // A phrase that names nobody, never a UUID and never a blank hole mid-sentence.
-    expect(opened.metadata.referredOrg).toBe("A new customer");
+    const opened = sent().find((p) => p.eventType === REFERRAL_REWARD_OPENED_EVENT)!;
+    expect(opened.metadata.referredOrg).toBe("a new customer");
   });
 });

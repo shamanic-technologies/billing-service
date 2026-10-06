@@ -61,13 +61,8 @@ export async function runWelcomeCompletionSweep(): Promise<WelcomeCompletionSwee
       for (const promise of outcome.referrals.granted) {
         granted += 1;
         console.log(
-          `[billing-service] referral promise granted org=${orgId} promise=${promise.id} ` +
-            `amount_cents=${promise.amountCents} referred_org=${promise.referredOrgId ?? "none"}`
-        );
-      }
-      if (outcome.referrals.inviterPromisesOpened > 0) {
-        console.log(
-          `[billing-service] inviter promises opened by org=${orgId}: ${outcome.referrals.inviterPromisesOpened}`
+          `[billing-service] referral reward granted to referrer org=${promise.orgId} ` +
+            `promise=${promise.id} amount_cents=${promise.amountCents} earned_by=${orgId}`
         );
       }
     } catch (err) {

@@ -287,6 +287,7 @@ beforeAll(async () => {
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_welcome" ON "free_credit_promises" ("org_id") WHERE "kind" = 'welcome'`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_referrer" ON "free_credit_promises" ("org_id") WHERE "referrer_org_id" IS NOT NULL`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_org_referred" ON "free_credit_promises" ("org_id", "referred_org_id") WHERE "referred_org_id" IS NOT NULL`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS "idx_free_credit_promises_referred_once" ON "free_credit_promises" ("referred_org_id") WHERE "kind" = 'referral' AND "referred_org_id" IS NOT NULL`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_org" ON "free_credit_promises" ("org_id")`;
   await sql`CREATE INDEX IF NOT EXISTS "idx_free_credit_promises_outstanding" ON "free_credit_promises" ("granted_at") WHERE "granted_at" IS NULL`;
   // Notification markers (migration 0034). ALTERed rather than only declared above,

@@ -12,6 +12,7 @@ import {
   attachReferredOrgIdentities,
   claimReferral,
   listOutstandingPromises,
+  settleReferralsHeldBy,
   sumOutstandingPromiseAmounts,
   ReferralAlreadyClaimedError,
   ReferralRewardCodeMissingError,
@@ -25,15 +26,15 @@ const router = Router();
 // POST /internal/referrals/claim — client-service tells billing that a new org
 // signed up through another org's invite link.
 //
-// Auth: x-api-key only (both org ids are in the body; no x-org-id header). Opens the
-// INVITEE's outstanding referral promise and remembers who referred them; grants
-// NOTHING (the referral offer has no up-front portion, the whole amount lands when
-// the bar is crossed). The inviter's own promise is opened later, at the moment the
-// invitee EARNS theirs — never from the invitee merely signing up.
+// Auth: x-api-key only (both org ids are in the body; no x-org-id header). Opens ONE
+// promise, held by the REFERRER (`promise.orgId` = referrerOrgId,
+// `promise.referredOrgId` = orgId): the referral amount, granted to the referrer once
+// the REFERRED org has paid that much. The referred org gets nothing. Grants nothing
+// now.
 //
 // Idempotent: re-claiming the same invite returns the existing promise with
-// alreadyClaimed=true. A claim by a DIFFERENT inviter is a 409 — an org is referred
-// once, and guessing which inviter wins is not billing's call.
+// alreadyClaimed=true. A claim by a DIFFERENT referrer is a 409 — an org is referred
+// once, and guessing which referrer wins is not billing's call.
 router.post("/internal/referrals/claim", async (req, res) => {
   const parsed = ReferralClaimRequestSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -118,8 +119,11 @@ router.get("/v1/free-credit-promises", requireOrgHeaders, async (req, res) => {
     try {
       paidTopupsCents = await sumSucceededTopupsForOrg(orgId);
       await settleFreeCreditPromises(orgId, paidTopupsCents);
+      // Referral rewards this org HOLDS are earned on the referred orgs' payments:
+      // grant any already earned, and keep those figures for the progress bars.
+      const paidByReferredOrg = await settleReferralsHeldBy(orgId);
       promises = await attachReferredOrgIdentities(
-        await listOutstandingPromises(orgId, paidTopupsCents)
+        await listOutstandingPromises(orgId, paidTopupsCents, paidByReferredOrg)
       );
     } catch (err) {
       console.error("[billing-service] Failed to compose free-credit promises:", err);

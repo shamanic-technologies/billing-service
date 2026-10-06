@@ -1,67 +1,41 @@
 /**
- * Telling the two people in a referral what they cannot see coming.
+ * Telling the REFERRER what they cannot see coming.
  *
- * The money already works end to end: a customer shares their link, someone signs
- * up through it and pays, that opens a $500 reward for the referrer, and the
- * referrer earns it on their own next payments. None of it produced any
- * notification, so a referrer had no reason to open the dashboard on the day any
- * of it happened. They could bring in three converting customers and never learn
- * the referral worked, let alone that money was waiting. An offer whose whole
- * mechanism is "keep paying and it lands" is worth nothing to someone who never
- * finds out it landed.
+ * A referral reward is held by the referrer and earned on the REFERRED org's
+ * payments (see lib/free-credit-promises.ts). The referrer has no reason to open the
+ * dashboard on either day that matters, so two messages, both to the referrer:
  *
- * ## Which moments, and which were dropped
+ *   - `referral-reward-opened` → when someone signs up through their invite link:
+ *     "you get $500 in free credits once <org> has paid $500".
+ *   - `referral-credits-granted` → when the referred org's payments cross the bar
+ *     and the credits land.
  *
- * TWO messages, both about something the recipient could not otherwise know:
+ * The REFERRED org is never told it gets anything: it gets nothing from the referral.
  *
- *   - `referral-reward-opened` → the REFERRER, when someone they invited converts
- *     and a reward opens. This is the one that cannot be inferred from anything
- *     they can see, and it is the one that makes sharing the link feel worth it.
- *   - `referral-credits-granted` → whoever just had a reward GRANTED, on either
- *     side, when the credits actually land.
- *
- * Both name the referral that caused them, because a referrer holding three
- * pending $500s cannot otherwise tell which one a message is about. That is the
- * same identity the Billing page already resolves, under the same authorization:
- * billing is the only service that knows the referral relationship exists.
- *
- * Deliberately NOT sent:
- *
- *   - the invitee's promise being CREATED at signup. Nothing has been earned, and
- *     the person is mid-onboarding being told the same thing on screen.
- *   - "opened" when the reward is ALREADY earned the moment it opens. A referrer
- *     whose own payments are past the new bar earns it on the very next settle, so
- *     "$500 is on its way" followed minutes later by "$500 arrived" teaches nothing
- *     with the second message. `alreadyEarned` collapses that pair down to the
- *     granted one, which names the same referral anyway.
- *   - a separate "your welcome credits landed". That is the other offer, and this
- *     module is not the place to start mailing about it.
+ * Deliberately NOT sent: "opened" when the reward is ALREADY earned the moment it
+ * opens (the referred org has already paid the bar). `alreadyEarned` collapses that
+ * pair down to the granted message, which names the same referral.
  *
  * ## Exactly once
  *
- * The sweep re-examines every promise on every tick, so "we granted it" cannot
- * double as "we told them". Each message claims its own marker column with a
- * CONDITIONAL update that only matches while the marker is still NULL, and only
- * the caller whose update returns a row sends. Two racing settles therefore
- * produce one email, and a replayed payment produces none.
+ * Each message claims its own marker column with a CONDITIONAL update that only
+ * matches while the marker is still NULL, and only the caller whose update returns a
+ * row sends. Two racing settles produce one email, a replayed payment none.
  *
  * ## Every send needs a REAL run
  *
  * transactional-email-service records each send as a run child of the `x-run-id`
  * it is handed, so that header must name a run runs-service already knows. There
- * is no end user on a settle, so this module opens a PLATFORM run per message
- * (`createPlatformRun`) and closes it afterwards. A minted-on-the-spot UUID looks
- * right and is silently fatal: the email service answers 200 with
- * `{sent: false, reason: "Run creation failed: parentRunId … does not exist"}`,
- * and because the send is fire-and-forget nothing surfaces it. Verified against
- * prod both ways before this was written.
+ * is no end user here, so this module opens a PLATFORM run per message
+ * (`createPlatformRun`) and closes it afterwards. A minted-on-the-spot UUID is
+ * silently fatal: the email service answers 200 with `{sent: false, ...}`.
  *
  * ## Fail-soft, deliberately
  *
- * The documented exception to this repo's fail-loud rule, same posture as the
- * identity lookup this feature already relies on: the promise is the money-bearing
- * information and the mail is not. A recipient we cannot resolve, or a send that
- * throws, logs loudly and returns. It never fails, delays or rolls back a grant.
+ * The documented exception to this repo's fail-loud rule: the promise is the
+ * money-bearing information and the mail is not. A recipient we cannot resolve, or a
+ * send that throws, logs loudly and returns. It never fails, delays or rolls back a
+ * grant or a claim.
  */
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -149,24 +123,20 @@ async function recipientFor(orgId: string): Promise<string | null> {
 }
 
 /**
- * Is this reward ALREADY earned the moment it opens?
+ * Is this reward ALREADY earned the moment it opens — has the REFERRED org already
+ * paid the bar? Then the granted message carries the whole story.
  *
- * A referrer whose own payments are already past the new bar earns the reward on
- * the very next settle, so telling them "$500 is on its way" and then, minutes
- * later, "$500 arrived" teaches them nothing with the second message. When the bar
- * is already met we say nothing here and let the granted message carry the whole
- * story — it names the same referral.
- *
- * Fail-OPEN: a paid-topups read that throws yields false, so the referrer is told
- * their referral converted. A possible duplicate beats silence about money.
+ * Fail-OPEN: a paid-topups read that throws yields false, so the referrer is told.
+ * A possible duplicate beats silence about money.
  */
 async function alreadyEarned(promise: FreeCreditPromise): Promise<boolean> {
+  if (!promise.referredOrgId) return false;
   try {
-    const paid = await sumSucceededTopupsForOrg(promise.orgId);
+    const paid = await sumSucceededTopupsForOrg(promise.referredOrgId);
     return gte(paid, new Decimal(promise.paidTriggerCents).toFixed(10));
   } catch (err) {
     console.error(
-      `[billing-service] referral notification: could not read paid topups for org ${promise.orgId}, assuming the reward is not yet earned:`,
+      `[billing-service] referral notification: could not read paid topups for referred org ${promise.referredOrgId}, assuming the reward is not yet earned:`,
       err
     );
     return false;
@@ -174,7 +144,8 @@ async function alreadyEarned(promise: FreeCreditPromise): Promise<boolean> {
 }
 
 /**
- * Tell the REFERRER that someone they invited converted.
+ * Tell the REFERRER that someone signed up through their invite link, and what
+ * that org must pay before the reward lands.
  *
  * Names who it was when we can resolve them, because a referrer with several
  * pending rewards otherwise cannot tell which one this is about. The name is the
@@ -225,9 +196,10 @@ export async function notifyReferralRewardOpened(
         amount: dollars(promise.amountCents),
         unlockAt: dollars(promise.paidTriggerCents),
         // Always a real phrase, never blank: the name sits mid-sentence, and an
-        // empty substitution would leave a hole there. "A new customer" names
-        // nobody, which is the honest rendering when the lookup resolves nothing.
-        referredOrg: identity?.name ?? "A new customer",
+        // empty substitution would leave a hole there. "a new customer" names
+        // nobody, which is the honest rendering when the lookup resolves nothing
+        // (a brand-new org often has no brand yet).
+        referredOrg: identity?.name ?? "a new customer",
       },
     });
     await completePlatformRun(runId);
@@ -240,30 +212,15 @@ export async function notifyReferralRewardOpened(
   }
 }
 
-/**
- * Why this credit exists, in the recipient's own terms.
- *
- * Composed here rather than branched in the template, because the two sides of a
- * referral earned the same amount for opposite reasons: an inviter through
- * somebody else's signup, an invitee through their own. It is also the only place
- * the granted message can name the referral, which matters most in the case where
- * the reward was earned the instant it opened and this is the ONLY message the
- * referrer receives about it.
- */
-function grantReason(
-  promise: FreeCreditPromise,
-  referredOrgName: string | null
-): string {
-  if (!promise.referredOrgId) {
-    return "These are the referral credits for joining through an invite link.";
-  }
+/** Why this credit exists, naming the referral when we can. */
+function grantReason(referredOrgName: string | null): string {
   if (referredOrgName) {
-    return `This is your referral reward for ${referredOrgName} joining through your invite link.`;
+    return `This is your referral reward: ${referredOrgName} joined through your invite link and has now paid us.`;
   }
-  return "This is your referral reward for a customer who joined through your invite link.";
+  return "This is your referral reward: a customer who joined through your invite link has now paid us.";
 }
 
-/** Tell whoever just had a referral reward credited that it landed. */
+/** Tell the referrer their referral reward landed. */
 export async function notifyReferralCreditsGranted(
   promise: FreeCreditPromise
 ): Promise<void> {
@@ -289,7 +246,7 @@ export async function notifyReferralCreditsGranted(
       recipientEmail,
       metadata: {
         amount: dollars(promise.amountCents),
-        reason: grantReason(promise, identity?.name ?? null),
+        reason: grantReason(identity?.name ?? null),
       },
     });
     await completePlatformRun(runId);
