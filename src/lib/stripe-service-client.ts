@@ -964,6 +964,35 @@ export async function chargeOrgOffSession(
 }
 
 /**
+ * `GET /internal/payments/by-org/{orgId}` — every payment the org made, across
+ * acquirers, read from stripe-service's mirrors (no acquirer call). `status` is
+ * canonical: `succeeded` (money moved), `failed`, or `pending` (still in flight).
+ * `id` is the acquirer's own id, the same value a charge result returns as
+ * `reference` for a Revolut org.
+ */
+export interface OrgPayment {
+  id: string;
+  acquirer: string;
+  amount: number;
+  currency: string;
+  status: "succeeded" | "failed" | "pending";
+  /** Unix seconds. */
+  created: number;
+}
+
+export async function listOrgPayments(orgId: string): Promise<OrgPayment[]> {
+  const res = await call<{ data?: unknown }>(
+    "GET",
+    `/internal/payments/by-org/${encodeURIComponent(orgId)}`,
+    {}
+  );
+  if (!Array.isArray(res?.data)) {
+    throw new Error(`stripe-service payments list for org ${orgId} has no data array`);
+  }
+  return res.data as OrgPayment[];
+}
+
+/**
  * `DELETE /internal/payment_methods/by-org/{orgId}` — stop holding this org's
  * card. The acquirer half of a customer-initiated removal.
  *

@@ -294,6 +294,67 @@ describe("subscription (billing-owned)", () => {
     expect(ssMocks.reloadOffSession.mock.calls[0][2]).not.toBe(ssMocks.reloadOffSession.mock.calls[1][2]);
   });
 
+  it("a renewal recorded refused whose payment in fact SUCCEEDED is reconciled to paid, never charged again (2026-10-06)", async () => {
+    const sub = await startTrial();
+    // stripe-service reported an in-flight Revolut payment as a decline; the
+    // order completed two seconds later.
+    ssMocks.reloadOffSession.mockResolvedValueOnce({
+      status: "failed",
+      reference: "rev-ord-1",
+      failure_code: "declined",
+    });
+    const t1 = new Date(sub.currentPeriodEnd.getTime() + HOUR);
+    const pastDue = await advanceSubscription(sub, t1);
+    expect(pastDue.status).toBe("past_due");
+
+    ssMocks.listOrgPayments.mockResolvedValue([
+      { id: "rev-ord-1", acquirer: "revolut", amount: 19900, currency: "usd", status: "succeeded", created: 1 },
+    ]);
+    // Well before the next rung: the reconcile does not wait for it.
+    const healed = await advanceSubscription(pastDue, new Date(t1.getTime() + HOUR));
+
+    expect(healed.status).toBe("active");
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    const [row] = await db
+      .select()
+      .from(subscriptionCharges)
+      .where(eq(subscriptionCharges.subscriptionId, sub.id));
+    expect(row.status).toBe("paid");
+    expect(row.reference).toBe("rev-ord-1");
+
+    // And on the day the next rung would have fired, still no second charge.
+    await advanceSubscription(healed, new Date(t1.getTime() + DAY + HOUR));
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused renewal whose payment is still in flight, or unreadable, is NOT retried", async () => {
+    const sub = await startTrial();
+    ssMocks.reloadOffSession.mockResolvedValueOnce({
+      status: "failed",
+      reference: "rev-ord-2",
+      failure_code: "declined",
+    });
+    const t1 = new Date(sub.currentPeriodEnd.getTime() + HOUR);
+    const pastDue = await advanceSubscription(sub, t1);
+
+    ssMocks.listOrgPayments.mockResolvedValueOnce([
+      { id: "rev-ord-2", acquirer: "revolut", amount: 19900, currency: "usd", status: "pending", created: 1 },
+    ]);
+    const held = await advanceSubscription(pastDue, new Date(t1.getTime() + DAY + HOUR));
+    expect(held.status).toBe("past_due");
+
+    ssMocks.listOrgPayments.mockRejectedValueOnce(new Error("stripe-service down"));
+    await advanceSubscription(held, new Date(t1.getTime() + DAY + 2 * HOUR));
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+
+    // A payment the mirror says FAILED walks the ordinary rung.
+    ssMocks.listOrgPayments.mockResolvedValueOnce([
+      { id: "rev-ord-2", acquirer: "revolut", amount: 19900, currency: "usd", status: "failed", created: 1 },
+    ]);
+    await advanceSubscription(held, new Date(t1.getTime() + DAY + 3 * HOUR));
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(2);
+  });
+
   it("a card the bank called stolen ends the subscription", async () => {
     const sub = await startTrial();
     ssMocks.reloadOffSession.mockResolvedValueOnce({ status: "failed", failure_code: "stolen_card" });

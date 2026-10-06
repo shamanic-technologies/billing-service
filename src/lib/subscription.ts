@@ -77,6 +77,7 @@ import {
   getCardSetup,
   getSavedPaymentMethod,
   LEGACY_PM_GATE_ACQUIRER,
+  listOrgPayments,
   sumSucceededTopupsForOrg,
 } from "./stripe-service-client.js";
 import { ensureOrgStripeCustomer } from "./account.js";
@@ -933,11 +934,55 @@ async function billPeriod(sub: Subscription, periodStart: Date, now: Date): Prom
   return updated;
 }
 
+/**
+ * What the acquirer's mirror says happened to a payment we already attempted,
+ * by the reference the charge result gave us. `absent` = no such payment (a
+ * Stripe reference names an invoice, not a payment, so it is never found here,
+ * and the ordinary retry applies). `unknown` = the read failed.
+ */
+async function settledStateOf(
+  orgId: string,
+  reference: string
+): Promise<"succeeded" | "failed" | "pending" | "absent" | "unknown"> {
+  try {
+    const payment = (await listOrgPayments(orgId)).find((p) => p.id === reference);
+    return payment ? payment.status : "absent";
+  } catch (err) {
+    console.error(
+      `[billing-service] could not read payment ${reference} for org ${orgId}; retry held this tick:`,
+      err
+    );
+    return "unknown";
+  }
+}
+
 /** A past_due subscription: the next rung of its period's charge, or the end. */
 async function retryPastDue(sub: Subscription, now: Date): Promise<Subscription> {
   const charge = await getCharge(sub.id, sub.currentPeriodStart);
   if (!charge) throw new Error(`[billing-service] past_due subscription ${sub.id} has no charge row`);
   if (charge.status !== "failed") return billPeriod(sub, sub.currentPeriodStart, now);
+  // Before another rung (a NEW idempotency key, so a NEW acquirer charge), ask
+  // whether the attempt we recorded as refused in fact took the money. It can:
+  // Revolut finishes a payment after the pay call answers, and stripe-service
+  // used to report that in-flight state as a decline (2026-10-06, a $99 that
+  // completed two seconds after it was recorded as `declined`). Charging the
+  // next rung then takes the money twice.
+  if (charge.reference) {
+    const settled = await settledStateOf(sub.orgId, charge.reference);
+    // Cannot tell, or still in flight: never risk a second charge. Next tick.
+    if (settled === "unknown" || settled === "pending") return sub;
+    if (settled === "succeeded") {
+      await db
+        .update(subscriptionCharges)
+        .set({ status: "paid", paidAt: now, failureCode: null })
+        .where(eq(subscriptionCharges.id, charge.id));
+      console.warn(
+        `[billing-service] subscription charge ${charge.id} for org ${sub.orgId} was recorded refused ` +
+          `but its payment ${charge.reference} SUCCEEDED; reconciled to paid`
+      );
+      return billPeriod(sub, sub.currentPeriodStart, now);
+    }
+  }
   if (charge.attemptCount >= MAX_ATTEMPTS_PER_STREAK || !charge.firstFailedAt) {
     return endSubscription(sub, now, now);
   }
