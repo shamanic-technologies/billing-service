@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
-import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, useLegacyOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import type { StripeCustomer } from "../../src/lib/stripe-service-client.js";
 
@@ -68,7 +68,14 @@ describe("a claimed org whose billing row exists with no Stripe customer", () =>
     expect(ssMocks.ensureCustomer).not.toHaveBeenCalled();
   });
 
+  // Written against what a freshly created account got before migration 0066
+  // (a legacy account): see useLegacyOfferDefaults.
+  beforeAll(async () => {
+    await useLegacyOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await cleanTestData();
     await closeDb();
   });
