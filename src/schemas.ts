@@ -82,22 +82,26 @@ export const BillingAccountSchema = z
      * already net. Billing never re-applies it.
      */
     usage_discount_pct: z.number().int().nullable(),
+    credited_advance_cents: CentsStringSchema.openapi({
+      description:
+        "A match_100 org's onboarding credit ADVANCE ($30 at creation): repaid by its first payments, never a gift. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents; credited_paid_cents is what the payments left after repaying it ($200 paid → 17000). 0 for a legacy org.",
+    }),
     /**
      * Where the org stands on its free-credit offer, ready-made for the payment wall
      * ("$30 is already yours, $70 more once you've paid $100"). See lib/free-credit-offer.
      */
     free_credit_offer: z.enum(["legacy", "match_100"]).openapi({
       description:
-        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' ($30 at creation, the rest once $100 is paid; every org created since migration 0066). `legacy` = every older org, unchanged.",
+        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `legacy` = every older org, unchanged.",
     }),
     free_credit_entitlement_cents: z.number().int().openapi({
       description: "Total free credit the offer gives, every gift included (10000 for match_100).",
     }),
     free_credit_received_cents: CentsStringSchema.openapi({
-      description: "Free credit already received that counts toward the offer (3000 right after a match_100 org is created).",
+      description: "Free credit already received that counts toward the offer (0 right after a match_100 org is created: its $30 is an advance, not a gift).",
     }),
     free_credit_pending_cents: CentsStringSchema.openapi({
-      description: "Free credit still to come (7000 for a new match_100 org; 0 once granted or when nothing more can come).",
+      description: "Free credit still to come (10000 for a new match_100 org; 0 once granted or when nothing more can come).",
     }),
     free_credit_paid_trigger_cents: z.number().int().openapi({
       description: "Cumulative succeeded payments (net of refunds) that unlock the pending credit (10000 for match_100).",

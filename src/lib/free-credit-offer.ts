@@ -1,8 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
   billingAccounts,
+  localPromoCodes,
+  localPromos,
+  ORG_CREATION_BONUS_CODE,
   LEGACY_FREE_CREDIT_OFFER,
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
@@ -14,10 +17,11 @@ import {
  * "We match your first $100" — the free-credit offer of every org created after
  * migration 0066 (owner 2026-10-06). Existing orgs keep their own offer ('legacy').
  *
- *   at creation  : $30, ONE `org_creation_bonus` row, whatever path created the org
- *                  (dashboard "New organization", anonymous onboarding, first touch)
- *   at $100 paid : the remainder (entitlement − every gift already counted against
- *                  it), i.e. +$70 — lib/welcome-completion, exactly once per org
+ *   at creation  : a $30 ADVANCE on the first payment (ONE `org_creation_bonus`
+ *                  row, whatever path created the org), repaid by that payment and
+ *                  never a gift (see getOnboardingAdvanceCents)
+ *   at $100 paid : +$100 free (entitlement − every GIFT, the advance is none) —
+ *                  lib/welcome-completion, exactly once per org
  *   never        : the per-person welcome gift, the trial seed, the welcome coupon
  *
  * The $30 is ONE ledger key on purpose: two up-front paths racing (the trial seed and
@@ -153,5 +157,51 @@ export function computeFreeCreditStatus(params: {
     pendingCents: pending.toFixed(10),
     paidTriggerCents: params.paidTriggerCents,
     remainingToPayCents: remainingToPay.toFixed(10),
+  };
+}
+
+/**
+ * The $30 a match_100 org receives at creation is an ADVANCE on its first payment,
+ * not a gift (owner 2026-10-06: « on déduit du montant que les users vont payer en
+ * prepaid … S'ils paient $200, ils verront $30 + $170. Ne labelise pas les $30 en
+ * gift car ils l'ont payé »). The card is charged in full; the first payments
+ * repay it, so a $200 payment leaves credited at $200 ($30 advance + $170), never $230.
+ *
+ * The ledger row (`org_creation_bonus`) is unchanged; what moves is how much of it
+ * still counts: credited = paid + local credits − repaid, with
+ * repaid = min(advance, cumulative paid). A legacy org's bonus is a gift: 0 repaid.
+ * Every credited composition goes through `composeCreditedFromParts` so the account
+ * read, the balance path and the grant route cannot disagree.
+ */
+export async function getOnboardingAdvanceCents(orgId: string): Promise<string> {
+  if (!(await isMatchOfferOrg(orgId))) return "0.0000000000";
+  const [row] = await db
+    .select({ amountCents: localPromos.amountCents })
+    .from(localPromos)
+    .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .where(and(eq(localPromos.orgId, orgId), eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE)))
+    .limit(1);
+  return new Decimal(row?.amountCents ?? 0).toFixed(10);
+}
+
+export interface CreditedParts {
+  creditedCents: string;
+  /** The org's onboarding advance (0 for a legacy org). */
+  advanceCents: string;
+  /** How much of it its payments have repaid so far. */
+  advanceRepaidCents: string;
+}
+
+export function composeCreditedFromParts(
+  paidTopupsCents: string,
+  localCreditsCents: string,
+  advanceCents: string
+): CreditedParts {
+  const paid = Decimal.max(0, new Decimal(paidTopupsCents));
+  const repaid = Decimal.min(new Decimal(advanceCents), paid);
+  return {
+    creditedCents: new Decimal(paidTopupsCents).plus(localCreditsCents).minus(repaid).toFixed(10),
+    advanceCents: new Decimal(advanceCents).toFixed(10),
+    advanceRepaidCents: repaid.toFixed(10),
   };
 }
