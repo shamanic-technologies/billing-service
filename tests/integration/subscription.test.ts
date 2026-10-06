@@ -265,9 +265,48 @@ describe("subscription (billing-owned)", () => {
     await settleOrgSubscription(orgId, t);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
 
+    // A PAID trial end expires nothing: the $69 left of the trial is the first
+    // month's credit. The $199 payment repays the $99 trial credit (adds none for
+    // it) and adds the other $100: balance = $69 + $100.
     const acct = await request(app).get("/v1/accounts").set(headers);
-    expect(acct.body.expired_cents).toBe("6900.0000000000");
-    expect(acct.body.balance_cents).toBe("19900.0000000000");
+    expect(Number(acct.body.expired_cents)).toBe(0);
+    expect(acct.body.credited_trial_repaid_cents).toBe("9900.0000000000");
+    expect(acct.body.credited_cents).toBe("19900.0000000000");
+    expect(acct.body.balance_cents).toBe("16900.0000000000");
+  });
+
+  it("the trial-end payment repays the trial and adds NO credit; staff gifts stay; month 2 adds credit (Legistai 2026-10-06)", async () => {
+    await insertTestAccount({ orgId });
+    await insertTestPromoGrant({ orgId, userId, amountCents: 3000, promoCode: "trial_seed" });
+    const sub = await startSubscription({ orgId, userId, monthlyAmountCents: 9900 });
+    await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "admin_grant" });
+    setUsage("8973.0000000000");
+
+    const t = new Date(sub.currentPeriodEnd.getTime() + HOUR);
+    const after = await advanceSubscription(sub, t);
+    expect(after.status).toBe("active");
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("9900.0000000000");
+
+    // $30 seed + $69 trial + $5 staff = $104. The $99 payment adds $0.
+    const acct = await request(app).get("/v1/accounts").set(headers);
+    expect(acct.body.credited_cents).toBe("10400.0000000000");
+    expect(acct.body.credited_trial_repaid_cents).toBe("9900.0000000000");
+    expect(acct.body.credited_paid_cents).toBe("0.0000000000");
+    expect(acct.body.credited_gifted_cents).toBe("10400.0000000000");
+    expect(Number(acct.body.expired_cents)).toBe(0);
+    expect(acct.body.balance_cents).toBe("1427.0000000000");
+
+    // The 2nd period's charge is an ordinary payment: it adds its $99.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("19800.0000000000");
+    const month2 = await request(app).get("/v1/accounts").set(headers);
+    expect(month2.body.credited_cents).toBe("20300.0000000000");
+  });
+
+  it("a trial cancelled before any payment keeps its trial credit (nothing repaid)", async () => {
+    await startTrial(9900);
+    const acct = await request(app).get("/v1/accounts").set(headers);
+    expect(acct.body.credited_trial_repaid_cents).toBe("0.0000000000");
+    expect(acct.body.credited_cents).toBe("9900.0000000000");
   });
 
   it("an overspent balance never expires", async () => {
@@ -275,7 +314,7 @@ describe("subscription (billing-owned)", () => {
     setUsage("12000.0000000000"); // balance −21 dollars
     await advanceSubscription(sub, new Date(sub.currentPeriodEnd.getTime() + HOUR));
     const acct = await request(app).get("/v1/accounts").set(headers);
-    expect(acct.body.expired_cents).toBe("0.0000000000");
+    expect(Number(acct.body.expired_cents)).toBe(0);
   });
 
   it("a refused renewal goes past_due and is retried on the next rung; then active", async () => {

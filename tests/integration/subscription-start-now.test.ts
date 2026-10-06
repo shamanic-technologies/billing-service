@@ -118,7 +118,7 @@ describe("subscription: start a trialing plan now", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
-  it("start now at the SAME amount: charged today, active, period restarts, credit grows by the amount", async () => {
+  it("start now at the SAME amount: charged today, active, period restarts, the trial-ending payment adds no credit", async () => {
     const trial = await startTrial(9900);
     // Trial credit $99, $10 spent → $89 left before paying.
     const before = await request(app).get("/v1/accounts/subscription").set(headers);
@@ -143,8 +143,9 @@ describe("subscription: start a trialing plan now", () => {
     expect(start.getTime()).toBeLessThan(trial.trialEndsAt!.getTime());
     expect(res.body.subscription.trial_end).toBe(res.body.subscription.current_period_start);
     expect(res.body.subscription.next_charge_at).toBe(nextPeriodEnd(start, start).toISOString());
-    // $89 trial credit kept + $99 paid now.
-    expect(res.body.credits_remaining_cents).toBe("18800.0000000000");
+    // The payment that ends the trial repays the $99 trial credit and adds none
+    // (owner 2026-10-06): the $89 left of the trial is the first month's credit.
+    expect(res.body.credits_remaining_cents).toBe("8900.0000000000");
     const expiries = await db
       .select()
       .from(subscriptionCreditExpiries)
