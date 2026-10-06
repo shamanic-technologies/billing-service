@@ -35,13 +35,7 @@
 
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
-import {
-  billingAccounts,
-  MATCH_FREE_CREDIT_OFFER,
-  MATCH_MIN_RELOAD_THRESHOLD_CENTS,
-  MATCH_MIN_TOPUP_CENTS,
-  subscriptions,
-} from "../db/schema.js";
+import { billingAccounts, subscriptions } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents, type BalanceSnapshot } from "./balance.js";
 import { cmpCents } from "./cents.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
@@ -250,11 +244,8 @@ export async function setPaymentMode(
       snapshot.hasCardPm &&
       snapshot.autoReloadSupported
     ) {
-      // A "We match your first $100" org arms at its minimums ($100 when the
-      // balance would fall below $5); legacy orgs keep the ladder flag as before.
-      const match = account.freeCreditOffer === MATCH_FREE_CREDIT_OFFER;
-      patch.topupAmountCents = match ? MATCH_MIN_TOPUP_CENTS : tierFor("0").amountCents;
-      patch.topupThresholdCents = match ? MATCH_MIN_RELOAD_THRESHOLD_CENTS : 0;
+      patch.topupAmountCents = tierFor("0").amountCents;
+      patch.topupThresholdCents = 0;
     }
   }
 

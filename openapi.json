@@ -172,34 +172,6 @@
             "type": "integer",
             "nullable": true
           },
-          "free_credit_offer": {
-            "type": "string",
-            "enum": [
-              "legacy",
-              "match_100"
-            ],
-            "description": "The free-credit offer this org was created under. `match_100` = 'We match your first $100' ($30 at creation, the rest once $100 is paid; every org created since migration 0066). `legacy` = every older org, unchanged."
-          },
-          "free_credit_entitlement_cents": {
-            "type": "integer",
-            "description": "Total free credit the offer gives, every gift included (10000 for match_100)."
-          },
-          "free_credit_received_cents": {
-            "type": "string",
-            "description": "Free credit already received that counts toward the offer (3000 right after a match_100 org is created)."
-          },
-          "free_credit_pending_cents": {
-            "type": "string",
-            "description": "Free credit still to come (7000 for a new match_100 org; 0 once granted or when nothing more can come)."
-          },
-          "free_credit_paid_trigger_cents": {
-            "type": "integer",
-            "description": "Cumulative succeeded payments (net of refunds) that unlock the pending credit (10000 for match_100)."
-          },
-          "free_credit_remaining_to_pay_cents": {
-            "type": "string",
-            "description": "What the org still has to pay to unlock the pending credit; 0 when nothing is pending."
-          },
           "topup_amount_cents": {
             "type": "integer",
             "nullable": true
@@ -245,12 +217,6 @@
           "actual_balance_cents",
           "free_credit_spendable_cents",
           "usage_discount_pct",
-          "free_credit_offer",
-          "free_credit_entitlement_cents",
-          "free_credit_received_cents",
-          "free_credit_pending_cents",
-          "free_credit_paid_trigger_cents",
-          "free_credit_remaining_to_pay_cents",
           "topup_amount_cents",
           "topup_threshold_cents",
           "has_payment_method",
@@ -4537,7 +4503,7 @@
             }
           },
           "400": {
-            "description": "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+            "description": "Payment method required or invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -5190,7 +5156,7 @@
     "/v1/checkout-sessions": {
       "post": {
         "summary": "Create Stripe Checkout session via stripe-service",
-        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). Credit + first-load match land via the existing checkout.session.completed webhook in all modes. WELCOME GIFT (onboarding): send the FULL daily budget as topup_amount_cents with apply_welcome_gift=true and billing takes the welcome gift the org holds off it as a standard discount line (e.g. $68 budget, -$30 gift, $38 due). The credit that lands is what is actually paid; the gift was granted at signup, so spendable = budget. Without apply_welcome_gift the charge is exactly topup_amount_cents and carries no discount. 409 `welcome_discount_not_first_payment` when the org has already paid; 409 `welcome_gift_covers_budget` when budget <= gift (use mode='setup'); 502 `welcome_discount_not_applied` when the acquirer did not charge exactly budget - gift. MATCH-cohort orgs whose free credit is not yet fully granted see a notice that the rest is coming. A match_100 org (free_credit_offer) is refused below a $100 top-up: 400 `topup_below_minimum` (+ `minimum_cents`); its $30 is credit, never a coupon: apply_welcome_gift=true is 409 `welcome_discount_not_offered`. User-entered promotion codes are NOT offered (allow_promotion_codes is never set).",
+        "description": "Auto-creates the billing account with welcome promo if the org has no account yet, then proxies to stripe-service. HOSTED (default, no ui_mode): requires success_url + cancel_url and returns a redirect `url`. mode='payment' (default) charges topup_amount_cents as a one-shot top-up and does not configure auto-topup. mode='setup' creates a no-charge Checkout that saves a reusable off-session card (for enabling auto-topup); topup_amount_cents is omitted and no topup amount is written. EMBEDDED (ui_mode='embedded'): Stripe Embedded Checkout for an in-app modal — no success_url/cancel_url, returns a `client_secret` the front-end mounts in an iframe; always charges topup_amount_cents (payment-only). Credit + first-load match land via the existing checkout.session.completed webhook in all modes. WELCOME GIFT (onboarding): send the FULL daily budget as topup_amount_cents with apply_welcome_gift=true and billing takes the welcome gift the org holds off it as a standard discount line (e.g. $68 budget, -$30 gift, $38 due). The credit that lands is what is actually paid; the gift was granted at signup, so spendable = budget. Without apply_welcome_gift the charge is exactly topup_amount_cents and carries no discount. 409 `welcome_discount_not_first_payment` when the org has already paid; 409 `welcome_gift_covers_budget` when budget <= gift (use mode='setup'); 502 `welcome_discount_not_applied` when the acquirer did not charge exactly budget - gift. MATCH-cohort orgs whose free credit is not yet fully granted see a notice that the rest is coming. User-entered promotion codes are NOT offered (allow_promotion_codes is never set).",
         "parameters": [
           {
             "schema": {

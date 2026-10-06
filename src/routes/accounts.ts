@@ -8,15 +8,8 @@ import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js"
 import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
 import { reloadTierFor } from "../lib/topup-tier.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
-import {
-  asFreeCreditOffer,
-  assertAutoTopupMinimums,
-  computeFreeCreditStatus,
-  configuredReloadFor,
-  TopupBelowMinimumError,
-} from "../lib/free-credit-offer.js";
 import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "../lib/transfer-usage.js";
-import { sumEntitlementGrantsForOrg, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
+import { sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
@@ -78,7 +71,6 @@ async function composeAccountFunds(
   discountPct: number | null;
   paidTopupsCents: string;
   giftedCreditsCents: string;
-  entitlementGrantsCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   cardBrand: string | null;
@@ -133,9 +125,6 @@ async function composeAccountFunds(
   // re-querying the ledger.
   const settled = await settleFreeCreditPromises(orgId, paidTopups);
   const localCredits = addCents(localCreditsBeforeSettle, settled.grantedCents);
-  // What counts toward the org's free-credit offer, read AFTER the settle so a gift
-  // that just landed is in it (free_credit_received_cents).
-  const entitlementGrantsCents = await sumEntitlementGrantsForOrg(orgId);
   const cardCountry = cardDisplay?.country ?? null;
   const creditedCents = addCents(paidTopups, localCredits);
   // runs-service usage is already NET of the org's usage discount (frozen at
@@ -162,7 +151,6 @@ async function composeAccountFunds(
     discountPct,
     paidTopupsCents: paidTopups,
     giftedCreditsCents: localCredits,
-    entitlementGrantsCents,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     cardBrand: cardDisplay?.brand ?? null,
@@ -185,7 +173,6 @@ function buildAccountResponse(
     discountPct: number | null;
     paidTopupsCents: string;
     giftedCreditsCents: string;
-    entitlementGrantsCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     cardBrand: string | null;
@@ -207,16 +194,8 @@ function buildAccountResponse(
   // stored flag says.
   const tier =
     enabled && paymentMode !== "subscription"
-      ? reloadTierFor(funds.paidTopupsCents, paymentMode, configuredReloadFor(account))
+      ? reloadTierFor(funds.paidTopupsCents, paymentMode)
       : null;
-  const freeCredit = computeFreeCreditStatus({
-    offer: asFreeCreditOffer(account.freeCreditOffer),
-    entitlementCents: account.freeCreditEntitlementCents,
-    paidTriggerCents: account.freeCreditPaidTriggerCents,
-    eligible: account.welcomeCompletionEligible,
-    receivedCents: funds.entitlementGrantsCents,
-    paidTopupsCents: funds.paidTopupsCents,
-  });
   return {
     id: account.id,
     org_id: account.orgId,
@@ -254,15 +233,6 @@ function buildAccountResponse(
     // runs-service, so usage_cents (and thus balance_cents/actual_balance_cents) is
     // already net. Billing never re-applies it. See CLAUDE.md "Usage discount".
     usage_discount_pct: funds.discountPct,
-    // Where the org stands on its free-credit offer, ready-made for the payment wall
-    // ("$30 is already yours, $70 more once you've paid $100"). See
-    // lib/free-credit-offer. `match_100` = "We match your first $100".
-    free_credit_offer: freeCredit.offer,
-    free_credit_entitlement_cents: freeCredit.entitlementCents,
-    free_credit_received_cents: freeCredit.receivedCents,
-    free_credit_pending_cents: freeCredit.pendingCents,
-    free_credit_paid_trigger_cents: freeCredit.paidTriggerCents,
-    free_credit_remaining_to_pay_cents: freeCredit.remainingToPayCents,
     topup_amount_cents: tier ? tier.amountCents : null,
     topup_threshold_cents: tier ? tier.thresholdCents : null,
     has_payment_method: funds.hasPaymentMethod,
@@ -566,26 +536,6 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
         code: "subscription_mode",
       });
       return;
-    }
-
-    // "We match your first $100" orgs reload at least $100, and never let the
-    // threshold sit below $5 (lib/free-credit-offer). Legacy orgs: unchanged.
-    try {
-      assertAutoTopupMinimums(
-        asFreeCreditOffer(account.freeCreditOffer),
-        topup_amount_cents,
-        topup_threshold_cents
-      );
-    } catch (err) {
-      if (err instanceof TopupBelowMinimumError) {
-        res.status(400).json({
-          error: err.message,
-          code: err.code,
-          minimum_cents: err.minimumCents,
-        });
-        return;
-      }
-      throw err;
     }
 
     // Arming automatic top-up commits us to charging this org with nobody
