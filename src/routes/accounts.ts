@@ -14,6 +14,7 @@ import {
   composeCreditedFromParts,
   computeFreeCreditStatus,
   getOnboardingAdvanceCents,
+  getTrialRepaymentCents,
   configuredReloadFor,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
@@ -83,6 +84,7 @@ async function composeAccountFunds(
   entitlementGrantsCents: string;
   advanceCents: string;
   advanceRepaidCents: string;
+  trialRepaidCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   cardBrand: string | null;
@@ -144,7 +146,9 @@ async function composeAccountFunds(
   // A match_100 org's $30 onboarding advance is repaid by its payments, and shown
   // as its own line, never as a gift (lib/free-credit-offer).
   const advance = await getOnboardingAdvanceCents(orgId);
-  const creditParts = composeCreditedFromParts(paidTopups, localCredits, advance);
+  // The trial-end subscription payment repays the trial credit: it adds none.
+  const trialRepayment = await getTrialRepaymentCents(orgId);
+  const creditParts = composeCreditedFromParts(paidTopups, localCredits, advance, trialRepayment);
   const creditedCents = creditParts.creditedCents;
   // runs-service usage is already NET of the org's usage discount (frozen at
   // cost-write). Billing subtracts it verbatim — no discount is applied here. The
@@ -173,6 +177,7 @@ async function composeAccountFunds(
     entitlementGrantsCents,
     advanceCents: creditParts.advanceCents,
     advanceRepaidCents: creditParts.advanceRepaidCents,
+    trialRepaidCents: creditParts.trialRepaidCents,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     cardBrand: cardDisplay?.brand ?? null,
@@ -198,6 +203,7 @@ function buildAccountResponse(
     entitlementGrantsCents: string;
     advanceCents: string;
     advanceRepaidCents: string;
+    trialRepaidCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     cardBrand: string | null;
@@ -245,7 +251,13 @@ function buildAccountResponse(
     // A match_100 org: the part of its payments left after repaying its onboarding
     // advance ($200 paid → 17000), the advance itself on credited_advance_cents.
     //   credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents
-    credited_paid_cents: subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
+    credited_paid_cents: subCents(
+      subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
+      funds.trialRepaidCents
+    ),
+    // Paid money that repaid a free trial (the trial-end subscription charge) and so
+    // added NO credit. Additive; credited_paid_cents already excludes it.
+    credited_trial_repaid_cents: funds.trialRepaidCents,
     credited_gifted_cents: funds.giftedCreditsCents,
     credited_advance_cents: funds.advanceCents,
     usage_cents: funds.usageCents,
