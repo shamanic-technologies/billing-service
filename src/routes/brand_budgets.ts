@@ -443,18 +443,25 @@ router.post(
       console.log(
         `[billing-service] mission ${move}: brand=${brandId} org=${orgId} campaign=${body.campaignId}`
       );
-      void notifyMissionStatusChanged({
+      const notification = {
         orgId,
         userId: (req.headers["x-user-id"] as string | undefined) ?? "",
         runId: (req.headers["x-run-id"] as string | undefined) ?? "",
         brandId,
         ...body,
         actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
-      });
-      // A subscriber's plan money follows the ON campaigns (the ON proactive carries
-      // the plan minus each ON reactive share, OFF ones none; lib/subscriber-plan-budgets),
-      // then the usual re-price, a no-op on those plan-derived rows (lib/campaign-items).
-      void onMissionStatusChanged({ orgId, brandId, offerId: body.offerId });
+      };
+      // ORDER MATTERS. A subscriber's plan money follows the ON campaigns (the ON
+      // proactive carries the plan minus each ON reactive share, OFF ones are
+      // DELETED; lib/subscriber-plan-budgets), then the usual re-price. The staff
+      // email states the ceilings as they stand after the move, so it composes
+      // only once that reallocation is done: run in parallel, it read the row the
+      // reallocation was deleting and told staff "$3/day kept" for money billing
+      // no longer held (Legistai, 2026-10-06). Both never throw; still fire-and-forget.
+      void (async () => {
+        await onMissionStatusChanged({ orgId, brandId, offerId: body.offerId });
+        await notifyMissionStatusChanged(notification);
+      })();
     }
     res.status(202).json({ notified: move !== null, move });
   }

@@ -233,7 +233,10 @@ describe("boot-time email template registration", () => {
       ].map((m) => m[1]),
     );
     expect(t.subject).toBe("{{subject}}");
-    expect(vars).toEqual(new Set(["action", "email", "subject", "summaryHtml", "summaryText"]));
+    expect(vars).toEqual(new Set(["action", "actionHtml", "email", "subject", "summaryHtml", "summaryText"]));
+    // The action carries customer-typed names: the HTML part reads the escaped copy.
+    expect(t.htmlBody).toContain("{{actionHtml}}");
+    expect(t.htmlBody).not.toContain("{{action}}");
     // The retired status-blind pair must not come back.
     expect(`${t.htmlBody} ${t.textBody}`).not.toMatch(/Running:|Configured:/);
 
