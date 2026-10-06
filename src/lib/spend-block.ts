@@ -29,7 +29,6 @@
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { configuredReloadFor } from "./free-credit-offer.js";
 import { billingAccounts } from "../db/schema.js";
 import { isDepleted, subCents, gte as gteCents } from "./cents.js";
 import { resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
@@ -88,8 +87,6 @@ export async function resolveOrgFloor(
   const [account] = await db
     .select({
       topupAmountCents: billingAccounts.topupAmountCents,
-      topupThresholdCents: billingAccounts.topupThresholdCents,
-      freeCreditOffer: billingAccounts.freeCreditOffer,
       paymentMode: billingAccounts.paymentMode,
     })
     .from(billingAccounts)
@@ -101,7 +98,6 @@ export async function resolveOrgFloor(
     autoReloadSupported: snapshot.autoReloadSupported,
     paidTopupsCents: snapshot.paidTopupsCents,
     paymentMode: account ? asPaymentMode(account.paymentMode) : "postpaid",
-    configuredReload: account ? configuredReloadFor(account) : null,
   });
   return { tier, floorCents: thresholdCents };
 }

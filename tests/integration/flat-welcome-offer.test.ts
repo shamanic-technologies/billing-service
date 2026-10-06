@@ -16,7 +16,7 @@
  * postgres.js connection in `afterAll`, which would take this block down with
  * `write CONNECTION_ENDED` (see CLAUDE.md).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -25,8 +25,6 @@ import {
   closeDb,
   insertTestAccount,
   insertTestPromoGrant,
-  useLegacyOfferDefaults,
-  restoreCurrentOfferDefaults,
 } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import * as runsClient from "../../src/lib/runs-client.js";
@@ -36,8 +34,8 @@ import {
   freeCreditPromises,
   localPromoCodes,
   localPromos,
-  FLAT_THIRTY_FREE_CREDIT_ENTITLEMENT_CENTS,
-  FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS,
+  CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS,
+  CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
   WELCOME_COMPLETION_CODE,
   WELCOME_PROMO_CODE,
@@ -124,14 +122,7 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
     } as never);
   });
 
-  // Written against what a freshly created account got before migration 0066
-  // (a legacy account): see useLegacyOfferDefaults.
-  beforeAll(async () => {
-    await useLegacyOfferDefaults();
-  });
-
   afterAll(async () => {
-    await restoreCurrentOfferDefaults();
     vi.unstubAllEnvs();
     await cleanTestData();
     await closeDb();
@@ -151,8 +142,8 @@ describe("flat $30 welcome offer, granted in full at signup", () => {
       .where(eq(billingAccounts.orgId, orgId));
 
     expect(row).toEqual({ entitlementCents: 3000, paidTriggerCents: 3000 });
-    expect(FLAT_THIRTY_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(3000);
-    expect(FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(3000);
+    expect(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(3000);
+    expect(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(3000);
   });
 
   // --- AC: welcome + completion totals EXACTLY $30, never more ---

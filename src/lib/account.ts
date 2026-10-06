@@ -1,15 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import {
-  billingAccounts,
-  MATCH_FREE_CREDIT_OFFER,
-  WELCOME_PROMO_CODE,
-} from "../db/schema.js";
-import {
-  grantOrgCreationBonus,
-  redeemPromoCode,
-  PromoAlreadyRedeemedError,
-} from "./promos.js";
+import { billingAccounts, WELCOME_PROMO_CODE } from "../db/schema.js";
+import { redeemPromoCode, PromoAlreadyRedeemedError } from "./promos.js";
 import {
   ensureCustomer,
   getCustomerByOrgOrNull,
@@ -71,13 +63,6 @@ export async function findOrCreateAccount(
       .returning();
     if (!inserted) return null;
 
-    // "We match your first $100" (lib/free-credit-offer): a new org's up-front gift
-    // is its org-creation bonus, never the per-person welcome, and a person whose
-    // welcome lives elsewhere does NOT zero this org's offer.
-    if (inserted.freeCreditOffer === MATCH_FREE_CREDIT_OFFER) {
-      return { account: inserted, welcomeHere: false, match: true };
-    }
-
     if (!personId) return { account: inserted, welcomeHere: true };
 
     const claim = await claimWelcomeForPerson(tx, personId, orgId);
@@ -102,14 +87,6 @@ export async function findOrCreateAccount(
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
     return refetched;
-  }
-
-  if ("match" in created && created.match) {
-    // The $30 up-front gift, whatever path created the org. Idempotent: an org that
-    // already got it (the dashboard's creation-bonus call, the trial seed) gets
-    // nothing more — one (org, org_creation_bonus) row, ever.
-    await grantOrgCreationBonus(orgId);
-    return created.account;
   }
 
   // No Stripe customer here: creating a billing account (and every read, grant

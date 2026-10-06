@@ -15,7 +15,7 @@
  * closes the shared postgres.js connection in `afterAll`, which would take this
  * block down with `write CONNECTION_ENDED` (see CLAUDE.md).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -24,8 +24,6 @@ import {
   closeDb,
   insertTestAccount,
   insertTestPromoGrant,
-  useLegacyOfferDefaults,
-  restoreCurrentOfferDefaults,
 } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import * as runsClient from "../../src/lib/runs-client.js";
@@ -36,8 +34,8 @@ import {
   localPromos,
   WELCOME_COMPLETION_CODE,
   WELCOME_PROMO_AMOUNT_CENTS,
-  FLAT_THIRTY_FREE_CREDIT_ENTITLEMENT_CENTS,
-  FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS,
+  CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS,
+  CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS,
   GRANDFATHERED_FREE_CREDIT_ENTITLEMENT_CENTS,
   GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
 } from "../../src/db/schema.js";
@@ -109,14 +107,7 @@ describe("per-account free-credit offer (flat $30 current, $400 and $25 grandfat
     } as never);
   });
 
-  // Written against what a freshly created account got before migration 0066
-  // (a legacy account): see useLegacyOfferDefaults.
-  beforeAll(async () => {
-    await useLegacyOfferDefaults();
-  });
-
   afterAll(async () => {
-    await restoreCurrentOfferDefaults();
     await cleanTestData();
     await closeDb();
   });
@@ -132,8 +123,8 @@ describe("per-account free-credit offer (flat $30 current, $400 and $25 grandfat
       entitlementCents: 3000,
       paidTriggerCents: 3000,
     });
-    expect(FLAT_THIRTY_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(3000);
-    expect(FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(3000);
+    expect(CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS).toBe(3000);
+    expect(CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS).toBe(3000);
   });
 
   it("an account that existed before resolves to $25 / $25", async () => {

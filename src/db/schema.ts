@@ -35,68 +35,29 @@ const FRACTIONAL_SCALE = 10;
 // export any more — a global entitlement is the bug this shape exists to prevent.)
 
 /**
- * Total free credits a NEWLY created account may ever receive, every up-front gift
- * INCLUDED: "We match your first $100" (owner 2026-10-06, migration 0066).
+ * Total free credits a NEWLY created account may ever receive, welcome gift INCLUDED.
  *
- * $30 lands at org creation (the `org_creation_bonus` ledger key, see
- * MATCH_FREE_CREDIT_OFFER) and the $70 remainder lands once the org's cumulative
- * SUCCEEDED payments reach the trigger below — the welcome-completion machinery,
- * whose remainder is `entitlement − what was already gifted`.
- *
- * Earlier cohorts keep their own frozen figures: $25 (pre-0032), $400 (0032-0040),
- * $30 flat (0040-0066, FLAT_THIRTY_*).
+ * $30, and the offer is no longer a MATCH: the whole amount is granted at signup by
+ * the `welcome` promo row, unconditionally, with nothing left to earn. So for a new
+ * account this figure is also exactly what signup already gave, which is why the
+ * completion remainder is zero and `settleWelcomeCompletion` no-ops for that cohort.
+ * The two earlier cohorts ($25 grandfathered, $400) keep their own frozen figures and
+ * their own two-stage behaviour — see the column comment below.
  */
-export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 10000;
+export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 3000;
 
 /**
  * Cumulative SUCCEEDED payments that earn the completion for a NEWLY created
- * account ($100). The trigger is money actually received — NOT usage consumed
- * (owner's pick): we must not gift credits to someone whose card may still fail.
- */
-export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 10000;
-
-/**
- * The flat $30 cohort (accounts created between migrations 0040 and 0066): the
- * whole $30 was granted at signup by the `welcome` row, so its remainder is zero.
- */
-export const FLAT_THIRTY_FREE_CREDIT_ENTITLEMENT_CENTS = 3000;
-export const FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS = 3000;
-
-/**
- * Which free-credit OFFER an account was created under (migration 0066), frozen at
- * account creation like the two figures above.
+ * account. The trigger is money actually received — NOT usage consumed: the
+ * account model is threshold-postpaid, so an org can consume on credit before
+ * paying anything, and we must not gift credits to someone whose card may fail.
  *
- * - `legacy`: every account that existed before 0066. Byte-unchanged: the per-person
- *   welcome gift, the trial seed, the org-creation bonus at its live price, no
- *   top-up minimums.
- * - `match_100`: "We match your first $100". The org's ONLY up-front free credit is
- *   ONE `org_creation_bonus` row (its live price, $30), granted at creation whatever
- *   path created the org; the per-person welcome is never granted to it and never
- *   zeroes its offer; the $70 remainder lands at $100 paid; top-ups are at least
- *   MATCH_MIN_TOPUP_CENTS and the auto-reload threshold at least
- *   MATCH_MIN_RELOAD_THRESHOLD_CENTS. See lib/free-credit-offer.
+ * Equal to the entitlement, as it has been for every cohort. At $30 that equality
+ * has a second consequence worth stating: signup already grants the full $30, so the
+ * remainder is zero before the trigger is ever consulted and no new account can reach
+ * a second grant whatever it pays. The trigger still governs the two older cohorts.
  */
-export const LEGACY_FREE_CREDIT_OFFER = "legacy";
-export const MATCH_FREE_CREDIT_OFFER = "match_100";
-export type FreeCreditOfferKind =
-  | typeof LEGACY_FREE_CREDIT_OFFER
-  | typeof MATCH_FREE_CREDIT_OFFER;
-
-/**
- * The match is a LIMITED offer (owner 2026-10-06): it runs until October 31, 2026. An
- * account created at or after this instant gets neither the $30 nor the +$70 — its
- * entitlement/trigger columns default to 0 (migration 0067's date-aware DEFAULT), and
- * no org-creation bonus is granted to it. Orgs created before keep the whole match,
- * including a +$70 earned after the date. The minimums below are NOT part of the
- * promotion and keep applying.
- */
-export const MATCH_OFFER_ENDS_AT_ISO = "2026-11-01T00:00:00.000Z";
-export const MATCH_OFFER_ENDS_AT_MS = Date.parse(MATCH_OFFER_ENDS_AT_ISO);
-
-/** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
-export const MATCH_MIN_TOPUP_CENTS = 10000;
-/** Smallest "reload when the balance falls below X" a match_100 org may configure. */
-export const MATCH_MIN_RELOAD_THRESHOLD_CENTS = 500;
+export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 3000;
 
 /**
  * What every account that existed before migration 0032 carries, permanently.
@@ -143,12 +104,6 @@ export const billingAccounts = pgTable(
     // existing row and every new account is 'postpaid' until someone chooses
     // otherwise. See lib/payment-mode.
     paymentMode: text("payment_mode").notNull().default("postpaid"),
-    // The free-credit OFFER this account was created under (migration 0066):
-    // 'legacy' for every account that predates it, 'match_100' for every new one.
-    // Frozen at creation, like the two figures above. See MATCH_FREE_CREDIT_OFFER.
-    freeCreditOffer: text("free_credit_offer")
-      .notNull()
-      .default(MATCH_FREE_CREDIT_OFFER),
     // When this org last opened a SUBSCRIPTION checkout (migration 0055). Cleared
     // once the subscription is observed live (or the attempt is abandoned), so it
     // bounds which orgs the hourly settle asks stripe-service about. See
@@ -499,11 +454,8 @@ export const PRODUCT_TASK_REWARD_CODE = "product_task_completed";
  */
 export const ORG_CREATION_BONUS_CODE = "org_creation_bonus";
 
-/**
- * Seed default of the org-creation bonus (migration 0052 at $5, 0066 at $30). The live
- * figure is the code row. For a match_100 org it IS the $30 up-front part of the offer.
- */
-export const ORG_CREATION_BONUS_AMOUNT_CENTS = 3000;
+/** Seed default of the org-creation bonus (migration 0052). The live figure is the code row. */
+export const ORG_CREATION_BONUS_AMOUNT_CENTS = 500;
 
 /**
  * Ledger key for the SUBSCRIPTION trial grant (migration 0055): when an org's
