@@ -759,9 +759,9 @@ export const FreeCreditPromiseSchema = z
     amountCents: z.number().int(),
     /** Cumulative succeeded payments (net of returns) that unlock it; frozen. */
     paidTriggerCents: z.number().int(),
-    /** On our own referral promise: the org that referred us. */
+    /** Legacy (pre-0071 invitee-held promises); always null on a new claim. */
     referrerOrgId: z.string().uuid().nullable(),
-    /** On an inviter's promise: the referred org whose conversion caused it. */
+    /** On a referrer's promise: the referred org whose payments earn it. */
     referredOrgId: z.string().uuid().nullable(),
     /** ISO-8601 instant the promise was granted; null while outstanding. */
     grantedAt: z.string().nullable(),
@@ -797,7 +797,11 @@ export const OutstandingFreeCreditPromiseSchema = z
     remaining_to_unlock_cents: CentsStringSchema,
     /** Progress as an integer percentage, 0–100. */
     progress_pct: z.number().int(),
-    /** The referred org whose conversion caused this promise; null otherwise. */
+    /**
+     * On a referral promise: the referred org whose payments earn it. Its
+     * paid_so_far / remaining / progress are measured on THAT org's payments, not
+     * this org's. Null otherwise.
+     */
     referred_org_id: z.string().uuid().nullable(),
     /**
      * Display name of that referred org, so an inviter holding three pending $500s
@@ -819,10 +823,8 @@ export const OutstandingFreeCreditPromiseSchema = z
      */
     referred_org_domain: z.string().nullable().optional(),
     /**
-     * The org that referred us, on our own referral promise; null otherwise. Left
-     * bare on purpose: the invitee reached us through that org's own invite link, so
-     * they already know who it was, and they hold exactly one referral promise —
-     * nothing to disambiguate. Revealing less is the default.
+     * Legacy: set only on a pre-0071 invitee-held promise (none outstanding after
+     * 0071). A referred org holds no referral promise and is credited nothing.
      */
     referrer_org_id: z.string().uuid().nullable(),
     created_at: z.string(),
@@ -3331,14 +3333,13 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/internal/referrals/claim",
-  summary: "Record that an org was referred, and open its outstanding referral promise",
+  summary: "Record that an org was referred, and open the REFERRER's reward promise",
   description:
     "Called by client-service when a new org signs up through another org's invite " +
-    "link. Opens the INVITEE's outstanding free-credit promise (its bar stacks above " +
-    "every bar the invitee already carries) and remembers who referred them. Grants " +
-    "NOTHING: the referral offer has no up-front portion, the whole amount lands when " +
-    "the bar is crossed. The INVITER's own promise is opened later, at the moment the " +
-    "invitee EARNS theirs, never from the invitee merely signing up. Idempotent: " +
+    "link. Opens ONE promise, held by the REFERRER (promise.orgId = referrerOrgId, " +
+    "promise.referredOrgId = orgId): the referral amount ($500 today), granted to the " +
+    "referrer once the REFERRED org's cumulative real payments reach that same amount. " +
+    "The referred org gets nothing from the referral. Grants nothing now. Idempotent: " +
     "re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
   request: {
     headers: internalHeaders,
@@ -3372,8 +3373,8 @@ registry.registerPath({
   summary: "Free-credit promises this org is still waiting on",
   description:
     "Every outstanding promise, cheapest bar first: what it is worth, what unlocks " +
-    "it, how far along the org is, and — when the promise exists because someone they " +
-    "referred converted — which org that was, by name and domain " +
+    "it, how far along it is, and — for a referral reward — which referred org it is " +
+    "waiting on, by name and domain, with progress measured on THAT org's payments " +
     "(referred_org_name / referred_org_domain, resolved through brand-service and " +
     "fail-soft: absent or null, never fabricated, never blocking the amounts). An " +
     "outstanding promise is a promise, not " +

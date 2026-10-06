@@ -9,8 +9,9 @@
  *   1. the WELCOME promise — lib/welcome-completion.ts, arithmetic unchanged; the
  *      promise row is materialised first so the offer is one of the listed promises
  *      and so a later referral bar stacks above it.
- *   2. every earned REFERRAL promise — lib/free-credit-promises.ts, which also opens
- *      the inviter's promise the moment an invitee earns theirs.
+ *   2. every REFERRAL reward this org's payments have now earned for whoever
+ *      referred it — lib/free-credit-promises.ts. Those land on the REFERRER's
+ *      account, never on this org, so they are NOT in `grantedCents`.
  *
  * `paidTopupsCents` is the org's cumulative SUCCEEDED payments NET of refunds and
  * lost disputes — the figure the callers already computed. Every condition is derived
@@ -25,7 +26,7 @@
 import { Decimal } from "decimal.js";
 import {
   ensureWelcomePromise,
-  settleReferralPromises,
+  settleReferralsEarnedBy,
   type ReferralSettleResult,
 } from "./free-credit-promises.js";
 import {
@@ -34,7 +35,7 @@ import {
 } from "./welcome-completion.js";
 
 export interface FreeCreditSettleResult {
-  /** Everything granted by THIS call, welcome + referral (canonical cents string). */
+  /** Everything granted to THIS org by this call (canonical cents string). */
   grantedCents: string;
   welcome: WelcomeCompletionOutcome;
   referrals: ReferralSettleResult;
@@ -47,11 +48,9 @@ export async function settleFreeCreditPromises(
   await ensureWelcomePromise(orgId);
 
   const welcome = await settleWelcomeCompletion(orgId, paidTopupsCents);
-  const referrals = await settleReferralPromises(orgId, paidTopupsCents);
+  const referrals = await settleReferralsEarnedBy(orgId, paidTopupsCents);
 
-  const grantedCents = new Decimal(welcome.amountCents)
-    .plus(referrals.grantedCents)
-    .toFixed(10);
+  const grantedCents = new Decimal(welcome.amountCents).toFixed(10);
 
   return { grantedCents, welcome, referrals };
 }
