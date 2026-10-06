@@ -1,7 +1,7 @@
 /**
  * features-service's period recap for one org (`GET /internal/orgs/:orgId/period-recap`)
- * — the figures the "all your outbound went out" email states
- * (lib/subscription-notifications). features-service owns every one of them (they
+ * — the figures the monthly update email states
+ * (lib/subscription-monthly-update). features-service owns every one of them (they
  * equal what the dashboard shows); billing renders them and computes none.
  *
  * Fail-soft (the documented exception, like every customer email here): a recap
@@ -120,7 +120,7 @@ export async function fetchSubscriptionRecap(
   const url = process.env.FEATURES_SERVICE_URL;
   const apiKey = process.env.FEATURES_SERVICE_API_KEY;
   if (!url || !apiKey) {
-    console.warn("[billing-service] FEATURES_SERVICE_URL/API_KEY unset — the credits-used email states no figures");
+    console.warn("[billing-service] FEATURES_SERVICE_URL/API_KEY unset — the monthly update states no figures");
     return null;
   }
   const path = `/internal/orgs/${encodeURIComponent(orgId)}/period-recap?from=${day(from)}&to=${day(to)}`;

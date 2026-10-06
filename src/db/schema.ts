@@ -1053,6 +1053,8 @@ export const subscriptions = pgTable(
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
     endedAt: timestamp("ended_at", { withTimezone: true }),
+    /** DEAD: marker of the deleted "credits used" email (owner 2026-10-06). Nothing
+     * reads or writes it; kept so no migration races a rolling deploy. */
     creditsUsedNotifiedPeriodStart: timestamp("credits_used_notified_period_start", {
       withTimezone: true,
     }),
