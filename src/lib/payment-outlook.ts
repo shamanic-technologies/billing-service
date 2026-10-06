@@ -50,6 +50,7 @@
 import { Decimal } from "decimal.js";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { configuredReloadFor, type ConfiguredReload } from "./free-credit-offer.js";
 import { billingAccounts, campaignReloadSweepAttempts } from "../db/schema.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
@@ -331,6 +332,8 @@ export interface PaymentOutlookInputs {
   requiredCents: string;
   /** Null when the org has no credit line (nothing can be reloaded). */
   tierAmountCents: number | null;
+  /** A match_100 org's own reload configuration (lib/free-credit-offer); absent = ladder. */
+  configuredReload?: ConfiguredReload | null;
   /** ≥1 chargeable payment method on file right now (card or link). */
   hasCardPm: boolean;
   /** False when the card's issuing country cannot be charged off-session. */
@@ -421,6 +424,8 @@ async function decideOutlook(
       paymentMode: billingAccounts.paymentMode,
       createdAt: billingAccounts.createdAt,
       topupAmountCents: billingAccounts.topupAmountCents,
+      topupThresholdCents: billingAccounts.topupThresholdCents,
+      freeCreditOffer: billingAccounts.freeCreditOffer,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
@@ -444,6 +449,7 @@ async function decideOutlook(
     paidTopupsCents: snapshot.paidTopupsCents,
     requiredCents: block.requiredCents,
     tierAmountCents: block.tier ? block.tier.amountCents : null,
+    configuredReload: configuredReloadFor(account),
     hasCardPm: snapshot.hasCardPm,
     autoReloadSupported: snapshot.autoReloadSupported,
     autoTopupEnabled: account.topupAmountCents != null,

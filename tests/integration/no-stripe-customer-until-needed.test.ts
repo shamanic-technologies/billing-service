@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
-import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, useLegacyOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import * as ssClient from "../../src/lib/stripe-service-client.js";
 import type { StripeCustomer } from "../../src/lib/stripe-service-client.js";
@@ -57,7 +57,14 @@ describe("a new org has no Stripe customer until a Stripe flow needs one", () =>
     });
   });
 
+  // Written against what a freshly created account got before migration 0066
+  // (a legacy account): see useLegacyOfferDefaults.
+  beforeAll(async () => {
+    await useLegacyOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await cleanTestData();
     await closeDb();
   });

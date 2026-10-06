@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
-import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { cleanTestData, closeDb, useLegacyOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import {
@@ -56,7 +56,14 @@ describe("GET/PATCH /internal/promo-codes/:code", () => {
       .where(eq(localPromoCodes.code, WELCOME_PROMO_CODE));
   });
 
+  // Written against what a freshly created account got before migration 0066
+  // (a legacy account): see useLegacyOfferDefaults.
+  beforeAll(async () => {
+    await useLegacyOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await db
       .update(localPromoCodes)
       .set({ amountCents: 500 })

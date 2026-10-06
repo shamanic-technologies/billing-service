@@ -82,6 +82,29 @@ export const BillingAccountSchema = z
      * already net. Billing never re-applies it.
      */
     usage_discount_pct: z.number().int().nullable(),
+    /**
+     * Where the org stands on its free-credit offer, ready-made for the payment wall
+     * ("$30 is already yours, $70 more once you've paid $100"). See lib/free-credit-offer.
+     */
+    free_credit_offer: z.enum(["legacy", "match_100"]).openapi({
+      description:
+        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' ($30 at creation, the rest once $100 is paid; every org created since migration 0066). `legacy` = every older org, unchanged.",
+    }),
+    free_credit_entitlement_cents: z.number().int().openapi({
+      description: "Total free credit the offer gives, every gift included (10000 for match_100).",
+    }),
+    free_credit_received_cents: CentsStringSchema.openapi({
+      description: "Free credit already received that counts toward the offer (3000 right after a match_100 org is created).",
+    }),
+    free_credit_pending_cents: CentsStringSchema.openapi({
+      description: "Free credit still to come (7000 for a new match_100 org; 0 once granted or when nothing more can come).",
+    }),
+    free_credit_paid_trigger_cents: z.number().int().openapi({
+      description: "Cumulative succeeded payments (net of refunds) that unlock the pending credit (10000 for match_100).",
+    }),
+    free_credit_remaining_to_pay_cents: CentsStringSchema.openapi({
+      description: "What the org still has to pay to unlock the pending credit; 0 when nothing is pending.",
+    }),
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
     has_payment_method: z.boolean(),
@@ -1754,7 +1777,8 @@ registry.registerPath({
       content: { "application/json": { schema: BillingAccountSchema } },
     },
     400: {
-      description: "Payment method required or invalid request",
+      description:
+        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -1928,6 +1952,7 @@ registry.registerPath({
     "Credit + first-load match land via the existing checkout.session.completed webhook in all modes. " +
     "WELCOME GIFT (onboarding): send the FULL daily budget as topup_amount_cents with apply_welcome_gift=true and billing takes the welcome gift the org holds off it as a standard discount line (e.g. $68 budget, -$30 gift, $38 due). The credit that lands is what is actually paid; the gift was granted at signup, so spendable = budget. Without apply_welcome_gift the charge is exactly topup_amount_cents and carries no discount. 409 `welcome_discount_not_first_payment` when the org has already paid; 409 `welcome_gift_covers_budget` when budget <= gift (use mode='setup'); 502 `welcome_discount_not_applied` when the acquirer did not charge exactly budget - gift. " +
     "MATCH-cohort orgs whose free credit is not yet fully granted see a notice that the rest is coming. " +
+    "A match_100 org (free_credit_offer) is refused below a $100 top-up: 400 `topup_below_minimum` (+ `minimum_cents`); its $30 is credit, never a coupon: apply_welcome_gift=true is 409 `welcome_discount_not_offered`. " +
     "User-entered promotion codes are NOT offered (allow_promotion_codes is never set).",
   request: {
     headers: protectedHeaders,
