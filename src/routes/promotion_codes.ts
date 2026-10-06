@@ -12,6 +12,7 @@ import {
   PromoExpiredError,
   PromoExhaustedError,
   PromoAlreadyRedeemedError,
+  WelcomeNotOfferedError,
 } from "../lib/promos.js";
 
 const router = Router();
@@ -49,6 +50,10 @@ router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) =>
     }
     if (err instanceof PromoExhaustedError) {
       res.status(400).json({ error: "Promo code has reached its redemption limit" });
+      return;
+    }
+    if (err instanceof WelcomeNotOfferedError) {
+      res.status(409).json({ error: err.message, code: "welcome_not_offered" });
       return;
     }
     if (err instanceof PromoAlreadyRedeemedError) {

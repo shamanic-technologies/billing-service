@@ -329,6 +329,8 @@ export async function insertTestAccount(data: {
   freeCreditEntitlementCents?: number;
   freeCreditPaidTriggerCents?: number;
   paymentMode?: "prepaid" | "postpaid" | "subscription";
+  /** Defaults to 'legacy' (an account that predates migration 0066), like the offer figures above. */
+  freeCreditOffer?: "legacy" | "match_100";
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -345,6 +347,7 @@ export async function insertTestAccount(data: {
         GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
       ...(data.paymentMode ? { paymentMode: data.paymentMode } : {}),
+      freeCreditOffer: data.freeCreditOffer ?? "legacy",
     })
     .returning();
   return account;
@@ -439,4 +442,24 @@ export async function insertTestUsageDiscount(data: {
 
 export async function closeDb() {
   await sql.end();
+}
+
+/**
+ * Point the billing_accounts column DEFAULTS back at the pre-0066 offer (a 'legacy'
+ * account on the flat $30/$30 figures), so a suite written against what a FRESHLY
+ * created account used to get keeps exercising that code path. Since migration 0066
+ * every new account is 'match_100'; the legacy branches still serve every account
+ * that existed before it. Call in `beforeAll`, and `restoreCurrentOfferDefaults` in
+ * `afterAll` (files run one at a time, so this cannot leak into another suite).
+ */
+export async function useLegacyOfferDefaults(): Promise<void> {
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'legacy'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 3000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 3000`;
+}
+
+export async function restoreCurrentOfferDefaults(): Promise<void> {
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'match_100'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 10000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 10000`;
 }

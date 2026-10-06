@@ -19,6 +19,13 @@ import {
 const CHECKOUT_PRODUCT_NAME = "Distribute credit top-up";
 const CHECKOUT_CURRENCY = "usd";
 
+import {
+  assertTopupMinimum,
+  getOrgFreeCreditOffer,
+  TopupBelowMinimumError,
+} from "../lib/free-credit-offer.js";
+import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
+
 const router = Router();
 
 // POST /v1/checkout-sessions — create Stripe Checkout session via stripe-service.
@@ -58,6 +65,29 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { mode: isSetup ? "setup" : "payment", ui_mode: isEmbedded ? "embedded" : "hosted", topup_amount_cents } }, req.headers);
 
     await findOrCreateAccount(orgId, userId);
+
+    // "We match your first $100" (lib/free-credit-offer): a top-up is at least $100,
+    // and the $30 up-front gift is credit, never a coupon off the charge. Legacy
+    // orgs: unchanged.
+    if (!isSetup) {
+      const offer = await getOrgFreeCreditOffer(orgId);
+      try {
+        assertTopupMinimum(offer, topup_amount_cents!);
+      } catch (err) {
+        if (err instanceof TopupBelowMinimumError) {
+          res.status(400).json({ error: err.message, code: err.code, minimum_cents: err.minimumCents });
+          return;
+        }
+        throw err;
+      }
+      if (applyWelcomeGift && offer === MATCH_FREE_CREDIT_OFFER) {
+        res.status(409).json({
+          error: "This organization's free credit is not a checkout discount",
+          code: "welcome_discount_not_offered",
+        });
+        return;
+      }
+    }
 
     const identity = {
       "x-org-id": orgId,

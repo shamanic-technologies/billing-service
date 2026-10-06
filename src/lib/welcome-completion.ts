@@ -88,6 +88,7 @@ import {
   billingAccounts,
   localPromoCodes,
   localPromos,
+  MATCH_FREE_CREDIT_OFFER,
   WELCOME_COMPLETION_CODE,
   WELCOME_COMPLETION_LAUNCH_AT_MS,
   WELCOME_COMPLETION_LAUNCH_AT_UNIX,
@@ -129,8 +130,11 @@ function dollars(cents: number): string {
  * remainder, and therefore never reaches this sentence.
  * (No em-dash: customer-facing copy.)
  */
-export function welcomeCompletionCheckoutNotice(offer: FreeCreditOffer): string {
-  return `You get ${dollars(offer.entitlementCents)} in free credits. $5 now, the rest once your payments reach ${dollars(offer.paidTriggerCents)}.`;
+export function welcomeCompletionCheckoutNotice(
+  offer: FreeCreditOffer,
+  upFrontCents: number = 500
+): string {
+  return `You get ${dollars(offer.entitlementCents)} in free credits. ${dollars(upFrontCents)} now, the rest once your payments reach ${dollars(offer.paidTriggerCents)}.`;
 }
 
 
@@ -204,6 +208,7 @@ export async function settleWelcomeCompletion(
     .select({
       eligible: billingAccounts.welcomeCompletionEligible,
       createdAt: billingAccounts.createdAt,
+      offer: billingAccounts.freeCreditOffer,
       entitlementCents: billingAccounts.freeCreditEntitlementCents,
       paidTriggerCents: billingAccounts.freeCreditPaidTriggerCents,
     })
@@ -265,9 +270,12 @@ export async function settleWelcomeCompletion(
       userId: SYSTEM_USER_ID,
       amountCents: remainingCents,
       promoCodeId: code.id,
-      description: `Welcome credits (2/2): $${new Decimal(remainingCents)
-        .dividedBy(100)
-        .toFixed(2)}`,
+      description:
+        account.offer === MATCH_FREE_CREDIT_OFFER
+          ? `First $100 match: $${new Decimal(remainingCents).dividedBy(100).toFixed(2)}`
+          : `Welcome credits (2/2): $${new Decimal(remainingCents)
+              .dividedBy(100)
+              .toFixed(2)}`,
     })
     // (org, promo_code) uniqueness is PARTIAL (WHERE idempotency_key IS NULL,
     // migration 0025) — the conflict target must carry the predicate.
@@ -328,6 +336,7 @@ export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string
       eligible: billingAccounts.welcomeCompletionEligible,
       entitlementCents: billingAccounts.freeCreditEntitlementCents,
       paidTriggerCents: billingAccounts.freeCreditPaidTriggerCents,
+      offer: billingAccounts.freeCreditOffer,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
@@ -345,7 +354,11 @@ export async function decideCheckoutWelcomeNotice(orgId: string): Promise<string
   const remainingCents = subCents(toCents(offer.entitlementCents), giftedCents);
   if (cmpCents(remainingCents, ZERO) <= 0) return null;
 
-  return welcomeCompletionCheckoutNotice(offer);
+  // A match_100 org states what it actually received up front ($30); the MATCH
+  // cohorts keep the literal $5 sentence byte for byte.
+  return account.offer === MATCH_FREE_CREDIT_OFFER
+    ? welcomeCompletionCheckoutNotice(offer, Math.round(Number(giftedCents)))
+    : welcomeCompletionCheckoutNotice(offer);
 }
 
 /**
