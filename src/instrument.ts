@@ -95,10 +95,12 @@ const TEMPLATES = [
     // {{summaryHtml}} arrives already escaped.
     name: BRAND_DAILY_BUDGET_CHANGED_EVENT,
     subject: "{{subject}}",
-    // {{action}} is "changed a daily budget" for a budget write and "paused a
-    // mission" / "restarted a mission" for a status change: ONE template for
-    // both, so the two emails cannot drift apart.
-    htmlBody: `<p>{{email}} {{action}}.</p>
+    // {{action}} names what the person did WITH the mission ("paused sales cold
+    // email outreach (offer LegistAI)", "raised ... from $10/day to $13/day"):
+    // ONE template for a budget write and a status change, so the two cannot
+    // drift. It carries customer-typed names, so the HTML part reads the
+    // escaped {{actionHtml}} (the email service interpolates without escaping).
+    htmlBody: `<p>{{email}} {{actionHtml}}.</p>
 {{summaryHtml}}`,
     textBody: "{{email}} {{action}}.\n\n{{summaryText}}",
   },

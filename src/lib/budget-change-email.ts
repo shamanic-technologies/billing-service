@@ -9,9 +9,9 @@
  * REACTIVE cap that only spends when a positive reply triggers it) was folded in.
  *
  * THREE RULES THIS MODULE HOLDS:
- *  - One line per mission this write changed, named by its channel, outcome
- *    and offer — never a brand-wide sum standing in for them. (Crew names were
- *    retired 2026-10-04; they now name sales path combinations.)
+ *  - Every mission this write changed is named, by channel (and outcome when
+ *    two share a channel) and offer, with its own before and after; never a
+ *    brand-wide sum standing in for them. (Crew names were retired 2026-10-04.)
  *  - The daily total counts ONLY running entry-leg missions (they spend every
  *    day). A reactive leg's figure is a CAP and is listed on its own, never
  *    added. A mission we cannot classify is listed apart and never added either.
@@ -20,10 +20,24 @@
  *
  * A PAUSE OR RESTART IS THE SAME EMAIL. Pausing a mission (campaign-service owns
  * the status) moves the brand's real daily spend exactly as lowering its ceiling
- * does, so staff get the same composition: the mission and its move under "What
- * changed", then the daily total, reactive caps and paused missions as they
- * stand AFTER the move. A status change carries no amount change, so its line
- * states the ceiling the mission keeps.
+ * does, so staff get the same composition, with every figure read AFTER the move.
+ * A paused mission's amount is stated as "kept" only when billing still holds
+ * it: a subscriber's plan reallocation DELETES an OFF campaign's row in the same
+ * second (Legistai, 2026-10-06: "$3/day kept" for a row already gone), so the
+ * route reallocates FIRST and composes after (routes/brand_budgets.ts).
+ *
+ * SHAPE (owner 2026-10-06, "wrong AND too messy"): the template's first line is
+ * the action with the mission in it ("<actor> paused sales cold email outreach
+ * (offer LegistAI)."), then one plain line per fact: "Spending now: $0/day.",
+ * "Still on: AI meeting booking, up to $0.30/day, only when someone replies
+ * they're interested.", a paused-and-kept line when any. EACH MISSION APPEARS
+ * ONCE: a mission named in the action line is left out of the lines below it.
+ * No section headings, no arrows, no em dashes. Sub-dollar amounts keep their
+ * cents ($0.30); a non-zero amount never prints as $0.
+ *
+ * Channel names are the catalogue's `name` lowercased (acronyms kept: "AI
+ * meeting booking"). features-service publishes no short channel name yet, so
+ * "sales cold email outreach" is as short as we can say without hard-coding.
  */
 
 import { Decimal } from "decimal.js";
@@ -76,8 +90,10 @@ export interface BudgetChangeEmailInput {
 }
 
 export interface BudgetChangeEmail {
-  /** What the person did, for the template's first line ("{{email}} {{action}}."). */
+  /** What the person did, for the template's first line ("{{email}} {{action}}."). Names the mission. */
   action: string;
+  /** The same, HTML-escaped: it carries customer-typed names (offer, brand). */
+  actionHtml: string;
   subject: string;
   summaryHtml: string;
   summaryText: string;
@@ -86,11 +102,20 @@ export interface BudgetChangeEmail {
 /** daily = entry leg; reactive = starts from a step (a cap); brand = the brand-wide scalar; unknown = unclassifiable. */
 export type MissionKind = "daily" | "reactive" | "brand" | "unknown";
 
-interface Described {
-  /** Short mission name for the subject: `channel · outcome`. */
-  name: string;
-  label: string;
+interface Mission {
+  key: string;
+  grain: MissionGrain;
   kind: MissionKind;
+  /** `sales cold email outreach`, plus the outcome when the channel+offer is ambiguous here. */
+  channel: string;
+  /** Distinguishing outcome (`positive reply`), only when two missions share channel and offer. */
+  outcome: string | null;
+  /** `offer LegistAI` / `offer e59646e4, name unavailable` / null (no offer). */
+  offer: string | null;
+  /** Reactive only: `only when someone replies they're interested`. */
+  trigger: string | null;
+  /** The leg could not be named from the catalogue: `leg start_to_x, not in the channel catalogue`. */
+  legNote: string | null;
 }
 
 function escapeHtml(s: string): string {
@@ -108,285 +133,272 @@ function key(g: MissionGrain): string {
   );
 }
 
-function wholeDollars(cents: Decimal): string {
-  return cents.dividedBy(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0);
+/**
+ * `$7`, `$0.30`, `$3.25`. Whole dollars print without cents, anything else with
+ * two decimals, and a non-zero amount that rounds to nothing says so: never
+ * `$0` for money that exists (Legistai's 30-cent cap printed "$0 cap").
+ */
+export function formatMoney(cents: string | Decimal): string {
+  const dollars = new Decimal(cents).dividedBy(100);
+  if (dollars.isZero()) return "$0";
+  const rounded = dollars.abs().toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const sign = dollars.isNegative() ? "-" : "";
+  if (rounded.isZero()) return `${sign}under $0.01`;
+  return `${sign}$${rounded.isInteger() ? rounded.toFixed(0) : rounded.toFixed(2)}`;
 }
 
-/** `$7/day`, `$3 cap`, or a plain `$3` when we cannot say which. */
-export function formatAmount(cents: string | Decimal, kind: MissionKind): string {
-  const d = new Decimal(cents);
-  const dollars = `$${wholeDollars(d)}`;
-  if (kind === "reactive") return `${dollars} cap`;
-  if (kind === "unknown") return dollars;
-  return `${dollars}/day`;
+export function perDay(cents: string | Decimal): string {
+  return `${formatMoney(cents)}/day`;
 }
 
-export function describeMission(
-  g: MissionGrain,
+/** `Sales Cold Email Outreach` → `sales cold email outreach`; acronyms stay (`AI meeting booking`). */
+export function shortChannelName(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.length > 1 && w === w.toUpperCase() && /[A-Z]/.test(w) ? w : w.toLowerCase()))
+    .join(" ");
+}
+
+function lowerFirst(s: string): string {
+  return s.length > 1 && s[1] === s[1].toUpperCase() && /[A-Z]/.test(s[1]) ? s : s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+function offerPhrase(offerId: string | null, offerNames: Map<string, string> | null): string | null {
+  if (offerId === null) return null;
+  if (offerNames === null) return `offer ${offerId.slice(0, 8)}, name unavailable`;
+  const name = offerNames.get(offerId.toLowerCase());
+  return name ? `offer ${name}` : `unknown offer ${offerId.slice(0, 8)}`;
+}
+
+/** Name every mission this email mentions, disambiguating only where needed. */
+function describeAll(
+  grains: MissionGrain[],
   catalogue: ChannelCatalogue | null,
   offerNames: Map<string, string> | null
-): Described {
-  if (g.featureSlug === null) {
-    return {
-      name: "Brand-wide budget",
-      label: "Brand-wide budget (no mission)",
-      kind: "brand",
-    };
-  }
-  const channel = catalogue?.get(g.featureSlug) ?? null;
-  const leg = g.legKey && channel ? (channel.legs.get(g.legKey) ?? null) : null;
-  const channelName = channel?.name ?? g.featureSlug;
-
-  let kind: MissionKind = "unknown";
-  if (leg) kind = leg.fromLabel === null ? "daily" : "reactive";
-
-  const outcome = leg
-    ? leg.fromLabel
-      ? `${leg.fromLabel} → ${leg.toLabel ?? "?"}`
-      : (leg.toLabel ?? "?")
-    : g.legKey
-      ? catalogue === null
-        ? `leg ${g.legKey} (channel catalogue unavailable)`
-        : `leg ${g.legKey} (not in the channel catalogue)`
-      : "no leg stated";
-
-  let offer: string;
-  if (g.offerId === null) offer = "no offer";
-  else if (offerNames === null) offer = `offer name unavailable (${g.offerId.slice(0, 8)})`;
-  else {
-    const name = offerNames.get(g.offerId.toLowerCase());
-    offer = name ? `offer "${name}"` : `unknown offer (${g.offerId.slice(0, 8)})`;
-  }
-
-  const name = `${channelName} · ${outcome}`;
-  return { name, label: `${name} · ${offer}`, kind };
-}
-
-/** `$10/day → $7/day (−$3, −30%)`. */
-export function formatChange(change: MissionChange, kind: MissionKind): string {
-  const before = new Decimal(change.previousDailyBudgetCents);
-  const after = new Decimal(change.newDailyBudgetCents);
-  const from = before.isZero() ? "$0" : formatAmount(before, kind);
-  const to = after.isZero() ? "paused ($0)" : formatAmount(after, kind);
-  const delta = after.minus(before);
-  const sign = delta.isNegative() ? "−" : "+";
-  const deltaText = `${sign}$${wholeDollars(delta.abs())}`;
-  const pct = before.isZero()
-    ? "new"
-    : `${sign}${delta.abs().dividedBy(before).times(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toFixed(0)}%`;
-  return `${from} → ${to} (${deltaText}, ${pct})`;
-}
-
-type Direction = "raised" | "lowered" | "paused" | "reallocated";
-
-function directionOf(changes: MissionChange[]): Direction {
-  let up = 0;
-  let down = 0;
-  let zeroed = 0;
-  for (const c of changes) {
-    const cmp = new Decimal(c.newDailyBudgetCents).comparedTo(c.previousDailyBudgetCents);
-    if (cmp > 0) up++;
-    else if (cmp < 0) {
-      down++;
-      if (new Decimal(c.newDailyBudgetCents).isZero()) zeroed++;
+): Map<string, Mission> {
+  const out = new Map<string, Mission>();
+  for (const g of grains) {
+    const k = key(g);
+    if (out.has(k)) continue;
+    if (g.featureSlug === null) {
+      out.set(k, { key: k, grain: g, kind: "brand", channel: "the brand-wide budget", outcome: null, offer: null, trigger: null, legNote: null });
+      continue;
     }
+    const channel = catalogue?.get(g.featureSlug) ?? null;
+    const leg = g.legKey && channel ? (channel.legs.get(g.legKey) ?? null) : null;
+    const name = channel?.name ? shortChannelName(channel.name) : g.featureSlug;
+    const legNote = leg
+      ? null
+      : g.legKey
+        ? catalogue === null
+          ? `leg ${g.legKey}`
+          : `leg ${g.legKey}, not in the channel catalogue`
+        : "no leg stated";
+    const kind: MissionKind = leg ? (leg.fromLabel === null ? "daily" : "reactive") : "unknown";
+    const trigger =
+      kind === "reactive" && leg
+        ? leg.fromShortDescription
+          ? `only when someone ${lowerFirst(leg.fromShortDescription)}`
+          : `only after a ${(leg.fromLabel ?? "trigger").toLowerCase()}`
+        : null;
+    out.set(k, {
+      key: k,
+      grain: g,
+      kind,
+      channel: name,
+      outcome: leg?.toLabel ? leg.toLabel.toLowerCase() : null,
+      offer: offerPhrase(g.offerId, offerNames),
+      trigger,
+      legNote,
+    });
   }
-  if (up > 0 && down > 0) return "reallocated";
-  if (up > 0) return "raised";
-  if (down > 0 && zeroed === down) return "paused";
-  return "lowered";
+  // Two missions on one channel and offer (two entry legs): name the outcome.
+  const byChannelOffer = new Map<string, Mission[]>();
+  for (const m of out.values()) {
+    const k = `${m.grain.featureSlug}\u0000${(m.grain.offerId ?? "").toLowerCase()}`;
+    byChannelOffer.set(k, [...(byChannelOffer.get(k) ?? []), m]);
+  }
+  for (const group of byChannelOffer.values()) {
+    if (group.length < 2) for (const m of group) m.outcome = null;
+  }
+  return out;
 }
 
-function joinNames(names: string[]): string {
-  const unique = [...new Set(names)];
-  if (unique.length <= 1) return unique[0] ?? "a mission";
-  return `${unique.slice(0, -1).join(", ")} and ${unique[unique.length - 1]}`;
+/** `sales cold email outreach (offer LegistAI)`; the offer only when asked for. */
+function nameOf(m: Mission, withOffer: boolean): string {
+  const quals = [m.outcome, m.legNote, withOffer ? m.offer : null].filter((q): q is string => !!q);
+  return quals.length ? `${m.channel} (${quals.join(", ")})` : m.channel;
 }
 
-/** The ceiling a mission holds after the write, as `$7/day` / `$3 cap`; null when none is stated. */
-function ceilingOf(
-  g: MissionGrain,
-  ceilings: MissionCeiling[],
-  kind: MissionKind
-): string | null {
-  const row = ceilings.find((c) => key(c) === key(g));
-  if (!row || new Decimal(row.dailyBudgetCents).isZero()) return null;
-  return formatAmount(row.dailyBudgetCents, kind);
+/** `$7/day`, or `up to $0.30/day` for a reactive cap, or a plain `$3` when we cannot say which. */
+function amountOf(cents: string | Decimal, kind: MissionKind): string {
+  if (kind === "reactive") return `up to ${perDay(cents)}`;
+  if (kind === "unknown") return formatMoney(cents);
+  return perDay(cents);
 }
 
-/** `paused ($7/day kept)` / `restarted ($7/day)` / `paused (no budget set)`. */
-export function formatStatusMove(move: MissionStatusMove, amount: string | null): string {
-  if (move === "paused") return amount ? `paused (${amount} kept)` : "paused (no budget set)";
-  return amount ? `restarted (${amount})` : "restarted (no budget set, so it cannot spend)";
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetChangeEmail {
   const { catalogue, offerNames, spendable } = input;
   const brand = input.brandName ?? "A brand";
-  const describe = (g: MissionGrain) => describeMission(g, catalogue, offerNames);
-  const statusDescribed = (input.statusChanges ?? []).map((s) => {
-    const d = describe(s);
-    return { s, d, amount: ceilingOf(s, input.ceilings, d.kind) };
-  });
+  const statusChanges = input.statusChanges ?? [];
+  const ceilings = input.ceilings.filter((c) => !new Decimal(c.dailyBudgetCents).isZero());
+  const missions = describeAll(
+    [...input.changes, ...statusChanges, ...ceilings],
+    catalogue,
+    offerNames
+  );
+  const mission = (g: MissionGrain) => missions.get(key(g))!;
+  const ceilingOf = (g: MissionGrain) => ceilings.find((c) => key(c) === key(g)) ?? null;
+  // The lines under the action name the offer only when the brand has several.
+  const offers = new Set([...missions.values()].map((m) => (m.grain.offerId ?? "").toLowerCase()));
+  const offerInState = offers.size > 1;
 
-  // --- subject: direction + brand + mission ----------------------------------
-  const described = input.changes.map((c) => ({ change: c, d: describe(c) }));
-  const names = joinNames(described.map((x) => x.d.name));
-  let subject: string;
-  let action = "changed a daily budget";
-  if (input.changes.length === 0 && statusDescribed.length > 0) {
-    const moves = new Set(statusDescribed.map((x) => x.s.move));
-    const move = moves.size === 1 ? [...moves][0] : null;
-    action = move === "paused" ? "paused a mission" : move === "restarted" ? "restarted a mission" : "paused and restarted missions";
-    const who = joinNames(statusDescribed.map((x) => x.d.name));
-    if (statusDescribed.length === 1) {
-      const { s, amount } = statusDescribed[0];
-      subject = `${brand} ${formatStatusMove(s.move, amount).replace(/^(\w+)/, `$1 ${who}`)}`;
+  // --- the action (template line 1) and the subject ---------------------------
+  const actionParts: string[] = [];
+  const subjectParts: Array<{ name: string; verb: string; tail: string }> = [];
+  for (const c of input.changes) {
+    const m = mission(c);
+    const before = new Decimal(c.previousDailyBudgetCents);
+    const after = new Decimal(c.newDailyBudgetCents);
+    const to = amountOf(after, m.kind);
+    if (input.firstBudget || before.isZero()) {
+      actionParts.push(`set ${nameOf(m, true)} to ${to}`);
+      subjectParts.push({ name: nameOf(m, false), verb: "set", tail: ` to ${to}` });
     } else {
-      subject = `${brand} ${move ?? "paused and restarted"} ${who}`;
-    }
-  } else if (input.firstBudget) {
-    const set = described
-      .filter((x) => !new Decimal(x.change.newDailyBudgetCents).isZero())
-      .map((x) => `${x.d.name} ${formatAmount(x.change.newDailyBudgetCents, x.d.kind)}`);
-    subject = `${brand} set a first budget: ${set.join(", ") || names}`;
-  } else {
-    const direction = directionOf(input.changes);
-    if (described.length === 1) {
-      const { change, d } = described[0];
-      subject =
-        direction === "paused"
-          ? `${brand} paused ${d.name} ($0)`
-          : `${brand} ${direction} ${d.name}: ${formatChange(change, d.kind).replace(/ \(.*\)$/, "")}`;
-    } else {
-      subject =
-        direction === "paused"
-          ? `${brand} paused ${names} ($0)`
-          : `${brand} ${direction} ${names}`;
+      const verb = after.greaterThan(before) ? "raised" : "lowered";
+      actionParts.push(`${verb} ${nameOf(m, true)} from ${amountOf(before, m.kind)} to ${to}`);
+      subjectParts.push({ name: nameOf(m, false), verb, tail: ` to ${to}` });
     }
   }
+  for (const s of statusChanges) {
+    const m = mission(s);
+    const row = ceilingOf(s);
+    if (s.move === "paused") {
+      actionParts.push(
+        `paused ${nameOf(m, true)}${row ? `, ${amountOf(row.dailyBudgetCents, m.kind)} budget kept` : ""}`
+      );
+    } else {
+      actionParts.push(
+        `restarted ${nameOf(m, true)}${
+          row
+            ? ` at ${amountOf(row.dailyBudgetCents, m.kind)}`
+            : input.ceilingsUnavailable
+              ? ""
+              : ", with no budget set so it cannot spend"
+        }`
+      );
+    }
+    subjectParts.push({ name: nameOf(m, false), verb: s.move, tail: "" });
+  }
+  const action = actionParts.join("; ") || "changed a daily budget";
 
-  // --- what changed ------------------------------------------------------------
-  const changedLines = [
-    ...described.map(({ change, d }) => `${d.label}: ${formatChange(change, d.kind)}`),
-    ...statusDescribed.map(({ s, d, amount }) => `${d.label}: ${formatStatusMove(s.move, amount)}`),
-  ];
+  let subject: string;
+  if (subjectParts.length === 1) {
+    const [p] = subjectParts;
+    subject = input.firstBudget
+      ? `${brand}: first budget, ${p.name}${p.tail}`
+      : `${brand}: ${p.name} ${p.verb}${p.tail}`;
+  } else {
+    const verbs = new Set(subjectParts.map((p) => p.verb));
+    const verb = input.firstBudget ? "first budgets set" : verbs.size === 1 ? [...verbs][0] : "changed";
+    subject = `${brand}: ${joinList([...new Set(subjectParts.map((p) => p.name))])} ${verb}`;
+  }
 
-  // --- what the brand now runs -------------------------------------------------
+  // --- the state after the move, each mission once -----------------------------
+  const moved = new Set([...input.changes, ...statusChanges].map(key));
   const runningOf = (g: MissionGrain): boolean | null => {
     if (!spendable) return null;
     const row = spendable.rows.find((r) => key(r) === key(g));
     return row ? row.running : false;
   };
 
-  const daily: string[] = [];
-  const reactive: string[] = [];
+  let dailyTotal = new Decimal(0);
+  let movedCountsDaily = false;
+  const otherDaily: string[] = [];
+  const stillOn: string[] = [];
   const paused: string[] = [];
   const unclassified: string[] = [];
+  let movedUnclassified = false;
   const statusUnknown: string[] = [];
-  let dailyTotal = new Decimal(0);
-  let runningUnclassified = 0;
 
-  for (const ceiling of input.ceilings) {
+  for (const ceiling of ceilings) {
+    const m = mission(ceiling);
     const amount = new Decimal(ceiling.dailyBudgetCents);
-    if (amount.isZero()) continue;
-    const d = describe(ceiling);
-    const line = `${d.label}: ${formatAmount(amount, d.kind)}`;
+    const isMoved = moved.has(m.key);
     const running = runningOf(ceiling);
     if (running === null) {
-      statusUnknown.push(line);
+      if (!isMoved) statusUnknown.push(`${nameOf(m, offerInState)} ${amountOf(amount, m.kind)}`);
       continue;
     }
     if (!running) {
-      paused.push(`${line} kept`);
+      if (!isMoved) paused.push(`${nameOf(m, offerInState)} ${amountOf(amount, m.kind)}`);
       continue;
     }
-    if (d.kind === "daily" || d.kind === "brand") {
-      daily.push(line);
+    if (m.kind === "daily" || m.kind === "brand") {
       dailyTotal = dailyTotal.plus(amount);
-    } else if (d.kind === "reactive") {
-      reactive.push(line);
+      if (isMoved) movedCountsDaily = true;
+      else otherDaily.push(`${nameOf(m, offerInState)} at ${perDay(amount)}`);
+    } else if (m.kind === "reactive") {
+      if (!isMoved) {
+        stillOn.push(`Still on: ${nameOf(m, offerInState)}, ${amountOf(amount, m.kind)}, ${m.trigger}.`);
+      }
+    } else if (!isMoved) {
+      unclassified.push(`${nameOf(m, offerInState)} ${amountOf(amount, m.kind)}`);
     } else {
-      unclassified.push(line);
-      runningUnclassified++;
+      movedUnclassified = true;
     }
   }
 
-  let dailyHeadline: string;
-  const notes: string[] = [];
+  const lines: string[] = [];
   if (!spendable) {
-    dailyHeadline = "Daily spend now: unavailable";
-    notes.push(
-      "Campaign statuses could not be read from campaign-service, so we cannot say which missions are running. Every funded mission is listed below with its amount, and no total is stated."
-    );
+    lines.push("Spending now: unknown, campaign statuses could not be read.");
+    if (statusUnknown.length > 0) lines.push(`Budgets set, status unknown: ${statusUnknown.join("; ")}.`);
   } else {
-    dailyHeadline = `Daily spend now: ${formatAmount(dailyTotal, "daily")}`;
-    if (daily.length === 0) dailyHeadline += " (no daily mission is running)";
-    if (runningUnclassified > 0) {
-      dailyHeadline += `, not counting ${runningUnclassified} running mission${runningUnclassified > 1 ? "s" : ""} we could not classify`;
+    let spending = `Spending now: ${perDay(dailyTotal)}`;
+    if (otherDaily.length > 0) {
+      spending += movedCountsDaily ? `, with ${joinList(otherDaily)}` : ` on ${joinList(otherDaily)}`;
     }
+    if (unclassified.length > 0) {
+      spending += `, not counting ${joinList(unclassified)} (running, could not be classified)`;
+    }
+    if (movedUnclassified) {
+      spending += `, not counting the mission${actionParts.length > 1 ? "s" : ""} above (running, could not be classified)`;
+    }
+    lines.push(`${spending}.`);
+    lines.push(...stillOn);
+    if (paused.length > 0) lines.push(`Paused, budget kept: ${paused.join("; ")}.`);
   }
   if (!catalogue) {
-    notes.push(
-      "The channel catalogue (features-service) could not be read, so channels are shown by slug and daily missions cannot be told apart from reactive caps."
-    );
+    lines.push("The channel catalogue could not be read, so channels show by slug and nothing is counted as daily spend.");
   }
   if (input.ceilingsUnavailable) {
-    notes.push(
-      "The mission budgets could not be read from billing, so no amount or daily total below is complete."
-    );
+    lines.push("The budgets could not be read from billing, so no amount here is complete.");
   }
-  if (!offerNames) notes.push("Offer names could not be read from brand-service.");
-  if (!input.brandName) notes.push("The brand name could not be read from brand-service.");
-  if (!input.org?.name) notes.push("The org name could not be read.");
+  if (!input.brandName) lines.push("The brand name could not be read.");
 
-  const orgName = input.org?.name ?? "unknown org";
   const adminUrl = input.org?.externalId
     ? `${ADMIN_CONSOLE_URL}/orgs/${input.org.externalId}/brands/${input.brandId}`
     : null;
-  if (!adminUrl) notes.push("No admin console link: the org's Clerk id could not be read.");
+  if (!adminUrl) lines.push("No admin link: the org's Clerk id could not be read.");
+  const footer = `Org ${input.org?.name ?? "name unavailable"} · Brand id ${input.brandId} · Org id ${input.orgId}`;
 
-  const sections: Array<{ title: string; lines: string[] }> = [
-    { title: "What changed", lines: changedLines },
-    { title: dailyHeadline, lines: daily },
-    {
-      title: "Reactive caps (spend only when triggered, never part of the daily total)",
-      lines: reactive,
-    },
-    { title: "Running, not classified (not part of the daily total)", lines: unclassified },
-    { title: "Paused (amount kept, not spending)", lines: paused },
-    { title: "Funded, status unknown", lines: statusUnknown },
-  ].filter((s, i) => i <= 1 || s.lines.length > 0);
+  const html: string[] = lines.map((l) => `<p>${escapeHtml(l)}</p>`);
+  if (adminUrl) html.push(`<p><a href="${escapeHtml(adminUrl)}">Open in admin</a></p>`);
+  html.push(`<p style="color:#888;font-size:12px">${escapeHtml(footer)}</p>`);
 
-  const intro = `${brand} (org ${orgName})`;
-
-  const html: string[] = [`<p><strong>${escapeHtml(intro)}</strong></p>`];
-  for (const s of sections) {
-    html.push(`<p><strong>${escapeHtml(s.title)}</strong></p>`);
-    if (s.lines.length > 0) {
-      html.push(`<ul>${s.lines.map((l) => `<li>${escapeHtml(l)}</li>`).join("")}</ul>`);
-    }
-  }
-  for (const n of notes) html.push(`<p>${escapeHtml(n)}</p>`);
-  if (adminUrl) {
-    html.push(`<p><a href="${escapeHtml(adminUrl)}">Open ${escapeHtml(brand)} in the admin console</a></p>`);
-  }
-  html.push(
-    `<p style="color:#888;font-size:12px">Brand id ${escapeHtml(input.brandId)} · Org id ${escapeHtml(input.orgId)}</p>`
-  );
-
-  const text: string[] = [intro, ""];
-  for (const s of sections) {
-    text.push(s.title);
-    for (const l of s.lines) text.push(`- ${l}`);
-    text.push("");
-  }
-  for (const n of notes) text.push(n);
-  if (adminUrl) text.push(`Admin console: ${adminUrl}`);
-  text.push(`Brand id ${input.brandId} · Org id ${input.orgId}`);
+  const text: string[] = [...lines, ""];
+  if (adminUrl) text.push(`Open in admin: ${adminUrl}`);
+  text.push(footer);
 
   return {
     action,
+    actionHtml: escapeHtml(action),
     subject,
     summaryHtml: html.join("\n"),
     summaryText: text.join("\n"),

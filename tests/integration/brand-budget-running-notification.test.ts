@@ -158,18 +158,14 @@ describe("brand budget notification → running headline", () => {
     const res = await putCampaign(RUNNING_CHANNEL, 21000);
     expect(res.status).toBe(200);
 
-    const { subject, summaryText } = await sentMetadata();
-    expect(subject).toContain("raised Sales Cold Email Outreach · Positive reply: $200/day → $210/day");
-    expect(summaryText).toContain(
-      "Sales Cold Email Outreach · Positive reply"
-    );
+    const { subject, action, summaryText } = await sentMetadata();
+    expect(subject).toBe("A brand: sales cold email outreach raised to $210/day");
+    expect(action).toMatch(/^raised sales cold email outreach \(offer .*\) from \$200\/day to \$210\/day$/);
     // Crew names retired 2026-10-04: a legacy "Herald" or a null crewName in the
     // catalogue never reaches the email.
-    expect(`${subject}${summaryText}`).not.toMatch(/Herald|crew/i);
-    expect(summaryText).toContain("$200/day → $210/day (+$10, +5%)");
-    expect(summaryText).toContain("Daily spend now: $210/day");
-    expect(summaryText).toContain("Paused (amount kept, not spending)");
-    expect(summaryText).toMatch(/Feedback Request Cold Email Outreach · Positive reply · .*: \$10\/day kept/);
+    expect(`${subject}${action}${summaryText}`).not.toMatch(/Herald|crew/i);
+    expect(summaryText).toContain("Spending now: $210/day.");
+    expect(summaryText).toContain("Paused, budget kept: feedback request cold email outreach $10/day.");
     expect(summaryText).not.toContain("$220");
   });
 
@@ -183,10 +179,11 @@ describe("brand budget notification → running headline", () => {
 
     await putCampaign(PAUSED_CHANNEL, 2000);
 
-    const { summaryText } = await sentMetadata();
-    expect(summaryText).toContain("$10/day → $20/day (+$10, +100%)");
-    expect(summaryText).toContain("Daily spend now: $200/day");
-    expect(summaryText).toMatch(/: \$20\/day kept/);
+    const { action, summaryText } = await sentMetadata();
+    expect(action).toMatch(/^raised feedback request cold email outreach \(offer .*\) from \$10\/day to \$20\/day$/);
+    expect(summaryText).toContain("Spending now: $200/day on sales cold email outreach at $200/day.");
+    // The moved mission is named once, in the action line.
+    expect(summaryText).not.toContain("feedback request");
   });
 
   it("a pre-offer ceiling the write ADOPTED shows as moved onto the named mission", async () => {
@@ -206,11 +203,12 @@ describe("brand budget notification → running headline", () => {
     const res = await putCampaign(RUNNING_CHANNEL, 21000);
     expect(res.status).toBe(200);
 
-    const { summaryText } = await sentMetadata();
+    const { action, summaryText } = await sentMetadata();
     // A leg-less legacy row cannot be classified, so it carries no unit.
-    expect(summaryText).toContain("no leg stated · no offer: $200 → paused ($0)");
-    expect(summaryText).toContain("$0 → $210/day (+$210, new)");
-    expect(summaryText).toContain("Daily spend now: $210/day");
+    expect(action).toMatch(
+      /^lowered sales cold email outreach \(no leg stated\) from \$200 to \$0; set sales cold email outreach \(offer .*\) to \$210\/day$/
+    );
+    expect(summaryText).toContain("Spending now: $210/day.");
   });
 
   it("an unreachable campaign-service leaves the write and the send intact", async () => {
@@ -226,7 +224,6 @@ describe("brand budget notification → running headline", () => {
     expect(res.body.dailyBudgetCents).toBe("21000.0000000000");
 
     const { summaryText } = await sentMetadata();
-    expect(summaryText).toContain("Daily spend now: unavailable");
-    expect(summaryText).toContain("Campaign statuses could not be read");
+    expect(summaryText).toContain("Spending now: unknown, campaign statuses could not be read.");
   });
 });

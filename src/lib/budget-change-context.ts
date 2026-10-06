@@ -33,6 +33,12 @@ const READ_TIMEOUT_MS = 5_000;
 export interface CatalogueLeg {
   /** The step the leg starts from; null for an entry leg, which spends daily. */
   fromLabel: string | null;
+  /**
+   * The start step's plain trigger phrase (`Replies they're interested`), read
+   * by the email's reactive line ("only when someone replies they're
+   * interested"); null when the catalogue publishes none.
+   */
+  fromShortDescription: string | null;
   toLabel: string | null;
 }
 
@@ -46,6 +52,7 @@ export type ChannelCatalogue = Map<string, CatalogueChannel>;
 
 interface PublishedStep {
   label?: string | null;
+  shortDescription?: string | null;
 }
 interface PublishedLeg {
   legKey?: string | null;
@@ -69,6 +76,10 @@ export function channelCatalogueFrom(channels: PublishedChannel[]): ChannelCatal
       if (typeof leg?.legKey !== "string" || !leg.legKey) continue;
       legs.set(leg.legKey, {
         fromLabel: leg.from ? (leg.from.label ?? null) : null,
+        fromShortDescription:
+          typeof leg.from?.shortDescription === "string" && leg.from.shortDescription.trim()
+            ? leg.from.shortDescription.trim()
+            : null,
         toLabel: leg.to?.label ?? null,
       });
     }
