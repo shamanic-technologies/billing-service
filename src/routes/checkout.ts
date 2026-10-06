@@ -1,3 +1,4 @@
+import { recordCheckoutOpened } from "../lib/payment-alerts.js";
 import { Router } from "express";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
@@ -226,6 +227,17 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     const welcomeFields = welcomeDiscount
       ? { welcome_discount_cents: welcomeDiscount.giftCents, amount_due_cents: welcomeDiscount.amountDueCents }
       : {};
+
+    // The payment this checkout may produce is alerted to the owner once it SUCCEEDS
+    // (lib/payment-alerts); this records who opened it (staff's own payments are not
+    // alerted) and marks the org for the fast scan. Never fails the checkout.
+    if (!isSetup) {
+      await recordCheckoutOpened(
+        orgId,
+        (req.headers["x-email"] as string | undefined) ?? null,
+        welcomeDiscount ? welcomeDiscount.amountDueCents : topup_amount_cents ?? null
+      );
+    }
 
     traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id ?? session.id } }, req.headers);
 

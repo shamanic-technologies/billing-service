@@ -1160,3 +1160,36 @@ export const salesPathReactiveCharges = pgTable("sales_path_reactive_charges", {
     table.cumulativeCents
   ),
 ]);
+
+// Owner Telegram alert per succeeded payment (migration 0072, lib/payment-alerts).
+// The primary key is the exactly-once guarantee: claimed before any send.
+export const paymentAlerts = pgTable("payment_alerts", {
+  paymentKey: text("payment_key").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  acquirer: text("acquirer").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  currency: text("currency").notNull(),
+  kind: text("kind").notNull(),
+  paymentNumber: integer("payment_number").notNull(),
+  /** `sending` (claimed) | `sent` | `skipped`. */
+  outcome: text("outcome").notNull(),
+  skipReason: text("skip_reason"),
+  paidAt: timestamp("paid_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+});
+
+// What billing knows about a payment it caused or a checkout a person opened
+// (migration 0072). Labels a payment; never decides whether money moved.
+export const paymentAlertSignals = pgTable("payment_alert_signals", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  /** `charge` (an off-session charge that succeeded) | `checkout_opened`. */
+  signal: text("signal").notNull(),
+  kind: text("kind"),
+  reference: text("reference"),
+  amountMinor: integer("amount_minor"),
+  actorEmail: text("actor_email"),
+  matchedPaymentKey: text("matched_payment_key"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

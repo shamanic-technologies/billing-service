@@ -32,6 +32,7 @@
 
 import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
+import { recordChargeSignal } from "./payment-alerts.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -73,6 +74,8 @@ export async function reloadOffSession(
     idempotencyKey
   );
   if (charge.status === "succeeded") {
+    // Labels the owner's "a customer paid" alert (lib/payment-alerts). Never throws.
+    await recordChargeSignal(orgId, charge.reference, metadata?.reason, amountCents);
     return { status: "succeeded", reference: charge.reference };
   }
   // A REFUSED card arrives HERE, not as a throw: the acquirer answered, so

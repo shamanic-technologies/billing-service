@@ -505,6 +505,13 @@
       "when": 1794304800000,
       "tag": "0071_referral_reward_to_referrer",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1794391200000,
+      "tag": "0072_payment_alerts",
+      "breakpoints": true
     }
   ]
 }
