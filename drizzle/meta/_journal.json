@@ -498,6 +498,13 @@
       "when": 1794218400000,
       "tag": "0070_match_no_end_date",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1794304800000,
+      "tag": "0071_referral_reward_to_referrer",
+      "breakpoints": true
     }
   ]
 }

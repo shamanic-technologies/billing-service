@@ -1,18 +1,18 @@
 /**
- * Stacked free-credit promises — the referral offer.
+ * The $500 referral reward — owned by the REFERRER, earned on the REFERRED org's
+ * real payments (owner 2026-10-06: "Nag (Ascend) dont get any free credits. It is
+ * Senthil who gets that money because of referral").
  *
- * An org may carry several outstanding promises at once, each with its own frozen
- * amount and its own frozen bar, and some of them earned because somebody ELSE paid.
- * These cases pin the whole chain: claim → invitee's ladder → invitee earns → the
- * inviter's promise appears at the inviter's own next bar → the inviter earns it on
- * THEIR OWN payments, repeatedly and with no ceiling.
+ *   Senthil (inviter) refers Nag (invitee).
+ *   Nag pays $200            → nothing for anyone.
+ *   Nag pays $300 more ($500) → inviter +$500. Invitee gets nothing from it.
  *
  * Own file, not a `describe` appended to welcome-completion.test.ts: that suite
  * closes the shared postgres.js connection in `afterAll` (see CLAUDE.md).
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import {
   cleanTestData,
@@ -26,18 +26,18 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 import { db } from "../../src/db/index.js";
 import {
+  freeCreditPromises,
   localPromoCodes,
   localPromos,
   REFERRAL_REWARD_CODE,
   CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
-  WELCOME_COMPLETION_CODE,
 } from "../../src/db/schema.js";
 import {
   claimReferral,
   ReferralAlreadyClaimedError,
   ReferralRewardCodeMissingError,
   SelfReferralError,
-  settleReferralPromises,
+  settleReferralsEarnedBy,
 } from "../../src/lib/free-credit-promises.js";
 import { settleFreeCreditPromises } from "../../src/lib/free-credit-settlement.js";
 import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-sweep.js";
@@ -45,55 +45,42 @@ import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-swee
 const inviter = "00000000-0000-0000-0000-0000000005a1";
 const invitee = "00000000-0000-0000-0000-0000000005a2";
 const invitee2 = "00000000-0000-0000-0000-0000000005a3";
-const invitee3 = "00000000-0000-0000-0000-0000000005a4";
+const otherInviter = "00000000-0000-0000-0000-0000000005a4";
 const userId = "00000000-0000-0000-0000-0000000005a9";
 
 const cents = (n: number) => `${n}.0000000000`;
-const NEVER_PRE_LAUNCH = () => Promise.resolve("0.0000000000");
+const REWARD = CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS;
 
-/** A brand-new signup on the CURRENT $400 offer: inserted with org_id only. */
-async function newSignup(orgId: string) {
-  await insertTestAccount({
-    orgId,
-    welcomeCompletionEligible: true,
-    freeCreditEntitlementCents: 40000,
-    freeCreditPaidTriggerCents: 40000,
-  });
-  await insertTestPromoGrant({ orgId, userId, amountCents: 500, promoCode: "welcome" });
+/** A signup holding the usual free credit (a $30 advance-like gift row). */
+async function signup(orgId: string) {
+  await insertTestAccount({ orgId });
+  await insertTestPromoGrant({ orgId, userId, amountCents: 3000, promoCode: "welcome" });
 }
 
-async function grantRows(orgId: string, code: string) {
+async function referralGrants(orgId: string) {
   return db
     .select({ amountCents: localPromos.amountCents })
     .from(localPromos)
     .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
-    .where(and(eq(localPromos.orgId, orgId), eq(localPromoCodes.code, code)));
+    .where(and(eq(localPromos.orgId, orgId), eq(localPromoCodes.code, REFERRAL_REWARD_CODE)));
 }
 
-/** The inviter's promises caused by one specific converted referral. */
-async function inviterPromisesFor(referredOrgId: string) {
-  return (await listPromises(inviter)).filter(
-    (p) => p.referredOrgId === referredOrgId
-  );
-}
+const settle = (orgId: string, paidCents: number) =>
+  settleFreeCreditPromises(orgId, cents(paidCents));
 
-/** Just the (amount, bar) ladder, which is the whole product rule. */
-async function ladder(orgId: string) {
-  const rows = await listPromises(orgId);
-  return rows.map((r) => [r.amountCents, r.paidTriggerCents]);
-}
-
-async function settle(orgId: string, paidCents: number) {
-  return settleFreeCreditPromises(orgId, cents(paidCents), NEVER_PRE_LAUNCH);
-}
-
-describe("stacked free-credit promises (referral offer)", () => {
+describe("referral reward: the referrer earns it on the referee's payments", () => {
   const app = createTestApp();
   let ssMocks: ReturnType<typeof setupStripeMocks>;
+  /** What each org has really paid, as stripe-service would answer. */
+  let paid: Record<string, number>;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     ssMocks = setupStripeMocks();
+    paid = {};
+    ssMocks.sumSucceededTopupsForOrg.mockImplementation(async (orgId: string) =>
+      cents(paid[orgId] ?? 0)
+    );
     await cleanTestData();
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockResolvedValue({
       spent_cents: "0.0000000000",
@@ -108,470 +95,318 @@ describe("stacked free-credit promises (referral offer)", () => {
     await closeDb();
   });
 
-  // --- AC1: the ladder ---
+  it("a claim opens ONE promise, held by the referrer, $500 at $500 of the referee's payments", async () => {
+    await signup(inviter);
+    await signup(invitee);
 
-  it("AC1: a referred new org carries two promises, $400 @ $400 and $500 @ $900", async () => {
-    await newSignup(invitee);
+    const { promise, alreadyClaimed } = await claimReferral(invitee, inviter);
 
-    await claimReferral(invitee, inviter);
-
-    expect(await ladder(invitee)).toEqual([
-      [40000, 40000],
-      [50000, 90000],
-    ]);
+    expect(alreadyClaimed).toBe(false);
+    expect(promise).toMatchObject({
+      orgId: inviter,
+      kind: "referral",
+      amountCents: REWARD,
+      paidTriggerCents: REWARD,
+      referredOrgId: invitee,
+      referrerOrgId: null,
+      grantedAt: null,
+    });
+    // The referee holds no referral promise of its own.
+    expect((await listPromises(invitee)).filter((p) => p.kind === "referral")).toEqual([]);
   });
 
-  it("nothing is granted beyond the $5 welcome until it pays", async () => {
-    await newSignup(invitee);
+  it("AC1: referee pays $500 cumulative → referrer granted $500 once; referee gets no referral credit", async () => {
+    await signup(inviter);
+    await signup(invitee);
     await claimReferral(invitee, inviter);
 
-    const outcome = await settle(invitee, 0);
+    // $200, then $300 more.
+    await settle(invitee, 20000);
+    expect(await referralGrants(inviter)).toHaveLength(0);
 
+    const outcome = await settle(invitee, 50000);
+
+    expect(await referralGrants(inviter)).toEqual([{ amountCents: cents(REWARD) }]);
+    expect(await referralGrants(invitee)).toHaveLength(0);
+    // Nothing lands on the referee's own credit from this settle.
     expect(outcome.grantedCents).toBe(cents(0));
-    expect(await grantRows(invitee, WELCOME_COMPLETION_CODE)).toHaveLength(0);
-    expect(await grantRows(invitee, REFERRAL_REWARD_CODE)).toHaveLength(0);
+    expect(outcome.referrals.granted.map((p) => p.orgId)).toEqual([inviter]);
   });
 
-  it("a third promise stacks to $1,400, with no ceiling", async () => {
-    await newSignup(inviter);
-    // Two referrals that already converted → two inviter promises.
+  it("the referrer's balance rises with NO payment of their own; the referee's does not", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+    paid[invitee] = 50000;
+
+    // The referee's own account read is what settles it.
+    const refereeRes = await request(app).get("/v1/accounts").set(getAuthHeaders(invitee));
+    expect(refereeRes.status).toBe(200);
+    expect(refereeRes.body.credited_gifted_cents).toBe(cents(3000));
+
+    const inviterRes = await request(app).get("/v1/accounts").set(getAuthHeaders(inviter));
+    expect(inviterRes.status).toBe(200);
+    expect(inviterRes.body.credited_paid_cents).toBe(cents(0));
+    expect(inviterRes.body.credited_gifted_cents).toBe(cents(3000 + REWARD));
+  });
+
+  it("AC2: referee pays $499 → nothing granted", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+
+    await settle(invitee, 49999);
+
+    expect(await referralGrants(inviter)).toHaveLength(0);
+    expect(await referralGrants(invitee)).toHaveLength(0);
+  });
+
+  it("AC2: the referee's free credit never counts toward the $500", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    // $600 of free credit on the referee, $0 paid.
+    await insertTestPromoGrant({ orgId: invitee, userId, amountCents: 60000, promoCode: "invite_reward" });
+    await claimReferral(invitee, inviter);
+
+    await request(app).get("/v1/accounts").set(getAuthHeaders(invitee));
+    await runWelcomeCompletionSweep();
+
+    expect(await referralGrants(inviter)).toHaveLength(0);
+  });
+
+  it("the referrer's own payments never earn it", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+    paid[inviter] = 1_000_000;
+
+    await settle(inviter, 1_000_000);
+    await request(app).get("/v1/free-credit-promises").set(getAuthHeaders(inviter));
+
+    expect(await referralGrants(inviter)).toHaveLength(0);
+  });
+
+  it("AC3: replayed settles grant once", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+
+    await settle(invitee, 50000);
+    await settle(invitee, 50000);
+    await settle(invitee, 90000);
+
+    expect(await referralGrants(inviter)).toHaveLength(1);
+  });
+
+  it("AC3: concurrent settles (referee side AND referrer side) grant once", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+    paid[invitee] = 50000;
+
+    const results = await Promise.all([
+      settleReferralsEarnedBy(invitee, cents(50000)),
+      settleReferralsEarnedBy(invitee, cents(50000)),
+      settleReferralsEarnedBy(invitee, cents(50000)),
+      request(app).get("/v1/free-credit-promises").set(getAuthHeaders(inviter)),
+    ]);
+
+    const grantedByEarned = results
+      .slice(0, 3)
+      .flatMap((r) => (r as { granted: unknown[] }).granted);
+    expect(grantedByEarned.length).toBeLessThanOrEqual(1);
+    expect(await referralGrants(inviter)).toHaveLength(1);
+  });
+
+  it("each referral is its own $500 at $500 — nothing stacks", async () => {
+    await signup(inviter);
     await claimReferral(invitee, inviter);
     await claimReferral(invitee2, inviter);
-    await settle(invitee, 90000);
-    await settle(invitee2, 90000);
 
-    expect(await ladder(inviter)).toEqual([
-      [40000, 40000],
-      [50000, 90000],
-      [50000, 140000],
-    ]);
-
-    await claimReferral(invitee3, inviter);
-    await settle(invitee3, 90000);
-    expect((await ladder(inviter))[3]).toEqual([50000, 190000]);
-  });
-
-  it("a grandfathered $25 org referred by someone gets $25 @ $25 and $500 @ $525", async () => {
-    await insertTestAccount({ orgId: invitee, welcomeCompletionEligible: true });
-
-    await claimReferral(invitee, inviter);
-
-    expect(await ladder(invitee)).toEqual([
-      [2500, 2500],
-      [50000, 52500],
-    ]);
-  });
-
-  // --- AC2: paying crosses the bars one at a time ---
-
-  it("AC2: $400 grants the welcome remainder and nothing else; $900 grants the $500", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    const atTrigger = await settle(invitee, 40000);
-    expect(atTrigger.welcome.granted).toBe(true);
-    expect(atTrigger.welcome.amountCents).toBe(cents(39500)); // $400 − the $5 welcome
-    expect(atTrigger.referrals.granted).toHaveLength(0);
-    expect(await grantRows(invitee, REFERRAL_REWARD_CODE)).toHaveLength(0);
-    // The inviter has nothing yet — the invitee has not earned its referral.
-    expect(await ladder(inviter)).toEqual([]);
-
-    const atReferralBar = await settle(invitee, 90000);
-    expect(atReferralBar.referrals.granted).toHaveLength(1);
-    expect((await grantRows(invitee, REFERRAL_REWARD_CODE))[0].amountCents).toBe(
-      cents(50000)
+    const rows = (await listPromises(inviter)).filter((p) => p.kind === "referral");
+    expect(rows.map((r) => [r.amountCents, r.paidTriggerCents, r.referredOrgId]).sort()).toEqual(
+      [
+        [REWARD, REWARD, invitee],
+        [REWARD, REWARD, invitee2],
+      ].sort()
     );
+
+    await settle(invitee, 50000);
+    expect(await referralGrants(inviter)).toHaveLength(1);
+    await settle(invitee2, 50000);
+    expect(await referralGrants(inviter)).toHaveLength(2);
   });
 
-  it("AC2: the inviter's $500 promise appears at that instant, at the inviter's own next bar", async () => {
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    await settle(invitee, 90000);
-
-    // Inviter's own $400 welcome bar, then the referral $500 stacked above it.
-    expect(await ladder(inviter)).toEqual([
-      [40000, 40000],
-      [50000, 90000],
-    ]);
-    const [, referral] = await listPromises(inviter);
-    expect(referral.referredOrgId).toBe(invitee);
-    expect(referral.grantedAt).toBeNull();
-  });
-
-  it("the welcome remainder is NOT swallowed by a referral grant that landed first", async () => {
-    // A referred org that crosses both bars at once still gets BOTH: the referral is
-    // additional money, never a replacement for the welcome offer.
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    const outcome = await settle(invitee, 90000);
-
-    expect(outcome.welcome.granted).toBe(true);
-    expect(outcome.referrals.granted).toHaveLength(1);
-    // $5 welcome + $395 completion + $500 referral.
-    expect(outcome.grantedCents).toBe(cents(89500));
-  });
-
-  // --- AC3: the inviter earns it on their OWN payments, never for free ---
-
-  it("AC3: the inviter's $500 lands only once the INVITER's own payments cross the bar", async () => {
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    await settle(invitee, 90000);
-
-    // Inviter has paid nothing: outstanding, not granted.
-    await settle(inviter, 0);
-    expect(await grantRows(inviter, REFERRAL_REWARD_CODE)).toHaveLength(0);
-
-    // $899.99 is still short of the $900 bar.
-    await settle(inviter, 89999);
-    expect(await grantRows(inviter, REFERRAL_REWARD_CODE)).toHaveLength(0);
-
-    await settle(inviter, 90000);
-    expect((await grantRows(inviter, REFERRAL_REWARD_CODE))[0].amountCents).toBe(
-      cents(50000)
-    );
-  });
-
-  it("AC4: a second and third converting referral give successively higher bars", async () => {
-    await newSignup(inviter);
-    for (const org of [invitee, invitee2, invitee3]) {
-      await newSignup(org);
-      await claimReferral(org, inviter);
-      await settle(org, 90000);
-    }
-
-    expect(await ladder(inviter)).toEqual([
-      [40000, 40000],
-      [50000, 90000],
-      [50000, 140000],
-      [50000, 190000],
-    ]);
-
-    // Crossing $1,400 earns exactly two of the three (the $1,900 rung is still out).
-    await settle(inviter, 140000);
-    expect(await grantRows(inviter, REFERRAL_REWARD_CODE)).toHaveLength(2);
-  });
-
-  // --- Exactly-once ---
-
-  it("a re-claimed invite opens no second promise", async () => {
-    await newSignup(invitee);
-
+  it("a re-claimed invite is a no-op; a DIFFERENT referrer is rejected", async () => {
     const first = await claimReferral(invitee, inviter);
-    const second = await claimReferral(invitee, inviter);
+    const again = await claimReferral(invitee, inviter);
+    expect(again.alreadyClaimed).toBe(true);
+    expect(again.promise.id).toBe(first.promise.id);
 
-    expect(first.alreadyClaimed).toBe(false);
-    expect(second.alreadyClaimed).toBe(true);
-    expect(second.promise.id).toBe(first.promise.id);
-    expect(await listPromises(invitee)).toHaveLength(2); // welcome + one referral
-  });
-
-  it("a claim by a DIFFERENT inviter is rejected, never silently stacked", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    await expect(claimReferral(invitee, invitee2)).rejects.toThrow(
+    await expect(claimReferral(invitee, otherInviter)).rejects.toThrow(
       ReferralAlreadyClaimedError
     );
-    expect(await listPromises(invitee)).toHaveLength(2);
+    expect(await listPromises(otherInviter)).toHaveLength(0);
+  });
+
+  it("concurrent claims for the same referee open one promise", async () => {
+    const outcomes = await Promise.all([
+      claimReferral(invitee, inviter),
+      claimReferral(invitee, inviter),
+      claimReferral(invitee, inviter),
+    ]);
+    expect(new Set(outcomes.map((o) => o.promise.id)).size).toBe(1);
+    expect(await listPromises(inviter)).toHaveLength(1);
   });
 
   it("an org cannot refer itself", async () => {
-    await newSignup(invitee);
     await expect(claimReferral(invitee, invitee)).rejects.toThrow(SelfReferralError);
   });
 
-  it("replaying the same payment grants a referral exactly once", async () => {
-    await newSignup(invitee);
+  it("the sweep grants it for a referee with no request traffic at all", async () => {
+    await signup(inviter);
+    await signup(invitee);
     await claimReferral(invitee, inviter);
+    paid[invitee] = 50000;
 
-    await settle(invitee, 90000);
-    await settle(invitee, 90000);
-    await settle(invitee, 90000);
-
-    expect(await grantRows(invitee, REFERRAL_REWARD_CODE)).toHaveLength(1);
-    expect(await inviterPromisesFor(invitee)).toHaveLength(1);
-  });
-
-  it("concurrent settles grant a referral exactly once and open ONE inviter promise", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    const outcomes = await Promise.all([
-      settleReferralPromises(invitee, cents(90000)),
-      settleReferralPromises(invitee, cents(90000)),
-      settleReferralPromises(invitee, cents(90000)),
-    ]);
-
-    expect(outcomes.flatMap((o) => o.granted)).toHaveLength(1);
-    expect(await grantRows(invitee, REFERRAL_REWARD_CODE)).toHaveLength(1);
-    expect(await inviterPromisesFor(invitee)).toHaveLength(1);
-  });
-
-  it("two converted referrals from the same inviter open two DISTINCT promises", async () => {
-    await newSignup(inviter);
-    await claimReferral(invitee, inviter);
-    await claimReferral(invitee2, inviter);
-
-    await settle(invitee, 90000);
-    await settle(invitee2, 90000);
-
-    const referred = (await listPromises(inviter))
-      .filter((p) => p.referredOrgId)
-      .map((p) => p.referredOrgId);
-    expect(referred.sort()).toEqual([invitee, invitee2].sort());
-  });
-
-  // --- An outstanding promise is a promise, not money ---
-
-  it("an outstanding promise is absent from credited, gifted and balance", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(1000));
-
-    const res = await request(app).get("/v1/accounts").set(getAuthHeaders(invitee));
-
-    expect(res.status).toBe(200);
-    // $10 paid + the $5 welcome row. The $400 and $500 promises are nowhere.
-    expect(res.body.credited_gifted_cents).toBe(cents(500));
-    expect(res.body.credited_cents).toBe(cents(1500));
-    expect(res.body.balance_cents).toBe(cents(1500));
-  });
-
-  // --- The dashboard read ---
-
-  it("serves every outstanding promise with worth, bar, progress and the referred org", async () => {
-    await newSignup(inviter);
-    await claimReferral(invitee, inviter);
-    await settle(invitee, 90000);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(45000));
-
-    const res = await request(app)
-      .get("/v1/free-credit-promises")
-      .set(getAuthHeaders(inviter));
-
-    expect(res.status).toBe(200);
-    expect(res.body.paid_topups_cents).toBe(cents(45000));
-    // The $400 welcome promise was earned at $400 and granted by this very read, so
-    // only the $500 referral is still outstanding.
-    expect(res.body.promises).toHaveLength(1);
-    const [promise] = res.body.promises;
-    expect(promise.kind).toBe("referral");
-    expect(promise.amount_cents).toBe(cents(50000));
-    expect(promise.paid_trigger_cents).toBe(cents(90000));
-    expect(promise.paid_so_far_cents).toBe(cents(45000));
-    expect(promise.remaining_to_unlock_cents).toBe(cents(45000));
-    expect(promise.progress_pct).toBe(50);
-    // Which org caused it — the dashboard resolves the brand from this id.
-    expect(promise.referred_org_id).toBe(invitee);
-  });
-
-  it("the welcome promise is reported at what would ACTUALLY land, net of the $5 already gifted", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
-
-    const res = await request(app)
-      .get("/v1/free-credit-promises")
-      .set(getAuthHeaders(invitee));
-
-    expect(res.body.promises.map((p: { amount_cents: string }) => p.amount_cents)).toEqual([
-      cents(39500),
-      cents(50000),
-    ]);
-    expect(res.body.promises[0].progress_pct).toBe(25);
-  });
-
-  // --- The headline total ---
-
-  it("answers the TOTAL still outstanding, reconciling with the promise rows beside it", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
-
-    const res = await request(app)
-      .get("/v1/free-credit-promises")
-      .set(getAuthHeaders(invitee));
-
-    expect(res.status).toBe(200);
-    // $395 welcome remainder + $500 referral: the sidebar headline.
-    expect(res.body.outstanding_total_cents).toBe(cents(89500));
-    // Same figure the rows add up to — the two can never disagree.
-    const summed = res.body.promises.reduce(
-      (acc: number, p: { amount_cents: string }) => acc + Number(p.amount_cents),
-      0
-    );
-    expect(Number(res.body.outstanding_total_cents)).toBe(summed);
-  });
-
-  it("an org with nothing outstanding gets a canonical zero, not null and not an absent field", async () => {
-    // Ineligible for the welcome completion and never referred: no promise at all.
-    await insertTestAccount({ orgId: invitee });
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(10000));
-
-    const res = await request(app)
-      .get("/v1/free-credit-promises")
-      .set(getAuthHeaders(invitee));
-
-    expect(res.status).toBe(200);
-    expect(res.body.promises).toEqual([]);
-    expect(res.body.outstanding_total_cents).toBe(cents(0));
-  });
-
-  it("a promise the org has already earned leaves the total at zero once it lands", async () => {
-    await newSignup(inviter);
-    await claimReferral(invitee, inviter);
-    await settle(invitee, 90000);
-    // The inviter has paid past BOTH bars, so this read grants everything.
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(200000));
-
-    const res = await request(app)
-      .get("/v1/free-credit-promises")
-      .set(getAuthHeaders(inviter));
-
-    expect(res.status).toBe(200);
-    expect(res.body.promises).toEqual([]);
-    expect(res.body.outstanding_total_cents).toBe(cents(0));
-  });
-
-  // --- The unconditional server-side driver ---
-
-  it("the sweep settles a referral for an org with no request traffic at all", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(90000));
-
-    const sweep = await runWelcomeCompletionSweep();
-
-    expect(sweep.candidates).toBe(1);
-    // Welcome completion + the referral.
-    expect(sweep.granted).toBe(2);
-    expect(await grantRows(invitee, REFERRAL_REWARD_CODE)).toHaveLength(1);
-    // ...and the inviter's promise exists even though the inviter never called us.
-    expect(await inviterPromisesFor(invitee)).toHaveLength(1);
-  });
-
-  it("the sweep re-opens an inviter promise that never got created", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-    await settle(invitee, 90000);
-    // Simulate a crash between the invitee's grant committing and the inviter's
-    // promise being opened.
-    await db.delete((await import("../../src/db/schema.js")).freeCreditPromises).where(
-      eq((await import("../../src/db/schema.js")).freeCreditPromises.orgId, inviter)
-    );
-    expect(await listPromises(inviter)).toHaveLength(0);
-
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(90000));
     await runWelcomeCompletionSweep();
 
-    expect(await inviterPromisesFor(invitee)).toHaveLength(1);
+    expect(await referralGrants(inviter)).toHaveLength(1);
   });
 
-  // --- Fail loud ---
+  it("the referrer's dashboard shows the pending $500 with the REFEREE's progress", async () => {
+    await signup(inviter);
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+    paid[invitee] = 20000;
+    paid[inviter] = 7000;
 
-  it("a claim fails loud when the referral ledger key is missing", async () => {
-    await newSignup(invitee);
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(inviter));
+
+    expect(res.status).toBe(200);
+    expect(res.body.paid_topups_cents).toBe(cents(7000));
+    const referral = res.body.promises.find((p: { kind: string }) => p.kind === "referral");
+    expect(referral).toMatchObject({
+      amount_cents: cents(REWARD),
+      paid_trigger_cents: cents(REWARD),
+      paid_so_far_cents: cents(20000),
+      remaining_to_unlock_cents: cents(30000),
+      progress_pct: 40,
+      referred_org_id: invitee,
+    });
+    expect(res.body.outstanding_total_cents).toBe(cents(REWARD));
+  });
+
+  it("the referrer's dashboard read lands an already-earned reward", async () => {
+    await signup(inviter);
+    await claimReferral(invitee, inviter);
+    paid[invitee] = 50000;
+
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(inviter));
+
+    expect(res.status).toBe(200);
+    expect(res.body.promises.filter((p: { kind: string }) => p.kind === "referral")).toEqual([]);
+    expect(await referralGrants(inviter)).toHaveLength(1);
+  });
+
+  it("the referee's dashboard lists no referral promise", async () => {
+    await signup(invitee);
+    await claimReferral(invitee, inviter);
+
+    const res = await request(app)
+      .get("/v1/free-credit-promises")
+      .set(getAuthHeaders(invitee));
+
+    expect(res.status).toBe(200);
+    expect(res.body.promises.filter((p: { kind: string }) => p.kind === "referral")).toEqual([]);
+  });
+
+  it("re-pricing the offer leaves a promise already opened untouched", async () => {
+    await claimReferral(invitee, inviter);
+    await db
+      .update(localPromoCodes)
+      .set({ amountCents: 90000 })
+      .where(eq(localPromoCodes.code, REFERRAL_REWARD_CODE));
+    await claimReferral(invitee2, inviter);
+
+    const byReferred = Object.fromEntries(
+      (await listPromises(inviter)).map((p) => [p.referredOrgId, [p.amountCents, p.paidTriggerCents]])
+    );
+    expect(byReferred[invitee]).toEqual([REWARD, REWARD]);
+    expect(byReferred[invitee2]).toEqual([90000, 90000]);
+  });
+
+  it("migration 0071 moves an invitee-held promise onto its referrer, idempotently", async () => {
+    // The pre-0071 prod shape: AscendQE holds $500 @ $500 naming NOVEMIQ as referrer.
+    await db.insert(freeCreditPromises).values({
+      orgId: invitee,
+      kind: "referral",
+      amountCents: REWARD,
+      paidTriggerCents: REWARD + 3000,
+      referrerOrgId: inviter,
+    });
+    const fs = await import("node:fs");
+    const sqlText = fs.readFileSync("drizzle/0071_referral_reward_to_referrer.sql", "utf8");
+    await db.execute(sql.raw(sqlText));
+    await db.execute(sql.raw(sqlText));
+
+    expect(await listPromises(invitee)).toHaveLength(0);
+    const [moved] = await listPromises(inviter);
+    expect(moved).toMatchObject({
+      orgId: inviter,
+      referredOrgId: invitee,
+      referrerOrgId: null,
+      amountCents: REWARD,
+      paidTriggerCents: REWARD,
+      grantedAt: null,
+    });
+
+    await settle(invitee, 50000);
+    expect(await referralGrants(inviter)).toHaveLength(1);
+    expect(await referralGrants(invitee)).toHaveLength(0);
+  });
+
+  it("a claim fails loud when the referral ledger key is missing (500 on the route)", async () => {
     await removeReferralRewardCode();
-
     await expect(claimReferral(invitee, inviter)).rejects.toThrow(
       ReferralRewardCodeMissingError
     );
-  });
-
-  it("the claim endpoint surfaces the missing ledger key as a 500, and a bad body as a 400", async () => {
-    await newSignup(invitee);
-    await removeReferralRewardCode();
-
-    const missing = await request(app)
+    const res = await request(app)
       .post("/internal/referrals/claim")
       .set(getAuthHeaders(invitee))
       .send({ orgId: invitee, referrerOrgId: inviter });
-    expect(missing.status).toBe(500);
-
-    const bad = await request(app)
-      .post("/internal/referrals/claim")
-      .set(getAuthHeaders(invitee))
-      .send({ orgId: "not-a-uuid", referrerOrgId: inviter });
-    expect(bad.status).toBe(400);
+    expect(res.status).toBe(500);
   });
 
-  it("the claim endpoint returns the frozen promise, and 409 on a different inviter", async () => {
-    await newSignup(invitee);
-
+  it("the claim route returns the referrer's promise, 409 on a different referrer, 400 on a bad body", async () => {
     const first = await request(app)
       .post("/internal/referrals/claim")
       .set(getAuthHeaders(invitee))
       .send({ orgId: invitee, referrerOrgId: inviter });
-
     expect(first.status).toBe(200);
-    expect(first.body.alreadyClaimed).toBe(false);
     expect(first.body.promise).toMatchObject({
-      orgId: invitee,
+      orgId: inviter,
       kind: "referral",
-      amountCents: CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS,
-      paidTriggerCents: 90000,
-      referrerOrgId: inviter,
-      referredOrgId: null,
+      amountCents: REWARD,
+      paidTriggerCents: REWARD,
+      referredOrgId: invitee,
       grantedAt: null,
     });
 
     const conflict = await request(app)
       .post("/internal/referrals/claim")
       .set(getAuthHeaders(invitee))
-      .send({ orgId: invitee, referrerOrgId: invitee2 });
+      .send({ orgId: invitee, referrerOrgId: otherInviter });
     expect(conflict.status).toBe(409);
-  });
 
-  // --- Freezing / grandfathering ---
-
-  it("re-pricing the referral offer leaves promises already created untouched", async () => {
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    // Re-price to $900 the way PATCH /internal/promo-codes/:code does.
-    await db
-      .update(localPromoCodes)
-      .set({ amountCents: 90000 })
-      .where(eq(localPromoCodes.code, REFERRAL_REWARD_CODE));
-
-    await newSignup(invitee2);
-    await claimReferral(invitee2, inviter);
-
-    // The old promise keeps $500 @ $900; the new one freezes $900 @ $1,300.
-    expect((await ladder(invitee))[1]).toEqual([50000, 90000]);
-    expect((await ladder(invitee2))[1]).toEqual([90000, 130000]);
-  });
-
-  it("the INVITER's promise copies the invitee's frozen amount, not the current price", async () => {
-    await newSignup(inviter);
-    await newSignup(invitee);
-    await claimReferral(invitee, inviter);
-
-    await db
-      .update(localPromoCodes)
-      .set({ amountCents: 90000 })
-      .where(eq(localPromoCodes.code, REFERRAL_REWARD_CODE));
-
-    await settle(invitee, 90000);
-
-    expect((await ladder(inviter))[1]).toEqual([50000, 90000]);
-  });
-
-  // --- An org that was never referred is unchanged ---
-
-  it("an org that was never referred carries only its welcome promise and grants as before", async () => {
-    await newSignup(invitee);
-
-    const outcome = await settle(invitee, 40000);
-
-    expect(await ladder(invitee)).toEqual([[40000, 40000]]);
-    expect(outcome.welcome.amountCents).toBe(cents(39500));
-    expect(outcome.referrals.granted).toHaveLength(0);
-    expect(outcome.grantedCents).toBe(cents(39500));
+    const bad = await request(app)
+      .post("/internal/referrals/claim")
+      .set(getAuthHeaders(invitee))
+      .send({ orgId: "not-a-uuid", referrerOrgId: inviter });
+    expect(bad.status).toBe(400);
   });
 });

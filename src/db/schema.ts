@@ -355,18 +355,18 @@ export const freeCreditPromises = pgTable(
     amountCents: integer("amount_cents").notNull(),
     /**
      * The bar: cumulative SUCCEEDED payments (net of refunds + lost disputes) that
-     * earn this promise. Frozen at creation as
-     * (highest bar the org already carries) + (this promise's own amount).
+     * earn this promise, frozen at creation. A welcome promise is earned on the
+     * org's own payments; a referral promise on the REFERRED org's, bar = amount.
      */
     paidTriggerCents: integer("paid_trigger_cents").notNull(),
     /**
-     * Set on the INVITEE's promise: the org that referred them. Granting the
-     * invitee's promise is what opens the inviter's — never the invitee signing up.
+     * LEGACY (pre-0071): set on an INVITEE-held promise. Nothing writes it any more;
+     * 0071 moved every ungranted one onto its referrer.
      */
     referrerOrgId: uuid("referrer_org_id"),
     /**
-     * Set on the INVITER's promise: which referred org converted and caused it. The
-     * dashboard resolves this org to a brand name + logo through brand-service.
+     * Set on a REFERRER-held referral promise: the referred org whose payments earn
+     * it. The dashboard resolves this org to a brand name + logo through brand-service.
      */
     referredOrgId: uuid("referred_org_id"),
     /** NULL while outstanding. Stamped when the matching credit grant lands. */
@@ -403,6 +403,10 @@ export const freeCreditPromises = pgTable(
     uniqueIndex("idx_free_credit_promises_org_referred")
       .on(table.orgId, table.referredOrgId)
       .where(sql`referred_org_id IS NOT NULL`),
+    // An org is referred ONCE (0071): one referrer-held promise per referred org.
+    uniqueIndex("idx_free_credit_promises_referred_once")
+      .on(table.referredOrgId)
+      .where(sql`kind = 'referral' AND referred_org_id IS NOT NULL`),
     index("idx_free_credit_promises_org").on(table.orgId),
     index("idx_free_credit_promises_outstanding")
       .on(table.grantedAt)

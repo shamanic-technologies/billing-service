@@ -8452,8 +8452,8 @@
     },
     "/internal/referrals/claim": {
       "post": {
-        "summary": "Record that an org was referred, and open its outstanding referral promise",
-        "description": "Called by client-service when a new org signs up through another org's invite link. Opens the INVITEE's outstanding free-credit promise (its bar stacks above every bar the invitee already carries) and remembers who referred them. Grants NOTHING: the referral offer has no up-front portion, the whole amount lands when the bar is crossed. The INVITER's own promise is opened later, at the moment the invitee EARNS theirs, never from the invitee merely signing up. Idempotent: re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
+        "summary": "Record that an org was referred, and open the REFERRER's reward promise",
+        "description": "Called by client-service when a new org signs up through another org's invite link. Opens ONE promise, held by the REFERRER (promise.orgId = referrerOrgId, promise.referredOrgId = orgId): the referral amount ($500 today), granted to the referrer once the REFERRED org's cumulative real payments reach that same amount. The referred org gets nothing from the referral. Grants nothing now. Idempotent: re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
         "parameters": [
           {
             "schema": {
@@ -8520,7 +8520,7 @@
     "/v1/free-credit-promises": {
       "get": {
         "summary": "Free-credit promises this org is still waiting on",
-        "description": "Every outstanding promise, cheapest bar first: what it is worth, what unlocks it, how far along the org is, and — when the promise exists because someone they referred converted — which org that was, by name and domain (referred_org_name / referred_org_domain, resolved through brand-service and fail-soft: absent or null, never fabricated, never blocking the amounts). An outstanding promise is a promise, not money: it is NOT part of credited / balance / spendable. Settles first, so a customer returning from Stripe sees an already-earned grant land immediately; that can only make an earned grant land sooner, never conjure one.",
+        "description": "Every outstanding promise, cheapest bar first: what it is worth, what unlocks it, how far along it is, and — for a referral reward — which referred org it is waiting on, by name and domain, with progress measured on THAT org's payments (referred_org_name / referred_org_domain, resolved through brand-service and fail-soft: absent or null, never fabricated, never blocking the amounts). An outstanding promise is a promise, not money: it is NOT part of credited / balance / spendable. Settles first, so a customer returning from Stripe sees an already-earned grant land immediately; that can only make an earned grant land sooner, never conjure one.",
         "parameters": [
           {
             "schema": {
