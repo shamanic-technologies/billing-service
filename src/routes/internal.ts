@@ -52,6 +52,11 @@ import {
 import { personIdOrNull } from "../lib/welcome-recipient.js";
 import { grantOrgCreationBonus } from "../lib/promos.js";
 import {
+  assertTopupMinimum,
+  getOrgFreeCreditOffer,
+  TopupBelowMinimumError,
+} from "../lib/free-credit-offer.js";
+import {
   chargeOrgOnDemand,
   OnDemandChargeError,
 } from "../lib/on-demand-charge.js";
@@ -920,6 +925,23 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
       error: `amountCents must be at least ${STRIPE_MIN_CHARGE_CENTS} (Stripe minimum charge)`,
     });
     return;
+  }
+  // A top-up by a "We match your first $100" org is at least $100.
+  try {
+    assertTopupMinimum(await getOrgFreeCreditOffer(orgId), amountCents);
+  } catch (err) {
+    if (err instanceof TopupBelowMinimumError) {
+      res.status(400).json({
+        ok: false,
+        charged: false,
+        amountCents,
+        code: err.code,
+        minimum_cents: err.minimumCents,
+        error: err.message,
+      });
+      return;
+    }
+    throw err;
   }
 
   try {

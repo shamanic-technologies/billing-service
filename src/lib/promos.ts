@@ -1,5 +1,6 @@
 import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { isMatchOfferOrg, matchUpFrontAllowed } from "./free-credit-offer.js";
 import {
   billingAccounts,
   localPromoCodes,
@@ -47,6 +48,12 @@ export interface RedeemResult {
  *
  * Throws specific errors so callers can map to HTTP codes.
  */
+export class WelcomeNotOfferedError extends Error {
+  constructor(orgId: string) {
+    super(`org ${orgId} is on the match_100 offer: the welcome gift is not part of it`);
+  }
+}
+
 export async function redeemPromoCode(
   orgId: string,
   userId: string,
@@ -59,6 +66,11 @@ export async function redeemPromoCode(
     .limit(1);
 
   if (!promo) throw new PromoNotFoundError(code);
+  // A match_100 org's only up-front gift is its org-creation bonus: the welcome
+  // gift never stacks on it (lib/free-credit-offer).
+  if (code === WELCOME_PROMO_CODE && (await isMatchOfferOrg(orgId))) {
+    throw new WelcomeNotOfferedError(orgId);
+  }
   if (promo.expiresAt && promo.expiresAt < new Date()) {
     throw new PromoExpiredError(code);
   }
@@ -118,9 +130,11 @@ export async function sumLocalPromoCreditsForOrg(orgId: string): Promise<string>
  * gifted`, which is what keeps it correct across cohorts and re-prices. Referral
  * rewards are additional money on top of the welcome offer, never a replacement for
  * it (a $500 referral must not swallow a $400 welcome remainder), so they are the one
- * grant kind excluded here. The org-creation bonus is excluded for the same reason: it
- * is not part of the welcome offer and must never shrink a welcome remainder. For an
- * org holding neither this is byte-identical to `sumLocalPromoCreditsForOrg`.
+ * grant kind excluded here. The org-creation bonus COUNTS (migration 0066): for a
+ * match_100 org it IS the $30 up-front part of the $100 offer, so the remainder is
+ * $70. (It used to be excluded; at 0066's ship the only org holding one had an
+ * entitlement of 0, so no existing remainder moved.) For an org holding no referral
+ * reward this is byte-identical to `sumLocalPromoCreditsForOrg`.
  */
 export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string> {
   const [row] = await db
@@ -132,7 +146,7 @@ export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string>
     .where(
       and(
         eq(localPromos.orgId, orgId),
-        rawSql`${localPromoCodes.code} NOT IN (${REFERRAL_REWARD_CODE}, ${ORG_CREATION_BONUS_CODE})`
+        rawSql`${localPromoCodes.code} <> ${REFERRAL_REWARD_CODE}`
       )
     );
   return row?.total ?? "0.0000000000";
@@ -342,6 +356,19 @@ export async function grantOrgCreationBonus(
     .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
     .limit(1);
   if (!code) throw new GrantPromoCodeMissingError(ORG_CREATION_BONUS_CODE);
+
+  // The match ended (orgs created on or after 2026-11-01): no $30. An org that
+  // already received it keeps it and is answered as before.
+  if (!(await matchUpFrontAllowed(orgId))) {
+    const [existing] = await db
+      .select({ amountCents: localPromos.amountCents })
+      .from(localPromos)
+      .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, code.id)))
+      .limit(1);
+    return existing
+      ? { grantedCents: Number(existing.amountCents), alreadyGranted: true }
+      : { grantedCents: 0, alreadyGranted: false };
+  }
 
   const inserted = await db
     .insert(localPromos)

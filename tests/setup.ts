@@ -56,9 +56,12 @@ beforeAll(async () => {
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_paid_trigger_cents" integer NOT NULL DEFAULT 2500`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 3000`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 3000`;
-  // 0066-0068: the $100 match was added then reverted before any org received it;
-  // a local DB that ran the suite in between may still carry the dropped column.
-  await sql`ALTER TABLE "billing_accounts" DROP COLUMN IF EXISTS "free_credit_offer"`;
+  // "We match your first $100" (migration 0066): a cohort column (existing rows
+  // 'legacy', new ones 'match_100') and the $100/$100 figure defaults.
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_offer" text NOT NULL DEFAULT 'legacy'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'match_100'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT (CASE WHEN now() < '2026-11-01 00:00:00+00'::timestamptz THEN 10000 ELSE 0 END)`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT (CASE WHEN now() < '2026-11-01 00:00:00+00'::timestamptz THEN 10000 ELSE 0 END)`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
   // Subscription checkout stamp (migration 0055).
@@ -376,7 +379,7 @@ beforeAll(async () => {
            ('referral_reward', 50000, NULL, NULL),
            ('product_task_completed', 0, NULL, NULL),
            ('trial_seed', 0, NULL, NULL),
-           ('org_creation_bonus', 500, NULL, NULL),
+           ('org_creation_bonus', 3000, NULL, NULL),
            ('subscription_trial', 9900, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
