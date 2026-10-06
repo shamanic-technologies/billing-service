@@ -22,6 +22,8 @@ import {
   subscriptionCreditExpiries,
   platformOrgs,
   salesPathReactiveCharges,
+  paymentAlerts,
+  paymentAlertSignals,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -62,6 +64,8 @@ export async function cleanTestData() {
   // Keep 0057's seeded row; drop any a test added.
   await db.delete(platformOrgs).where(notInArray(platformOrgs.orgId, [SEEDED_PLATFORM_ORG_ID]));
   await db.delete(salesPathReactiveCharges);
+  await db.delete(paymentAlerts);
+  await db.delete(paymentAlertSignals);
   await db.delete(subscriptionCreditExpiries);
   await db.delete(subscriptionCharges);
   await db.delete(subscriptions);

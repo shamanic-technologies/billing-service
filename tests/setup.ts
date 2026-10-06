@@ -355,6 +355,7 @@ beforeAll(async () => {
     "0063_campaign_item_budgets.sql",
     "0064_campaign_budget_one_store.sql",
     "0065_campaign_budget_plan_derived.sql",
+    "0072_payment_alerts.sql",
   ]) {
     const { readFileSync } = await import("fs");
     const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
