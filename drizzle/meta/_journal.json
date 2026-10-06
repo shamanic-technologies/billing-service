@@ -512,6 +512,13 @@
       "when": 1794391200000,
       "tag": "0072_payment_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1794477600000,
+      "tag": "0073_owner_alerts",
+      "breakpoints": true
     }
   ]
 }

@@ -60,6 +60,7 @@
  * keyed (one charge row per period, one expiry per boundary).
  */
 
+import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { and, asc, desc, eq, gte, isNotNull, ne, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -446,6 +447,12 @@ export async function startSubscription(params: {
     await enterSubscriptionMode(orgId);
     await grantSubscriptionTrial(orgId);
     console.log(`[billing-service] subscription: org ${orgId} started a trial (${amount} cents/month)`);
+    notifyOwnerBillingEvent({
+      orgId,
+      emoji: "🆕",
+      text: `Subscription started: ${usd(amount)}/month, ${SUBSCRIPTION_TRIAL_DAYS}-day free trial`,
+      dedupKey: `sub-started:${sub.id}`,
+    });
     return sub;
   }
 
@@ -490,6 +497,12 @@ export async function startSubscription(params: {
     .where(eq(subscriptions.id, sub.id))
     .returning();
   await enterSubscriptionMode(orgId);
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "🆕",
+    text: `Subscription started: ${usd(amount)}/month, first month paid now`,
+    dedupKey: `sub-started:${active.id}`,
+  });
   return active;
 }
 
@@ -612,6 +625,12 @@ export async function startPlanForOffer(params: {
   console.log(
     `[billing-service] plan: org ${orgId} bought ${monthlyAmountCents} cents/month for brand ${brandId} x offer ${offerId}`
   );
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "🆕",
+    text: `New plan started: ${usd(monthlyAmountCents)}/month, first month paid now`,
+    dedupKey: `sub-started:${active.id}`,
+  });
   return active;
 }
 
@@ -851,6 +870,12 @@ async function endSubscription(sub: Subscription, at: Date, now: Date): Promise<
     .where(eq(subscriptions.id, sub.id))
     .returning();
   console.log(`[billing-service] subscription: org ${sub.orgId} ended at ${at.toISOString()}`);
+  notifyOwnerBillingEvent({
+    orgId: sub.orgId,
+    emoji: "🛑",
+    text: `Subscription ended (${usd(sub.monthlyAmountCents)}/month)`,
+    dedupKey: `sub-ended:${sub.id}`,
+  });
   return ended;
 }
 
@@ -1166,6 +1191,11 @@ export async function changeSubscriptionAmount(
     .set({ monthlyAmountCents, updatedAt: now })
     .where(eq(subscriptions.id, sub.id))
     .returning();
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: monthlyAmountCents > sub.monthlyAmountCents ? "⬆️" : "⬇️",
+    text: `Subscription ${monthlyAmountCents > sub.monthlyAmountCents ? "upgraded" : "downgraded"}: ${usd(sub.monthlyAmountCents)} → ${usd(monthlyAmountCents)}/month, from the next charge`,
+  });
   return updated;
 }
 
@@ -1278,6 +1308,11 @@ export async function startSubscriptionNow(
   console.log(
     `[billing-service] subscription: org ${orgId} started plan ${sub.id} now at ${monthlyAmountCents} cents/month (trial ended early)`
   );
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "🚀",
+    text: `Trial ended early: plan started now at ${usd(monthlyAmountCents)}/month (paid today)`,
+  });
   return active;
 }
 
@@ -1307,6 +1342,11 @@ export async function cancelSubscription(
     .set({ cancelAtPeriodEnd: true, canceledAt: now, updatedAt: now })
     .where(eq(subscriptions.id, sub.id))
     .returning();
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "❌",
+    text: `Subscription cancelled (${usd(sub.monthlyAmountCents)}/month): ends ${sub.currentPeriodEnd.toISOString().slice(0, 10)}, sending stopped now`,
+  });
   return updated;
 }
 
@@ -1325,6 +1365,11 @@ export async function resumeSubscription(
     .set({ cancelAtPeriodEnd: false, canceledAt: null, updatedAt: now })
     .where(eq(subscriptions.id, sub.id))
     .returning();
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "↩️",
+    text: `Cancellation undone: subscription kept at ${usd(sub.monthlyAmountCents)}/month`,
+  });
   return updated;
 }
 
@@ -1415,6 +1460,11 @@ export async function pauseSubscription(
   console.log(
     `[billing-service] subscription: org ${orgId} paused plan ${sub.id} for ${months} month(s)`
   );
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "⏸️",
+    text: `Subscription paused for ${months} month${months > 1 ? "s" : ""} (${usd(sub.monthlyAmountCents)}/month)`,
+  });
   return paused;
 }
 
@@ -1456,7 +1506,13 @@ export async function unpauseSubscription(
   if (!sub.pausedAt) {
     throw new SubscriptionRefused("subscription_not_paused", "The plan is not paused.");
   }
-  return advanceSubscription(await unpauseAt(sub, now, now), now);
+  const resumed = await advanceSubscription(await unpauseAt(sub, now, now), now);
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "▶️",
+    text: `Subscription unpaused (${usd(sub.monthlyAmountCents)}/month)`,
+  });
+  return resumed;
 }
 
 /** Why a subscription org may not spend right now (null = it may). */

@@ -18,11 +18,13 @@ import paymentModeRoutes from "../../src/routes/payment_mode.js";
 import subscriptionRoutes from "../../src/routes/subscription.js";
 import acquirerRoutes from "../../src/routes/acquirer.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
+import { ownerAlertActorMiddleware } from "../../src/lib/owner-alerts.js";
 
 export function createTestApp() {
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use(ownerAlertActorMiddleware);
 
   app.use(healthRoutes);
   app.use(publicStatsRoutes);

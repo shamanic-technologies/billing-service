@@ -362,7 +362,15 @@ Owner 2026-10-06: « JE NE RECOIS PAS DE NOTIF QUAND ON A UN CLIENT QUI A PAYE �
 - **Scan**: every 30s the hot orgs (checkout opened / off-session charge in 48h), every 10 min every billing account (backstop: an invoice paid later from its hosted page). 45s grace so the charge's signal lands first.
 - **Labels from `payment_alert_signals`**: `reloadOffSession` records each succeeded charge with its metadata `reason` (Revolut: matched by reference; Stripe answers an invoice id, so matched on amount within 15 min); no signal = checkout top-up. A new `reloadOffSession` reason maps in `kindFromChargeReason`.
 - **Never the owner's own actions**: `direct` (hand-recorded) payments ignored; platform orgs and a checkout opened by staff (`isStaffEmail`: api-service `STAFF_EMAILS` mirror + any `@distribute.you`) are claimed `skipped`.
-- Refunds are not alerted.
+- Refunds are not alerted (issued by staff by hand = the owner's own action; a lost dispute is indistinguishable here).
+
+### Every other customer billing event (`src/lib/owner-alerts.ts`, migration 0073)
+
+Owner 2026-10-06: « Also send me a telegram message when there is a billing information, like topup, change in auto-topup, cancellation, upgrade in subscription, anything like that ». `notifyOwnerBillingEvent({orgId, text, emoji, dedupKey?})` is the ONE sender: fired AFTER the write, never awaited, never throws. Events: auto top-up ON / changed (from → to) / OFF (a re-save is no event); card removed; customer payment-mode switch; charge refused (`reloadOffSession`, once per org per UTC day); subscription started (trial or paid), new plan, upgraded / downgraded, trial ended early (start now), cancelled, cancellation undone, paused, unpaused, ended; brand/campaign budget change (one line from the staff budget email's `action`).
+
+- **Never the owner's own actions**: `ownerAlertActorMiddleware` puts the request's `x-email` in AsyncLocalStorage; a staff address sends nothing (sweeps have no actor = the system). The staff payment-mode route and platform orgs send nothing.
+- **Once**: a sweep-reachable event carries a `dedupKey` claimed in `owner_alerts` (released if the send fails). A route event is one write = one message.
+- Left out on purpose: card ADDED (stripe-service sees it, billing does not), renewals (the payment alert already says "Subscription charge"), automatic pause end, plan re-pricing from campaign budgets (the budget line already reports it), staff grants/debits.
 
 ## Billing/runs ownership target
 
