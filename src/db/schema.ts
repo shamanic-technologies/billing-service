@@ -1193,3 +1193,11 @@ export const paymentAlertSignals = pgTable("payment_alert_signals", {
   matchedPaymentKey: text("matched_payment_key"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Once-only claim for an owner Telegram billing event (migration 0073, lib/owner-alerts).
+export const ownerAlerts = pgTable("owner_alerts", {
+  dedupKey: text("dedup_key").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

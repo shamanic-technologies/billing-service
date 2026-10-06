@@ -24,6 +24,7 @@ import {
   salesPathReactiveCharges,
   paymentAlerts,
   paymentAlertSignals,
+  ownerAlerts,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -66,6 +67,7 @@ export async function cleanTestData() {
   await db.delete(salesPathReactiveCharges);
   await db.delete(paymentAlerts);
   await db.delete(paymentAlertSignals);
+  await db.delete(ownerAlerts);
   await db.delete(subscriptionCreditExpiries);
   await db.delete(subscriptionCharges);
   await db.delete(subscriptions);

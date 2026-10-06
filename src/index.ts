@@ -27,6 +27,7 @@ import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 import { deployEmailTemplates } from "./instrument.js";
 import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
 import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
+import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +36,8 @@ const PORT = process.env.PORT || 3012;
 
 app.use(cors());
 app.use(express.json());
+// Who is acting (x-email), for the owner billing alerts (never the owner's own actions).
+app.use(ownerAlertActorMiddleware);
 
 // Public routes
 app.use(healthRoutes);

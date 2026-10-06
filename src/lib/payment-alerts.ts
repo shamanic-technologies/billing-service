@@ -104,6 +104,11 @@ const KIND_LABELS: Record<PaymentKind, string> = {
   card_change_settle: "Balance settled at card change",
 };
 
+/** Owner-readable name of what an off-session charge was for. */
+export function chargeReasonLabel(reason: string | undefined): string {
+  return KIND_LABELS[kindFromChargeReason(reason)];
+}
+
 function paymentKey(p: OrgPayment): string {
   return `${p.acquirer}:${p.id}`;
 }

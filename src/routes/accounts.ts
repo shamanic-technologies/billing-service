@@ -1,3 +1,4 @@
+import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -546,6 +547,17 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
       return;
     }
 
+    if (outcome.detached.length > 0) {
+      notifyOwnerBillingEvent({
+        orgId,
+        emoji: "💳",
+        text:
+          "Card removed" +
+          (outcome.autoTopupDisarmed ? ", automatic reload turned off" : "") +
+          (outcome.settlement.chargedCents > 0 ? ` (${usd(outcome.settlement.chargedCents)} owed was collected first)` : ""),
+      });
+    }
+
     res.json({
       object: "saved_payment_method_removed",
       org_id: orgId,
@@ -559,6 +571,27 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/** Owner alert for a real auto top-up change (a re-save of the same values is not one). */
+function notifyAutoTopupChange(
+  orgId: string,
+  before: { topupAmountCents: number | null; topupThresholdCents: number | null },
+  amount: number,
+  threshold: number
+): void {
+  const now = `${usd(amount)} when the balance falls below ${usd(threshold)}`;
+  if (before.topupAmountCents == null) {
+    notifyOwnerBillingEvent({ orgId, emoji: "⚙️", text: `Automatic reload turned ON: ${now}` });
+    return;
+  }
+  if (before.topupAmountCents === amount && before.topupThresholdCents === threshold) return;
+  const was = `${usd(before.topupAmountCents)} below ${usd(before.topupThresholdCents ?? 0)}`;
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "⚙️",
+    text: `Automatic reload changed: ${was} → ${usd(amount)} below ${usd(threshold)}`,
+  });
+}
 
 router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
@@ -709,6 +742,7 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
+    notifyAutoTopupChange(orgId, account, topup_amount_cents, topup_threshold_cents);
 
     let funds;
     try {
@@ -754,6 +788,9 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
+    if (account.topupAmountCents != null) {
+      notifyOwnerBillingEvent({ orgId, emoji: "⚙️", text: "Automatic reload turned OFF" });
+    }
 
     let funds;
     try {
