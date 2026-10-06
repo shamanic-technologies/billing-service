@@ -13,6 +13,9 @@ import {
   withdrawFreeCreditOffer,
 } from "./welcome-recipient.js";
 import { getSubscriptionTrialGrantCents } from "./subscription.js";
+import { getOrgFreeCreditOffer } from "./free-credit-offer.js";
+import { grantOrgCreationBonus, sumEntitlementGrantsForOrg } from "./promos.js";
+import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
 
 /**
  * Trial seed — free credit for an org that has NOT signed up yet, and the settlement
@@ -132,6 +135,17 @@ export interface TrialSeedResult {
  * is exactly the "welcome amount PLUS the seed" outcome this exists to prevent.
  */
 export async function seedTrialCredit(orgId: string): Promise<TrialSeedResult> {
+  // "We match your first $100": a NEW org's up-front free credit is its ONE
+  // org-creation bonus ($30), whichever path asks first — so the anonymous walk gets
+  // the same $30 a dashboard-created org gets, and a racing first billing touch can
+  // never add a second up-front gift (same unique row). No `trial_seed` row.
+  // The account first, so its offer is the one the DB default gives a new org.
+  await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
+  if ((await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER) {
+    const bonus = await grantOrgCreationBonus(orgId);
+    return { orgId, seededCents: bonus.grantedCents, alreadySeeded: bonus.alreadyGranted };
+  }
+
   const welcome = await requirePromoCode(WELCOME_PROMO_CODE);
   const seedCode = await requirePromoCode(TRIAL_SEED_CODE);
 
@@ -224,6 +238,23 @@ export async function settleSignupWelcome(
   orgId: string,
   personId: string | null
 ): Promise<SignupWelcomeResult> {
+  // A match_100 org gets NO welcome at signup and its offer is never zeroed by the
+  // person's history: its whole up-front gift is the org-creation bonus (granted here
+  // too, idempotently, for an org that reached signup without one).
+  // The account first, so its offer is the one the DB default gives a new org.
+  await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
+  if ((await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER) {
+    await grantOrgCreationBonus(orgId);
+    return {
+      orgId,
+      trialSeedCents: await sumTrialSeedGrantsForOrg(orgId),
+      welcomeGrantedCents: 0,
+      totalFreeCreditCents: Math.round(Number(await sumEntitlementGrantsForOrg(orgId))),
+      alreadySettled: true,
+      welcomeReceivedElsewhere: false,
+    };
+  }
+
   const welcome = await requirePromoCode(WELCOME_PROMO_CODE);
   const trialSeedCents = await sumTrialSeedGrantsForOrg(orgId);
 

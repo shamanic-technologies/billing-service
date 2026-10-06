@@ -48,6 +48,7 @@
 import { Decimal } from "decimal.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
 import { computeTopupCharge, reloadTierFor } from "./topup-tier.js";
+import type { ConfiguredReload } from "./free-credit-offer.js";
 import { cannotSpend } from "./spend-block.js";
 import {
   floorCrossingAt,
@@ -132,6 +133,8 @@ export function replayCharges(params: {
   paymentMode: PaymentMode;
   /** Present the floor reload at `now` first (the outlook said it is due). */
   dueNow: boolean;
+  /** A match_100 org's own reload configuration (lib/free-credit-offer); absent = ladder. */
+  configuredReload?: ConfiguredReload | null;
 }): ExpectedCharge[] {
   const events: ExpectedCharge[] = [];
   const burn = new Decimal(params.dailyBurnCents);
@@ -156,7 +159,7 @@ export function replayCharges(params: {
   };
 
   if (params.dueNow) {
-    const tier = reloadTierFor(fixed(paid), params.paymentMode);
+    const tier = reloadTierFor(fixed(paid), params.paymentMode, params.configuredReload);
     const target = required.plus(tier.thresholdCents);
     const amount =
       computeTopupCharge(fixed(balance), fixed(target), tier.amountCents) ||
@@ -165,7 +168,7 @@ export function replayCharges(params: {
   }
 
   while (events.length < MAX_EVENTS) {
-    const tier = reloadTierFor(fixed(paid), params.paymentMode);
+    const tier = reloadTierFor(fixed(paid), params.paymentMode, params.configuredReload);
     const floor = String(tier.thresholdCents);
     const target = required.plus(tier.thresholdCents);
 
@@ -266,6 +269,7 @@ export function chargeScheduleFrom(
       dailyBurnCents: outlook.realizedDailyBurnCents,
       paymentMode: outlook.paymentMode,
       dueNow: outlook.state === "charge_due_now",
+      configuredReload: inputs.configuredReload,
     });
   } else if (
     outlook.trigger === "retry_rung" &&
@@ -276,7 +280,11 @@ export function chargeScheduleFrom(
     // A refused card: one attempt at the next rung, the amount the reload sweep
     // would ask for. Nothing after it — a schedule built on the bank saying yes
     // would be a prediction billing cannot make.
-    const tier = reloadTierFor(inputs.paidTopupsCents, outlook.paymentMode);
+    const tier = reloadTierFor(
+      inputs.paidTopupsCents,
+      outlook.paymentMode,
+      inputs.configuredReload
+    );
     const target = new Decimal(inputs.requiredCents).plus(tier.thresholdCents);
     const amount =
       computeTopupCharge(inputs.balanceCents, fixed(target), tier.amountCents) ||

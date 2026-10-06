@@ -1,5 +1,6 @@
 import { Decimal } from "decimal.js";
 import type { PaymentMode } from "./payment-mode-types.js";
+import type { ConfiguredReload } from "./free-credit-offer.js";
 
 /**
  * Threshold-based postpaid top-up tiers (Google/Meta-Ads billing cadence).
@@ -72,6 +73,11 @@ export function resolvePostpaidTier(params: {
    * every org that has not chosen otherwise.
    */
   paymentMode?: PaymentMode;
+  /**
+   * The org's OWN reload configuration when it binds (a match_100 org, see
+   * lib/free-credit-offer `configuredReloadFor`); null/absent = the derived ladder.
+   */
+  configuredReload?: ConfiguredReload | null;
 }): { tier: TopupTier | null; thresholdCents: string } {
   // SUBSCRIPTION never reloads and extends no credit: its money is the monthly
   // invoice Stripe charges on its own schedule, and spend stops at zero (owner
@@ -80,15 +86,15 @@ export function resolvePostpaidTier(params: {
   const canReload =
     params.topupEnabled && params.hasCardPm && params.autoReloadSupported;
   if (!canReload) return { tier: null, thresholdCents: "0" };
-  const ladder = tierFor(params.paidTopupsCents);
   // PREPAID extends no credit: the floor is ZERO whatever the org has paid. Auto
   // top-up still reloads the ladder's amount, but only once the next run would
   // take the balance below zero — so a prepaid org never spends money it has not
   // paid in first.
-  const tier =
-    params.paymentMode === "prepaid"
-      ? { thresholdCents: 0, amountCents: ladder.amountCents }
-      : ladder;
+  const tier = reloadTierFor(
+    params.paidTopupsCents,
+    params.paymentMode ?? "postpaid",
+    params.configuredReload
+  );
   return { tier, thresholdCents: String(tier.thresholdCents) };
 }
 
@@ -99,7 +105,8 @@ export function resolvePostpaidTier(params: {
  */
 export function reloadTierFor(
   paidTopupsCents: string,
-  paymentMode: PaymentMode
+  paymentMode: PaymentMode,
+  configuredReload?: ConfiguredReload | null
 ): TopupTier {
   if (paymentMode === "subscription") {
     // Unreachable by construction (resolvePostpaidTier grants a subscription org no
@@ -108,6 +115,20 @@ export function reloadTierFor(
     throw new Error("[billing-service] a subscription org has no reload tier");
   }
   const ladder = tierFor(paidTopupsCents);
+  if (configuredReload) {
+    // A match_100 org's own configuration binds (minimums already applied): prepaid
+    // reloads its amount when the balance would fall below its POSITIVE threshold;
+    // postpaid keeps the ladder's credit line but never reloads less than its amount.
+    return paymentMode === "prepaid"
+      ? {
+          thresholdCents: configuredReload.thresholdCents,
+          amountCents: configuredReload.amountCents,
+        }
+      : {
+          thresholdCents: ladder.thresholdCents,
+          amountCents: Math.max(ladder.amountCents, configuredReload.amountCents),
+        };
+  }
   return paymentMode === "prepaid"
     ? { thresholdCents: 0, amountCents: ladder.amountCents }
     : ladder;
