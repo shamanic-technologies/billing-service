@@ -250,64 +250,7 @@ describe("We match your first $100", () => {
     expect(reloadTierFor("0", "prepaid")).toEqual({ thresholdCents: 0, amountCents: 5000 });
   });
 
-  it("the match ends for accounts created on or after 2026-11-01 00:00 UTC (date-aware DEFAULT)", async () => {
-    const rows = (await sql`
-      SELECT column_name, column_default FROM information_schema.columns
-       WHERE table_name = 'billing_accounts'
-         AND column_name IN ('free_credit_entitlement_cents', 'free_credit_paid_trigger_cents')
-    `) as unknown as { column_name: string; column_default: string }[];
-    expect(rows).toHaveLength(2);
-    for (const row of rows) {
-      const at = async (iso: string) => {
-        const expr = row.column_default.replace(/now\(\)/g, `'${iso}'::timestamptz`);
-        const [r] = (await sql.unsafe(`SELECT (${expr})::int AS v`)) as unknown as { v: number }[];
-        return r.v;
-      };
-      expect(await at("2026-10-31 23:59:59+00")).toBe(10000);
-      expect(await at("2026-11-01 00:00:00+00")).toBe(0);
-    }
-  });
-
-  it("an org created after the end gets no $30 (no account yet: the clock decides)", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-11-01T00:00:00.000Z"));
-    try {
-      const res = await request(app)
-        .post(`/internal/accounts/by-org/${orgId}/org-creation-bonus`)
-        .set(internal);
-      expect(res.status).toBe(200);
-      expect(res.body.grantedCents).toBe(0);
-      expect(await rowsByCode(orgId, ORG_CREATION_BONUS_CODE)).toHaveLength(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("an account created after the end (entitlement 0) gets neither the $30 nor the +$70", async () => {
-    await db.insert(billingAccounts).values({
-      orgId,
-      freeCreditEntitlementCents: 0,
-      freeCreditPaidTriggerCents: 0,
-    });
-    const seed = await request(app)
-      .post(`/internal/accounts/by-org/${orgId}/trial-seed`)
-      .set(internal);
-    expect(seed.body.seededCents).toBe(0);
-    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(cents(20000));
-    const res = await account(orgId);
-    expect(res.body.credited_gifted_cents).toBe(cents(0));
-    expect(res.body.free_credit_pending_cents).toBe(cents(0));
-    expect(res.body.free_credit_remaining_to_pay_cents).toBe(cents(0));
-    expect(await rowsByCode(orgId, WELCOME_COMPLETION_CODE)).toHaveLength(0);
-    // The minimums are not part of the promotion: they still apply.
-    const low = await request(app)
-      .post("/v1/checkout-sessions")
-      .set(getAuthHeaders(orgId, person))
-      .send({ success_url: "https://x/s", cancel_url: "https://x/c", topup_amount_cents: 9900 });
-    expect(low.body.code).toBe("topup_below_minimum");
-  });
-
-  it("an org created before the end keeps its +$70 when it pays after it", async () => {
+  it("the match has no end date: +$70 still lands on a payment months later", async () => {
     await account(orgId);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-12-15T00:00:00.000Z"));
@@ -320,14 +263,20 @@ describe("We match your first $100", () => {
     }
   });
 
-  it("migration 0069 (the match re-ship) replayed twice: an existing account stays legacy, a new one is match_100 at $100/$100", async () => {
+  it("migrations 0069 + 0070 replayed twice: an existing account stays legacy, a new one is match_100 at $100/$100", async () => {
     await insertTestAccount({ orgId: legacyOrgId, freeCreditEntitlementCents: 3000, freeCreditPaidTriggerCents: 3000 });
     const migration = readFileSync(
       new URL("../../drizzle/0069_reship_match_first_100_offer.sql", import.meta.url),
       "utf8"
     );
-    await sql.unsafe(migration);
-    await sql.unsafe(migration);
+    const noEndDate = readFileSync(
+      new URL("../../drizzle/0070_match_no_end_date.sql", import.meta.url),
+      "utf8"
+    );
+    for (let i = 0; i < 2; i += 1) {
+      await sql.unsafe(migration);
+      await sql.unsafe(noEndDate);
+    }
     await db.insert(billingAccounts).values({ orgId });
     const rows = await db.select().from(billingAccounts);
     const byOrg = Object.fromEntries(rows.map((r) => [r.orgId, r]));

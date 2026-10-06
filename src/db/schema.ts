@@ -82,17 +82,6 @@ export type FreeCreditOfferKind =
   | typeof LEGACY_FREE_CREDIT_OFFER
   | typeof MATCH_FREE_CREDIT_OFFER;
 
-/**
- * The match is a LIMITED offer (owner 2026-10-06): it runs until October 31, 2026. An
- * account created at or after this instant gets neither the $30 nor the +$70 — its
- * entitlement/trigger columns default to 0 (migration 0067's date-aware DEFAULT), and
- * no org-creation bonus is granted to it. Orgs created before keep the whole match,
- * including a +$70 earned after the date. The minimums below are NOT part of the
- * promotion and keep applying.
- */
-export const MATCH_OFFER_ENDS_AT_ISO = "2026-11-01T00:00:00.000Z";
-export const MATCH_OFFER_ENDS_AT_MS = Date.parse(MATCH_OFFER_ENDS_AT_ISO);
-
 /** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
 export const MATCH_MIN_TOPUP_CENTS = 10000;
 /** Smallest "reload when the balance falls below X" a match_100 org may configure. */

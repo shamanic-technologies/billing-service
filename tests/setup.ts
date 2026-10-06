@@ -60,8 +60,8 @@ beforeAll(async () => {
   // 'legacy', new ones 'match_100') and the $100/$100 figure defaults.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "free_credit_offer" text NOT NULL DEFAULT 'legacy'`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'match_100'`;
-  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT (CASE WHEN now() < '2026-11-01 00:00:00+00'::timestamptz THEN 10000 ELSE 0 END)`;
-  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT (CASE WHEN now() < '2026-11-01 00:00:00+00'::timestamptz THEN 10000 ELSE 0 END)`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 10000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 10000`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
   // Subscription checkout stamp (migration 0055).
