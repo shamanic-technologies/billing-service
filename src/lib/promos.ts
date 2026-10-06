@@ -1,6 +1,6 @@
 import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { isMatchOfferOrg, matchUpFrontAllowed } from "./free-credit-offer.js";
+import { isMatchOfferOrg } from "./free-credit-offer.js";
 import {
   billingAccounts,
   localPromoCodes,
@@ -356,19 +356,6 @@ export async function grantOrgCreationBonus(
     .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
     .limit(1);
   if (!code) throw new GrantPromoCodeMissingError(ORG_CREATION_BONUS_CODE);
-
-  // The match ended (orgs created on or after 2026-11-01): no $30. An org that
-  // already received it keeps it and is answered as before.
-  if (!(await matchUpFrontAllowed(orgId))) {
-    const [existing] = await db
-      .select({ amountCents: localPromos.amountCents })
-      .from(localPromos)
-      .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, code.id)))
-      .limit(1);
-    return existing
-      ? { grantedCents: Number(existing.amountCents), alreadyGranted: true }
-      : { grantedCents: 0, alreadyGranted: false };
-  }
 
   const inserted = await db
     .insert(localPromos)

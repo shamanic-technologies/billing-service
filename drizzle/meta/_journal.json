@@ -491,6 +491,13 @@
       "when": 1794132000000,
       "tag": "0069_reship_match_first_100_offer",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1794218400000,
+      "tag": "0070_match_no_end_date",
+      "breakpoints": true
     }
   ]
 }
