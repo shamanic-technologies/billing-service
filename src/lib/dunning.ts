@@ -36,8 +36,6 @@ import { cannotSpend, resolveSpendBlock } from "./spend-block.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
-import { getLiveSubscription } from "./subscription.js";
-import { notifySubscriptionCreditsUsedIfDue } from "./subscription-notifications.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const FOLLOWUP_3D_MS = 3 * DAY_MS;
@@ -137,10 +135,10 @@ export async function openDepletionEpisodeIfDepleted(
   params: OpenEpisodeParams
 ): Promise<{ opened: boolean }> {
   // A SUBSCRIPTION org running out of the month's credit is the plan working, not
-  // a payment problem: no episode, and the customer gets the celebratory
-  // "all your outbound went out" email instead (lib/subscription-notifications).
+  // a payment problem: no episode, no dunning, and NO email at all (the "credits
+  // used" upsell email was deleted, owner 2026-10-06). Keep this branch: removing
+  // it would route subscription orgs into the generic out-of-credit dunning.
   if (await isSubscriptionOrg(params.orgId)) {
-    void notifySubscriptionCreditsUsedIfDue(params.orgId, await getLiveSubscription(params.orgId));
     return { opened: false };
   }
   const blocked = cannotSpend(

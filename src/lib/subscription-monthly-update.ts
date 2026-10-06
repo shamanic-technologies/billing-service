@@ -1,9 +1,8 @@
 /**
  * The informational monthly update (owner 2026-10-04, lyon-v3 relay + review in
  * this repo): every subscription org gets "Your month for <brand>" at the END of
- * each period, independent of credit consumption, apart from the promotional
- * "month booked" email (lib/subscription-notifications, sent on top only when the
- * expected return is above 1x). Copy: lib/subscription-monthly-update-email.
+ * each period, independent of credit consumption. Copy:
+ * lib/subscription-monthly-update-email.
  *
  * Timing: the hourly subscription sweep calls this after advancing the plan. A
  * period is "closed" once `current_period_start` has moved past the end of the
@@ -30,7 +29,7 @@ import { fetchBrandName, fetchOrgIdentity } from "./budget-change-context.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import { fetchSubscriptionRecap } from "./subscription-recap-client.js";
-import { DASHBOARD_URL } from "./subscription-notifications.js";
+import { DASHBOARD_URL } from "./subscription-email-format.js";
 import { composeMonthlyUpdateEmail, recapHasActivity } from "./subscription-monthly-update-email.js";
 
 export const SUBSCRIPTION_MONTHLY_UPDATE_EVENT = "subscription-monthly-update";
