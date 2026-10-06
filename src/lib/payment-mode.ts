@@ -33,6 +33,7 @@
  * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
+import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -268,6 +269,17 @@ export async function setPaymentMode(
     `[billing-service] payment mode: org ${orgId} ${current} → ${target}` +
       (settledCents !== "0" ? ` (settled ${settledCents} cents first)` : "")
   );
+  // Staff switches (internal route) are the owner's own action: never alerted.
+  if (actor === "customer") {
+    notifyOwnerBillingEvent({
+      orgId,
+      emoji: "🔁",
+      text:
+        `Payment mode: ${current} → ${target}` +
+        (settledCents !== "0" ? ` (${usd(settledCents)} owed collected first)` : "") +
+        (updated.topupAmountCents != null && account.topupAmountCents == null ? ", automatic reload turned on" : ""),
+    });
+  }
 
   return {
     orgId,

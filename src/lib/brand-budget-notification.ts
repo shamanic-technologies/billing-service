@@ -35,6 +35,8 @@
  * awaited by any route.
  */
 
+import { currentActorEmail, notifyOwnerBillingEvent } from "./owner-alerts.js";
+import { isStaffEmail } from "./payment-alerts.js";
 import { Decimal } from "decimal.js";
 import { cmpCents } from "./cents.js";
 import { sendEmail } from "./email-client.js";
@@ -98,6 +100,11 @@ export interface BrandDailyBudgetChangeNotification {
  * ONE send path for both notifications (a budget write and a status change), so
  * the two cannot drift: same event, same template, same variables.
  */
+function notifyOwnerTelegramForBudget(orgId: string, actingEmail: string | null, action: string): void {
+  if (isStaffEmail(actingEmail ?? currentActorEmail())) return;
+  notifyOwnerBillingEvent({ orgId, emoji: "💸", text: `Budget: ${action}` });
+}
+
 export function sendStaffEmail(
   params: { orgId: string; userId: string; runId: string; actingEmail?: string | null },
   email: BudgetChangeEmail
@@ -110,6 +117,10 @@ export function sendStaffEmail(
     summaryText: email.summaryText,
   };
   if (params.actingEmail) metadata.email = params.actingEmail;
+
+  // Same event on the owner's Telegram, one line (the email carries the detail).
+  // x-email is the acting person; a staff change is the owner's own action.
+  notifyOwnerTelegramForBudget(params.orgId, params.actingEmail ?? null, email.action);
 
   sendEmail({
     eventType: BRAND_DAILY_BUDGET_CHANGED_EVENT,

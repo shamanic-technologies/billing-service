@@ -30,9 +30,10 @@
  * same as they did for the invoiced charge, whichever acquirer ran.
  */
 
+import { notifyOwnerBillingEvent, usd, utcDay } from "./owner-alerts.js";
 import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
-import { recordChargeSignal } from "./payment-alerts.js";
+import { chargeReasonLabel, recordChargeSignal } from "./payment-alerts.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -86,6 +87,16 @@ export async function reloadOffSession(
   // the day that shipped; a charge that never reached an acquirer is still a
   // non-2xx and still lands in the caller's catch.
   const { failure } = charge;
+  // The owner hears about a refused charge once per org per day: a declining card is
+  // retried on a schedule, and every retry is not news (lib/owner-alerts).
+  notifyOwnerBillingEvent({
+    orgId,
+    emoji: "⚠️",
+    text:
+      `Charge refused: ${usd(amountCents)} (${chargeReasonLabel(metadata?.reason)})` +
+      (failure?.message ? `: ${failure.message}` : ""),
+    dedupKey: `charge-refused:${orgId}:${utcDay()}`,
+  });
   return {
     status: "failed",
     reference: charge.reference,
