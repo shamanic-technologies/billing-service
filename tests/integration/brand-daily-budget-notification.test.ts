@@ -96,11 +96,9 @@ describe("brand daily budget → staff notification", () => {
     expect(call.userId).toBe(userId);
     expect(call.runId).toBe(runId);
     expect(call.metadata.subject).toBe(
-      "A brand set a first budget: Brand-wide budget $50/day"
+      "A brand: first budget, the brand-wide budget to $50/day"
     );
-    expect(call.metadata.summaryText).toContain(
-      "Brand-wide budget (no mission): $0 → $50/day (+$50, new)"
-    );
+    expect(call.metadata.action).toBe("set the brand-wide budget to $50/day");
     expect(call.metadata.summaryText).toContain(`Brand id ${brandId} · Org id ${orgId}`);
     // No staff address is named by billing — the email service owns who staff is.
     expect(call.recipientEmail).toBeUndefined();
@@ -114,8 +112,8 @@ describe("brand daily budget → staff notification", () => {
     await setBudget(9900);
 
     const { metadata } = await sentCall();
-    expect(metadata.subject).toBe("A brand raised Brand-wide budget: $50/day → $99/day");
-    expect(metadata.summaryText).toContain("$50/day → $99/day (+$49, +98%)");
+    expect(metadata.subject).toBe("A brand: the brand-wide budget raised to $99/day");
+    expect(metadata.action).toBe("raised the brand-wide budget from $50/day to $99/day");
     expect(sendEmailSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -132,7 +130,7 @@ describe("brand daily budget → staff notification", () => {
     expect(sendEmailSpy).not.toHaveBeenCalled();
   });
 
-  it("a change to zero reads as a pause, not as 'changed to 0'", async () => {
+  it("a change to zero states the $0/day it now holds", async () => {
     await setBudget(5000);
     await sentCall();
     sendEmailSpy.mockClear();
@@ -140,8 +138,8 @@ describe("brand daily budget → staff notification", () => {
     await setBudget(0);
 
     const { metadata } = await sentCall();
-    expect(metadata.subject).toBe("A brand paused Brand-wide budget ($0)");
-    expect(metadata.summaryText).toContain("$50/day → paused ($0) (−$50, −100%)");
+    expect(metadata.subject).toBe("A brand: the brand-wide budget lowered to $0/day");
+    expect(metadata.action).toBe("lowered the brand-wide budget from $50/day to $0/day");
   });
 
   it("leaving a pause notifies with the pause as the previous side", async () => {
@@ -151,19 +149,17 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(8000);
 
-    expect((await sentCall()).metadata.summaryText).toContain(
-      "$0 → $80/day (+$80, new)"
-    );
+    expect((await sentCall()).metadata.action).toBe("set the brand-wide budget to $80/day");
   });
 
-  it("never prints fractional cents on a fractional stored budget", async () => {
+  it("rounds a fractional stored budget to the cent", async () => {
     await setBudget(0);
     await sentCall();
     sendEmailSpy.mockClear();
 
     await setBudget("5049.5");
 
-    expect((await sentCall()).metadata.summaryText).toContain("$0 → $50/day");
+    expect((await sentCall()).metadata.action).toBe("set the brand-wide budget to $50.50/day");
   });
 
   it("forwards the acting staff email when the gateway supplies x-email", async () => {
@@ -186,8 +182,8 @@ describe("brand daily budget → staff notification", () => {
 
     await setBudget(2000, getAuthHeaders(otherOrgId, userId, runId));
 
-    expect((await sentCall()).metadata.summaryText).toContain(
-      "$10/day → $20/day (+$10, +100%)"
+    expect((await sentCall()).metadata.action).toBe(
+      "raised the brand-wide budget from $10/day to $20/day"
     );
   });
 
@@ -262,9 +258,9 @@ describe("brand daily budget → staff notification", () => {
     await setBudget(5000);
 
     const { metadata } = await sentCall();
-    expect(metadata.summaryText).toContain("Daily spend now: unavailable");
-    expect(metadata.summaryText).toContain("Campaign statuses could not be read");
-    expect(metadata.summaryText).toContain("Funded, status unknown");
+    expect(metadata.summaryText).toContain("Spending now: unknown, campaign statuses could not be read.");
+    // The only budget is the one this write moved: named once, in the action line.
+    expect(metadata.summaryText).not.toContain("status unknown:");
     expect(metadata.summaryText).not.toMatch(/Running:|Configured:/);
   });
 

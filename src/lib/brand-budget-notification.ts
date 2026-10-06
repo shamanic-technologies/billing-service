@@ -104,6 +104,7 @@ export function sendStaffEmail(
 ): void {
   const metadata: Record<string, string | null> = {
     action: email.action,
+    actionHtml: email.actionHtml,
     subject: email.subject,
     summaryHtml: email.summaryHtml,
     summaryText: email.summaryText,
