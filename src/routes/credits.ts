@@ -27,6 +27,7 @@ import {
   listDebitsForOrg,
   StaffDebitKeyConflictError,
 } from "../lib/staff-debits.js";
+import { composeCreditedFromParts, getOnboardingAdvanceCents } from "../lib/free-credit-offer.js";
 
 const router = Router();
 
@@ -97,12 +98,13 @@ router.post("/internal/credits/grant", async (req, res) => {
 
   let newBalanceCents: string;
   try {
-    const [paidTopups, localCredits, runsUsage] = await Promise.all([
+    const [paidTopups, localCredits, runsUsage, advance] = await Promise.all([
       sumSucceededTopupsForOrg(orgId),
       sumLocalPromoCreditsForOrg(orgId),
       fetchOrgUsageTotal(orgId, identity),
+      getOnboardingAdvanceCents(orgId),
     ]);
-    const credited = addCents(paidTopups, localCredits);
+    const credited = composeCreditedFromParts(paidTopups, localCredits, advance).creditedCents;
     newBalanceCents = subCents(credited, runsUsage.spent_cents);
   } catch (err) {
     console.error("[billing-service] credits/grant compose balance failed:", err);
