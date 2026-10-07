@@ -50,6 +50,8 @@ async function read(query: Record<string, string> = {}) {
 describe("campaign sourcing ceiling", () => {
   beforeEach(async () => {
     await cleanTestData();
+    // A stated split reads the catalogue (is the sourcing on its own source campaign?).
+    __primeSalesPathTerms([], { origins: [], sourceLegKey: "start_to_lead_found", originsByChannel: {} });
   });
   afterEach(() => {
     vi.restoreAllMocks();

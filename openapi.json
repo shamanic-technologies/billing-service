@@ -2665,6 +2665,10 @@
           "split": {
             "type": "boolean"
           },
+          "source": {
+            "type": "boolean",
+            "nullable": true
+          },
           "period": {
             "$ref": "#/components/schemas/CampaignItemPeriod"
           },
@@ -2690,6 +2694,7 @@
           "outreachDailyBudgetCents",
           "sourcingCeilingCents",
           "split",
+          "source",
           "period",
           "periodStart",
           "periodEnd",
@@ -4042,6 +4047,9 @@
           "split": {
             "type": "boolean"
           },
+          "source": {
+            "type": "boolean"
+          },
           "managed": {
             "type": "boolean",
             "nullable": true
@@ -4073,6 +4081,7 @@
           "outreachDailyBudgetCents",
           "sourcingCeilingCents",
           "split",
+          "source",
           "managed",
           "minimumCents",
           "capCents",
@@ -9233,7 +9242,7 @@
       },
       "put": {
         "summary": "Set ONE campaign's daily ceiling",
-        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money (including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand; a channel already funded below its floor may be kept or raised. The brand's daily budget is the SUM of every ceiling. Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand (null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + sourcingCeilingCents instead of dailyBudgetCents and billing sums them.",
+        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money (including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand; a channel already funded below its floor may be kept or raised. The brand's daily budget is the SUM of every ceiling. Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand (null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + sourcingCeilingCents instead of dailyBudgetCents and billing sums them. A stated split on an outreach campaign whose offer funds a SOURCE campaign feeding it is refused (409 sourcing_has_its_own_campaign): that sourcing is budgeted on the source campaign.",
         "parameters": [
           {
             "schema": {
@@ -9356,8 +9365,18 @@
               }
             }
           },
+          "409": {
+            "description": "sourcing_has_its_own_campaign: a sourcing ceiling stated on an outreach campaign whose offer funds the source campaign feeding it ({ error, code, sourceFeatureSlugs })",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "502": {
-            "description": "The acquisition channels' published terms could not be read",
+            "description": "The acquisition channels' (or sourcing origins') published terms could not be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -12366,7 +12385,7 @@
       },
       "put": {
         "summary": "Set one or several campaign budgets of an offer",
-        "description": "Upserts the listed campaigns. Each clears its published minimum (a daily budget: monthly minimum / 30, rounded up); a reactive campaign's MAX is at most 50% of the SUM of the offer's entry (proactive) budgets; customer-team legs carry none. Subscriber: monthly budgets; the offer's plan becomes the SUM of its budgets on channels we run whose campaign is ON (min $99) from the next charge, and ON follow-up budgets not yet collected this period are charged now (unspent follow-up credit carries over). A channel we do not run is recorded and charged nothing until it launches. Nothing is written on any refusal.",
+        "description": "Upserts the listed campaigns. Each clears its published minimum (a daily budget: monthly minimum / 30, rounded up); a reactive campaign's MAX is at most 50% of the SUM of the offer's entry (proactive) budgets; customer-team legs carry none. Subscriber: monthly budgets; the offer's plan becomes the SUM of its budgets on channels we run whose campaign is ON (min $99) from the next charge, and ON follow-up budgets not yet collected this period are charged now (unspent follow-up credit carries over). A channel we do not run is recorded and charged nothing until it launches. Nothing is written on any refusal. A SOURCE campaign is set here like any other: featureSlug = a live sourcing origin (sourcing-apollo-cold-filters, sourcing-apollo-buying-signals, sourcing-linkedin-engagement-signals, sourcing-crm-contacts), legKey = start_to_lead_found, budgetCents = its daily (or monthly) sourcing ceiling; no minimum, and it is not the entry budget a follow-up campaign needs.",
         "parameters": [
           {
             "schema": {

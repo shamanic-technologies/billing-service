@@ -1052,6 +1052,8 @@ export const SpendableCampaignItemSchema = z
     /** DAILY: what sourcing may spend, on demand; null = not split. */
     sourcingCeilingCents: CentsStringSchema.nullable(),
     split: z.boolean(),
+    /** true for a SOURCE campaign (featureSlug = a sourcing origin, legKey = "start_to_lead_found"); null = catalogue unreadable. */
+    source: z.boolean().nullable(),
     period: ItemPeriodSchema,
     /** A monthly item's period (subscriber: the plan's current period; prepaid / postpaid: the UTC calendar month); null for a daily one. */
     periodStart: z.string().nullable(),
@@ -3660,7 +3662,9 @@ registry.registerPath({
     "be kept or raised. The brand's daily budget is the SUM of every ceiling. " +
     "Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand " +
     "(null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + " +
-    "sourcingCeilingCents instead of dailyBudgetCents and billing sums them.",
+    "sourcingCeilingCents instead of dailyBudgetCents and billing sums them. A stated split on an " +
+    "outreach campaign whose offer funds a SOURCE campaign feeding it is refused (409 " +
+    "sourcing_has_its_own_campaign): that sourcing is budgeted on the source campaign.",
   request: {
     headers: protectedHeaders,
     params: z.object({ brandId: z.string().uuid() }),
@@ -3682,8 +3686,13 @@ registry.registerPath({
         "Invalid address or amount, an unknown acquisition channel, or a funded channel below its floor",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+    409: {
+      description:
+        "sourcing_has_its_own_campaign: a sourcing ceiling stated on an outreach campaign whose offer funds the source campaign feeding it ({ error, code, sourceFeatureSlugs })",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
     502: {
-      description: "The acquisition channels' published terms could not be read",
+      description: "The acquisition channels' (or sourcing origins') published terms could not be read",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -4569,6 +4578,13 @@ const CampaignItemViewSchema = z
     sourcingCeilingCents: CentsStringSchema.nullable(),
     /** true when the campaign states a sourcing ceiling. */
     split: z.boolean(),
+    /**
+     * true for a SOURCE campaign (owner 2026-10-07): featureSlug is a live sourcing origin
+     * (features-service GET /public/sourcing-origins), legKey "start_to_lead_found". Its whole
+     * budget is sourcing, "up to $X/day", never split; its minimum is 0 (none published). An
+     * outreach campaign fed by a funded source campaign carries no sourcing ceiling of its own.
+     */
+    source: z.boolean(),
     /** false = a channel we do not run yet: recorded, charged nothing until it launches. */
     managed: z.boolean().nullable(),
     /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
@@ -4680,7 +4696,11 @@ registry.registerPath({
     "offer's plan becomes the SUM of its budgets on channels we run whose campaign is ON (min $99) " +
     "from the next charge, and ON follow-up budgets not yet collected this period are charged now " +
     "(unspent follow-up credit carries over). A channel we do not run is recorded and charged " +
-    "nothing until it launches. Nothing is written on any refusal.",
+    "nothing until it launches. Nothing is written on any refusal. A SOURCE campaign is set here like " +
+    "any other: featureSlug = a live sourcing origin (sourcing-apollo-cold-filters, " +
+    "sourcing-apollo-buying-signals, sourcing-linkedin-engagement-signals, sourcing-crm-contacts), " +
+    "legKey = start_to_lead_found, budgetCents = its daily (or monthly) sourcing ceiling; no minimum, " +
+    "and it is not the entry budget a follow-up campaign needs.",
   request: {
     headers: protectedHeaders,
     params: brandOfferParams,
