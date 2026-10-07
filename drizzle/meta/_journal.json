@@ -519,6 +519,20 @@
       "when": 1794477600000,
       "tag": "0073_owner_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1794564000000,
+      "tag": "0074_campaign_sourcing_ceiling",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1794650400000,
+      "tag": "0075_campaign_sourcing_ceiling_backfill",
+      "breakpoints": true
     }
   ]
 }
