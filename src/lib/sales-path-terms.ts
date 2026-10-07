@@ -15,6 +15,16 @@
  *  - `managed`: true when we run the channel today. A channel we do not run is
  *    recorded with the card on file and charged NOTHING until it launches.
  *
+ * SOURCE CAMPAIGNS (owner 2026-10-07, features-service v0.179.79): every live
+ * sourcing ORIGIN (`GET /public/sourcing-origins`) is a campaign of its own, keyed
+ * (offer, featureSlug = <origin slug>, legKey = the published `sourceLegKey`,
+ * "start_to_lead_found"). It is an ENTRY leg (proactive), "on demand, up to $X/day":
+ * the catalogue publishes NO minimum for it, and the sourcing ceiling it replaces
+ * never had one, so its minimum is 0 (a stored budget is still a positive amount;
+ * "not set" is a DELETE). `managed` = the origin is live. A retired origin is not
+ * indexed: no new budget is stated on it. It never counts as the entry budget a
+ * follow-up (reactive) campaign needs: it finds leads, it contacts nobody.
+ *
  * An unreadable catalogue, or an item the catalogue states no minimum / managed
  * flag for, REFUSES the write: a gate that cannot be evaluated never lets money
  * through, and no default floor is invented. A refresh that fails keeps the last
@@ -48,6 +58,8 @@ export interface ItemTerms {
   minimumMonthlyCents: number | null;
   /** true when we run the channel today; null when the catalogue states nothing. */
   managed: boolean | null;
+  /** true for a SOURCE campaign (a sourcing origin on the published source leg). */
+  source: boolean;
 }
 
 interface PublishedTransition {
@@ -63,6 +75,14 @@ export interface PublishedSalesChannel {
   operatedBy?: string | null;
   managed?: boolean | null;
   stepTransitions?: PublishedTransition[] | null;
+}
+
+/** `GET /public/sourcing-origins`, the fields billing reads. */
+export interface PublishedSourcingOrigins {
+  origins?: Array<{ slug?: string | null; live?: boolean | null }> | null;
+  sourceLegKey?: string | null;
+  /** outreach channel slug -> the origin slugs that feed it. */
+  originsByChannel?: Record<string, string[] | null> | null;
 }
 
 function key(featureSlug: string, legKey: string): string {
@@ -92,10 +112,54 @@ export function itemTermsFrom(channels: PublishedSalesChannel[]): Map<string, It
         minimumMonthlyCents:
           typeof min === "number" && Number.isFinite(min) && min >= 0 ? Math.round(min) : null,
         managed,
+        source: false,
       });
     }
   }
   return out;
+}
+
+/** Index the LIVE sourcing origins as source campaigns (proactive, minimum 0). Pure. */
+export function sourceItemTermsFrom(published: PublishedSourcingOrigins | null | undefined): Map<string, ItemTerms> {
+  const out = new Map<string, ItemTerms>();
+  const legKey = typeof published?.sourceLegKey === "string" ? published.sourceLegKey.trim() : "";
+  if (!legKey) return out;
+  for (const origin of published?.origins ?? []) {
+    const slug = typeof origin?.slug === "string" ? origin.slug.trim() : "";
+    if (!slug || origin.live !== true) continue;
+    out.set(key(slug, legKey), {
+      featureSlug: slug,
+      legKey,
+      role: "proactive",
+      minimumMonthlyCents: 0,
+      managed: true,
+      source: true,
+    });
+  }
+  return out;
+}
+
+/** The published catalogue billing judges items against. */
+export interface TermsIndex {
+  items: Map<string, ItemTerms>;
+  /** The source leg ("start_to_lead_found"); null when no origin catalogue was read. */
+  sourceLegKey: string | null;
+  /** outreach channel slug -> the origin slugs that feed it. */
+  originsByChannel: Map<string, string[]>;
+}
+
+export function termsIndexFrom(
+  channels: PublishedSalesChannel[],
+  origins: PublishedSourcingOrigins | null = null
+): TermsIndex {
+  const items = itemTermsFrom(channels);
+  for (const [k, t] of sourceItemTermsFrom(origins)) items.set(k, t);
+  const originsByChannel = new Map<string, string[]>();
+  for (const [channel, slugs] of Object.entries(origins?.originsByChannel ?? {})) {
+    if (Array.isArray(slugs)) originsByChannel.set(channel, slugs.filter((s) => typeof s === "string"));
+  }
+  const legKey = typeof origins?.sourceLegKey === "string" ? origins.sourceLegKey.trim() : "";
+  return { items, sourceLegKey: legKey || null, originsByChannel };
 }
 
 export interface SalesPathTerms {
@@ -103,47 +167,73 @@ export interface SalesPathTerms {
   termsFor(featureSlug: string, legKey: string): ItemTerms | null;
   /** Whether we run this channel today (null = not stated). */
   managedChannel(featureSlug: string): boolean | null;
+  /**
+   * Is (featureSlug, legKey) a SOURCE campaign? Read off the published source leg and
+   * the origin list (a retired origin still answers true: its stored row stays a source).
+   */
+  isSourceItem(featureSlug: string, legKey: string | null): boolean;
+  /** The origin slugs that feed an outreach channel ([] when none). */
+  originsFeeding(channelSlug: string): string[];
 }
 
-function toTerms(index: Map<string, ItemTerms>): SalesPathTerms {
+function toTerms(index: TermsIndex): SalesPathTerms {
+  const knownOrigins = new Set<string>();
+  for (const slugs of index.originsByChannel.values()) for (const s of slugs) knownOrigins.add(s);
+  for (const t of index.items.values()) if (t.source) knownOrigins.add(t.featureSlug);
   return {
-    termsFor: (featureSlug, legKey) => index.get(key(featureSlug, legKey)) ?? null,
+    termsFor: (featureSlug, legKey) => index.items.get(key(featureSlug, legKey)) ?? null,
     managedChannel(featureSlug) {
-      for (const t of index.values()) if (t.featureSlug === featureSlug) return t.managed;
+      for (const t of index.items.values()) if (t.featureSlug === featureSlug) return t.managed;
       return null;
     },
+    isSourceItem: (featureSlug, legKey) =>
+      index.sourceLegKey !== null && legKey === index.sourceLegKey && knownOrigins.has(featureSlug),
+    originsFeeding: (channelSlug) => index.originsByChannel.get(channelSlug) ?? [],
   };
 }
 
 /** Wrap an index as the terms a write is judged against (tests, pure callers). */
-export function salesPathTermsOf(index: Map<string, ItemTerms>): SalesPathTerms {
-  return toTerms(index);
+export function salesPathTermsOf(
+  index: Map<string, ItemTerms>,
+  origins: PublishedSourcingOrigins | null = null
+): SalesPathTerms {
+  const full = termsIndexFrom([], origins);
+  for (const [k, t] of index) full.items.set(k, t);
+  return toTerms(full);
 }
 
-let snapshot: { at: number; index: Map<string, ItemTerms> } | null = null;
-let inFlight: Promise<Map<string, ItemTerms>> | null = null;
+let snapshot: { at: number; index: TermsIndex } | null = null;
+let inFlight: Promise<TermsIndex> | null = null;
 let pinned = false;
 
-async function readCatalogue(): Promise<Map<string, ItemTerms>> {
+async function readJson<T>(url: string, what: string): Promise<T> {
+  const res = await fetchWithRetry(url, { signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS) });
+  if (!res.ok) {
+    throw new SalesPathTermsUnavailableError(`features-service answered ${res.status} for the ${what}.`);
+  }
+  return (await res.json()) as T;
+}
+
+async function readCatalogue(): Promise<TermsIndex> {
   const url = process.env.FEATURES_SERVICE_URL;
   if (!url) {
     throw new SalesPathTermsUnavailableError(
       "FEATURES_SERVICE_URL is unset, so the sales-path item minimums cannot be read."
     );
   }
-  const res = await fetchWithRetry(`${url}/public/channels`, {
-    signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new SalesPathTermsUnavailableError(
-      `features-service answered ${res.status} for the published channels.`
-    );
-  }
-  const body = (await res.json()) as { channels?: PublishedSalesChannel[] };
+  const [body, origins] = await Promise.all([
+    readJson<{ channels?: PublishedSalesChannel[] }>(`${url}/public/channels`, "published channels"),
+    readJson<PublishedSourcingOrigins>(`${url}/public/sourcing-origins`, "published sourcing origins"),
+  ]);
   if (!Array.isArray(body?.channels)) {
     throw new SalesPathTermsUnavailableError("features-service returned no channels array.");
   }
-  return itemTermsFrom(body.channels);
+  if (!Array.isArray(origins?.origins) || typeof origins?.sourceLegKey !== "string") {
+    throw new SalesPathTermsUnavailableError(
+      "features-service returned no sourcing origins (origins[] + sourceLegKey)."
+    );
+  }
+  return termsIndexFrom(body.channels, origins);
 }
 
 /** The terms, read from the published catalogue (reused for a minute). */
@@ -177,8 +267,11 @@ export async function getSalesPathTerms(): Promise<SalesPathTerms> {
 }
 
 /** Test seam: state the catalogue a suite runs against (never expires). */
-export function __primeSalesPathTerms(channels: PublishedSalesChannel[]): void {
-  snapshot = { at: Date.now(), index: itemTermsFrom(channels) };
+export function __primeSalesPathTerms(
+  channels: PublishedSalesChannel[],
+  origins: PublishedSourcingOrigins | null = null
+): void {
+  snapshot = { at: Date.now(), index: termsIndexFrom(channels, origins) };
   pinned = true;
 }
 

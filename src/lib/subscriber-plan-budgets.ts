@@ -142,7 +142,10 @@ export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promi
           .from(campaignDailyBudgets)
           .where(and(eq(campaignDailyBudgets.orgId, g.orgId), eq(campaignDailyBudgets.brandId, g.brandId)))
           .for("update");
-        const offerRows = rows.filter((r) => r.offerId === offerId && r.legKey !== null);
+        // A SOURCE campaign's budget (a sourcing origin) is the customer's, never restated from the plan.
+        const offerRows = rows.filter(
+          (r) => r.offerId === offerId && r.legKey !== null && !terms.isSourceItem(r.featureSlug, r.legKey)
+        );
         if (offerRows.some((r) => r.monthlyBudgetCents !== null)) return "mixed" as const;
         const legacy = offerRows.filter((r) => r.monthlyBudgetCents === null);
         if (legacy.length === 0) return "done" as const;
@@ -355,7 +358,10 @@ export async function allocatePlanToOnCampaigns(params: {
     let written = 0;
     let deleted = 0;
     let unchanged = 0;
-    for (const p of planAllocationFor([...campaigns.values()], plan.monthlyAmountCents, terms)) {
+    // A SOURCE campaign (a sourcing origin, owner 2026-10-07) is not plan money: the
+    // plan is never split onto it and its row is never written nor deleted here.
+    const planCampaigns = [...campaigns.values()].filter((c) => !terms.isSourceItem(c.featureSlug, c.legKey));
+    for (const p of planAllocationFor(planCampaigns, plan.monthlyAmountCents, terms)) {
       const before = offerRows.find((r) => keyOf(r.featureSlug, r.legKey as string) === keyOf(p.featureSlug, p.legKey));
       const key = and(
         eq(campaignDailyBudgets.orgId, orgId),

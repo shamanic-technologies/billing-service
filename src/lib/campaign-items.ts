@@ -135,6 +135,8 @@ interface OfferItem {
   legKey: string;
   budgetCents: number;
   role: ItemRoleServed;
+  /** A SOURCE campaign (a sourcing origin): finds leads, contacts nobody. */
+  source?: boolean;
   /** Derived from the plan (lib/subscriber-plan-budgets): never charged on top of it. */
   planDerived?: boolean;
 }
@@ -223,21 +225,28 @@ export function validateItemInputs(
         { ...where, minimumCents, period }
       );
     }
-    out.push({ featureSlug: item.featureSlug, legKey: item.legKey, budgetCents: item.budgetCents, role: t.role });
+    out.push({
+      featureSlug: item.featureSlug,
+      legKey: item.legKey,
+      budgetCents: item.budgetCents,
+      role: t.role,
+      source: t.source,
+    });
   }
   return out;
 }
 
 /**
  * Judge the offer's state once the write lands: a follow-up (reactive) campaign
- * needs a lead-finding (entry) budget to follow up on. There is NO maximum on any
+ * needs an entry budget to follow up on: an OUTREACH entry, never a source campaign
+ * alone (a source finds leads and contacts nobody). There is NO maximum on any
  * budget (owner 2026-10-05: "people can put the numbers they want with no maximum,
  * only minimums apply"); the per channel x leg minimums are judged per item.
  */
 export function assertEntryForReactive(offer: OfferItem[]): void {
   const reactive = offer.filter((i) => i.role === "reactive");
   if (reactive.length === 0) return;
-  if (offer.some((i) => i.role === "proactive" && i.budgetCents > 0)) return;
+  if (offer.some((i) => i.role === "proactive" && !i.source && i.budgetCents > 0)) return;
   throw new ItemBudgetRefused(
     "entry_item_required",
     "Set a budget on a campaign that finds the leads first; a follow-up campaign follows up on its leads.",
@@ -438,6 +447,7 @@ function asOfferItems(items: CampaignItem[], period: ItemPeriod, terms: SalesPat
       legKey: i.legKey,
       budgetCents: budget,
       role: roleOf(terms, i.featureSlug, i.legKey) ?? "proactive",
+      source: terms.isSourceItem(i.featureSlug, i.legKey),
       planDerived: i.planDerived,
     };
   });
@@ -703,6 +713,11 @@ export interface ItemView {
   sourcingCeilingCents: string | null;
   /** true when the campaign states a sourcing ceiling. */
   split: boolean;
+  /**
+   * true for a SOURCE campaign (featureSlug = a sourcing origin, legKey = the source
+   * leg): its whole budget is sourcing, "up to $X/day". Never split.
+   */
+  source: boolean;
   /** false = a channel we do not run yet: recorded, charged nothing. */
   managed: boolean | null;
   /** The minimum in this period. */
@@ -774,6 +789,7 @@ export async function getOfferItemsView(
       budgetCents: row ? inPeriod(row.budgetCents, row.period, rowPeriod) : null,
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
       ...splitFieldsOf(row),
+      source: terms.isSourceItem(featureSlug, legKey),
       managed: t?.managed ?? null,
       minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, rowPeriod),
       capCents: null,
@@ -808,6 +824,8 @@ export interface SpendItemView {
   /** DAILY: what sourcing may spend, on demand; null = not split. */
   sourcingCeilingCents: string | null;
   split: boolean;
+  /** true for a SOURCE campaign (a sourcing origin on the source leg); null = catalogue unreadable. */
+  source: boolean | null;
   period: ItemPeriod;
   /**
    * The period a monthly budget covers (a subscriber: its plan's current period; a
@@ -895,6 +913,7 @@ export async function getBrandItemsSpendView(
       outreachDailyBudgetCents: splitOf([i]).outreachDailyBudgetCents,
       sourcingCeilingCents: splitOf([i]).sourcingCeilingCents,
       split: splitOf([i]).split,
+      source: terms ? terms.isSourceItem(i.featureSlug, i.legKey) : null,
       period: i.period,
       periodStart: window ? window.start.toISOString() : null,
       periodEnd: window ? window.end.toISOString() : null,
