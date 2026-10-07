@@ -2655,6 +2655,16 @@
           "budgetCents": {
             "type": "string"
           },
+          "outreachDailyBudgetCents": {
+            "type": "string"
+          },
+          "sourcingCeilingCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "split": {
+            "type": "boolean"
+          },
           "period": {
             "$ref": "#/components/schemas/CampaignItemPeriod"
           },
@@ -2677,6 +2687,9 @@
           "featureSlug",
           "role",
           "budgetCents",
+          "outreachDailyBudgetCents",
+          "sourcingCeilingCents",
+          "split",
           "period",
           "periodStart",
           "periodEnd",
@@ -4018,6 +4031,17 @@
             "type": "string",
             "nullable": true
           },
+          "outreachDailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourcingCeilingCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "split": {
+            "type": "boolean"
+          },
           "managed": {
             "type": "boolean",
             "nullable": true
@@ -4046,6 +4070,9 @@
           "statedPeriod",
           "budgetCents",
           "dailyBudgetCents",
+          "outreachDailyBudgetCents",
+          "sourcingCeilingCents",
+          "split",
           "managed",
           "minimumCents",
           "capCents",

@@ -30,6 +30,8 @@ export interface CampaignItem {
   budgetCents: number;
   /** The daily ceiling as stored (decimal string). */
   dailyBudgetCents: string;
+  /** The part of the daily ceiling sourcing may spend, on demand (lib/campaign-sourcing); null = not split. */
+  sourcingCeilingCents: string | null;
   /**
    * A subscriber's budget DERIVED FROM ITS PLAN (lib/subscriber-plan-budgets), not
    * stated by the customer: it IS the plan, so it never prices it and is never
@@ -51,6 +53,7 @@ export function itemOf(row: CeilingRow): CampaignItem | null {
     period: month ? "month" : "day",
     budgetCents: month ? (row.monthlyBudgetCents as number) : Number(row.dailyBudgetCents),
     dailyBudgetCents: row.dailyBudgetCents,
+    sourcingCeilingCents: row.sourcingCeilingCents ?? null,
     planDerived: row.planDerived === true,
     updatedAt: row.updatedAt,
   };

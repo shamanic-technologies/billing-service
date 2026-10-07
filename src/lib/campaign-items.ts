@@ -80,6 +80,7 @@ import {
 } from "./subscription.js";
 import { attributeUnassignedPlan } from "./subscription-plans.js";
 import { reloadOffSession } from "./reload.js";
+import { splitOf } from "./campaign-sourcing.js";
 
 /** The acquirer refuses a charge under this; a smaller delta rolls into the renewal. */
 const MIN_CHARGE_CENTS = 50;
@@ -696,6 +697,12 @@ export interface ItemView {
   budgetCents: number | null;
   /** The daily ceiling campaign-service paces on (decimal string); null = not set. */
   dailyBudgetCents: string | null;
+  /** DAILY: what outreach may spend (the whole daily ceiling when not split); null = not set. */
+  outreachDailyBudgetCents: string | null;
+  /** DAILY: what sourcing may spend, on demand, out of the daily ceiling; null = not split / not set. */
+  sourcingCeilingCents: string | null;
+  /** true when the campaign states a sourcing ceiling. */
+  split: boolean;
   /** false = a channel we do not run yet: recorded, charged nothing. */
   managed: boolean | null;
   /** The minimum in this period. */
@@ -705,6 +712,13 @@ export interface ItemView {
   /** Customer-team legs carry no budget. */
   budgetable: boolean;
   updatedAt: string | null;
+}
+
+/** A row's daily split (lib/campaign-sourcing), or the explicit "not set" answer. */
+function splitFieldsOf(row: CampaignItem | null) {
+  if (!row) return { outreachDailyBudgetCents: null, sourcingCeilingCents: null, split: false };
+  const s = splitOf([row]);
+  return { outreachDailyBudgetCents: s.outreachDailyBudgetCents, sourcingCeilingCents: s.sourcingCeilingCents, split: s.split };
 }
 
 export interface OfferItemsView {
@@ -759,6 +773,7 @@ export async function getOfferItemsView(
       statedPeriod: row?.period ?? null,
       budgetCents: row ? inPeriod(row.budgetCents, row.period, rowPeriod) : null,
       dailyBudgetCents: row?.dailyBudgetCents ?? null,
+      ...splitFieldsOf(row),
       managed: t?.managed ?? null,
       minimumCents: t?.minimumMonthlyCents == null ? null : minimumInPeriod(t.minimumMonthlyCents, rowPeriod),
       capCents: null,
@@ -788,6 +803,11 @@ export interface SpendItemView {
   role: ItemRoleServed | null;
   /** Decimal cents in the period. A reactive monthly budget includes last period's carry-over. */
   budgetCents: string;
+  /** DAILY: what outreach may spend (the whole daily ceiling when not split). */
+  outreachDailyBudgetCents: string;
+  /** DAILY: what sourcing may spend, on demand; null = not split. */
+  sourcingCeilingCents: string | null;
+  split: boolean;
   period: ItemPeriod;
   /**
    * The period a monthly budget covers (a subscriber: its plan's current period; a
@@ -872,6 +892,9 @@ export async function getBrandItemsSpendView(
       featureSlug: i.featureSlug,
       role: roleOf(terms, i.featureSlug, i.legKey),
       budgetCents: budget.toFixed(10),
+      outreachDailyBudgetCents: splitOf([i]).outreachDailyBudgetCents,
+      sourcingCeilingCents: splitOf([i]).sourcingCeilingCents,
+      split: splitOf([i]).split,
       period: i.period,
       periodStart: window ? window.start.toISOString() : null,
       periodEnd: window ? window.end.toISOString() : null,
