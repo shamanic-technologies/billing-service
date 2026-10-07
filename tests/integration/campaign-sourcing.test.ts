@@ -12,6 +12,7 @@ import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets } from "../../src/db/schema.js";
 import { splitOf } from "../../src/lib/campaign-sourcing.js";
+import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 
 const orgId = "00000000-0000-0000-0000-0000000057e1";
 const userId = "00000000-0000-0000-0000-0000000057e9";
@@ -52,6 +53,7 @@ describe("campaign sourcing ceiling", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    __resetSalesPathTerms();
   });
   afterAll(async () => {
     await cleanTestData();
@@ -101,6 +103,35 @@ describe("campaign sourcing ceiling", () => {
       outreachDailyBudgetCents: "1100.0000000000",
       sourcingCeilingCents: "900.0000000000",
     });
+  });
+
+  it("the per-offer items read carries the daily split on each item (additive)", async () => {
+    await seed("2000", "1700");
+    __primeSalesPathTerms([
+      {
+        slug: COLD,
+        operatedBy: "platform",
+        managed: true,
+        stepTransitions: [
+          { legKey: LEG, from: null, minimumMonthlyBudgetCents: 9900 },
+          { legKey: "start_to_website_visit", from: null, minimumMonthlyBudgetCents: 9900 },
+        ],
+      },
+    ]);
+    const res = await request(app)
+      .get(`/v1/brands/${brandId}/offers/${OFFER}/campaign-budgets`)
+      .query({ campaigns: `${COLD}:start_to_website_visit` })
+      .set(getAuthHeaders(orgId, userId, runId));
+    expect(res.status).toBe(200);
+    const item = res.body.items.find((i: { legKey: string }) => i.legKey === LEG);
+    expect(item).toMatchObject({
+      dailyBudgetCents: "2000.0000000000",
+      outreachDailyBudgetCents: "300.0000000000",
+      sourcingCeilingCents: "1700.0000000000",
+      split: true,
+    });
+    const notSet = res.body.items.find((i: { legKey: string }) => i.legKey === "start_to_website_visit");
+    expect(notSet).toMatchObject({ outreachDailyBudgetCents: null, sourcingCeilingCents: null, split: false });
   });
 
   it("a write states the split with the total", async () => {

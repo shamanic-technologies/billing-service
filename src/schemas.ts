@@ -1047,6 +1047,11 @@ export const SpendableCampaignItemSchema = z
     role: z.enum(["proactive", "reactive"]).nullable(),
     /** Decimal cents. A reactive monthly item includes last period's carry-over. */
     budgetCents: CentsStringSchema,
+    /** DAILY: what outreach may spend (the whole daily ceiling when not split). */
+    outreachDailyBudgetCents: CentsStringSchema,
+    /** DAILY: what sourcing may spend, on demand; null = not split. */
+    sourcingCeilingCents: CentsStringSchema.nullable(),
+    split: z.boolean(),
     period: ItemPeriodSchema,
     /** A monthly item's period (subscriber: the plan's current period; prepaid / postpaid: the UTC calendar month); null for a daily one. */
     periodStart: z.string().nullable(),
@@ -4558,6 +4563,12 @@ const CampaignItemViewSchema = z
     budgetCents: z.number().nullable(),
     /** The daily ceiling campaign-service paces on (monthly / 30 for a subscriber); null = not set. */
     dailyBudgetCents: CentsStringSchema.nullable(),
+    /** DAILY: what outreach may spend = dailyBudgetCents - sourcingCeilingCents (the whole ceiling when not split); null = not set. */
+    outreachDailyBudgetCents: CentsStringSchema.nullable(),
+    /** DAILY: what sourcing may spend, on demand, out of dailyBudgetCents; null = not split or not set. */
+    sourcingCeilingCents: CentsStringSchema.nullable(),
+    /** true when the campaign states a sourcing ceiling. */
+    split: z.boolean(),
     /** false = a channel we do not run yet: recorded, charged nothing until it launches. */
     managed: z.boolean().nullable(),
     /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
