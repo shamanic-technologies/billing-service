@@ -1987,6 +1987,13 @@
           "dailyBudgetCents": {
             "type": "string"
           },
+          "outreachDailyBudgetCents": {
+            "type": "string"
+          },
+          "sourcingCeilingCents": {
+            "type": "string",
+            "nullable": true
+          },
           "updatedAt": {
             "type": "string"
           }
@@ -1996,6 +2003,8 @@
           "legKey",
           "featureSlug",
           "dailyBudgetCents",
+          "outreachDailyBudgetCents",
+          "sourcingCeilingCents",
           "updatedAt"
         ]
       },
@@ -2400,6 +2409,37 @@
           "campaigns"
         ]
       },
+      "CampaignSpendToday": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "spentCents": {
+            "type": "string"
+          },
+          "sourcingSpentCents": {
+            "type": "string"
+          },
+          "outreachSpentCents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "campaignIds",
+          "spentCents",
+          "sourcingSpentCents",
+          "outreachSpentCents"
+        ]
+      },
       "ReadCampaignDailyBudget": {
         "type": "object",
         "properties": {
@@ -2425,9 +2465,23 @@
             "type": "string",
             "nullable": true
           },
+          "outreachDailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourcingCeilingCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "split": {
+            "type": "boolean"
+          },
           "updatedAt": {
             "type": "string",
             "nullable": true
+          },
+          "today": {
+            "$ref": "#/components/schemas/CampaignSpendToday"
           }
         },
         "required": [
@@ -2436,7 +2490,11 @@
           "legKey",
           "featureSlug",
           "dailyBudgetCents",
-          "updatedAt"
+          "outreachDailyBudgetCents",
+          "sourcingCeilingCents",
+          "split",
+          "updatedAt",
+          "today"
         ]
       },
       "SetCampaignDailyBudgetResponse": {
@@ -2463,6 +2521,16 @@
           "dailyBudgetCents": {
             "type": "string"
           },
+          "outreachDailyBudgetCents": {
+            "type": "string"
+          },
+          "sourcingCeilingCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "split": {
+            "type": "boolean"
+          },
           "updatedAt": {
             "type": "string"
           },
@@ -2483,6 +2551,9 @@
           "legKey",
           "featureSlug",
           "dailyBudgetCents",
+          "outreachDailyBudgetCents",
+          "sourcingCeilingCents",
+          "split",
           "updatedAt",
           "brandDailyBudgetCents",
           "campaigns"
@@ -2512,13 +2583,35 @@
                 "type": "number"
               }
             ]
+          },
+          "outreachDailyBudgetCents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "sourcingCeilingCents": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "nullable": true
+              }
+            ]
           }
         },
         "required": [
           "offerId",
           "legKey",
-          "featureSlug",
-          "dailyBudgetCents"
+          "featureSlug"
         ]
       },
       "BrandFundingMode": {
@@ -8849,7 +8942,7 @@
     "/internal/brands/{brandId}/campaign-budget": {
       "get": {
         "summary": "Read ONE campaign's daily ceiling",
-        "description": "A campaign is (offer x leg x acquisition channel); all three are required. Answers the SUM of the ceilings that are this campaign's money. A ceiling written before offers (or legs) existed counts only while the brand names no other offer (the channel no other leg). Nothing funds it -> dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
+        "description": "A campaign is (offer x leg x acquisition channel); all three are required. Answers the SUM of the ceilings that are this campaign's money. A ceiling written before offers (or legs) existed counts only while the brand names no other offer (the channel no other leg). Nothing funds it -> dailyBudgetCents: null, never 0. The ceiling is in two parts: dailyBudgetCents (max daily spend) = outreachDailyBudgetCents + sourcingCeilingCents (sourcing on demand, up to; null = not split). Pass campaignIds to also get `today`: today's spend against each part. x-api-key plus x-org-id.",
         "parameters": [
           {
             "schema": {
@@ -8891,6 +8984,14 @@
             "schema": {
               "type": "string"
             },
+            "required": false,
+            "name": "campaignIds",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
             "required": true,
             "name": "x-api-key",
             "in": "header"
@@ -8918,6 +9019,16 @@
           },
           "400": {
             "description": "Invalid brandId / x-org-id, or a missing offerId, legKey or featureSlug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Today's spend could not be read from runs-service (only when campaignIds is passed)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8968,6 +9079,14 @@
             },
             "required": true,
             "name": "featureSlug",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "campaignIds",
             "in": "query"
           },
           {
@@ -9072,12 +9191,22 @@
                 }
               }
             }
+          },
+          "502": {
+            "description": "Today's spend could not be read from runs-service (only when campaignIds is passed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
       "put": {
         "summary": "Set ONE campaign's daily ceiling",
-        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money (including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand; a channel already funded below its floor may be kept or raised. The brand's daily budget is the SUM of every ceiling.",
+        "description": "States the ceiling of one campaign — (offer, leg, acquisition channel) — and leaves every other campaign untouched. Ceilings that were this campaign's money (including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A funded channel below its published daily floor is refused (400), judged on the channel's total across the brand; a channel already funded below its floor may be kept or raised. The brand's daily budget is the SUM of every ceiling. Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand (null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + sourcingCeilingCents instead of dailyBudgetCents and billing sums them.",
         "parameters": [
           {
             "schema": {

@@ -959,6 +959,15 @@ A campaign is **(offer x leg x acquisition channel)** and a daily ceiling is key
 - **No discount, ever** — a ceiling is configuration, not a charge.
 - **Copy a row VERBATIM inside Postgres (`INSERT … SELECT`), never through JS**: `timestamptz` holds microseconds, a JS `Date` milliseconds, so a round trip silently truncates `updated_at` (bit a 2026-08 sweep).
 
+### Outreach + SOURCING on demand, one campaign row (`src/lib/campaign-sourcing.ts`, migrations 0074 + 0075)
+
+Owner 2026-10-07. A campaign's budget has two parts: OUTREACH (fixed per day) and the SOURCING feeding it leads ("on demand, up to $X/day", a ceiling). **One column on `campaign_daily_budgets`, never a second store**: `daily_budget_cents` keeps meaning the campaign's MAX daily spend (every existing reader unchanged), `sourcing_ceiling_cents` is the part sourcing may spend (CHECK 0..daily), outreach = daily − sourcing is SERVED, never stored. NULL = not split (whole chain on one budget, as before).
+
+- **Sourcing = measured subtrees, never a cost-name list**: every run under a `lead-service:lead-serve` or `apollo-service:audience-companies` root carries the campaign id (prod: 130,244 descendants / 30d, 0 without). Basis: committed NET, as campaign-service paces.
+- **Reads (additive)**: every campaign entry (`campaigns[]` on brand / offer / leg / campaign-budgets reads) adds `outreachDailyBudgetCents` + `sourcingCeilingCents`; `GET /internal|v1/brands/:id/campaign-budget?offerId&legKey&featureSlug` adds `split` and, with `campaignIds=` (the family, ≤500), `today {date, campaignIds, spentCents, sourcingSpentCents, outreachSpentCents}` (runs-service `/v1/stats/costs` + `/v1/runs?include=subtreeCost` walk; failure = 502, never 0).
+- **Write**: `PUT /v1/brands/:id/campaign-budget` takes optional `sourcingCeilingCents` (null clears) or `outreachDailyBudgetCents + sourcingCeilingCents` instead of `dailyBudgetCents` (summed here). A write moving the total WITHOUT stating the split keeps the share (`scaledSourcingCeilingSql`, every UPDATE of `daily_budget_cents` uses it, subscriber plan writers included); a total of 0 has no share left and refunds unsplit.
+- **0075 = the live split** ("on garde le même total, réparti selon ce que chaque campagne a vraiment dépensé sur ses 30 derniers jours"): literal per-row values measured 2026-10-07, own 30d share when the campaign spent on both parts, else the channel's fleet share (cold email 45.1%), whole dollars; each UPDATE guarded on (identity, total, unsplit). Totals untouched. Enforcement is campaign-service's.
+
 ## Campaign affordability gate (read-only pre-flight)
 
 Stops a credit "retry storm": an out-of-credit org's recurring campaign was re-triggered every minute by campaign-service, each run doing paid Apollo enrichment then 402-ing at the LLM step. campaign-service now asks billing "can this org afford another run of campaign X?" BEFORE dispatching — billing answers live, per-campaign, **without charging or reloading**.

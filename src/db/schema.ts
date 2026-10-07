@@ -817,6 +817,16 @@ export const campaignDailyBudgets = pgTable(
      * the plan and is never charged on top of it. A customer write clears it.
      */
     planDerived: boolean("plan_derived").notNull().default(false),
+    /**
+     * The part of `daily_budget_cents` SOURCING may spend, on demand (migration
+     * 0074, lib/campaign-sourcing). `daily_budget_cents` stays the campaign's max
+     * daily spend; outreach = daily - sourcing, served, never stored. NULL = not
+     * split (the whole chain on one budget). CHECK: 0 <= sourcing <= daily.
+     */
+    sourcingCeilingCents: numeric("sourcing_ceiling_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

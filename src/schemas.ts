@@ -1420,8 +1420,19 @@ export const CampaignDailyBudgetSchema = z
     legKey: z.string().nullable(),
     /** The acquisition channel (a features-service feature slug) performing the leg. */
     featureSlug: z.string(),
-    /** This campaign's daily ceiling. */
+    /** This campaign's daily ceiling = its MAX daily spend (outreach + sourcing ceiling). */
     dailyBudgetCents: CentsStringSchema,
+    /**
+     * What OUTREACH may spend per day: dailyBudgetCents - sourcingCeilingCents.
+     * The whole dailyBudgetCents when the campaign is not split.
+     */
+    outreachDailyBudgetCents: CentsStringSchema,
+    /**
+     * What SOURCING (lead-service lead-serve + apollo-service audience-companies
+     * subtrees) may spend per day, ON DEMAND: a ceiling, not a commitment. null =
+     * not split (the whole chain is paid out of dailyBudgetCents, as before).
+     */
+    sourcingCeilingCents: CentsStringSchema.nullable(),
     updatedAt: z.string(),
   })
   .openapi("CampaignDailyBudget");
@@ -1481,6 +1492,21 @@ export const ReadCampaignDailyBudgetsSchema = z
   })
   .openapi("ReadCampaignDailyBudgets");
 
+export const CampaignSpendTodaySchema = z
+  .object({
+    /** The UTC day measured, YYYY-MM-DD. */
+    date: z.string(),
+    /** The campaign ids measured, as requested (deduped). */
+    campaignIds: z.array(z.string()),
+    /** Everything the campaign spent today (actual + provisioned, NET). */
+    spentCents: CentsStringSchema,
+    /** Of which sourcing: the subtrees of lead-service lead-serve + apollo-service audience-companies runs. */
+    sourcingSpentCents: CentsStringSchema,
+    /** Of which outreach: spentCents - sourcingSpentCents. */
+    outreachSpentCents: CentsStringSchema,
+  })
+  .openapi("CampaignSpendToday");
+
 export const ReadCampaignDailyBudgetSchema = z
   .object({
     brandId: z.string().uuid(),
@@ -1490,11 +1516,23 @@ export const ReadCampaignDailyBudgetSchema = z
     legKey: z.string(),
     featureSlug: z.string(),
     /**
-     * This campaign's ceiling. `null` when nothing funds it — a different
-     * answer from 0 (funded at nothing), and never derived from it.
+     * This campaign's ceiling = its MAX daily spend (outreach + sourcing
+     * ceiling). `null` when nothing funds it — a different answer from 0
+     * (funded at nothing), and never derived from it.
      */
     dailyBudgetCents: CentsStringSchema.nullable(),
+    /** What outreach may spend per day (the whole budget when not split); null when nothing funds it. */
+    outreachDailyBudgetCents: CentsStringSchema.nullable(),
+    /** What sourcing may spend per day, on demand; null when not split or nothing funds it. */
+    sourcingCeilingCents: CentsStringSchema.nullable(),
+    /** true when the campaign states a sourcing ceiling (the two parts above are separate budgets). */
+    split: z.boolean(),
     updatedAt: z.string().nullable(),
+    /**
+     * Today's (UTC) committed NET spend against each part. Present only when
+     * the request names `campaignIds`; null otherwise.
+     */
+    today: CampaignSpendTodaySchema.nullable(),
   })
   .openapi("ReadCampaignDailyBudget");
 
@@ -1506,8 +1544,33 @@ export const SetCampaignDailyBudgetRequestSchema = z
     legKey: z.string().min(1),
     /** The acquisition channel's features-service feature slug. */
     featureSlug: z.string().min(1),
-    /** Non-negative cents. 0 = not funding this campaign right now. */
-    dailyBudgetCents: z.union([z.string(), z.number()]),
+    /**
+     * Non-negative cents: the campaign's MAX daily spend. 0 = not funding this
+     * campaign right now. Omit it to state the two parts instead
+     * (outreachDailyBudgetCents + sourcingCeilingCents, summed here).
+     */
+    dailyBudgetCents: z.union([z.string(), z.number()]).optional(),
+    /** With sourcingCeilingCents and no dailyBudgetCents: what outreach may spend per day. */
+    outreachDailyBudgetCents: z.union([z.string(), z.number()]).optional(),
+    /**
+     * What sourcing may spend per day, on demand, out of the daily budget
+     * (0 <= value <= dailyBudgetCents). null = not split. Omitted = keep the
+     * campaign's current share of its total (a $20 campaign sourcing up to $9
+     * raised to $40 sources up to $18).
+     */
+    sourcingCeilingCents: z.union([z.string(), z.number()]).nullable().optional(),
+  })
+  .superRefine((body, ctx) => {
+    const parts = body.outreachDailyBudgetCents !== undefined;
+    if (body.dailyBudgetCents === undefined && !parts) {
+      ctx.addIssue({ code: "custom", message: "dailyBudgetCents is required (or outreachDailyBudgetCents + sourcingCeilingCents)." });
+    }
+    if (body.dailyBudgetCents !== undefined && parts) {
+      ctx.addIssue({ code: "custom", message: "State dailyBudgetCents OR outreachDailyBudgetCents + sourcingCeilingCents, not both." });
+    }
+    if (parts && (body.sourcingCeilingCents === undefined || body.sourcingCeilingCents === null)) {
+      ctx.addIssue({ code: "custom", message: "outreachDailyBudgetCents needs sourcingCeilingCents beside it." });
+    }
   })
   .openapi("SetCampaignDailyBudgetRequest");
 
@@ -1518,8 +1581,11 @@ export const SetCampaignDailyBudgetResponseSchema = z
     offerId: z.string().uuid(),
     legKey: z.string(),
     featureSlug: z.string(),
-    /** This campaign's ceiling after the write. */
+    /** This campaign's ceiling after the write (its max daily spend). */
     dailyBudgetCents: CentsStringSchema,
+    outreachDailyBudgetCents: CentsStringSchema,
+    sourcingCeilingCents: CentsStringSchema.nullable(),
+    split: z.boolean(),
     updatedAt: z.string(),
     /** The brand-level daily budget after the write = the sum of every ceiling. */
     brandDailyBudgetCents: CentsStringSchema,
@@ -3463,6 +3529,14 @@ const campaignQuery = z.object({
   featureSlug: z.string().min(1),
 });
 
+const campaignReadQuery = campaignQuery.extend({
+  /**
+   * Comma-separated campaign ids (the campaign FAMILY, at most 500). When
+   * present the answer carries `today`: today's spend against each part.
+   */
+  campaignIds: z.string().optional(),
+});
+
 registry.registerPath({
   method: "get",
   path: "/internal/brands/{brandId}/campaign-budgets",
@@ -3517,11 +3591,13 @@ registry.registerPath({
     "Answers the SUM of the ceilings that are this campaign's money. A ceiling " +
     "written before offers (or legs) existed counts only while " +
     "the brand names no other offer (the channel no other leg). Nothing funds it -> " +
-    "dailyBudgetCents: null, never 0. x-api-key plus x-org-id.",
+    "dailyBudgetCents: null, never 0. The ceiling is in two parts: dailyBudgetCents (max daily " +
+    "spend) = outreachDailyBudgetCents + sourcingCeilingCents (sourcing on demand, up to; null = not " +
+    "split). Pass campaignIds to also get `today`: today's spend against each part. x-api-key plus x-org-id.",
   request: {
     headers: internalOrgHeaders,
     params: z.object({ brandId: z.string().uuid() }),
-    query: campaignQuery,
+    query: campaignReadQuery,
   },
   responses: {
     200: {
@@ -3530,6 +3606,10 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId / x-org-id, or a missing offerId, legKey or featureSlug",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Today's spend could not be read from runs-service (only when campaignIds is passed)",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -3543,7 +3623,7 @@ registry.registerPath({
   request: {
     headers: protectedHeaders,
     params: z.object({ brandId: z.string().uuid() }),
-    query: campaignQuery,
+    query: campaignReadQuery,
   },
   responses: {
     200: {
@@ -3552,6 +3632,10 @@ registry.registerPath({
     },
     400: {
       description: "Invalid brandId, missing org headers, or an incomplete campaign address",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Today's spend could not be read from runs-service (only when campaignIds is passed)",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -3568,7 +3652,10 @@ registry.registerPath({
     "row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A " +
     "funded channel below its published daily floor is refused (400), judged on the " +
     "channel's total across the brand; a channel already funded below its floor may " +
-    "be kept or raised. The brand's daily budget is the SUM of every ceiling.",
+    "be kept or raised. The brand's daily budget is the SUM of every ceiling. " +
+    "Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand " +
+    "(null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + " +
+    "sourcingCeilingCents instead of dailyBudgetCents and billing sums them.",
   request: {
     headers: protectedHeaders,
     params: z.object({ brandId: z.string().uuid() }),

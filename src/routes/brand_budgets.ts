@@ -57,6 +57,13 @@ import {
   brandGrainChange,
   ceilingChangesBetween,
 } from "../lib/brand-running-budget.js";
+import {
+  InvalidSourcingCeilingError,
+  fetchCampaignSpendToday,
+  parseCampaignIds,
+  MAX_CAMPAIGN_IDS,
+} from "../lib/campaign-sourcing.js";
+import { addCents } from "../lib/cents.js";
 
 const router = Router();
 
@@ -92,6 +99,8 @@ function renderCampaigns(totals: CampaignBudgetTotal[]) {
     legKey: total.legKey,
     featureSlug: total.featureSlug,
     dailyBudgetCents: total.dailyBudgetCents,
+    outreachDailyBudgetCents: total.outreachDailyBudgetCents,
+    sourcingCeilingCents: total.sourcingCeilingCents,
     updatedAt: total.updatedAt.toISOString(),
   }));
 }
@@ -140,7 +149,8 @@ function respondToCeilingWriteError(err: unknown, res: Response): void {
   if (
     err instanceof CeilingBelowMinimumError ||
     err instanceof UnknownAcquisitionChannelError ||
-    err instanceof InvalidCeilingError
+    err instanceof InvalidCeilingError ||
+    err instanceof InvalidSourcingCeilingError
   ) {
     res.status(400).json({ error: err.message });
     return;
@@ -640,14 +650,61 @@ async function composeCampaignBudgetsView(orgId: string, brandId: string) {
 async function composeCampaignBudgetView(
   orgId: string,
   brandId: string,
-  key: CampaignKey
+  key: CampaignKey,
+  campaignIds: string[] | null
 ) {
   const found = campaignBudgetOf(await getBrandCeilings(orgId, brandId), key);
+  // Today's spend against each part, only when the caller names the campaign's
+  // ids (campaign-service owns campaign -> ids; billing never guesses them).
+  const today = campaignIds ? await fetchCampaignSpendToday(orgId, campaignIds) : null;
   return {
     ...key,
     dailyBudgetCents: found ? found.dailyBudgetCents : null,
+    outreachDailyBudgetCents: found ? found.outreachDailyBudgetCents : null,
+    sourcingCeilingCents: found ? found.sourcingCeilingCents : null,
+    split: found ? found.split : false,
     updatedAt: found ? found.updatedAt.toISOString() : null,
+    today,
   };
+}
+
+/**
+ * The optional `campaignIds` query (comma-separated, the campaign FAMILY).
+ * Returns undefined after writing the 400 on a malformed list, null when absent.
+ */
+function campaignIdsFromQuery(req: Request, res: Response): string[] | null | undefined {
+  const raw = req.query.campaignIds;
+  if (raw === undefined) return null;
+  const ids = parseCampaignIds(raw);
+  if (!ids) {
+    res.status(400).json({
+      error: `campaignIds must be a comma-separated list of 1 to ${MAX_CAMPAIGN_IDS} campaign ids`,
+    });
+    return undefined;
+  }
+  return ids;
+}
+
+/** Compose the one-campaign read; a runs-service failure on today's spend is a 502. */
+async function respondCampaignBudget(
+  res: Response,
+  orgId: string,
+  brandId: string,
+  key: CampaignKey,
+  campaignIds: string[] | null,
+  extra: Record<string, unknown>
+): Promise<void> {
+  let view;
+  try {
+    view = await composeCampaignBudgetView(orgId, brandId, key, campaignIds);
+  } catch (err) {
+    console.error(
+      `[billing-service] campaign budget read failed: brand=${brandId} org=${orgId} campaign=${key.offerId}/${key.legKey}/${key.featureSlug}: ${(err as Error).message}`
+    );
+    res.status(502).json({ error: "Failed to read today's campaign spend" });
+    return;
+  }
+  res.json({ brandId, ...extra, ...view });
 }
 
 /** Parse the campaign address out of the query string; writes the 400 itself. */
@@ -706,7 +763,9 @@ router.get("/internal/brands/:brandId/campaign-budget", async (req, res) => {
   if (!orgId) return;
   const key = campaignKeyFromQuery(req, res);
   if (!key) return;
-  res.json({ brandId, ...(await composeCampaignBudgetView(orgId, brandId, key)) });
+  const campaignIds = campaignIdsFromQuery(req, res);
+  if (campaignIds === undefined) return;
+  await respondCampaignBudget(res, orgId, brandId, key, campaignIds, {});
 });
 
 // GET /v1/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug= — the
@@ -722,12 +781,10 @@ router.get(
     }
     const key = campaignKeyFromQuery(req, res);
     if (!key) return;
+    const campaignIds = campaignIdsFromQuery(req, res);
+    if (campaignIds === undefined) return;
     const orgId = req.headers["x-org-id"] as string;
-    res.json({
-      brandId,
-      orgId,
-      ...(await composeCampaignBudgetView(orgId, brandId, key)),
-    });
+    await respondCampaignBudget(res, orgId, brandId, key, campaignIds, { orgId });
   }
 );
 
@@ -760,14 +817,25 @@ router.put(
     }
 
     const orgId = req.headers["x-org-id"] as string;
+    const body = parsedBody.data;
     let written;
     try {
-      written = await setCampaignDailyBudget(
-        orgId,
-        brandId,
-        key,
-        parsedBody.data.dailyBudgetCents
-      );
+      // The total is either stated, or the sum of the two parts (summed here,
+      // never in a browser). Omitting sourcingCeilingCents keeps the row's share.
+      let dailyBudgetCents = body.dailyBudgetCents;
+      if (dailyBudgetCents === undefined) {
+        try {
+          dailyBudgetCents = addCents(
+            parseNonNegativeCents(body.outreachDailyBudgetCents),
+            parseNonNegativeCents(body.sourcingCeilingCents)
+          );
+        } catch (err) {
+          throw new InvalidCeilingError((err as Error).message);
+        }
+      }
+      written = await setCampaignDailyBudget(orgId, brandId, key, dailyBudgetCents, {
+        sourcingCeilingCents: body.sourcingCeilingCents,
+      });
     } catch (err) {
       respondToCeilingWriteError(err, res);
       return;
@@ -806,6 +874,9 @@ router.put(
       orgId,
       ...key,
       dailyBudgetCents: written.campaign.dailyBudgetCents,
+      outreachDailyBudgetCents: written.campaign.outreachDailyBudgetCents,
+      sourcingCeilingCents: written.campaign.sourcingCeilingCents,
+      split: written.campaign.split,
       updatedAt: written.campaign.updatedAt.toISOString(),
       brandDailyBudgetCents: written.brandDailyBudgetCents,
       campaigns: renderCampaigns(campaignTotalsOf(written.ceilings)),

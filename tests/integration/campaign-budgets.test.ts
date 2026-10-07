@@ -124,6 +124,9 @@ describe("a daily ceiling per campaign", () => {
           legKey: LEG_REPLY,
           featureSlug: COLD,
           dailyBudgetCents: "2500.0000000000",
+          // Not split: the whole budget on outreach, no sourcing ceiling.
+          outreachDailyBudgetCents: "2500.0000000000",
+          sourcingCeilingCents: null,
           updatedAt: expect.any(String),
         },
       ],

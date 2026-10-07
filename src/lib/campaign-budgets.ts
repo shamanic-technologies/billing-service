@@ -55,6 +55,12 @@ import {
 } from "../db/schema.js";
 import { addCents, parseNonNegativeCents } from "./cents.js";
 import { getChannelMinimums, type ChannelMinimums } from "./channel-terms.js";
+import {
+  parseSourcingCeiling,
+  scaledSourcingCeilingSql,
+  splitOf,
+  type CampaignSplit,
+} from "./campaign-sourcing.js";
 
 export {
   UnknownAcquisitionChannelError,
@@ -290,6 +296,10 @@ export interface CampaignBudgetTotal {
   legKey: string | null;
   featureSlug: string;
   dailyBudgetCents: string;
+  /** What outreach may spend per day (the whole amount when not split). */
+  outreachDailyBudgetCents: string;
+  /** What sourcing may spend per day, on demand; null when not split. */
+  sourcingCeilingCents: string | null;
   updatedAt: Date;
 }
 
@@ -300,6 +310,8 @@ export function campaignTotalsOf(rows: CeilingRow[]): CampaignBudgetTotal[] {
     legKey: row.legKey,
     featureSlug: row.featureSlug,
     dailyBudgetCents: row.dailyBudgetCents,
+    outreachDailyBudgetCents: splitOf([row]).outreachDailyBudgetCents,
+    sourcingCeilingCents: splitOf([row]).sourcingCeilingCents,
     updatedAt: row.updatedAt,
   }));
 }
@@ -340,10 +352,10 @@ export function aggregateLegBudget(
 export function campaignBudgetOf(
   rows: CeilingRow[],
   key: CampaignKey
-): { dailyBudgetCents: string; updatedAt: Date } | null {
+): (CampaignSplit & { updatedAt: Date }) | null {
   const owned = campaignCeilingRows(rows, key);
   if (owned.length === 0) return null;
-  return { dailyBudgetCents: sumCeilings(owned), updatedAt: latestUpdatedAt(owned) };
+  return { ...splitOf(owned), dailyBudgetCents: sumCeilings(owned), updatedAt: latestUpdatedAt(owned) };
 }
 
 /** Channel slug, then offer, then leg (the unscoped one first), so a list renders stably. */
@@ -383,7 +395,7 @@ export interface SetCampaignBudgetResult {
   /** The brand-level daily budget after = the sum of every ceiling. */
   brandDailyBudgetCents: string;
   /** This campaign's ceiling after the write. */
-  campaign: { dailyBudgetCents: string; updatedAt: Date };
+  campaign: CampaignSplit & { updatedAt: Date };
 }
 
 /**
@@ -412,6 +424,12 @@ export interface SetCampaignBudgetOptions {
    * monthly figure the row held: one row, one figure.
    */
   monthlyBudgetCents?: number | null;
+  /**
+   * The part of the new daily budget SOURCING may spend (lib/campaign-sourcing).
+   * Omitted (undefined) = keep the row's current share of the total; null =
+   * not split; a value = stated, 0 <= value <= the daily budget (400 otherwise).
+   */
+  sourcingCeilingCents?: unknown;
 }
 
 export async function setCampaignDailyBudget(
@@ -430,6 +448,11 @@ export async function setCampaignDailyBudget(
       err instanceof Error ? err.message : "invalid dailyBudgetCents"
     );
   }
+
+  const sourcingCeilingCents =
+    options.sourcingCeilingCents === undefined
+      ? undefined
+      : parseSourcingCeiling(options.sourcingCeilingCents, dailyBudgetCents);
 
   // Read before the lock — a network read has no business inside one.
   const minimums = options.skipChannelFloor ? null : await getChannelMinimums();
@@ -493,6 +516,10 @@ export async function setCampaignDailyBudget(
           legKey: key.legKey,
           dailyBudgetCents,
           monthlyBudgetCents,
+          sourcingCeilingCents:
+            sourcingCeilingCents === undefined
+              ? scaledSourcingCeilingSql(dailyBudgetCents)
+              : sourcingCeilingCents,
           // A customer write: the figure is theirs now, no longer derived from the plan.
           planDerived: false,
           updatedAt: changedAt,
@@ -507,6 +534,7 @@ export async function setCampaignDailyBudget(
         legKey: key.legKey,
         dailyBudgetCents,
         monthlyBudgetCents,
+        sourcingCeilingCents: sourcingCeilingCents ?? null,
         updatedAt: changedAt,
       });
     }
