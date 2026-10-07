@@ -55,6 +55,7 @@ import {
 } from "../db/schema.js";
 import { addCents, parseNonNegativeCents } from "./cents.js";
 import { getChannelMinimums, type ChannelMinimums } from "./channel-terms.js";
+import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import {
   parseSourcingCeiling,
   scaledSourcingCeilingSql,
@@ -72,6 +73,20 @@ export class CeilingBelowMinimumError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CeilingBelowMinimumError";
+  }
+}
+
+/**
+ * A sourcing ceiling stated on an OUTREACH campaign whose offer already funds the
+ * sourcing that feeds it as a SOURCE campaign of its own (owner 2026-10-07): the
+ * sourcing money lives on the source campaign, never twice. Surfaced as a 409.
+ */
+export class SourcingHasItsOwnCampaignError extends Error {
+  readonly sourceFeatureSlugs: string[];
+  constructor(message: string, sourceFeatureSlugs: string[]) {
+    super(message);
+    this.name = "SourcingHasItsOwnCampaignError";
+    this.sourceFeatureSlugs = sourceFeatureSlugs;
   }
 }
 
@@ -456,6 +471,9 @@ export async function setCampaignDailyBudget(
 
   // Read before the lock — a network read has no business inside one.
   const minimums = options.skipChannelFloor ? null : await getChannelMinimums();
+  // A STATED split needs to know which source campaigns feed this channel.
+  const terms: SalesPathTerms | null =
+    sourcingCeilingCents !== undefined && sourcingCeilingCents !== null ? await getSalesPathTerms() : null;
 
   return db.transaction(async (tx) => {
     const changedAt = new Date();
@@ -481,6 +499,23 @@ export async function setCampaignDailyBudget(
 
     const owned = campaignCeilingRows(existing, key);
     const ownedSet = new Set(owned);
+
+    if (terms) {
+      const feeding = new Set(terms.originsFeeding(key.featureSlug));
+      const sources = existing.filter(
+        (row) =>
+          row.offerId === key.offerId &&
+          feeding.has(row.featureSlug) &&
+          terms.isSourceItem(row.featureSlug, row.legKey)
+      );
+      if (sources.length > 0) {
+        const slugs = sources.map((row) => row.featureSlug);
+        throw new SourcingHasItsOwnCampaignError(
+          `The sourcing feeding ${key.featureSlug} on this offer is budgeted on its own source campaign (${slugs.join(", ")}); set that campaign's budget instead of a sourcing ceiling here.`,
+          slugs
+        );
+      }
+    }
 
     const channelRows = existing.filter(
       (row) => row.featureSlug === key.featureSlug

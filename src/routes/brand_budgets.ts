@@ -38,6 +38,7 @@ import {
 import {
   BrandBudgetManagedByCampaignsError,
   CeilingBelowMinimumError,
+  SourcingHasItsOwnCampaignError,
   ChannelTermsUnavailableError,
   InvalidCeilingError,
   UnknownAcquisitionChannelError,
@@ -64,6 +65,7 @@ import {
   MAX_CAMPAIGN_IDS,
 } from "../lib/campaign-sourcing.js";
 import { addCents } from "../lib/cents.js";
+import { SalesPathTermsUnavailableError } from "../lib/sales-path-terms.js";
 
 const router = Router();
 
@@ -159,8 +161,16 @@ function respondToCeilingWriteError(err: unknown, res: Response): void {
   // minimum is known. A gate that cannot be evaluated REFUSES — never lets the
   // write through — and it is the producer that is unavailable, not the request
   // that is wrong.
-  if (err instanceof ChannelTermsUnavailableError) {
+  if (err instanceof ChannelTermsUnavailableError || err instanceof SalesPathTermsUnavailableError) {
     res.status(502).json({ error: err.message });
+    return;
+  }
+  if (err instanceof SourcingHasItsOwnCampaignError) {
+    res.status(409).json({
+      error: err.message,
+      code: "sourcing_has_its_own_campaign",
+      sourceFeatureSlugs: err.sourceFeatureSlugs,
+    });
     return;
   }
   throw err;

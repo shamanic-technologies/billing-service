@@ -533,6 +533,13 @@
       "when": 1794650400000,
       "tag": "0075_campaign_sourcing_ceiling_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1794736800000,
+      "tag": "0076_source_campaign_budgets",
+      "breakpoints": true
     }
   ]
 }
