@@ -38,6 +38,7 @@ import { sumCeilings } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { listLiveSubscriptions } from "./subscription.js";
 import { attributeUnassignedPlan } from "./subscription-plans.js";
+import { scaledSourcingCeilingSql } from "./campaign-sourcing.js";
 
 export interface PlanBudgetRow {
   featureSlug: string;
@@ -174,6 +175,7 @@ export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promi
               .set({
                 monthlyBudgetCents: p.monthlyBudgetCents,
                 dailyBudgetCents: (p.monthlyBudgetCents / DAYS_PER_MONTH).toFixed(10),
+                sourcingCeilingCents: scaledSourcingCeilingSql((p.monthlyBudgetCents / DAYS_PER_MONTH).toFixed(10)),
                 planDerived: true,
                 updatedAt: now,
               })
@@ -377,7 +379,11 @@ export async function allocatePlanToOnCampaigns(params: {
           planDerived: true,
           updatedAt: now,
         };
-        if (before) await tx.update(campaignDailyBudgets).set(values).where(key);
+        if (before)
+          await tx
+            .update(campaignDailyBudgets)
+            .set({ ...values, sourcingCeilingCents: scaledSourcingCeilingSql(values.dailyBudgetCents) })
+            .where(key);
         else
           await tx.insert(campaignDailyBudgets).values({
             orgId,
