@@ -60,11 +60,16 @@ export interface ItemTerms {
   managed: boolean | null;
   /** true for a SOURCE campaign (a sourcing origin on the published source leg). */
   source: boolean;
+  /**
+   * The step a REACTIVE leg reacts on (the catalogue's `from`: `conversation` /
+   * "Positive reply"); null for an entry leg, or when the catalogue names no key.
+   */
+  trigger: { key: string; label: string | null } | null;
 }
 
 interface PublishedTransition {
   legKey?: string | null;
-  from?: unknown;
+  from?: { key?: unknown; label?: unknown } | null;
   /** features-service's explicit flag; absent → derived from `from`. */
   reactive?: boolean | null;
   minimumMonthlyBudgetCents?: number | null;
@@ -113,6 +118,10 @@ export function itemTermsFrom(channels: PublishedSalesChannel[]): Map<string, It
           typeof min === "number" && Number.isFinite(min) && min >= 0 ? Math.round(min) : null,
         managed,
         source: false,
+        trigger:
+          typeof t.from?.key === "string" && t.from.key.trim()
+            ? { key: t.from.key.trim(), label: typeof t.from.label === "string" ? t.from.label : null }
+            : null,
       });
     }
   }
@@ -134,6 +143,7 @@ export function sourceItemTermsFrom(published: PublishedSourcingOrigins | null |
       minimumMonthlyCents: 0,
       managed: true,
       source: true,
+      trigger: null,
     });
   }
   return out;

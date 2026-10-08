@@ -4606,6 +4606,42 @@ const ItemsPlanPricingSchema = z
   })
   .openapi("CampaignItemsPlanPricing");
 
+const OfferBudgetTotalsSchema = z
+  .object({
+    /** The org's period (subscriber: month, else day); every figure is in it. */
+    period: ItemPeriodSchema,
+    proactive: z.object({
+      /** SUM of the budgets of the ON proactive campaigns: what the offer spends. */
+      budgetCents: z.number(),
+      /** The part of it that is sourcing, on demand (source campaigns + split sourcing ceilings). */
+      sourcingBudgetCents: z.number(),
+      campaigns: z.number().int(),
+    }),
+    reactive: z.object({
+      /** SUM of the ceilings of the ON reactive campaigns: a MAX, never counted as spend. */
+      maxBudgetCents: z.number(),
+      campaigns: z.number().int(),
+      /** Per reaction type: the step the campaigns react on (`conversation` = "Positive reply"). */
+      byTrigger: z.array(
+        z.object({
+          triggerKey: z.string().nullable(),
+          triggerLabel: z.string().nullable(),
+          maxBudgetCents: z.number(),
+          campaigns: z.number().int(),
+        })
+      ),
+    }),
+    /** ON campaigns with a budget neither total counts (unknown role, or a channel we do not run yet). */
+    notCounted: z.array(
+      z.object({
+        featureSlug: z.string(),
+        legKey: z.string(),
+        reason: z.enum(["role_unknown", "channel_not_run"]),
+      })
+    ),
+  })
+  .openapi("OfferBudgetTotals");
+
 export const CampaignItemBudgetsSchema = z
   .object({
     orgId: z.string().uuid(),
@@ -4617,6 +4653,13 @@ export const CampaignItemBudgetsSchema = z
     plan: z.object({ subscriptionId: z.string().uuid(), monthlyAmountCents: z.number().int() }).nullable(),
     /** Subscriber: what the budgets cost; null when nothing is charged (or not a subscriber). */
     pricing: ItemsPlanPricingSchema.nullable(),
+    /**
+     * What the offer is committed to right now, ON campaigns only (campaign-service's
+     * status): proactive spend + reactive ceilings, in `totals.period`. null when
+     * campaign-service could not say which are on (see totalsUnavailableReason).
+     */
+    totals: OfferBudgetTotalsSchema.nullable(),
+    totalsUnavailableReason: z.enum(["campaign_service_unconfigured", "campaign_service_unavailable"]).nullable(),
   })
   .openapi("CampaignItemBudgets");
 
