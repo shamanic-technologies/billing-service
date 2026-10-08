@@ -68,7 +68,10 @@ import {
   type ItemRoleServed,
   type ItemsPlanPricing,
 } from "./campaign-items-store.js";
-import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
+import {
+  fetchRecurringCampaignStatuses,
+  type RecurringStatusUnavailableReason,
+} from "./campaign-service-client.js";
 import { getBrandSalesBudget, clearBrandSalesBudget } from "./brand-sales-budget.js";
 import { setCampaignDailyBudget, sumCeilings, type SetCampaignBudgetResult } from "./campaign-budgets.js";
 import { getPaymentMode } from "./payment-mode.js";
@@ -746,6 +749,102 @@ export interface OfferItemsView {
   plan: { subscriptionId: string; monthlyAmountCents: number } | null;
   /** Subscriber: what the budgets cost (null when nothing is charged, or not a subscriber). */
   pricing: ItemsPlanPricing | null;
+  /**
+   * What the offer is committed to RIGHT NOW, in `period`: proactive spend and
+   * reactive ceilings of the campaigns that are ON. Null when campaign-service
+   * could not say which are on (`totalsUnavailableReason`), never a guessed 0.
+   */
+  totals: OfferBudgetTotals | null;
+  totalsUnavailableReason: RecurringStatusUnavailableReason | null;
+}
+
+/** One reaction type: the reactive campaigns that fire on the same step. */
+export interface ReactiveTriggerTotal {
+  /** The step they react on (catalogue `from.key`, e.g. `conversation`); null = not published. */
+  triggerKey: string | null;
+  /** Its label (`Positive reply`); null = not published. */
+  triggerLabel: string | null;
+  /** SUM of their ceilings, in the totals' period. A MAX, never spend. */
+  maxBudgetCents: number;
+  campaigns: number;
+}
+
+export interface OfferBudgetTotals {
+  /** The org's period (subscriber: month, else day); every figure below is in it. */
+  period: ItemPeriod;
+  proactive: {
+    /** SUM of the budgets of the ON proactive campaigns: what the offer spends. */
+    budgetCents: number;
+    /** The part of it that is sourcing, on demand (source campaigns + split sourcing ceilings). */
+    sourcingBudgetCents: number;
+    campaigns: number;
+  };
+  reactive: {
+    /** SUM of the ceilings of the ON reactive campaigns. A MAX, never counted as spend. */
+    maxBudgetCents: number;
+    campaigns: number;
+    byTrigger: ReactiveTriggerTotal[];
+  };
+  /**
+   * ON campaigns holding a budget that neither total counts: `role_unknown` (the
+   * catalogue does not carry the channel x leg), `channel_not_run` (a channel we do
+   * not run yet: recorded, spends nothing).
+   */
+  notCounted: Array<{ featureSlug: string; legKey: string; reason: "role_unknown" | "channel_not_run" }>;
+}
+
+/**
+ * The offer's totals from its stored budgets. Pure. Only ON campaigns count (on/off
+ * is campaign-service's status); each budget is taken in the item's period and
+ * converted to `period`.
+ */
+export function offerBudgetTotals(
+  stored: CampaignItem[],
+  terms: SalesPathTerms,
+  isOn: CampaignOnPredicate,
+  period: ItemPeriod
+): OfferBudgetTotals {
+  const totals: OfferBudgetTotals = {
+    period,
+    proactive: { budgetCents: 0, sourcingBudgetCents: 0, campaigns: 0 },
+    reactive: { maxBudgetCents: 0, campaigns: 0, byTrigger: [] },
+    notCounted: [],
+  };
+  for (const i of stored) {
+    if (!isOn(i)) continue;
+    const t = terms.termsFor(i.featureSlug, i.legKey);
+    const role = roleOf(terms, i.featureSlug, i.legKey);
+    if (!role) {
+      if (t?.role !== "customer") totals.notCounted.push({ featureSlug: i.featureSlug, legKey: i.legKey, reason: "role_unknown" });
+      continue;
+    }
+    if (t?.managed === false) {
+      totals.notCounted.push({ featureSlug: i.featureSlug, legKey: i.legKey, reason: "channel_not_run" });
+      continue;
+    }
+    const budget = inPeriod(i.budgetCents, i.period, period);
+    if (role === "proactive") {
+      totals.proactive.budgetCents += budget;
+      totals.proactive.campaigns += 1;
+      if (terms.isSourceItem(i.featureSlug, i.legKey)) {
+        totals.proactive.sourcingBudgetCents += budget;
+      } else if (i.sourcingCeilingCents !== null) {
+        totals.proactive.sourcingBudgetCents += inPeriod(Number(i.sourcingCeilingCents), "day", period);
+      }
+      continue;
+    }
+    totals.reactive.maxBudgetCents += budget;
+    totals.reactive.campaigns += 1;
+    const triggerKey = t?.trigger?.key ?? null;
+    let bucket = totals.reactive.byTrigger.find((b) => b.triggerKey === triggerKey);
+    if (!bucket) {
+      bucket = { triggerKey, triggerLabel: t?.trigger?.label ?? null, maxBudgetCents: 0, campaigns: 0 };
+      totals.reactive.byTrigger.push(bucket);
+    }
+    bucket.maxBudgetCents += budget;
+    bucket.campaigns += 1;
+  }
+  return totals;
 }
 
 /**
@@ -798,16 +897,35 @@ export async function getOfferItemsView(
     };
   });
 
+  // ONE read of which campaigns are on, shared by the plan pricing and the totals.
+  const statuses = stored.length > 0 ? await fetchRecurringCampaignStatuses(orgId) : null;
+  const isOn: CampaignOnPredicate | null =
+    statuses === null ? () => false : statuses.ok ? campaignOnPredicateOf(statuses.campaigns) : null;
+
   let plan: OfferItemsView["plan"] = null;
   let pricing: ItemsPlanPricing | null = null;
   if (period === "month") {
     const live = (await listLiveSubscriptions(orgId)).find((s) => s.brandId === brandId && s.offerId === offerId);
     if (live) plan = { subscriptionId: live.id, monthlyAmountCents: live.monthlyAmountCents };
     if (stored.some((i) => i.period === "month")) {
-      pricing = itemsPlanPricing(stored, terms, await readOnPredicate(orgId));
+      if (!isOn) {
+        throw new ItemBudgetRefused(
+          "campaign_status_unavailable",
+          "We cannot read which campaigns are on right now, so nothing was saved. Try again in a moment.",
+          502
+        );
+      }
+      pricing = itemsPlanPricing(stored, terms, isOn);
     }
   }
-  return { brandId, offerId, period, items, plan, pricing };
+  const totals = isOn ? offerBudgetTotals(stored, terms, isOn, period) : null;
+  const totalsUnavailableReason = statuses && !statuses.ok ? statuses.reason : null;
+  if (totalsUnavailableReason) {
+    console.error(
+      `[billing-service] offer ${offerId} budget totals unavailable for org ${orgId}: ${totalsUnavailableReason}`
+    );
+  }
+  return { brandId, offerId, period, items, plan, pricing, totals, totalsUnavailableReason };
 }
 
 /** One campaign as campaign-service spends it (GET /internal/brands/:id/sales-budget, mode "items"). */
