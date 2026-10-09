@@ -40,7 +40,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { legIdentityKey, sameLeg } from "./leg-identity.js";
+import { canonicalLegKey, legIdentityKey, sameLeg } from "./leg-identity.js";
 import {
   campaignDailyBudgets,
   salesPathReactiveCharges,
@@ -232,7 +232,7 @@ export function validateItemInputs(
     }
     out.push({
       featureSlug: item.featureSlug,
-      legKey: item.legKey,
+      legKey: canonicalLegKey(item.featureSlug, item.legKey),
       budgetCents: item.budgetCents,
       role: t.role,
       source: t.source,
@@ -871,11 +871,11 @@ export async function getOfferItemsView(
     legKey: r.legKey,
   }));
   // A pair asked under the other spelling of a stored outbound leg IS that row:
-  // served once, under the spelling it is stored with (lib/leg-identity).
+  // served once, under the new spelling (wave 2, lib/leg-identity).
   const samePair = (a: { featureSlug: string; legKey: string }, b: { featureSlug: string; legKey: string }) =>
     a.featureSlug === b.featureSlug && sameLeg(a.featureSlug, a.legKey, b.legKey);
   for (const c of campaigns) {
-    if (!pairs.some((p) => samePair(p, c))) pairs.push(c);
+    if (!pairs.some((p) => samePair(p, c))) pairs.push({ featureSlug: c.featureSlug, legKey: canonicalLegKey(c.featureSlug, c.legKey) });
   }
   const items: ItemView[] = pairs.map(({ featureSlug, legKey }) => {
     const row = stored.find((r) => samePair(r, { featureSlug, legKey })) ?? null;

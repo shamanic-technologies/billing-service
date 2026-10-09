@@ -32,8 +32,8 @@ const internal = { "X-API-Key": "test-api-key", "x-org-id": orgId };
 const BRAND = "aaaaaaaa-0066-4000-8000-000000000001";
 const OFFER = "aaaaaaaa-0066-4000-8000-0000000000a1";
 const COLD = "sales-cold-email-outreach";
-const REPLY = "start_to_conversation";
-const VISIT = "start_to_website_visit";
+const REPLY = "lead_found_to_conversation";
+const VISIT = "lead_found_to_website_visit";
 const MEET = "ai-meeting-booking";
 const MEET_LEG = "conversation_to_meeting_booked";
 
