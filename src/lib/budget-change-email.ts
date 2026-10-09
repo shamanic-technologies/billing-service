@@ -43,6 +43,7 @@
 import { Decimal } from "decimal.js";
 import type { ChannelCatalogue, OrgIdentity } from "./budget-change-context.js";
 import type { SpendableBudget } from "./campaign-service-client.js";
+import { canonicalLegKey } from "./leg-identity.js";
 
 export const ADMIN_CONSOLE_URL = "https://admin.distribute.you";
 
@@ -128,7 +129,8 @@ function escapeHtml(s: string): string {
 }
 
 function key(g: MissionGrain): string {
-  return [g.featureSlug ?? "", (g.offerId ?? "").toLowerCase(), g.legKey ?? ""].join(
+  const leg = g.legKey === null ? "" : canonicalLegKey(g.featureSlug, g.legKey);
+  return [g.featureSlug ?? "", (g.offerId ?? "").toLowerCase(), leg].join(
     "\u0000"
   );
 }
@@ -186,7 +188,7 @@ function describeAll(
       continue;
     }
     const channel = catalogue?.get(g.featureSlug) ?? null;
-    const leg = g.legKey && channel ? (channel.legs.get(g.legKey) ?? null) : null;
+    const leg = g.legKey && channel ? (channel.legs.get(canonicalLegKey(g.featureSlug, g.legKey)) ?? null) : null;
     const name = channel?.name ? shortChannelName(channel.name) : g.featureSlug;
     const legNote = leg
       ? null
@@ -195,7 +197,8 @@ function describeAll(
           ? `leg ${g.legKey}`
           : `leg ${g.legKey}, not in the channel catalogue`
         : "no leg stated";
-    const kind: MissionKind = leg ? (leg.fromLabel === null ? "daily" : "reactive") : "unknown";
+    const reactive = leg ? (leg.reactive ?? leg.fromLabel !== null) : null;
+    const kind: MissionKind = leg ? (reactive ? "reactive" : "daily") : "unknown";
     const trigger =
       kind === "reactive" && leg
         ? leg.fromShortDescription

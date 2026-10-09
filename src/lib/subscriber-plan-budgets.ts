@@ -39,6 +39,7 @@ import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { listLiveSubscriptions } from "./subscription.js";
 import { attributeUnassignedPlan } from "./subscription-plans.js";
 import { scaledSourcingCeilingSql } from "./campaign-sourcing.js";
+import { legIdentityKey } from "./leg-identity.js";
 
 export interface PlanBudgetRow {
   featureSlug: string;
@@ -346,7 +347,8 @@ export async function allocatePlanToOnCampaigns(params: {
     const offerRows = rows.filter((r) => r.offerId === offerId && r.legKey !== null);
 
     const campaigns = new Map<string, OfferCampaign>();
-    const keyOf = (featureSlug: string, legKey: string) => `${featureSlug}\u0000${legKey}`.toLowerCase();
+    // Either spelling of an outbound leg is one campaign; the stored row keeps its spelling.
+    const keyOf = (featureSlug: string, legKey: string) => legIdentityKey(featureSlug, legKey).toLowerCase();
     for (const r of offerRows) campaigns.set(keyOf(r.featureSlug, r.legKey as string), { featureSlug: r.featureSlug, legKey: r.legKey as string, on: false });
     for (const c of statuses.campaigns) {
       if (c.brandId?.toLowerCase() !== brandId || c.offerId?.toLowerCase() !== offerId || !c.featureSlug || !c.legKey) continue;
