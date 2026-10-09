@@ -19,6 +19,7 @@ import subscriptionRoutes from "../../src/routes/subscription.js";
 import acquirerRoutes from "../../src/routes/acquirer.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 import { ownerAlertActorMiddleware } from "../../src/lib/owner-alerts.js";
+import { legacyOutboundLegKeyLogMiddleware } from "../../src/lib/legacy-leg-key-log.js";
 
 export function createTestApp() {
   const app = express();
@@ -30,6 +31,7 @@ export function createTestApp() {
   app.use(publicStatsRoutes);
 
   app.use(requireApiKey);
+  app.use(legacyOutboundLegKeyLogMiddleware);
   app.use(internalRoutes);
   app.use(creditsRoutes);
   app.use(promoCodesRoutes);
