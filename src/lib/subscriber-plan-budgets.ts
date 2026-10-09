@@ -39,7 +39,7 @@ import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { listLiveSubscriptions } from "./subscription.js";
 import { attributeUnassignedPlan } from "./subscription-plans.js";
 import { scaledSourcingCeilingSql } from "./campaign-sourcing.js";
-import { legIdentityKey } from "./leg-identity.js";
+import { canonicalLegKey, legIdentityKey } from "./leg-identity.js";
 
 export interface PlanBudgetRow {
   featureSlug: string;
@@ -398,7 +398,7 @@ export async function allocatePlanToOnCampaigns(params: {
             brandId,
             offerId,
             featureSlug: p.featureSlug,
-            legKey: p.legKey,
+            legKey: canonicalLegKey(p.featureSlug, p.legKey),
             ...values,
           });
         written++;

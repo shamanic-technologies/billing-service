@@ -20,7 +20,7 @@ const runId = "00000000-0000-0000-0000-0000000057eb";
 const brandId = "00000000-0000-0000-0000-000000057e01";
 const COLD = "sales-cold-email-outreach";
 const OFFER = "aaaaaaaa-1157-4157-8157-aaaaaaaaaaaa";
-const LEG = "start_to_conversation";
+const LEG = "lead_found_to_conversation";
 const key = { offerId: OFFER, legKey: LEG, featureSlug: COLD };
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
@@ -116,13 +116,13 @@ describe("campaign sourcing ceiling", () => {
         managed: true,
         stepTransitions: [
           { legKey: LEG, from: null, minimumMonthlyBudgetCents: 9900 },
-          { legKey: "start_to_website_visit", from: null, minimumMonthlyBudgetCents: 9900 },
+          { legKey: "lead_found_to_website_visit", from: null, minimumMonthlyBudgetCents: 9900 },
         ],
       },
     ]);
     const res = await request(app)
       .get(`/v1/brands/${brandId}/offers/${OFFER}/campaign-budgets`)
-      .query({ campaigns: `${COLD}:start_to_website_visit` })
+      .query({ campaigns: `${COLD}:lead_found_to_website_visit` })
       .set(getAuthHeaders(orgId, userId, runId));
     expect(res.status).toBe(200);
     const item = res.body.items.find((i: { legKey: string }) => i.legKey === LEG);
@@ -132,7 +132,7 @@ describe("campaign sourcing ceiling", () => {
       sourcingCeilingCents: "1700.0000000000",
       split: true,
     });
-    const notSet = res.body.items.find((i: { legKey: string }) => i.legKey === "start_to_website_visit");
+    const notSet = res.body.items.find((i: { legKey: string }) => i.legKey === "lead_found_to_website_visit");
     expect(notSet).toMatchObject({ outreachDailyBudgetCents: null, sourcingCeilingCents: null, split: false });
   });
 

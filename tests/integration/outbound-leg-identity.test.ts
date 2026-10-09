@@ -1,8 +1,9 @@
 /**
- * Wave 1 of the outbound leg-key rename (owner 2026-10-09, lib/leg-identity).
+ * The outbound leg-key rename (owner 2026-10-09, lib/leg-identity).
  * Every route taking a leg key answers the same for the legacy and the new
  * spelling of an OUTBOUND leg, a write under one spelling never opens a second
- * budget beside the other, and what is stored and served keeps its spelling.
+ * budget beside the other, and (wave 2) what is written and served is the new
+ * spelling, a not-yet-migrated legacy row included.
  * A non-outbound start_to_website_visit is unaffected.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
@@ -120,7 +121,7 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     expect(renamed.body.campaigns.map((c: { legKey: string }) => c.legKey)).toEqual([LEGACY_VISIT]);
   });
 
-  it("a ceiling write under the new spelling updates the legacy row in place (one row, spelling kept)", async () => {
+  it("a ceiling write under the new spelling updates the legacy row in place (one row, new spelling)", async () => {
     await seed(COLD, LEGACY_REPLY, "500.0000000000");
     const res = await request(app)
       .put(`/v1/brands/${BRAND}/campaign-budget`)
@@ -129,7 +130,8 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     expect(res.status).toBe(200);
     const stored = await rows();
     expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({ legKey: LEGACY_REPLY, dailyBudgetCents: "700.0000000000" });
+    expect(stored[0]).toMatchObject({ legKey: NEW_REPLY, dailyBudgetCents: "700.0000000000" });
+    expect(res.body.legKey).toBe(NEW_REPLY);
     expect((await readCampaign(LEGACY_REPLY)).body.dailyBudgetCents).toBe("700.0000000000");
   });
 
@@ -144,6 +146,9 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     expect(newView.body.items).toEqual(legacyView.body.items);
     expect(newView.body.items).toHaveLength(1);
     expect(newView.body.items[0]).toMatchObject({ legKey: LEGACY_REPLY, budgetCents: 500, minimumCents: 330 });
+    // A "not set" pair asked under the legacy spelling is served under the new one.
+    const notSet = await request(app).get(`${itemsPath}?campaigns=${COLD}:${LEGACY_VISIT}`).set(headers);
+    expect(notSet.body.items.map((i: { legKey: string }) => i.legKey)).toEqual([LEGACY_REPLY, NEW_VISIT]);
 
     // Both spellings in one write are one campaign listed twice.
     const dup = await request(app)
@@ -160,7 +165,7 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     expect(write.status).toBe(200);
     let stored = await rows();
     expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({ legKey: LEGACY_REPLY, dailyBudgetCents: "800.0000000000" });
+    expect(stored[0]).toMatchObject({ legKey: NEW_REPLY, dailyBudgetCents: "800.0000000000" });
 
     const del = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${NEW_REPLY}`).set(headers);
     expect(del.status).toBe(200);
@@ -172,6 +177,8 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     await seed(COLD, NEW_REPLY, "300.0000000000");
     const legacy = await readCampaign(LEGACY_REPLY);
     expect(legacy.body.dailyBudgetCents).toBe("300.0000000000");
+    // The legacy-spelled request is answered under the new spelling.
+    expect(legacy.body.legKey).toBe(NEW_REPLY);
     const res = await request(app)
       .put(`/v1/brands/${BRAND}/campaign-budget`)
       .set(headers)
