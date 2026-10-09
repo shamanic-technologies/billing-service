@@ -22,7 +22,9 @@
  * WHICH IDENTIFIERS EXIST IS NOT THIS SERVICE'S STATEMENT. brand-service owns
  * offers, features-service owns legs and channels; billing stores whatever the
  * customer funds and validates none of them against their owners. A leg id is
- * OPAQUE and never parsed.
+ * OPAQUE and never parsed, with ONE exception: the two spellings of an outbound
+ * leg (the 2026-10-09 rename, lib/leg-identity) are the same leg, so every leg
+ * comparison here goes through `sameLeg`. A stored row keeps its own spelling.
  *
  * NULL OFFER / NULL LEG. A ceiling written before offers (or legs) existed names
  * none. That NULL is a permanent value, never backfilled, and it is resolved by
@@ -62,6 +64,7 @@ import {
   splitOf,
   type CampaignSplit,
 } from "./campaign-sourcing.js";
+import { sameLeg } from "./leg-identity.js";
 
 export {
   UnknownAcquisitionChannelError,
@@ -261,12 +264,15 @@ export function campaignCeilingRows<R extends CeilingRow>(
 ): R[] {
   const onChannel = rows.filter((row) => row.featureSlug === key.featureSlug);
   const otherOfferNamed = namedOffersOf(rows).some((o) => o !== key.offerId);
-  const otherLegNamed = namedLegsOf(onChannel).some((l) => l !== key.legKey);
+  const otherLegNamed = namedLegsOf(onChannel).some(
+    (l) => !sameLeg(key.featureSlug, l, key.legKey)
+  );
   return onChannel.filter(
     (row) =>
       (row.offerId === key.offerId ||
         (row.offerId === null && !otherOfferNamed)) &&
-      (row.legKey === key.legKey || (row.legKey === null && !otherLegNamed))
+      (sameLeg(key.featureSlug, row.legKey, key.legKey) ||
+        (row.legKey === null && !otherLegNamed))
   );
 }
 
@@ -297,12 +303,15 @@ export function legBudgetRows<R extends CeilingRow>(
   rows: R[],
   legKey: string
 ): R[] {
-  const owned = rows.filter((row) => row.legKey === legKey);
+  // The leg is read in each row's own channel: the two spellings of an outbound
+  // leg are one leg there, while the same legacy key on a non-outbound channel
+  // stays itself.
+  const isLeg = (row: R) => row.legKey !== null && sameLeg(row.featureSlug, row.legKey, legKey);
+  const owned = rows.filter(isLeg);
   if (owned.length === 0) return [];
-  const named = namedLegsOf(rows);
-  const soleNamedLeg = named.length === 1 && named[0] === legKey;
+  const soleNamedLeg = rows.every((row) => row.legKey === null || isLeg(row));
   if (!soleNamedLeg) return owned;
-  return rows.filter((row) => row.legKey === legKey || row.legKey === null);
+  return rows.filter((row) => isLeg(row) || row.legKey === null);
 }
 
 /** One campaign's ceiling as stored. */
@@ -548,7 +557,12 @@ export async function setCampaignDailyBudget(
         .update(campaignDailyBudgets)
         .set({
           offerId: key.offerId,
-          legKey: key.legKey,
+          // The same leg under its other spelling keeps the spelling it is stored
+          // under (wave 1 of the outbound rename stores what it stored).
+          legKey:
+            keeper.legKey !== null && sameLeg(key.featureSlug, keeper.legKey, key.legKey)
+              ? keeper.legKey
+              : key.legKey,
           dailyBudgetCents,
           monthlyBudgetCents,
           sourcingCeilingCents:

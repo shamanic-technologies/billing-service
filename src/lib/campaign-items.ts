@@ -40,6 +40,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
+import { legIdentityKey, sameLeg } from "./leg-identity.js";
 import {
   campaignDailyBudgets,
   salesPathReactiveCharges,
@@ -157,8 +158,9 @@ export function minimumInPeriod(monthlyMinimumCents: number, period: ItemPeriod)
   return period === "month" ? monthlyMinimumCents : Math.ceil(monthlyMinimumCents / DAYS_PER_MONTH);
 }
 
+/** (channel, leg IDENTITY): either spelling of an outbound leg is one item. */
 function itemKey(featureSlug: string, legKey: string): string {
-  return `${featureSlug}\u0000${legKey}`;
+  return legIdentityKey(featureSlug, legKey);
 }
 
 /**
@@ -607,12 +609,12 @@ export async function removeOfferItem(params: {
   const { orgId, featureSlug, legKey } = params;
   const now = params.now ?? new Date();
   const items = await listOfferItems(orgId, brandId, offerId);
-  const target = items.find((i) => i.featureSlug === featureSlug && i.legKey === legKey);
+  const isTarget = (i: { featureSlug: string; legKey: string }) =>
+    i.featureSlug === featureSlug && sameLeg(featureSlug, i.legKey, legKey);
+  const target = items.find(isTarget);
   if (!target) return false;
   const terms = await readTerms();
-  assertEntryForReactive(
-    asOfferItems(items, target.period, terms).filter((i) => !(i.featureSlug === featureSlug && i.legKey === legKey))
-  );
+  assertEntryForReactive(asOfferItems(items, target.period, terms).filter((i) => !isTarget(i)));
   await db.transaction(async (tx) => {
     await tx
       .delete(campaignDailyBudgets)
@@ -622,7 +624,8 @@ export async function removeOfferItem(params: {
           eq(campaignDailyBudgets.brandId, brandId),
           eq(campaignDailyBudgets.offerId, offerId),
           eq(campaignDailyBudgets.featureSlug, featureSlug),
-          eq(campaignDailyBudgets.legKey, legKey)
+          // The row as STORED (either spelling of the leg names it).
+          eq(campaignDailyBudgets.legKey, target.legKey)
         )
       );
     const left = await tx
@@ -867,11 +870,15 @@ export async function getOfferItemsView(
     featureSlug: r.featureSlug,
     legKey: r.legKey,
   }));
+  // A pair asked under the other spelling of a stored outbound leg IS that row:
+  // served once, under the spelling it is stored with (lib/leg-identity).
+  const samePair = (a: { featureSlug: string; legKey: string }, b: { featureSlug: string; legKey: string }) =>
+    a.featureSlug === b.featureSlug && sameLeg(a.featureSlug, a.legKey, b.legKey);
   for (const c of campaigns) {
-    if (!pairs.some((p) => p.featureSlug === c.featureSlug && p.legKey === c.legKey)) pairs.push(c);
+    if (!pairs.some((p) => samePair(p, c))) pairs.push(c);
   }
   const items: ItemView[] = pairs.map(({ featureSlug, legKey }) => {
-    const row = stored.find((r) => r.featureSlug === featureSlug && r.legKey === legKey) ?? null;
+    const row = stored.find((r) => samePair(r, { featureSlug, legKey })) ?? null;
     const t = terms.termsFor(featureSlug, legKey);
     const role = roleOf(terms, featureSlug, legKey);
     // Every figure of a row is in ONE period, never a budget beside a cap or minimum

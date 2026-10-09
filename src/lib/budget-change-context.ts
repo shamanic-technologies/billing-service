@@ -21,6 +21,7 @@
  */
 
 import { fetchWithRetry } from "./fetch-retry.js";
+import { canonicalLegKey } from "./leg-identity.js";
 
 const READ_TIMEOUT_MS = 5_000;
 
@@ -31,8 +32,16 @@ const READ_TIMEOUT_MS = 5_000;
 // or absent, so the deploy order with features-service does not matter.
 
 export interface CatalogueLeg {
-  /** The step the leg starts from; null for an entry leg, which spends daily. */
+  /** The step the leg starts from; null for a leg starting from nothing. */
   fromLabel: string | null;
+  /**
+   * features-service's per-leg flag: true = fires when a lead reaches its start
+   * step (a cap), false = funded and paced daily. null when not published, and
+   * only then is the kind read off `fromLabel`. An outbound leg starts at
+   * lead_found (owner 2026-10-09) and still spends daily, so a start step alone
+   * no longer means reactive.
+   */
+  reactive: boolean | null;
   /**
    * The start step's plain trigger phrase (`Replies they're interested`), read
    * by the email's reactive line ("only when someone replies they're
@@ -56,6 +65,7 @@ interface PublishedStep {
 }
 interface PublishedLeg {
   legKey?: string | null;
+  reactive?: boolean | null;
   from?: PublishedStep | null;
   to?: PublishedStep | null;
 }
@@ -74,8 +84,10 @@ export function channelCatalogueFrom(channels: PublishedChannel[]): ChannelCatal
     const legs = new Map<string, CatalogueLeg>();
     for (const leg of channel.stepTransitions ?? []) {
       if (typeof leg?.legKey !== "string" || !leg.legKey) continue;
-      legs.set(leg.legKey, {
+      // Keyed by leg IDENTITY: either spelling of an outbound leg finds it.
+      legs.set(canonicalLegKey(slug, leg.legKey), {
         fromLabel: leg.from ? (leg.from.label ?? null) : null,
+        reactive: typeof leg.reactive === "boolean" ? leg.reactive : null,
         fromShortDescription:
           typeof leg.from?.shortDescription === "string" && leg.from.shortDescription.trim()
             ? leg.from.shortDescription.trim()
