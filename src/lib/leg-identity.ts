@@ -13,12 +13,11 @@
  * PR...) are NOT renamed and stay distinct identities. Sourcing keeps
  * start_to_lead_found. Every other leg key is unchanged.
  *
- * WAVE 1 (this module): billing keeps STORING and SERVING exactly the spelling
- * it holds, but treats the two spellings of an outbound leg as the SAME identity
- * wherever it receives, matches, dedups or enforces uniqueness on a leg key. A
- * caller sending the new key finds a row stored under the old one, and the
- * reverse once wave 2 has migrated the rows. Wave 2 (a separate change)
- * migrates stored rows and flips what is served.
+ * WAVE 1: the two spellings of an outbound leg are the SAME identity wherever
+ * billing receives, matches, dedups or enforces uniqueness on a leg key.
+ * WAVE 2 (migration 0077): every stored row carries the new spelling and every
+ * write stores it (`canonicalLegKey`), so reads serve it; the legacy spelling
+ * is still accepted on input.
  *
  * Every comparison of two leg keys goes through `sameLeg` / `legIdentityKey`:
  * a bare `a.legKey === b.legKey` is the bug this module exists to remove. The
@@ -60,8 +59,8 @@ export function isOutboundChannel(featureSlug: string | null | undefined): boole
 
 /**
  * The leg's identity in its channel: the NEW spelling for a legacy outbound
- * key, the key itself otherwise. For COMPARISON only — never stored, never
- * served (wave 1 serves what is stored).
+ * key, the key itself otherwise. Used for comparison AND, since wave 2, as the
+ * spelling every write stores.
  */
 export function canonicalLegKey(featureSlug: string | null | undefined, legKey: string): string;
 export function canonicalLegKey(featureSlug: string | null | undefined, legKey: string | null): string | null;

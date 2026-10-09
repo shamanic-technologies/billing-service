@@ -24,7 +24,7 @@
  * customer funds and validates none of them against their owners. A leg id is
  * OPAQUE and never parsed, with ONE exception: the two spellings of an outbound
  * leg (the 2026-10-09 rename, lib/leg-identity) are the same leg, so every leg
- * comparison here goes through `sameLeg`. A stored row keeps its own spelling.
+ * comparison here goes through `sameLeg`. A row is written under the new spelling (wave 2).
  *
  * NULL OFFER / NULL LEG. A ceiling written before offers (or legs) existed names
  * none. That NULL is a permanent value, never backfilled, and it is resolved by
@@ -64,7 +64,7 @@ import {
   splitOf,
   type CampaignSplit,
 } from "./campaign-sourcing.js";
-import { sameLeg } from "./leg-identity.js";
+import { canonicalLegKey, sameLeg } from "./leg-identity.js";
 
 export {
   UnknownAcquisitionChannelError,
@@ -157,9 +157,11 @@ export function parseCampaignKey(input: {
       "featureSlug must be a non-empty acquisition-channel feature slug."
     );
   }
+  // Either spelling of an outbound leg is accepted; the new one is what is
+  // stored and served (wave 2, lib/leg-identity).
   return {
     offerId: offerId.trim().toLowerCase(),
-    legKey: legKey.trim(),
+    legKey: canonicalLegKey(featureSlug.trim(), legKey.trim()),
     featureSlug: featureSlug.trim(),
   };
 }
@@ -463,6 +465,9 @@ export async function setCampaignDailyBudget(
   dailyBudgetCentsInput: unknown,
   options: SetCampaignBudgetOptions = {}
 ): Promise<SetCampaignBudgetResult> {
+  // Wave 2 of the outbound leg rename: a row is STORED under the new spelling,
+  // whichever spelling the caller sent (lib/leg-identity).
+  key = { ...key, legKey: canonicalLegKey(key.featureSlug, key.legKey) };
   const monthlyBudgetCents = options.monthlyBudgetCents ?? null;
   let dailyBudgetCents: string;
   try {
@@ -557,12 +562,8 @@ export async function setCampaignDailyBudget(
         .update(campaignDailyBudgets)
         .set({
           offerId: key.offerId,
-          // The same leg under its other spelling keeps the spelling it is stored
-          // under (wave 1 of the outbound rename stores what it stored).
-          legKey:
-            keeper.legKey !== null && sameLeg(key.featureSlug, keeper.legKey, key.legKey)
-              ? keeper.legKey
-              : key.legKey,
+          // Stored under the new spelling of an outbound leg (wave 2, lib/leg-identity).
+          legKey: key.legKey,
           dailyBudgetCents,
           monthlyBudgetCents,
           sourcingCeilingCents:

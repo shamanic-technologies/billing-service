@@ -23,8 +23,8 @@ const COLD = "sales-cold-email-outreach";
 const BOOKING = "ai-meeting-booking";
 const OFFER_A = "aaaaaaaa-1147-4147-8147-aaaaaaaaaaaa";
 const OFFER_B = "bbbbbbbb-2247-4247-8247-bbbbbbbbbbbb";
-const LEG_REPLY = "start_to_conversation";
-const LEG_VISIT = "start_to_website_visit";
+const LEG_REPLY = "lead_found_to_conversation";
+const LEG_VISIT = "lead_found_to_website_visit";
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
 const campaignPath = `/v1/brands/${brandId}/campaign-budget`;
