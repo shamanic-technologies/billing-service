@@ -12,6 +12,7 @@ import { db } from "../db/index.js";
 import { campaignDailyBudgets, type CeilingRow } from "../db/schema.js";
 import type { SalesPathTerms } from "./sales-path-terms.js";
 import type { RecurringCampaignStatus } from "./campaign-service-client.js";
+import { canonicalLegKey } from "./leg-identity.js";
 
 /** The smallest monthly plan a subscriber pays when it is priced from campaign budgets. */
 export const ITEMS_PLAN_MIN_MONTHLY_CENTS = 9900;
@@ -85,9 +86,11 @@ export function campaignOnPredicateOf(campaigns: RecurringCampaignStatus[]): Cam
   const on = new Set(
     campaigns
       .filter((c) => c.status === "ongoing")
-      .map((c) => [c.brandId, c.offerId, c.featureSlug, c.legKey].join("\u0000").toLowerCase())
+      .map((c) => [c.brandId, c.offerId, c.featureSlug, canonicalLegKey(c.featureSlug, c.legKey)].join("\u0000").toLowerCase())
   );
-  return (i) => on.has([i.brandId, i.offerId, i.featureSlug, i.legKey].join("\u0000").toLowerCase());
+  // Either spelling of an outbound leg is the same campaign (lib/leg-identity).
+  return (i) =>
+    on.has([i.brandId, i.offerId, i.featureSlug, canonicalLegKey(i.featureSlug, i.legKey)].join("\u0000").toLowerCase());
 }
 
 /** The item's role from the published terms; null when the catalogue does not carry it. */

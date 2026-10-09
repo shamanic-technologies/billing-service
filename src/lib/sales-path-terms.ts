@@ -10,6 +10,12 @@
  *    floor spread over 30 days, rounded up to the cent.
  *  - `stepTransitions[].reactive` (else derived from `from`: null = an ENTRY leg,
  *    proactive, spends daily; a step = a REACTIVE leg, fires when a lead reaches it).
+ *    The explicit per-leg flag is what decides. The `from` fallback only covers a
+ *    catalogue that omits it, and it is WRONG for an outbound leg once that leg
+ *    starts at lead_found (owner 2026-10-09): such a leg has a `from` and is still
+ *    funded and paced daily. features-service serves `reactive` on every leg
+ *    today; the channel-level `trigger` is not used, because it disagrees with
+ *    the per-leg flag (ai-meeting-booking: trigger daily_budget, reactive true).
  *  - `operatedBy: "customer"`: a customer-team leg (your-team-*). It carries no
  *    budget at all.
  *  - `managed`: true when we run the channel today. A channel we do not run is
@@ -32,6 +38,7 @@
  */
 
 import { fetchWithRetry } from "./fetch-retry.js";
+import { legIdentityKey } from "./leg-identity.js";
 
 const CATALOGUE_TIMEOUT_MS = 10_000;
 const CATALOGUE_TTL_MS = 60_000;
@@ -90,8 +97,12 @@ export interface PublishedSourcingOrigins {
   originsByChannel?: Record<string, string[] | null> | null;
 }
 
+/**
+ * Indexed by (channel, leg IDENTITY): an outbound leg published or asked under
+ * either spelling of the 2026-10-09 rename is the same item (lib/leg-identity).
+ */
 function key(featureSlug: string, legKey: string): string {
-  return `${featureSlug}\u0000${legKey}`;
+  return legIdentityKey(featureSlug, legKey);
 }
 
 /** Index a published catalogue by (channel, leg). Pure. */

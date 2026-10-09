@@ -8,6 +8,7 @@
  */
 
 import { Decimal } from "decimal.js";
+import { canonicalLegKey } from "./leg-identity.js";
 
 /**
  * One ceiling this write touched. `previousDailyBudgetCents` is "0" for a
@@ -102,7 +103,8 @@ function grainKey(
   offerId: string | null,
   legKey: string | null
 ): string {
-  return [featureSlug ?? "", (offerId ?? "").toLowerCase(), legKey ?? ""].join(
+  const leg = legKey === null ? "" : canonicalLegKey(featureSlug, legKey);
+  return [featureSlug ?? "", (offerId ?? "").toLowerCase(), leg].join(
     "\u0000"
   );
 }
