@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
+import { logLegacyLegKeyOnLegPath } from "../lib/legacy-leg-key-log.js";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import {
   MissionStatusChangedRequestSchema,
@@ -43,6 +44,7 @@ import {
   InvalidCeilingError,
   UnknownAcquisitionChannelError,
   aggregateLegBudget,
+  legBudgetRows,
   aggregateOfferBudget,
   campaignBudgetOf,
   campaignTotalsOf,
@@ -138,11 +140,13 @@ async function composeOfferBudgetView(
  * ceilings. A leg with no ceiling answers null.
  */
 async function composeLegBudgetView(
+  req: Request,
   orgId: string,
   brandId: string,
   legKey: string
 ) {
   const stored = await getBrandCeilings(orgId, brandId);
+  logLegacyLegKeyOnLegPath(req, legKey, legBudgetRows(stored, legKey));
   return { legKey, ...renderSubtotal(aggregateLegBudget(stored, legKey)) };
 }
 
@@ -604,7 +608,7 @@ router.get(
     const orgId = requireInternalOrgId(req, res);
     if (!orgId) return;
 
-    const view = await composeLegBudgetView(orgId, brandId, legKey.trim());
+    const view = await composeLegBudgetView(req, orgId, brandId, legKey.trim());
     res.json({ brandId, ...view });
   }
 );
@@ -627,7 +631,7 @@ router.get(
     }
 
     const orgId = req.headers["x-org-id"] as string;
-    const view = await composeLegBudgetView(orgId, brandId, legKey.trim());
+    const view = await composeLegBudgetView(req, orgId, brandId, legKey.trim());
     res.json({ brandId, orgId, ...view });
   }
 );

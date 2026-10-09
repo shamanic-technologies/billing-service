@@ -28,6 +28,7 @@ import { deployEmailTemplates } from "./instrument.js";
 import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
 import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
+import { legacyOutboundLegKeyLogMiddleware } from "./lib/legacy-leg-key-log.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -56,6 +57,7 @@ app.get("/openapi.json", (_req, res) => {
 
 // Protected routes (service-to-service)
 app.use(requireApiKey);
+app.use(legacyOutboundLegKeyLogMiddleware);
 app.use(internalRoutes);
 app.use(creditsRoutes);
 app.use(promoCodesRoutes);
