@@ -73,6 +73,21 @@ export function canonicalLegKey(
   return OUTBOUND_LEG_RENAMES[legKey] ?? legKey;
 }
 
+/**
+ * Is this the LEGACY spelling of an outbound leg, read in its channel? The same
+ * key on a non-outbound channel is not legacy: it was never renamed.
+ */
+export function isLegacyOutboundLegKey(
+  featureSlug: string | null | undefined,
+  legKey: string | null | undefined
+): boolean {
+  return (
+    typeof legKey === "string" &&
+    isOutboundChannel(featureSlug) &&
+    Object.prototype.hasOwnProperty.call(OUTBOUND_LEG_RENAMES, legKey.trim())
+  );
+}
+
 /** Both spellings of one leg on one channel (one entry when it was never renamed). */
 export function legKeySpellings(featureSlug: string | null | undefined, legKey: string): string[] {
   if (!isOutboundChannel(featureSlug)) return [legKey];
