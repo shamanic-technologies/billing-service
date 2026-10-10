@@ -139,6 +139,7 @@ export type SubscriptionRefusalCode =
   | "subscription_trialing"
   | "subscription_not_trialing"
   | "start_now_in_progress"
+  | "amount_not_upgrade"
   | "subscription_not_active"
   | "subscription_cancel_pending"
   | "subscription_not_cancel_pending"
@@ -1219,6 +1220,17 @@ export async function changeSubscriptionAmount(
  *  - Nothing is charged at the old trial end: the period now ends a month out.
  *  - Two concurrent clicks: the plan is CLAIMED (optimistic, on updated_at) before
  *    the charge, so only one charge is made; the other is 409 start_now_in_progress.
+ *
+ * UPGRADE NOW on an ACTIVE plan (owner 2026-10-10, option A: « upgrade = charged
+ * today at the new amount, credit right away, the monthly cycle restarts today »).
+ * Same mechanics as a trial start-now: the new amount is charged today, its credit
+ * lands at once (an ordinary succeeded payment, NOT a trial repayment: the plan's
+ * first paid charge is already behind it), the period restarts today and the next
+ * charge is one month out. Only a HIGHER amount (409 amount_not_upgrade
+ * otherwise): a second click at the amount just paid would otherwise charge twice,
+ * and a lower amount still applies from the next charge (no start_now). Credit
+ * left from the old period is not expired early: it rolls into the new period.
+ * The out-of-credits email (lib/subscription-out-of-credits) links here.
  */
 export async function startSubscriptionNow(
   orgId: string,
@@ -1231,16 +1243,23 @@ export async function startSubscriptionNow(
   }
   const sub = await requireLive(orgId, now, subscriptionId);
   assertNotPaused(sub);
-  if (sub.status !== "trialing") {
+  if (sub.status !== "trialing" && sub.status !== "active") {
     throw new SubscriptionRefused(
-      "subscription_not_trialing",
-      "Only a plan in its free trial can be started now."
+      "subscription_not_active",
+      "The last payment did not go through; the plan can be changed once it has."
     );
   }
+  const upgrading = sub.status === "active";
   if (sub.cancelAtPeriodEnd) {
     throw new SubscriptionRefused(
       "subscription_cancel_pending",
       "The subscription is set to end; resume it before starting it now."
+    );
+  }
+  if (upgrading && monthlyAmountCents <= sub.monthlyAmountCents) {
+    throw new SubscriptionRefused(
+      "amount_not_upgrade",
+      "Only a higher amount can be paid today. A lower amount applies from your next charge."
     );
   }
   if (!(await confirmChargeableCard(orgId))) {
@@ -1253,7 +1272,7 @@ export async function startSubscriptionNow(
     .where(
       and(
         eq(subscriptions.id, sub.id),
-        eq(subscriptions.status, "trialing"),
+        eq(subscriptions.status, sub.status),
         // timestamptz holds microseconds, a JS Date milliseconds: compare at ms.
         rawSql`date_trunc('milliseconds', ${subscriptions.updatedAt}) = ${sub.updatedAt.toISOString()}::timestamptz`
       )
@@ -1289,7 +1308,9 @@ export async function startSubscriptionNow(
   if (result !== "paid") {
     throw new SubscriptionRefused(
       "first_charge_declined",
-      "The card was not charged, so the plan is still in its free trial. Try another card."
+      upgrading
+        ? "The card was not charged, so the plan is unchanged. Try another card."
+        : "The card was not charged, so the plan is still in its free trial. Try another card."
     );
   }
   const [active] = await db
@@ -1297,7 +1318,7 @@ export async function startSubscriptionNow(
     .set({
       status: "active",
       monthlyAmountCents,
-      trialEndsAt: now,
+      ...(upgrading ? {} : { trialEndsAt: now }),
       renewalAnchorAt: null,
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
@@ -1306,12 +1327,16 @@ export async function startSubscriptionNow(
     .where(eq(subscriptions.id, sub.id))
     .returning();
   console.log(
-    `[billing-service] subscription: org ${orgId} started plan ${sub.id} now at ${monthlyAmountCents} cents/month (trial ended early)`
+    upgrading
+      ? `[billing-service] subscription: org ${orgId} upgraded plan ${sub.id} now from ${sub.monthlyAmountCents} to ${monthlyAmountCents} cents/month (paid today, cycle restarts today)`
+      : `[billing-service] subscription: org ${orgId} started plan ${sub.id} now at ${monthlyAmountCents} cents/month (trial ended early)`
   );
   notifyOwnerBillingEvent({
     orgId,
     emoji: "🚀",
-    text: `Trial ended early: plan started now at ${usd(monthlyAmountCents)}/month (paid today)`,
+    text: upgrading
+      ? `Subscription upgraded now: ${usd(sub.monthlyAmountCents)} → ${usd(monthlyAmountCents)}/month (paid today, cycle restarts today)`
+      : `Trial ended early: plan started now at ${usd(monthlyAmountCents)}/month (paid today)`,
   });
   return active;
 }
@@ -1560,7 +1585,9 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
   if (!sub) return null;
   const paused = sub.pausedAt !== null;
   const canChange = sub.status === "active" && !sub.cancelAtPeriodEnd && !paused;
-  const canStartNow = sub.status === "trialing" && !sub.cancelAtPeriodEnd && !paused;
+  // Trialing: end the trial and pay today. Active: upgrade to a HIGHER amount and pay today.
+  const canStartNow =
+    (sub.status === "trialing" || sub.status === "active") && !sub.cancelAtPeriodEnd && !paused;
   const canPause =
     (sub.status === "active" || sub.status === "trialing") && !sub.cancelAtPeriodEnd && !paused;
   const next = nextChargeAt(sub);
@@ -1579,7 +1606,10 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
     currency: "usd",
     has_payment_method: hasPaymentMethod,
     can_change_amount: canChange,
-    /** Trialing: the customer may end the trial and pay today (PATCH with start_now: true). */
+    /**
+     * PATCH with start_now: true is accepted. Trialing: end the trial and pay today
+     * (any amount). Active: upgrade to a HIGHER amount, paid today, cycle restarts today.
+     */
     can_start_now: canStartNow,
     /** Paused by the customer: no charge, no expiry; sending stops once every plan is paused. */
     paused,
