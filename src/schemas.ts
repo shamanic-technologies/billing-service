@@ -52,7 +52,7 @@ export const BillingAccountSchema = z
     /** Credits GIFTED to the org: SUM(local_promos) — welcome, welcome-completion, matches, invite + staff grants, redeemed promos. */
     credited_gifted_cents: CentsStringSchema.openapi({
       description:
-        "Credits we gave the org: SUM(local_promos) — signup welcome gift, welcome-completion gift, first-load match, invite grants, staff grants and redeemed promo codes. The other half of credited_cents alongside credited_paid_cents.",
+        "FREE credit we gave the org: SUM(local_promos) — signup welcome gift, welcome-completion gift, first-load match, invite grants, staff grants and redeemed promo codes — EXCLUDING advances: the match_100 onboarding advance (credited_advance_cents) and a subscription trial's credit (trial_seed + subscription_trial, credited_trial_advance_cents), repaid or not. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents + credited_trial_advance_cents.",
     }),
     /** Lifetime platform usage from runs-service /internal/org-usage-total. */
     usage_cents: UsageCentsSchema,
@@ -90,9 +90,13 @@ export const BillingAccountSchema = z
       description:
         "Total CASH the org has paid us: every succeeded payment, on every acquirer, NET of refunds and lost disputes. Never reduced by what a payment repaid (the trial-end subscription charge, the match_100 onboarding advance) and never includes credits we gave. credited_paid_cents === cash_paid_cents − credited_trial_repaid_cents − (advance repaid). 0 for an org that never paid.",
     }),
+    credited_trial_advance_cents: CentsStringSchema.openapi({
+      description:
+        "A subscription trial's credit (the subscription_trial grant plus the non-staff credit held before it, e.g. the trial_seed): an ADVANCE on the subscription, never free credit, repaid by the trial-end charge (credited_trial_repaid_cents) or not. Still part of credited_cents and the balance; excluded from credited_gifted_cents. 0 for an org that never started a subscription trial.",
+    }),
     credited_advance_cents: CentsStringSchema.openapi({
       description:
-        "A match_100 org's onboarding credit ADVANCE ($30 at creation): repaid by its first payments, never a gift. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents; credited_paid_cents is what the payments left after repaying it ($200 paid → 17000). 0 for a legacy org.",
+        "A match_100 org's onboarding credit ADVANCE ($30 at creation): repaid by its first payments, never a gift. credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents + credited_trial_advance_cents; credited_paid_cents is what the payments left after repaying it ($200 paid → 17000). 0 for a legacy org.",
     }),
     /**
      * Where the org stands on its free-credit offer, ready-made for the payment wall
