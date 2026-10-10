@@ -547,6 +547,13 @@
       "when": 1794823200000,
       "tag": "0077_outbound_leg_keys_new_spelling",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1794909600000,
+      "tag": "0078_sales_funnel_caps",
+      "breakpoints": true
     }
   ]
 }

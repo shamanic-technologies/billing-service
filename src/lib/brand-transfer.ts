@@ -12,6 +12,8 @@ import {
   brandDailyBudgets,
   brandSalesBudgetChanges,
   brandSalesBudgets,
+  salesFunnelCapChanges,
+  salesFunnelCaps,
   brandTransfers,
   campaignDailyBudgets,
 } from "../db/schema.js";
@@ -109,6 +111,19 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
         )
         .returning({ id: brandSalesBudgetChanges.id });
 
+      // A funnel's caps (migration 0078) are this brand's stop config: they follow it.
+      const funnelCaps = await tx
+        .update(salesFunnelCaps)
+        .set({ orgId: targetOrgId, brandId: newBrandId })
+        .where(and(eq(salesFunnelCaps.orgId, sourceOrgId), eq(salesFunnelCaps.brandId, sourceBrandId)))
+        .returning({ brandId: salesFunnelCaps.brandId });
+
+      const funnelCapChanges = await tx
+        .update(salesFunnelCapChanges)
+        .set({ orgId: targetOrgId, brandId: newBrandId })
+        .where(and(eq(salesFunnelCapChanges.orgId, sourceOrgId), eq(salesFunnelCapChanges.brandId, sourceBrandId)))
+        .returning({ id: salesFunnelCapChanges.id });
+
       const [existing] = await tx
         .select()
         .from(brandTransfers)
@@ -169,6 +184,8 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
           { tableName: "campaign_daily_budgets", count: ceilings.length },
           { tableName: "brand_sales_budgets", count: salesBudgets.length },
           { tableName: "brand_sales_budget_changes", count: salesChanges.length },
+          { tableName: "sales_funnel_caps", count: funnelCaps.length },
+          { tableName: "sales_funnel_cap_changes", count: funnelCapChanges.length },
           { tableName: "brand_transfers", count: ledgerCount },
         ],
         balanceAdjustment: {
@@ -199,11 +216,13 @@ async function assertNoTargetBudgetConflict(
     SELECT
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
        OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
-       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId}))
+       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
+       OR EXISTS (SELECT 1 FROM sales_funnel_caps WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId}))
       AS source_has,
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
        OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
-       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId}))
+       OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
+       OR EXISTS (SELECT 1 FROM sales_funnel_caps WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId}))
       AS target_has
   `)) as unknown as { source_has: boolean; target_has: boolean }[];
   if (row.source_has && row.target_has) {

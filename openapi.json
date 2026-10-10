@@ -845,6 +845,9 @@
           "campaignDailyBudgets": {
             "type": "integer"
           },
+          "salesFunnelCaps": {
+            "type": "integer"
+          },
           "welcomeCreditClaims": {
             "type": "integer"
           },
@@ -862,6 +865,7 @@
           "campaignAuthorizeCosts",
           "brandDailyBudgets",
           "campaignDailyBudgets",
+          "salesFunnelCaps",
           "welcomeCreditClaims",
           "freeCreditPromises",
           "staffDebits"
@@ -4113,6 +4117,110 @@
           "offMonthlyCents"
         ]
       },
+      "OfferBudgetTotals": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "period": {
+            "$ref": "#/components/schemas/CampaignItemPeriod"
+          },
+          "proactive": {
+            "type": "object",
+            "properties": {
+              "budgetCents": {
+                "type": "number"
+              },
+              "sourcingBudgetCents": {
+                "type": "number"
+              },
+              "campaigns": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "budgetCents",
+              "sourcingBudgetCents",
+              "campaigns"
+            ]
+          },
+          "reactive": {
+            "type": "object",
+            "properties": {
+              "maxBudgetCents": {
+                "type": "number"
+              },
+              "campaigns": {
+                "type": "integer"
+              },
+              "byTrigger": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "triggerKey": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "triggerLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "maxBudgetCents": {
+                      "type": "number"
+                    },
+                    "campaigns": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "triggerKey",
+                    "triggerLabel",
+                    "maxBudgetCents",
+                    "campaigns"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "maxBudgetCents",
+              "campaigns",
+              "byTrigger"
+            ]
+          },
+          "notCounted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "featureSlug": {
+                  "type": "string"
+                },
+                "legKey": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "role_unknown",
+                    "channel_not_run"
+                  ]
+                }
+              },
+              "required": [
+                "featureSlug",
+                "legKey",
+                "reason"
+              ]
+            }
+          }
+        },
+        "required": [
+          "period",
+          "proactive",
+          "reactive",
+          "notCounted"
+        ]
+      },
       "CampaignItemBudgets": {
         "type": "object",
         "properties": {
@@ -4156,6 +4264,17 @@
           },
           "pricing": {
             "$ref": "#/components/schemas/CampaignItemsPlanPricing"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/OfferBudgetTotals"
+          },
+          "totalsUnavailableReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "campaign_service_unconfigured",
+              "campaign_service_unavailable"
+            ]
           }
         },
         "required": [
@@ -4165,7 +4284,9 @@
           "period",
           "items",
           "plan",
-          "pricing"
+          "pricing",
+          "totals",
+          "totalsUnavailableReason"
         ]
       },
       "ItemBudgetRefusal": {
@@ -4276,6 +4397,364 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "SalesFunnelCapPeriod": {
+        "type": "string",
+        "enum": [
+          "one_off",
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "description": "UTC. daily = the calendar day; weekly = Monday 00:00 to the next Monday; monthly = the calendar month; one_off = once, counted from when the cap was first stated in this period (never resets)."
+      },
+      "SalesFunnelConsumedUnavailableReason": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "sales_funnel_not_found",
+          "sales_funnel_catalogue_unavailable",
+          "campaign_service_unconfigured",
+          "campaign_service_unavailable",
+          "runs_service_unavailable",
+          "no_proactive_pipe",
+          "volume_not_measured_on_channel"
+        ]
+      },
+      "SalesFunnelBudgetCap": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "amountCents": {
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+          },
+          "periodStart": {
+            "type": "string"
+          },
+          "periodEnd": {
+            "type": "string",
+            "nullable": true
+          },
+          "consumedCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "remainingCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "reached": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "consumedUnavailableReason": {
+            "$ref": "#/components/schemas/SalesFunnelConsumedUnavailableReason"
+          },
+          "consumedUnavailableDetail": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "amountCents",
+          "period",
+          "periodStart",
+          "periodEnd",
+          "consumedCents",
+          "remainingCents",
+          "reached",
+          "consumedUnavailableReason",
+          "consumedUnavailableDetail"
+        ],
+        "description": "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign on the funnel's pipes for this brand x offer, runs started in [periodStart, periodEnd). reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0."
+      },
+      "SalesFunnelVolumeCap": {
+        "type": "object",
+        "nullable": true,
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "period": {
+            "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "first_contacts"
+            ]
+          },
+          "periodStart": {
+            "type": "string"
+          },
+          "periodEnd": {
+            "type": "string",
+            "nullable": true
+          },
+          "consumed": {
+            "type": "integer",
+            "nullable": true
+          },
+          "remaining": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reached": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "consumedUnavailableReason": {
+            "$ref": "#/components/schemas/SalesFunnelConsumedUnavailableReason"
+          },
+          "consumedUnavailableDetail": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "count",
+          "period",
+          "unit",
+          "periodStart",
+          "periodEnd",
+          "consumed",
+          "remaining",
+          "reached",
+          "consumedUnavailableReason",
+          "consumedUnavailableDetail"
+        ],
+        "description": "consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). A proactive pipe on a channel with no first-contact measure yet answers null + volume_not_measured_on_channel."
+      },
+      "SalesFunnelMeasuredPipe": {
+        "type": "object",
+        "properties": {
+          "pipeId": {
+            "type": "string"
+          },
+          "channelSlug": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "proactive",
+              "reactive"
+            ]
+          },
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "pipeId",
+          "channelSlug",
+          "legKey",
+          "mode",
+          "campaignIds"
+        ]
+      },
+      "SalesFunnelCaps": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "stated": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudget": {
+            "$ref": "#/components/schemas/SalesFunnelBudgetCap"
+          },
+          "maxVolume": {
+            "$ref": "#/components/schemas/SalesFunnelVolumeCap"
+          },
+          "salesFunnelName": {
+            "type": "string",
+            "nullable": true
+          },
+          "pipes": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/SalesFunnelMeasuredPipe"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "offerId",
+          "salesFunnelId",
+          "stated",
+          "updatedAt",
+          "maxBudget",
+          "maxVolume",
+          "salesFunnelName",
+          "pipes"
+        ]
+      },
+      "SetSalesFunnelCapsRequest": {
+        "type": "object",
+        "properties": {
+          "maxBudget": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "amountCents": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "period": {
+                "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+              }
+            },
+            "required": [
+              "amountCents",
+              "period"
+            ],
+            "additionalProperties": false
+          },
+          "maxVolume": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "period": {
+                "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+              }
+            },
+            "required": [
+              "count",
+              "period"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "maxBudget",
+          "maxVolume"
+        ],
+        "additionalProperties": false,
+        "description": "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. A cap restated in the same period keeps its window start (a one_off cap keeps counting)."
+      },
+      "StatedSalesFunnelCaps": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "maxBudget": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "amountCents": {
+                "type": "string"
+              },
+              "period": {
+                "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+              }
+            },
+            "required": [
+              "amountCents",
+              "period"
+            ]
+          },
+          "maxVolume": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "period": {
+                "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+              },
+              "unit": {
+                "type": "string",
+                "enum": [
+                  "first_contacts"
+                ]
+              }
+            },
+            "required": [
+              "count",
+              "period",
+              "unit"
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "offerId",
+          "salesFunnelId",
+          "maxBudget",
+          "maxVolume",
+          "updatedAt"
+        ]
+      },
+      "BrandSalesFunnelCaps": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatedSalesFunnelCaps"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "caps"
         ]
       }
     },
@@ -12774,6 +13253,711 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ItemBudgetRefusal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps": {
+      "get": {
+        "summary": "Read a sales funnel's MAX BUDGET / MAX VOLUME and what it consumed this period",
+        "description": "campaign-service reads this to decide whether to STOP the funnel's pipes (x-api-key + x-org-id). Each cap carries its window, consumed, remaining and reached; nothing stated answers stated:false with both caps null. A measurement that fails answers null + a reason, the caps are still served.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps": {
+      "get": {
+        "summary": "Read this sales funnel's caps and what it consumed this period (dashboard)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State a sales funnel's MAX BUDGET and MAX VOLUME",
+        "description": "Both caps in one write (object = state, null = clear). The funnel must exist in features-service's catalogue. Charges nothing; the per-campaign ceilings are not touched. Answers the read's shape.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear both caps of a sales funnel",
+        "description": "Idempotent: a funnel with nothing stated answers stated:false.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/sales-funnel-caps": {
+      "get": {
+        "summary": "Every sales funnel of a brand with a stated cap (no measurement)",
+        "description": "x-api-key + x-org-id. Optional offerId narrows to one offer. Read one funnel's caps for its consumption.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stated caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandSalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId, offerId or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/brands/{brandId}/sales-funnel-caps": {
+      "get": {
+        "summary": "Every sales funnel of this brand with a stated cap (dashboard)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "offerId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stated caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrandSalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid brandId or offerId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

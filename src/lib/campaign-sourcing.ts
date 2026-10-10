@@ -160,7 +160,8 @@ export function parseCampaignIds(raw: unknown): string[] | null {
   return ids;
 }
 
-async function readJson<T>(path: string, orgId: string, params: URLSearchParams): Promise<T> {
+/** GET a runs-service read as this org (x-org-id), fail-loud on non-2xx. */
+export async function readJson<T>(path: string, orgId: string, params: URLSearchParams): Promise<T> {
   const { url, apiKey } = runsConfig();
   const res = await fetchWithRetry(`${url}${path}?${params}`, {
     headers: { "x-api-key": apiKey, "x-org-id": orgId },
