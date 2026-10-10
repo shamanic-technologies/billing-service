@@ -88,6 +88,26 @@ export interface BudgetChangeEmailInput {
   catalogue: ChannelCatalogue | null;
   /** campaign-service's answer; null when it could not be read. */
   spendable: SpendableBudget | null;
+  /**
+   * SALES FUNNEL campaigns of the brand that hold a RECURRING max budget
+   * (lib/funnel-campaigns.ts): `running` = the `ongoing` ones, each counted in
+   * "Spending now" at its cap per day. null = the brand has such caps but the
+   * funnel campaigns could not be read (said in words, never counted as 0).
+   * Absent = the brand has no recurring funnel cap.
+   */
+  funnels?: { running: FunnelSpend[] } | null;
+}
+
+/** A running sales funnel campaign and its recurring MAX BUDGET. */
+export interface FunnelSpend {
+  /** features-service's funnel name (`Victory`), else its id. */
+  name: string;
+  offerId: string;
+  /** The cap per day (weekly / 7, monthly / 30). */
+  dailyBudgetCents: string;
+  /** The cap as stated, for the words (`$70/week`). */
+  amountCents: string;
+  period: "daily" | "weekly" | "monthly";
 }
 
 export interface BudgetChangeEmail {
@@ -363,12 +383,22 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
     lines.push("Spending now: unknown, campaign statuses could not be read.");
     if (statusUnknown.length > 0) lines.push(`Budgets set, status unknown: ${statusUnknown.join("; ")}.`);
   } else {
+    // Running SALES FUNNEL campaigns spend up to their recurring max budget.
+    for (const f of input.funnels?.running ?? []) {
+      dailyTotal = dailyTotal.plus(f.dailyBudgetCents);
+      const offer = offerPhrase(f.offerId, offerNames);
+      const stated = f.period === "daily" ? "" : ` (${formatMoney(f.amountCents)}/${f.period === "weekly" ? "week" : "month"})`;
+      otherDaily.push(`sales funnel ${f.name}${offer ? ` (${offer})` : ""} at ${perDay(f.dailyBudgetCents)}${stated}`);
+    }
     let spending = `Spending now: ${perDay(dailyTotal)}`;
     if (otherDaily.length > 0) {
       spending += movedCountsDaily ? `, with ${joinList(otherDaily)}` : ` on ${joinList(otherDaily)}`;
     }
     if (unclassified.length > 0) {
       spending += `, not counting ${joinList(unclassified)} (running, could not be classified)`;
+    }
+    if (input.funnels === null) {
+      spending += ", not counting sales funnel campaigns (they could not be read)";
     }
     if (movedUnclassified) {
       spending += `, not counting the mission${actionParts.length > 1 ? "s" : ""} above (running, could not be classified)`;

@@ -30,6 +30,7 @@ import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
 import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
 import { legacyOutboundLegKeyLogMiddleware } from "./lib/legacy-leg-key-log.js";
+import { reconcileFunnelCapHistory } from "./lib/sales-funnel-caps.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -99,6 +100,8 @@ if (process.env.NODE_ENV !== "test") {
         // Owner Telegram alert per succeeded payment. Missing vars = a loud warning.
         warnIfTelegramUnconfigured();
         startPaymentAlertScheduler();
+        // The by-day history learns the funnel caps stated before it counted them.
+        void reconcileFunnelCapHistory();
       });
     })
     .catch((err) => {

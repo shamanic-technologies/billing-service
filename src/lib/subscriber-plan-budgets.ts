@@ -27,6 +27,7 @@
  */
 
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
 import { db } from "../db/index.js";
 import { billingAccounts, brandDailyBudgetChanges, campaignDailyBudgets, type CeilingRow } from "../db/schema.js";
 import { DAYS_PER_MONTH, getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
@@ -200,7 +201,7 @@ export async function restateSubscriberBudgetsFromPlans(now = new Date()): Promi
           await tx.insert(brandDailyBudgetChanges).values({
             orgId: g.orgId,
             brandId: g.brandId,
-            dailyBudgetCents: sumCeilings(left),
+            dailyBudgetCents: await withRecurringFunnelCaps(tx, g.orgId, g.brandId, sumCeilings(left)),
             changedAt: now,
           });
         }
@@ -414,7 +415,12 @@ export async function allocatePlanToOnCampaigns(params: {
         .select()
         .from(campaignDailyBudgets)
         .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)));
-      await tx.insert(brandDailyBudgetChanges).values({ orgId, brandId, dailyBudgetCents: sumCeilings(left), changedAt: now });
+      await tx.insert(brandDailyBudgetChanges).values({
+        orgId,
+        brandId,
+        dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, sumCeilings(left)),
+        changedAt: now,
+      });
     }
     return { status: "allocated", written, deleted, unchanged } as const;
   });

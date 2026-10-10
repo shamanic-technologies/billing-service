@@ -127,6 +127,9 @@ describe("brand budget notification → running headline", () => {
   async function seedBoth() {
     expect((await putCampaign(RUNNING_CHANNEL, 20000)).status).toBe(200);
     expect((await putCampaign(PAUSED_CHANNEL, 1000)).status).toBe(200);
+    // The two seed emails are fire-and-forget: wait for both before clearing, or
+    // a late one lands after the clear and reads as the change under test.
+    await vi.waitFor(() => expect(sendEmailSpy).toHaveBeenCalledTimes(2));
     sendEmailSpy.mockClear();
   }
 

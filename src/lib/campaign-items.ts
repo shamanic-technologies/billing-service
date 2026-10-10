@@ -39,6 +39,7 @@
  */
 
 import { and, eq } from "drizzle-orm";
+import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
 import { db } from "../db/index.js";
 import { canonicalLegKey, legIdentityKey, sameLeg } from "./leg-identity.js";
 import {
@@ -637,7 +638,7 @@ export async function removeOfferItem(params: {
       await tx.insert(brandDailyBudgetChanges).values({
         orgId,
         brandId,
-        dailyBudgetCents: sumCeilings(left),
+        dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, sumCeilings(left)),
         changedAt: now,
       });
     }
