@@ -12,6 +12,7 @@ import creditsRoutes from "../../src/routes/credits.js";
 import promoCodesRoutes from "../../src/routes/promo_codes.js";
 import brandBudgetsRoutes from "../../src/routes/brand_budgets.js";
 import campaignItemBudgetsRoutes from "../../src/routes/campaign_item_budgets.js";
+import salesFunnelCapsRoutes from "../../src/routes/sales_funnel_caps.js";
 import usageDiscountRoutes from "../../src/routes/usage_discount.js";
 import freeCreditPromisesRoutes from "../../src/routes/free_credit_promises.js";
 import paymentModeRoutes from "../../src/routes/payment_mode.js";
@@ -37,6 +38,7 @@ export function createTestApp() {
   app.use(promoCodesRoutes);
   app.use(brandBudgetsRoutes);
   app.use(campaignItemBudgetsRoutes);
+  app.use(salesFunnelCapsRoutes);
   app.use(usageDiscountRoutes);
   app.use(freeCreditPromisesRoutes);
   app.use(paymentModeRoutes);

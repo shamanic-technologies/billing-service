@@ -10,6 +10,8 @@ import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
   brandSalesBudgets,
+  salesFunnelCaps,
+  salesFunnelCapChanges,
   brandSalesBudgetChanges,
   campaignDailyBudgets,
   orgUsageDiscounts,
@@ -81,6 +83,8 @@ export async function cleanTestData() {
   await db.delete(brandDailyBudgetChanges);
   await db.delete(brandSalesBudgetChanges);
   await db.delete(brandSalesBudgets);
+  await db.delete(salesFunnelCapChanges);
+  await db.delete(salesFunnelCaps);
   await db.delete(campaignDailyBudgets);
   await db.delete(brandDailyBudgets);
   await db.delete(orgUsageDiscounts);

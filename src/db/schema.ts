@@ -913,6 +913,73 @@ export const brandSalesBudgetChanges = pgTable(
 
 export type BrandSalesBudgetChange = typeof brandSalesBudgetChanges.$inferSelect;
 
+// sales_funnel_caps: MAX BUDGET + MAX VOLUME per brand x offer x SALES FUNNEL
+// (migration 0078, owner 2026-10-10). `sales_funnel_id` is features-service's
+// funnel id (its combinationKey), carried OPAQUE. Either cap may be unset (all
+// three of its columns NULL); a row with neither is deleted, never stored.
+// `*_since` = when that cap was first stated in its current period (a one_off
+// cap counts consumption from then). See lib/sales-funnel-caps.ts.
+export const salesFunnelCaps = pgTable(
+  "sales_funnel_caps",
+  {
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    offerId: uuid("offer_id").notNull(),
+    salesFunnelId: text("sales_funnel_id").notNull(),
+    maxBudgetCents: numeric("max_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
+    maxBudgetPeriod: text("max_budget_period"),
+    maxBudgetSince: timestamp("max_budget_since", { withTimezone: true }),
+    maxVolume: integer("max_volume"),
+    maxVolumePeriod: text("max_volume_period"),
+    maxVolumeSince: timestamp("max_volume_since", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: "sales_funnel_caps_pkey",
+      columns: [table.orgId, table.brandId, table.offerId, table.salesFunnelId],
+    }),
+  ]
+);
+
+export type SalesFunnelCapRow = typeof salesFunnelCaps.$inferSelect;
+
+// sales_funnel_cap_changes: append-only history of every state / clear of a
+// funnel's caps (NULL caps = cleared). Same transaction as the write.
+export const salesFunnelCapChanges = pgTable(
+  "sales_funnel_cap_changes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    offerId: uuid("offer_id").notNull(),
+    salesFunnelId: text("sales_funnel_id").notNull(),
+    maxBudgetCents: numeric("max_budget_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }),
+    maxBudgetPeriod: text("max_budget_period"),
+    maxVolume: integer("max_volume"),
+    maxVolumePeriod: text("max_volume_period"),
+    changedByUserId: uuid("changed_by_user_id"),
+    changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("sales_funnel_cap_changes_key_changed_at_idx").on(
+      table.orgId,
+      table.brandId,
+      table.offerId,
+      table.salesFunnelId,
+      table.changedAt,
+      table.id
+    ),
+  ]
+);
+
 export type BrandDailyBudgetChange = typeof brandDailyBudgetChanges.$inferSelect;
 export type NewBrandDailyBudgetChange =
   typeof brandDailyBudgetChanges.$inferInsert;

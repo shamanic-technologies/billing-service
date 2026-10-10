@@ -10,6 +10,8 @@ import {
   billingAccounts,
   brandDailyBudgets,
   brandSalesBudgets,
+  salesFunnelCaps,
+  salesFunnelCapChanges,
   campaignDailyBudgets,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
@@ -146,6 +148,13 @@ async function deleteBillingStateByOrg(
       .where(eq(brandSalesBudgets.orgId, orgId))
       .returning({ brandId: brandSalesBudgets.brandId });
 
+    // Sales funnel caps (migration 0078): this org's own stop config.
+    const deletedFunnelCaps = await tx
+      .delete(salesFunnelCaps)
+      .where(eq(salesFunnelCaps.orgId, orgId))
+      .returning({ brandId: salesFunnelCaps.brandId });
+    await tx.delete(salesFunnelCapChanges).where(eq(salesFunnelCapChanges.orgId, orgId));
+
     // Campaign ceilings are this org's own pacing config for the same brands.
     const deletedCampaignBudgets = await tx
       .delete(campaignDailyBudgets)
@@ -196,6 +205,7 @@ async function deleteBillingStateByOrg(
       brandDailyBudgets: deletedBrandBudgets.length,
       campaignDailyBudgets: deletedCampaignBudgets.length,
       brandSalesBudgets: deletedSalesBudgets.length,
+      salesFunnelCaps: deletedFunnelCaps.length,
       welcomeCreditClaims: deletedWelcomeClaims,
       freeCreditPromises: deletedPromises.length,
       staffDebits: deletedStaffDebits.length,

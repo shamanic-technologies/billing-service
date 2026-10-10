@@ -254,6 +254,19 @@ beforeAll(async () => {
       ON "brand_sales_budget_changes" ("org_id", "brand_id", "changed_at", "id")
   `;
 
+  // sales_funnel_caps + history (per-funnel max budget / max volume, migration
+  // 0078): the migration file itself, so the suite runs the shipped DDL.
+  {
+    const { readFileSync } = await import("fs");
+    const ddl = readFileSync(
+      new URL("../drizzle/0078_sales_funnel_caps.sql", import.meta.url),
+      "utf8"
+    );
+    for (const stmt of ddl.split("--> statement-breakpoint")) {
+      await sql.unsafe(stmt);
+    }
+  }
+
   // org_usage_discounts (per-org platform-usage discount, migration 0026).
   await sql`
     CREATE TABLE IF NOT EXISTS "org_usage_discounts" (
