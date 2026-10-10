@@ -65,6 +65,15 @@ import {
   type ExpectedCharge,
 } from "./charge-schedule.js";
 import { fundedBrandIds, resolvePaymentOutlook } from "./payment-outlook.js";
+import {
+  capOfFunnelCampaign,
+  fetchSalesFunnelCampaigns,
+  funnelBudgetCaps,
+  recurringDailyCentsOf,
+  unitIdsOf,
+  type SalesFunnelCampaign,
+} from "./funnel-campaigns.js";
+import type { SalesFunnelCapRow } from "../db/schema.js";
 import type { PaymentMode } from "./payment-mode-types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -205,11 +214,26 @@ export interface RevenueBrandLine {
   unknownReason: DailyBudgetUnknownReason | null;
 }
 
+/** A SALES FUNNEL campaign (campaign-service) and the money its MAX BUDGET puts in the figure. */
+export interface RevenueSalesFunnelLine {
+  salesFunnelCampaignId: string;
+  brandId: string;
+  offerId: string;
+  salesFunnelId: string;
+  status: string;
+  unitCampaignIds: string[];
+  /** The funnel's MAX BUDGET per day (weekly / 7, monthly / 30; one_off = "0"); null when no budget is stated. */
+  dailyBudgetCents: string | null;
+  /** In the proactive daily budget: ongoing, a recurring budget, and a unit campaign-service says recurs. */
+  counted: boolean;
+}
+
 export interface ProactiveBudget {
   dailyBudgetCents: string | null;
   unknownReason: DailyBudgetUnknownReason | null;
   brands: RevenueBrandLine[];
   campaigns: RevenueCampaignLine[];
+  salesFunnelCampaigns: RevenueSalesFunnelLine[];
 }
 
 interface BrandFunding {
@@ -217,6 +241,8 @@ interface BrandFunding {
   salesCents: string | null;
   ceilings: Awaited<ReturnType<typeof getBrandCeilings>>;
   scalarCents: string | null;
+  /** The brand's sales funnel caps stating a budget (lib/funnel-campaigns.ts). */
+  funnelCaps?: SalesFunnelCapRow[];
 }
 
 /**
@@ -225,7 +251,8 @@ interface BrandFunding {
  */
 export function proactiveBudgetOf(
   funding: BrandFunding[],
-  statuses: RecurringCampaignStatus[]
+  allStatuses: RecurringCampaignStatus[],
+  funnelCampaigns: SalesFunnelCampaign[] = []
 ): Omit<ProactiveBudget, "unknownReason" | "dailyBudgetCents"> & {
   dailyBudgetCents: string | null;
   unknownReason: DailyBudgetUnknownReason | null;
@@ -233,6 +260,12 @@ export function proactiveBudgetOf(
   const brands: RevenueBrandLine[] = [];
   const lines: RevenueCampaignLine[] = [];
   const fundedIds = new Set(funding.map((f) => f.brandId));
+  // A SALES FUNNEL unit has no per-pipe budget: it is never resolved onto a
+  // ceiling nor wakes a brand pot. Its money is its funnel's MAX BUDGET (below).
+  const unitIds = unitIdsOf(funnelCampaigns);
+  const statuses = allStatuses.filter((c) => !unitIds.has(c.campaignId));
+  const byId = new Map(allStatuses.map((c) => [c.campaignId, c]));
+  const funnelLines: RevenueSalesFunnelLine[] = [];
 
   for (const f of funding) {
     const own = statuses.filter((c) => c.brandId === f.brandId);
@@ -252,13 +285,15 @@ export function proactiveBudgetOf(
         proactive = null;
         unknownReason = "campaign_recurrence_unknown";
       } else proactive = fixed(new Decimal(0));
-      brands.push({
-        brandId: f.brandId,
-        mode,
-        configuredDailyBudgetCents: fixed(amount),
-        proactiveDailyBudgetCents: proactive,
-        unknownReason,
-      });
+      brands.push(
+        withFunnels(
+          { brandId: f.brandId, mode, configuredDailyBudgetCents: fixed(amount), proactiveDailyBudgetCents: proactive, unknownReason },
+          f,
+          funnelCampaigns,
+          byId,
+          funnelLines
+        )
+      );
       for (const c of own) {
         lines.push(lineOf(c, null, c.recurring === true && amount.greaterThan(0)));
       }
@@ -293,16 +328,31 @@ export function proactiveBudgetOf(
       lines.push(lineOf(c, rows.length > 0 ? fixed(amount) : null, isCounted));
     }
     const stillUnknown = [...unknown].some((k) => !counted.has(k));
-    brands.push({
-      brandId: f.brandId,
-      mode: "campaigns",
-      configuredDailyBudgetCents: fixed(
-        f.ceilings.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0))
-      ),
-      proactiveDailyBudgetCents: stillUnknown ? null : fixed(total),
-      unknownReason: stillUnknown ? "campaign_recurrence_unknown" : null,
-    });
+    brands.push(
+      withFunnels(
+        {
+          brandId: f.brandId,
+          mode: "campaigns",
+          configuredDailyBudgetCents: fixed(
+            f.ceilings.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0))
+          ),
+          proactiveDailyBudgetCents: stillUnknown ? null : fixed(total),
+          unknownReason: stillUnknown ? "campaign_recurrence_unknown" : null,
+        },
+        f,
+        funnelCampaigns,
+        byId,
+        funnelLines
+      )
+    );
   }
+
+  // Funnel campaigns of brands this org funds nothing for: listed, never counted.
+  for (const fc of funnelCampaigns) {
+    if (!fundedIds.has(fc.brandId)) funnelLines.push(funnelLineOf(fc, null, false));
+  }
+  // Every unit is listed with no budget of its own.
+  for (const c of allStatuses) if (unitIds.has(c.campaignId)) lines.push(lineOf(c, null, false));
 
   // Campaigns of brands this org funds nothing for: listed, never counted.
   for (const c of statuses) {
@@ -319,7 +369,61 @@ export function proactiveBudgetOf(
     }
     dailyBudgetCents = fixed(new Decimal(dailyBudgetCents!).plus(b.proactiveDailyBudgetCents));
   }
-  return { dailyBudgetCents, unknownReason, brands, campaigns: lines };
+  return { dailyBudgetCents, unknownReason, brands, campaigns: lines, salesFunnelCampaigns: funnelLines };
+}
+
+function funnelLineOf(fc: SalesFunnelCampaign, daily: string | null, counted: boolean): RevenueSalesFunnelLine {
+  return {
+    salesFunnelCampaignId: fc.id,
+    brandId: fc.brandId,
+    offerId: fc.offerId,
+    salesFunnelId: fc.salesFunnelId,
+    status: fc.status,
+    unitCampaignIds: fc.units.map((u) => u.campaignId),
+    dailyBudgetCents: daily,
+    counted,
+  };
+}
+
+/**
+ * Add a brand's SALES FUNNEL money to its line: configured = every recurring
+ * cap of the brand per day (like a ceiling, whatever its campaign does);
+ * proactive = the caps of funnel campaigns that are `ongoing` with at least one
+ * unit campaign-service says recurs. A funnel whose units' verdicts are unknown
+ * (none true, one null) makes the brand's figure unknown, never 0.
+ */
+function withFunnels(
+  line: RevenueBrandLine,
+  f: BrandFunding,
+  funnelCampaigns: SalesFunnelCampaign[],
+  byId: Map<string, RecurringCampaignStatus>,
+  out: RevenueSalesFunnelLine[]
+): RevenueBrandLine {
+  const caps = f.funnelCaps ?? [];
+  let configured = new Decimal(line.configuredDailyBudgetCents);
+  for (const cap of caps) configured = configured.plus(recurringDailyCentsOf(cap)!);
+  let proactive = line.proactiveDailyBudgetCents === null ? null : new Decimal(line.proactiveDailyBudgetCents);
+  let unknownReason = line.unknownReason;
+  for (const fc of funnelCampaigns.filter((c) => c.brandId === f.brandId)) {
+    const daily = recurringDailyCentsOf(capOfFunnelCampaign(caps, fc));
+    const verdicts = fc.units.map((u) => byId.get(u.campaignId)?.recurring ?? null);
+    const anyTrue = verdicts.some((v) => v === true);
+    const anyNull = verdicts.some((v) => v === null);
+    const money = daily !== null && new Decimal(daily).greaterThan(0);
+    const counted = fc.status === "ongoing" && money && anyTrue;
+    out.push(funnelLineOf(fc, daily, counted));
+    if (counted && proactive !== null) proactive = proactive.plus(daily!);
+    else if (fc.status === "ongoing" && money && !anyTrue && anyNull) {
+      proactive = null;
+      unknownReason = "campaign_recurrence_unknown";
+    }
+  }
+  return {
+    ...line,
+    configuredDailyBudgetCents: fixed(configured),
+    proactiveDailyBudgetCents: proactive === null ? null : fixed(proactive),
+    unknownReason: proactive === null ? unknownReason : null,
+  };
 }
 
 function lineOf(
@@ -347,7 +451,7 @@ async function readFunding(orgId: string): Promise<BrandFunding[]> {
   const brandIds = await fundedBrandIds(orgId);
   return Promise.all(
     brandIds.map(async (brandId) => {
-      const [sales, ceilings, scalarRows] = await Promise.all([
+      const [sales, ceilings, scalarRows, funnelCaps] = await Promise.all([
         getBrandSalesBudget(orgId, brandId),
         getBrandCeilings(orgId, brandId),
         db
@@ -355,12 +459,14 @@ async function readFunding(orgId: string): Promise<BrandFunding[]> {
           .from(brandDailyBudgets)
           .where(and(eq(brandDailyBudgets.orgId, orgId), eq(brandDailyBudgets.brandId, brandId)))
           .limit(1),
+        funnelBudgetCaps(orgId, brandId),
       ]);
       return {
         brandId,
         salesCents: sales ? String(sales.dailyBudgetCents) : null,
         ceilings,
         scalarCents: scalarRows[0] ? String(scalarRows[0].dailyBudgetCents) : null,
+        funnelCaps,
       };
     })
   );
@@ -403,13 +509,18 @@ export async function getProactiveBudget(orgId: string): Promise<ProactiveBudget
   const funding = await readFunding(orgId);
   // An org funding nothing has nothing to ask campaign-service about.
   if (funding.length === 0) {
-    return { dailyBudgetCents: fixed(new Decimal(0)), unknownReason: null, brands: [], campaigns: [] };
+    return { dailyBudgetCents: fixed(new Decimal(0)), unknownReason: null, brands: [], campaigns: [], salesFunnelCampaigns: [] };
   }
   const answer = await recurringStatusesThrottled(orgId);
   if (!answer.ok) {
-    return { dailyBudgetCents: null, unknownReason: answer.reason, brands: [], campaigns: [] };
+    return { dailyBudgetCents: null, unknownReason: answer.reason, brands: [], campaigns: [], salesFunnelCampaigns: [] };
   }
-  return proactiveBudgetOf(funding, answer.campaigns);
+  // Which campaigns are SALES FUNNEL units (their money is the funnel's cap, not a ceiling).
+  const funnels = await fetchSalesFunnelCampaigns(orgId);
+  if (!funnels.ok) {
+    return { dailyBudgetCents: null, unknownReason: funnels.reason, brands: [], campaigns: [], salesFunnelCampaigns: [] };
+  }
+  return proactiveBudgetOf(funding, answer.campaigns, funnels.campaigns);
 }
 
 /* ------------------------------------------------------------ per org */
@@ -475,6 +586,8 @@ export interface OrgRevenue {
   cash: ChargeSchedule;
   brands: RevenueBrandLine[];
   campaigns: RevenueCampaignLine[];
+  /** SALES FUNNEL campaigns, each counted by its MAX BUDGET per day. */
+  salesFunnelCampaigns: RevenueSalesFunnelLine[];
 }
 
 function revenueSubscription(sub: Subscription): RevenueSubscription {
@@ -609,6 +722,7 @@ export function composeOrgRevenue(
     cash: chargeScheduleFrom(resolved, cashHorizonDays, now),
     brands: proactive.brands,
     campaigns: proactive.campaigns,
+    salesFunnelCampaigns: proactive.salesFunnelCampaigns,
   };
 }
 

@@ -456,7 +456,7 @@ describe("sales funnel caps", () => {
     expect(none.body.caps).toEqual([]);
   });
 
-  it("the per-campaign ceilings and the brand daily budget read exactly as before", async () => {
+  it("the brand daily budget adds every RECURRING funnel cap per day; one_off and volume-only caps add nothing", async () => {
     mockUpstreams();
     await db.insert(campaignDailyBudgets).values({
       orgId,
@@ -467,10 +467,30 @@ describe("sales funnel caps", () => {
       dailyBudgetCents: "700",
       updatedAt: new Date(),
     });
-    const before = await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId));
-    await put({ maxBudget: { amountCents: 100, period: "daily" }, maxVolume: { count: 1, period: "daily" } });
-    const after = await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId));
-    expect(after.body.dailyBudgetCents).toBe("700.0000000000");
-    expect(after.body).toEqual(before.body);
+    const brandTotal = async () =>
+      (await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body;
+    const before = await brandTotal();
+    expect(before.dailyBudgetCents).toBe("700.0000000000");
+
+    // A one_off budget and a volume-only cap: not recurring money, the brand reads exactly as before.
+    await put({ maxBudget: { amountCents: 100000, period: "one_off" }, maxVolume: null });
+    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
+    expect(await brandTotal()).toEqual(before);
+
+    // $70 a week = $10 a day on top of the ceilings.
+    await put({ maxBudget: { amountCents: 7000, period: "weekly" }, maxVolume: null });
+    expect((await brandTotal()).dailyBudgetCents).toBe("1700.0000000000");
+    // A monthly cap / 30 on another funnel of another offer of the brand.
+    await put({ maxBudget: { amountCents: 30000, period: "monthly" }, maxVolume: null }, ADS_FUNNEL, OTHER_OFFER);
+    expect((await brandTotal()).dailyBudgetCents).toBe("2700.0000000000");
+  });
+
+  it("a brand funded ONLY by a funnel cap reads its daily amount, never null", async () => {
+    mockUpstreams();
+    const brandTotal = async () =>
+      (await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body;
+    expect((await brandTotal()).dailyBudgetCents).toBeNull();
+    await put({ maxBudget: { amountCents: 1400, period: "weekly" }, maxVolume: null });
+    expect((await brandTotal()).dailyBudgetCents).toBe("200.0000000000");
   });
 });

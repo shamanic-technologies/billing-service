@@ -55,7 +55,7 @@ import {
   type MissionStatusMove,
 } from "./budget-change-email.js";
 import { getBrandCeilings } from "./campaign-budgets.js";
-import { getBrandDailyBudget } from "./brand-budgets.js";
+import { getLegacyBrandDailyBudget } from "./brand-budgets.js";
 
 /** Byte-equal to the transactional-email-service event key AND template name. */
 export const BRAND_DAILY_BUDGET_CHANGED_EVENT = "brand_daily_budget_changed";
@@ -232,7 +232,8 @@ async function readCeilingsAfter(
   try {
     const rows = await getBrandCeilings(orgId, brandId);
     if (rows.length > 0) return rows;
-    const brandPot = await getBrandDailyBudget(orgId, brandId);
+    // The legacy brand-grain pot only: a funnel cap is not a mission here.
+    const brandPot = await getLegacyBrandDailyBudget(orgId, brandId);
     return brandPot
       ? [{ featureSlug: null, offerId: null, legKey: null, dailyBudgetCents: brandPot.dailyBudgetCents }]
       : [];

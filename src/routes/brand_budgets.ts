@@ -11,6 +11,7 @@ import {
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
   getBrandDailyBudget,
+  getLegacyBrandDailyBudget,
   getBrandDailyBudgetByDay,
   getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
@@ -654,7 +655,8 @@ async function composeCampaignBudgetsView(orgId: string, brandId: string) {
       campaigns: renderCampaigns(campaignTotalsOf(all)),
     };
   }
-  const brandLevel = await getBrandDailyBudget(orgId, brandId);
+  // A campaign's read: the funnel caps are never a per-campaign ceiling.
+  const brandLevel = await getLegacyBrandDailyBudget(orgId, brandId);
   return {
     dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
     campaigns: [],
