@@ -14,7 +14,10 @@
  * revenue DRR -> MRR = DRR x 30 -> ARR). A cap's period is normalised to a day:
  * daily x1, weekly / 7, monthly / 30 (MRR_DAYS: a monthly cap reads back as its
  * own amount in MRR). A ONE-OFF cap is not recurring: it adds nothing to a daily
- * figure. No discount: a cap is configuration.
+ * figure. A REACTIVE funnel's cap ("Up to $X", stored `sales_funnel_type`) adds
+ * nothing either: owner rule 2026-10-01, a reactive budget is a ceiling, never
+ * daily spend, pace or MRR (exactly as the old reactive ceilings in revenue).
+ * No discount: a cap is configuration.
  */
 
 import { Decimal } from "decimal.js";
@@ -55,10 +58,13 @@ export type SalesFunnelCampaignsAnswer =
  * "0" for a one_off cap (not recurring).
  */
 export function recurringDailyCentsOf(
-  cap: Pick<SalesFunnelCapRow, "maxBudgetCents" | "maxBudgetPeriod"> | null | undefined
+  cap:
+    | (Pick<SalesFunnelCapRow, "maxBudgetCents" | "maxBudgetPeriod"> & { salesFunnelType?: string | null })
+    | null
+    | undefined
 ): string | null {
   if (!cap || cap.maxBudgetCents == null || cap.maxBudgetPeriod == null) return null;
-  if (cap.maxBudgetPeriod === "one_off") return new Decimal(0).toFixed(10);
+  if (cap.maxBudgetPeriod === "one_off" || cap.salesFunnelType === "reactive") return new Decimal(0).toFixed(10);
   const days = DAYS_PER[cap.maxBudgetPeriod as keyof typeof DAYS_PER];
   if (!days) throw new Error(`unknown sales funnel cap period ${cap.maxBudgetPeriod}`);
   return new Decimal(cap.maxBudgetCents).dividedBy(days).toFixed(10);
@@ -74,7 +80,9 @@ export async function funnelBudgetCaps(orgId: string, brandId?: string): Promise
 
 /** PURE: the brand's configured recurring daily funnel budget, or null when no cap recurs. */
 export function brandFunnelDailyCents(caps: SalesFunnelCapRow[]): string | null {
-  const recurring = caps.filter((c) => c.maxBudgetPeriod !== "one_off" && c.maxBudgetCents != null);
+  const recurring = caps.filter(
+    (c) => c.maxBudgetPeriod !== "one_off" && c.salesFunnelType !== "reactive" && c.maxBudgetCents != null
+  );
   if (recurring.length === 0) return null;
   return recurring.reduce((s, c) => s.plus(recurringDailyCentsOf(c)!), new Decimal(0)).toFixed(10);
 }

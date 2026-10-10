@@ -427,6 +427,16 @@ describe("revenue: recurring, one-off, cash", () => {
       expect(b.salesFunnelCampaigns[0]).toMatchObject({ dailyBudgetCents: "0.0000000000", counted: false });
     });
 
+    it("a REACTIVE funnel's Up-to cap counts 0 in DRR / MRR and in the configured figure", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign()];
+      await funnelCap("daily", "2000");
+      await db.update(salesFunnelCaps).set({ salesFunnelType: "reactive" });
+      const b = await revenueOf();
+      expect(b.drrCents).toBe("0.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("5000.0000000000");
+      expect(b.salesFunnelCampaigns[0]).toMatchObject({ dailyBudgetCents: "0.0000000000", counted: false });
+    });
+
     it("a stopped funnel campaign counts nothing (its configured budget stays)", async () => {
       FUNNELS[FUNNEL] = [funnelCampaign({ status: "stopped" })];
       await funnelCap("daily", "2000");

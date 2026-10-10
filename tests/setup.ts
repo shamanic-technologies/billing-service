@@ -258,7 +258,7 @@ beforeAll(async () => {
   // 0078): the migration file itself, so the suite runs the shipped DDL.
   {
     const { readFileSync } = await import("fs");
-    for (const file of ["0078_sales_funnel_caps.sql", "0079_sales_funnel_caps_wide_budget.sql"]) {
+    for (const file of ["0078_sales_funnel_caps.sql", "0079_sales_funnel_caps_wide_budget.sql", "0080_sales_funnel_caps_type.sql"]) {
       const ddl = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
       for (const stmt of ddl.split("--> statement-breakpoint")) {
         await sql.unsafe(stmt);

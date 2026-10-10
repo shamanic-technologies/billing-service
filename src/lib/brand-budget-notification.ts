@@ -74,7 +74,10 @@ async function readFunnelSpend(
   brandId: string
 ): Promise<{ running: FunnelSpend[] } | null | undefined> {
   try {
-    const caps = (await funnelBudgetCaps(orgId, brandId)).filter((c) => c.maxBudgetPeriod !== "one_off");
+    // Reactive funnels ("Up to $X") are ceilings, never "Spending now" (owner rule 2026-10-01).
+    const caps = (await funnelBudgetCaps(orgId, brandId)).filter(
+      (c) => c.maxBudgetPeriod !== "one_off" && c.salesFunnelType !== "reactive"
+    );
     if (caps.length === 0) return undefined;
     const fcs = await fetchSalesFunnelCampaigns(orgId);
     if (!fcs.ok) return null;

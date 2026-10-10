@@ -4484,6 +4484,9 @@
           "period": {
             "$ref": "#/components/schemas/SalesFunnelCapPeriod"
           },
+          "dailyBudgetCents": {
+            "type": "string"
+          },
           "periodStart": {
             "type": "string"
           },
@@ -4514,6 +4517,7 @@
         "required": [
           "amountCents",
           "period",
+          "dailyBudgetCents",
           "periodStart",
           "periodEnd",
           "consumedCents",
@@ -4860,11 +4864,15 @@
               },
               "period": {
                 "$ref": "#/components/schemas/SalesFunnelCapPeriod"
+              },
+              "dailyBudgetCents": {
+                "type": "string"
               }
             },
             "required": [
               "amountCents",
-              "period"
+              "period",
+              "dailyBudgetCents"
             ]
           },
           "maxVolume": {
