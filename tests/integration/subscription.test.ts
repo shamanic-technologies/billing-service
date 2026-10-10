@@ -292,7 +292,12 @@ describe("subscription (billing-owned)", () => {
     expect(acct.body.credited_paid_cents).toBe("0.0000000000");
     // The cash paid is the whole $99, whatever it repaid.
     expect(acct.body.cash_paid_cents).toBe("9900.0000000000");
-    expect(acct.body.credited_gifted_cents).toBe("10400.0000000000");
+    // The $99 of trial credit ($30 seed + $69 trial) is an ADVANCE on the
+    // subscription, never free credit (owner 2026-10-11): only the $5 staff grant
+    // is gifted. credited = paid + gifted + advance + trial advance.
+    expect(acct.body.credited_gifted_cents).toBe("500.0000000000");
+    expect(acct.body.credited_trial_advance_cents).toBe("9900.0000000000");
+    expect(acct.body.credited_advance_cents).toBe("0.0000000000");
     expect(Number(acct.body.expired_cents)).toBe(0);
     expect(acct.body.balance_cents).toBe("1427.0000000000");
 
@@ -307,6 +312,11 @@ describe("subscription (billing-owned)", () => {
     const acct = await request(app).get("/v1/accounts").set(headers);
     expect(acct.body.credited_trial_repaid_cents).toBe("0.0000000000");
     expect(acct.body.credited_cents).toBe("9900.0000000000");
+    // Unrepaid, the trial credit is still an advance, never free credit; the org
+    // can still run on it without paying first.
+    expect(acct.body.credited_gifted_cents).toBe("0.0000000000");
+    expect(acct.body.credited_trial_advance_cents).toBe("9900.0000000000");
+    expect(acct.body.free_credit_spendable_cents).toBe("9900.0000000000");
   });
 
   it("an overspent balance never expires", async () => {

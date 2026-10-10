@@ -187,6 +187,23 @@ export async function getOnboardingAdvanceCents(orgId: string): Promise<string> 
 }
 
 /**
+ * The trial credit of an org's subscription trial: the `subscription_trial` grant
+ * plus every non-staff credit the org held before it (the grant tops credit UP TO
+ * the trial amount, so those are part of the trial's $99: a `trial_seed`, a
+ * `welcome`). One SQL expression, shared by the repayment cap and the advance read
+ * so the two can never disagree about what the trial credit is.
+ */
+function trialCreditSql(orgId: string) {
+  return sql`(SELECT COALESCE(SUM(p.amount_cents), 0)
+         FROM local_promos p
+         JOIN local_promo_codes pc ON pc.id = p.promo_code_id
+         JOIN local_promos t ON t.org_id = p.org_id
+         JOIN local_promo_codes tc ON tc.id = t.promo_code_id AND tc.code = ${SUBSCRIPTION_TRIAL_CODE}
+        WHERE p.org_id = ${orgId}
+          AND (p.id = t.id OR (p.created_at < t.created_at AND pc.code <> ${ADMIN_GRANT_CODE})))`;
+}
+
+/**
  * The subscription payment that ENDS a free trial pays a DEBT, the trial credit
  * already given; it never adds credit (owner 2026-10-06: « the payment of the free
  * trial is a debt due paid, it should NEVER add credits »). The trial grants
@@ -201,10 +218,8 @@ export async function getOnboardingAdvanceCents(orgId: string): Promise<string> 
  * payment keeps its trial credit (nothing paid, nothing repaid).
  */
 export async function getTrialRepaymentCents(orgId: string): Promise<string> {
-  // Capped at the trial credit it repays: the `subscription_trial` grant plus every
-  // non-staff credit the org held before it (the grant tops credit UP TO the trial
-  // amount, so those are part of the trial's $99: a `trial_seed`, a `welcome`). A
-  // plan priced above that adds the difference as credit, as any payment does.
+  // Capped at the trial credit it repays (trialCreditSql). A plan priced above that
+  // adds the difference as credit, as any payment does.
   const rows = (await db.execute(sql`
     SELECT LEAST(
       (SELECT COALESCE(SUM(c.amount_cents), 0)
@@ -217,14 +232,24 @@ export async function getTrialRepaymentCents(orgId: string): Promise<string> {
             SELECT MIN(c2.period_start) FROM subscription_charges c2
              WHERE c2.subscription_id = c.subscription_id
           )),
-      (SELECT COALESCE(SUM(p.amount_cents), 0)
-         FROM local_promos p
-         JOIN local_promo_codes pc ON pc.id = p.promo_code_id
-         JOIN local_promos t ON t.org_id = p.org_id
-         JOIN local_promo_codes tc ON tc.id = t.promo_code_id AND tc.code = ${SUBSCRIPTION_TRIAL_CODE}
-        WHERE p.org_id = ${orgId}
-          AND (p.id = t.id OR (p.created_at < t.created_at AND pc.code <> ${ADMIN_GRANT_CODE})))
+      ${trialCreditSql(orgId)}
     )::text AS total
+  `)) as unknown as Array<{ total: string }>;
+  return new Decimal(rows[0]?.total ?? 0).toFixed(10);
+}
+
+/**
+ * The trial credit is an ADVANCE on the subscription, never a gift (owner
+ * 2026-10-11, of Legistai's $30 trial seed + $69 subscription trial credit: « ca
+ * cest une avance sur la subscription liée au free trial!! Il ne faut pas le compter
+ * de fois »). Same nature as the match_100 onboarding advance: it stays credit (the
+ * balance is unchanged), but it is out of credited_gifted_cents ("free credit"),
+ * repaid or not, and shown on its own line, credited_trial_advance_cents.
+ * 0 for an org that never started a subscription trial.
+ */
+export async function getTrialAdvanceCents(orgId: string): Promise<string> {
+  const rows = (await db.execute(sql`
+    SELECT ${trialCreditSql(orgId)}::text AS total
   `)) as unknown as Array<{ total: string }>;
   return new Decimal(rows[0]?.total ?? 0).toFixed(10);
 }
