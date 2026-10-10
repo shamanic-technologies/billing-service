@@ -4524,6 +4524,15 @@
         ],
         "description": "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign on the funnel's pipes for this brand x offer PLUS every lead SOURCE campaign (Start -> Lead found) feeding those pipes (sources[]): ALL-INCLUSIVE, sourcing + sending + LLM. Runs started in [periodStart, periodEnd). reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0."
       },
+      "SalesFunnelVolumeUnit": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "first_contacts",
+          "prospects_handled"
+        ],
+        "description": "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step)."
+      },
       "SalesFunnelVolumeCap": {
         "type": "object",
         "nullable": true,
@@ -4535,10 +4544,7 @@
             "$ref": "#/components/schemas/SalesFunnelCapPeriod"
           },
           "unit": {
-            "type": "string",
-            "enum": [
-              "first_contacts"
-            ]
+            "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
           },
           "periodStart": {
             "type": "string"
@@ -4579,7 +4585,25 @@
           "consumedUnavailableReason",
           "consumedUnavailableDetail"
         ],
-        "description": "consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). A proactive pipe on a channel with no first-contact measure yet answers null + volume_not_measured_on_channel."
+        "description": "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes reactive): consumed = prospects the reactive pipes took on. A channel with no measure yet answers null + volume_not_measured_on_channel (no reactive channel is measured yet). unit null = the funnel is unreadable."
+      },
+      "SalesFunnelType": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "proactive",
+          "reactive"
+        ],
+        "description": "features-service's served funnel type, RELAYED (never derived here): proactive when at least one pipe is proactive, else reactive. Labels the caps: proactive = Max budget / Max volume, reactive = Up to $X / Up to N."
+      },
+      "SalesFunnelTypeUnavailableReason": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "type_not_served_by_features_service",
+          "sales_funnel_not_found",
+          "sales_funnel_catalogue_unavailable"
+        ]
       },
       "SalesFunnelMeasuredPipe": {
         "type": "object",
@@ -4680,6 +4704,15 @@
             "type": "string",
             "nullable": true
           },
+          "salesFunnelType": {
+            "$ref": "#/components/schemas/SalesFunnelType"
+          },
+          "salesFunnelTypeUnavailableReason": {
+            "$ref": "#/components/schemas/SalesFunnelTypeUnavailableReason"
+          },
+          "volumeUnit": {
+            "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
+          },
           "pipes": {
             "type": "array",
             "nullable": true,
@@ -4705,6 +4738,9 @@
           "maxBudget",
           "maxVolume",
           "salesFunnelName",
+          "salesFunnelType",
+          "salesFunnelTypeUnavailableReason",
+          "volumeUnit",
           "pipes",
           "sources"
         ]
@@ -4772,6 +4808,12 @@
           "salesFunnelId": {
             "type": "string"
           },
+          "salesFunnelType": {
+            "$ref": "#/components/schemas/SalesFunnelType"
+          },
+          "salesFunnelTypeUnavailableReason": {
+            "$ref": "#/components/schemas/SalesFunnelTypeUnavailableReason"
+          },
           "maxBudget": {
             "type": "object",
             "nullable": true,
@@ -4799,10 +4841,7 @@
                 "$ref": "#/components/schemas/SalesFunnelCapPeriod"
               },
               "unit": {
-                "type": "string",
-                "enum": [
-                  "first_contacts"
-                ]
+                "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
               }
             },
             "required": [
@@ -4818,6 +4857,8 @@
         "required": [
           "offerId",
           "salesFunnelId",
+          "salesFunnelType",
+          "salesFunnelTypeUnavailableReason",
           "maxBudget",
           "maxVolume",
           "updatedAt"

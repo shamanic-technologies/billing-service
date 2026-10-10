@@ -28,8 +28,17 @@
  *   sourcing + sending + LLM (owner 2026-10-09). Runs started in the window
  *   (runs-service `/v1/stats/costs`). An outreach campaign whose sourcing still
  *   runs under its own id is covered by its own campaign id.
- * - VOLUME = the items the funnel's PROACTIVE pipes produced: the first contact
- *   each makes with a prospect. Measured per channel from the run that makes it
+ * - VOLUME, in the unit billing names on the answer (`unit`):
+ *   - `first_contacts` when the funnel has a PROACTIVE pipe: the first contact
+ *     each proactive pipe makes with a prospect;
+ *   - `prospects_handled` when every pipe is REACTIVE (a reactive funnel
+ *     contacts nobody first): each prospect a reactive pipe takes on once they
+ *     reached its start step (a reply, a visit...). Measured per channel from
+ *     the run that handles one (`REACTIVE_ITEM_TASKS`); no reactive channel is
+ *     pinned yet, so it reads null + `volume_not_measured_on_channel`, never 0.
+ *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
+ *   not the relayed type; the two use the same rule upstream.
+ * - The proactive measure: Measured per channel from the run that makes it
  *   (`ITEM_TASKS`); a proactive pipe on a channel we cannot measure yet makes the
  *   volume `null` with a reason, never 0. Why not "completed campaign runs":
  *   most of those produce nothing (7 days of cold email, 2026-10-10: 1,792
@@ -39,6 +48,10 @@
  * this offer, the pipe's channel and the pipe's leg (`sameLeg`). A pipe shared
  * by two funnels of one offer counts its spend in both, and so does a source
  * feeding two funnels: a cap can only stop EARLIER because of it, never later.
+ *
+ * TYPE: `salesFunnelType` is features-service's served `type`, RELAYED (never
+ * derived here); null + `salesFunnelTypeUnavailableReason` when not served or
+ * the funnel is unreadable. It labels the caps ("Max budget" vs "Up to $X").
  *
  * Every figure that cannot be established is null with a named reason; a read
  * never fails because a measurement did (campaign-service still gets the caps).
@@ -63,6 +76,7 @@ import { brandDailyBudgetChanges } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import {
   getSalesFunnel,
+  type SalesFunnelType,
   SalesFunnelCatalogueUnavailableError,
   SalesFunnelNotFoundError,
   type SalesFunnel,
@@ -72,8 +86,19 @@ import {
 export const CAP_PERIODS = ["one_off", "daily", "weekly", "monthly"] as const;
 export type CapPeriod = (typeof CAP_PERIODS)[number];
 
-/** The volume unit, named on every answer. */
-export const VOLUME_UNIT = "first_contacts" as const;
+/** The volume units billing names on every answer (see the header). */
+export const VOLUME_UNITS = ["first_contacts", "prospects_handled"] as const;
+export type VolumeUnit = (typeof VOLUME_UNITS)[number];
+
+/** PURE: the unit a funnel's volume is counted in: first contacts when a pipe is proactive. */
+export function volumeUnitOf(funnel: Pick<SalesFunnel, "pipes">): VolumeUnit {
+  return funnel.pipes.some((p) => p.mode === "proactive") ? "first_contacts" : "prospects_handled";
+}
+
+export type SalesFunnelTypeUnavailableReason =
+  | "type_not_served_by_features_service"
+  | "sales_funnel_not_found"
+  | "sales_funnel_catalogue_unavailable";
 
 /**
  * The run that makes ONE first contact on a channel: a run of this service +
@@ -85,6 +110,15 @@ export const ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName
   "sales-cold-email-outreach": { serviceName: "instantly-service", taskName: "email-send-step-1" },
   "feedback-request-cold-email-outreach": { serviceName: "instantly-service", taskName: "email-send-step-1" },
 };
+
+/**
+ * The run that HANDLES ONE prospect on a REACTIVE channel (a reactive funnel's
+ * `prospects_handled`). Empty on purpose: prod 2026-10-10, an AI meeting booking
+ * campaign's runs carry no task that maps one-to-one to a prospect handled
+ * (polling workflow runs, LLM calls, judgments), so nothing is pinned rather
+ * than a guess. Add a channel here once one run = one prospect is verified.
+ */
+export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string }>> = {};
 
 export type ConsumedUnavailableReason =
   | "sales_funnel_not_found"
@@ -461,7 +495,8 @@ export interface BudgetCapView {
 export interface VolumeCapView {
   count: number;
   period: CapPeriod;
-  unit: typeof VOLUME_UNIT;
+  /** What the count counts; null only when the funnel is unreadable. */
+  unit: VolumeUnit | null;
   periodStart: string;
   periodEnd: string | null;
   consumed: number | null;
@@ -477,8 +512,13 @@ export interface SalesFunnelCapsView extends FunnelCapKey {
   updatedAt: string | null;
   maxBudget: BudgetCapView | null;
   maxVolume: VolumeCapView | null;
-  /** features-service's name of the funnel; null when not read (nothing stated) or unreadable. */
+  /** features-service's name of the funnel; null when unreadable. */
   salesFunnelName: string | null;
+  /** features-service's served funnel type (relayed); null with a reason when not served/unreadable. */
+  salesFunnelType: SalesFunnelType | null;
+  salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReason | null;
+  /** The unit a max volume of this funnel is counted in; null when the funnel is unreadable. */
+  volumeUnit: VolumeUnit | null;
   /** The pipes measured and the campaigns found on each; null when not read or unreadable. */
   pipes: MeasuredPipe[] | null;
   /**
@@ -509,14 +549,14 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
   };
 }
 
-function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>): VolumeCapView | null {
+function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>, unit: VolumeUnit | null): VolumeCapView | null {
   if (row.maxVolume == null || row.maxVolumePeriod == null || row.maxVolumeSince == null) return null;
   const period = row.maxVolumePeriod as CapPeriod;
   const w = periodWindow(period, row.maxVolumeSince, now);
   return {
     count: row.maxVolume,
     period,
-    unit: VOLUME_UNIT,
+    unit,
     periodStart: w.start.toISOString(),
     periodEnd: w.end ? w.end.toISOString() : null,
     consumed: m.consumed,
@@ -549,23 +589,27 @@ async function measureBudget(
 }
 
 async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<number>> {
+  // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
   const proactive = pipes.filter((p) => p.mode === "proactive");
-  if (proactive.length === 0) {
-    return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no proactive pipe` };
+  const counted = proactive.length > 0 ? proactive : pipes;
+  const tasks = proactive.length > 0 ? ITEM_TASKS : REACTIVE_ITEM_TASKS;
+  if (counted.length === 0) {
+    return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no pipe` };
   }
-  const unmeasured = proactive.filter((p) => !ITEM_TASKS[p.channelSlug]).map((p) => p.channelSlug);
+  const unmeasured = counted.filter((p) => !tasks[p.channelSlug]).map((p) => p.channelSlug);
   if (unmeasured.length > 0) {
+    const what = proactive.length > 0 ? "first-contact" : "prospect-handled";
     return {
       consumed: null,
       reason: "volume_not_measured_on_channel",
-      detail: `no first-contact measure on ${[...new Set(unmeasured)].join(", ")}`,
+      detail: `no ${what} measure on ${[...new Set(unmeasured)].join(", ")}`,
     };
   }
   const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
-  // One read per item task: the campaigns of every proactive pipe making it.
+  // One read per item task: the campaigns of every counted pipe making it.
   const byTask = new Map<string, { task: { serviceName: string; taskName: string }; ids: Set<string> }>();
-  for (const p of proactive) {
-    const task = ITEM_TASKS[p.channelSlug];
+  for (const p of counted) {
+    const task = tasks[p.channelSlug];
     const key = `${task.serviceName}\u0000${task.taskName}`;
     const entry = byTask.get(key) ?? { task, ids: new Set<string>() };
     p.campaignIds.forEach((id) => entry.ids.add(id));
@@ -588,7 +632,18 @@ export async function composeSalesFunnelCapsView(
 ): Promise<SalesFunnelCapsView> {
   const row = await getSalesFunnelCaps(k);
   if (!row) {
-    return { ...k, stated: false, updatedAt: null, maxBudget: null, maxVolume: null, salesFunnelName: null, pipes: null, sources: null };
+    // Nothing stated: still name the funnel, its type and its volume unit (the form's labels).
+    const read = await readFunnelSoft(k.salesFunnelId);
+    return {
+      ...k,
+      stated: false,
+      updatedAt: null,
+      maxBudget: null,
+      maxVolume: null,
+      ...funnelIdentity(read.funnel, read.reason),
+      pipes: null,
+      sources: null,
+    };
   }
   const answer = await measuredPipes(k);
   let budget: Measured<string> = NOT_MEASURED();
@@ -607,24 +662,81 @@ export async function composeSalesFunnelCapsView(
     stated: true,
     updatedAt: row.updatedAt.toISOString(),
     maxBudget: budgetView(row, now, budget),
-    maxVolume: volumeView(row, now, volume),
-    salesFunnelName: answer.funnel?.name ?? null,
+    maxVolume: volumeView(row, now, volume, answer.funnel ? volumeUnitOf(answer.funnel) : null),
+    ...funnelIdentity(answer.funnel, answer.ok ? null : answer.reason),
     pipes: answer.ok ? answer.pipes : null,
     sources: answer.ok && answer.sources.ok ? answer.sources.sources : null,
   };
 }
 
-/** The stated caps of a row, without measurement (the brand list). */
-export function statedCapsOf(row: SalesFunnelCapRow) {
+/** The funnel read fail-soft: the funnel, or null with the reason it could not be read. */
+async function readFunnelSoft(
+  id: string
+): Promise<{ funnel: SalesFunnel | null; reason: "sales_funnel_not_found" | "sales_funnel_catalogue_unavailable" | null }> {
+  try {
+    return { funnel: await getSalesFunnel(id), reason: null };
+  } catch (err) {
+    if (err instanceof SalesFunnelNotFoundError) return { funnel: null, reason: "sales_funnel_not_found" };
+    console.error(`[billing-service] sales funnel caps: ${(err as Error).message}`);
+    return { funnel: null, reason: "sales_funnel_catalogue_unavailable" };
+  }
+}
+
+/**
+ * PURE: the funnel's name, RELAYED type and volume unit. `readReason` is why the
+ * funnel itself could not be read (a funnel read but a later read failing is not
+ * a type problem).
+ */
+export function funnelIdentity(funnel: SalesFunnel | null, readReason: string | null) {
+  const typeReason: SalesFunnelTypeUnavailableReason | null = funnel
+    ? funnel.type
+      ? null
+      : "type_not_served_by_features_service"
+    : readReason === "sales_funnel_not_found"
+      ? "sales_funnel_not_found"
+      : "sales_funnel_catalogue_unavailable";
+  return {
+    salesFunnelName: funnel?.name ?? null,
+    salesFunnelType: funnel?.type ?? null,
+    salesFunnelTypeUnavailableReason: typeReason,
+    volumeUnit: funnel ? volumeUnitOf(funnel) : null,
+  };
+}
+
+/**
+ * The brand list waits at most this long on the catalogue: campaign-service reads
+ * it for its budget figures, and a slow features-service must not slow that read
+ * (the type then reads null + `sales_funnel_catalogue_unavailable`).
+ */
+const BRAND_LIST_CATALOGUE_WAIT_MS = 3_000;
+
+/** The stated caps of a row, without measurement (the brand list), plus the funnel's relayed type + unit. */
+export async function statedCapsOf(row: SalesFunnelCapRow) {
+  let timer: NodeJS.Timeout | undefined;
+  const read = await Promise.race([
+    readFunnelSoft(row.salesFunnelId),
+    new Promise<{ funnel: null; reason: "sales_funnel_catalogue_unavailable" }>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ funnel: null, reason: "sales_funnel_catalogue_unavailable" }),
+        BRAND_LIST_CATALOGUE_WAIT_MS
+      );
+    }),
+  ]);
+  clearTimeout(timer);
+  const identity = funnelIdentity(read.funnel, read.reason);
   return {
     offerId: row.offerId,
     salesFunnelId: row.salesFunnelId,
+    salesFunnelType: identity.salesFunnelType,
+    salesFunnelTypeUnavailableReason: identity.salesFunnelTypeUnavailableReason,
     maxBudget:
       row.maxBudgetCents != null
         ? { amountCents: row.maxBudgetCents, period: row.maxBudgetPeriod as CapPeriod }
         : null,
     maxVolume:
-      row.maxVolume != null ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: VOLUME_UNIT } : null,
+      row.maxVolume != null
+        ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: identity.volumeUnit }
+        : null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }

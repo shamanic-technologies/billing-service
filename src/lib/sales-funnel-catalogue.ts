@@ -30,9 +30,19 @@ export interface SalesFunnelPipe {
   mode: PipeMode;
 }
 
+/**
+ * The funnel's TYPE as features-service SERVES it (`type` on the detail,
+ * features-service `funnelTypeOf`, owner 2026-10-10): `proactive` when at least
+ * one pipe is proactive, else `reactive`. RELAYED, never derived here from pipe
+ * modes: null when features-service does not serve it (older version).
+ */
+export type SalesFunnelType = "proactive" | "reactive";
+
 export interface SalesFunnel {
   id: string;
   name: string | null;
+  /** features-service's served type; null = not served (never computed here). */
+  type: SalesFunnelType | null;
   pipes: SalesFunnelPipe[];
 }
 
@@ -61,7 +71,7 @@ export function __resetSalesFunnelCache(): void {
 
 /** PURE: the funnel out of features-service's detail body. Throws on a malformed one. */
 export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
-  const b = body as { id?: unknown; name?: unknown; legs?: unknown };
+  const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown };
   if (!b || typeof b !== "object" || !Array.isArray(b.legs)) {
     throw new SalesFunnelCatalogueUnavailableError(
       `features-service sales funnel ${id} carried no legs array`
@@ -90,7 +100,8 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
       mode: pipe.mode,
     });
   }
-  return { id, name: typeof b.name === "string" ? b.name : null, pipes };
+  const type = b.type === "proactive" || b.type === "reactive" ? b.type : null;
+  return { id, name: typeof b.name === "string" ? b.name : null, type, pipes };
 }
 
 /** One sales funnel and its pipes, from features-service (cached a few minutes). */

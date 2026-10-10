@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { periodWindow } from "../../src/lib/sales-funnel-caps.js";
+import { periodWindow, volumeUnitOf } from "../../src/lib/sales-funnel-caps.js";
 import {
   salesFunnelFromDetail,
   SalesFunnelCatalogueUnavailableError,
@@ -56,6 +56,7 @@ describe("salesFunnelFromDetail", () => {
     expect(salesFunnelFromDetail(epiphany.id, epiphany)).toEqual({
       id: epiphany.id,
       name: "Epiphany",
+      type: null,
       pipes: [
         {
           pipeId: "sales-cold-email-outreach|lead_found_to_website_visit",
@@ -65,6 +66,19 @@ describe("salesFunnelFromDetail", () => {
         },
       ],
     });
+  });
+
+  it("relays the served type; anything else is null (never derived from pipe modes)", () => {
+    expect(salesFunnelFromDetail(epiphany.id, { ...epiphany, type: "proactive" }).type).toBe("proactive");
+    expect(salesFunnelFromDetail(epiphany.id, { ...epiphany, type: "reactive" }).type).toBe("reactive");
+    // A reactive label on a funnel with a proactive pipe is relayed as served, not re-graded.
+    expect(salesFunnelFromDetail(epiphany.id, { ...epiphany, type: "Proactive" }).type).toBeNull();
+  });
+
+  it("volumeUnitOf: first contacts with a proactive pipe, prospects handled when all reactive", () => {
+    const pipe = (mode: "proactive" | "reactive") => ({ pipeId: "a|b", channelSlug: "a", legKey: "b", mode });
+    expect(volumeUnitOf({ pipes: [pipe("reactive"), pipe("proactive")] })).toBe("first_contacts");
+    expect(volumeUnitOf({ pipes: [pipe("reactive")] })).toBe("prospects_handled");
   });
 
   it("refuses a pipe id without <channel>|<leg>, a missing mode, or no legs", () => {
