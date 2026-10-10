@@ -147,7 +147,7 @@ async function respondBrandList(req: Request, res: Response, orgId: string) {
     return;
   }
   const rows = await listBrandSalesFunnelCaps(orgId, brandId, (offerId as string | undefined) ?? null);
-  res.json({ orgId, brandId, caps: rows.map(statedCapsOf) });
+  res.json({ orgId, brandId, caps: await Promise.all(rows.map(statedCapsOf)) });
 }
 
 router.get("/internal/brands/:brandId/sales-funnel-caps", handle(async (req, res) => {
