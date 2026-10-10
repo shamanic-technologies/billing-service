@@ -15,6 +15,7 @@ import {
   composeCreditedFromParts,
   computeFreeCreditStatus,
   getOnboardingAdvanceCents,
+  getTrialAdvanceCents,
   getTrialRepaymentCents,
   configuredReloadFor,
   TopupBelowMinimumError,
@@ -86,6 +87,7 @@ async function composeAccountFunds(
   advanceCents: string;
   advanceRepaidCents: string;
   trialRepaidCents: string;
+  trialAdvanceCents: string;
   hasPaymentMethod: boolean;
   cardCountry: string | null;
   cardBrand: string | null;
@@ -149,6 +151,9 @@ async function composeAccountFunds(
   const advance = await getOnboardingAdvanceCents(orgId);
   // The trial-end subscription payment repays the trial credit: it adds none.
   const trialRepayment = await getTrialRepaymentCents(orgId);
+  // The trial credit itself is an ADVANCE on the subscription, never free credit:
+  // out of credited_gifted_cents, repaid or not, on its own line.
+  const trialAdvance = await getTrialAdvanceCents(orgId);
   const creditParts = composeCreditedFromParts(paidTopups, localCredits, advance, trialRepayment);
   const creditedCents = creditParts.creditedCents;
   // runs-service usage is already NET of the org's usage discount (frozen at
@@ -174,11 +179,15 @@ async function composeAccountFunds(
     actualBalanceCents,
     discountPct,
     paidTopupsCents: paidTopups,
-    giftedCreditsCents: subCents(localCredits, creditParts.advanceCents),
+    giftedCreditsCents: subCents(
+      subCents(localCredits, creditParts.advanceCents),
+      trialAdvance
+    ),
     entitlementGrantsCents,
     advanceCents: creditParts.advanceCents,
     advanceRepaidCents: creditParts.advanceRepaidCents,
     trialRepaidCents: creditParts.trialRepaidCents,
+    trialAdvanceCents: trialAdvance,
     hasPaymentMethod: hasCardPm,
     cardCountry,
     cardBrand: cardDisplay?.brand ?? null,
@@ -205,6 +214,7 @@ function buildAccountResponse(
     advanceCents: string;
     advanceRepaidCents: string;
     trialRepaidCents: string;
+    trialAdvanceCents: string;
     hasPaymentMethod: boolean;
     cardCountry: string | null;
     cardBrand: string | null;
@@ -252,6 +262,9 @@ function buildAccountResponse(
     // A match_100 org: the part of its payments left after repaying its onboarding
     // advance ($200 paid → 17000), the advance itself on credited_advance_cents.
     //   credited_cents === credited_paid_cents + credited_gifted_cents + credited_advance_cents
+    //     + credited_trial_advance_cents
+    // A subscription trial's credit (trial_seed + subscription_trial) is an ADVANCE on
+    // the subscription, never a gift, repaid or not: credited_trial_advance_cents.
     credited_paid_cents: subCents(
       subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
       funds.trialRepaidCents
@@ -265,6 +278,7 @@ function buildAccountResponse(
     cash_paid_cents: funds.paidTopupsCents,
     credited_gifted_cents: funds.giftedCreditsCents,
     credited_advance_cents: funds.advanceCents,
+    credited_trial_advance_cents: funds.trialAdvanceCents,
     usage_cents: funds.usageCents,
     // Credit staff took OFF this org's balance (POST /v1/credits/debit), its own
     // line, never folded into usage_cents. Invariant:
@@ -277,8 +291,10 @@ function buildAccountResponse(
     actual_balance_cents: funds.actualBalanceCents,
     // Free credit the org can still spend, ready-made so the dashboard decides a
     // "skip payment" option without doing money arithmetic in the browser.
+    // Byte-unchanged by the trial re-base: a trialing org still runs on its trial
+    // credit without paying first, so the trial advance counts here.
     free_credit_spendable_cents: spendableFreeCreditCents(
-      funds.giftedCreditsCents,
+      addCents(funds.giftedCreditsCents, funds.trialAdvanceCents),
       funds.balanceCents
     ),
     // Per-org platform-usage discount percentage (0–100), or null when none. This
