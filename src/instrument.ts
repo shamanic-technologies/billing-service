@@ -23,6 +23,7 @@
  *   - `credit-card-unusable`       → src/lib/card-usability.ts
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
  *   - `subscription-monthly-update` → src/lib/subscription-monthly-update.ts
+ *   - `subscription-credits-used`  → src/lib/subscription-out-of-credits.ts
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
@@ -38,6 +39,7 @@ import {
 } from "./lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "./lib/subscription-monthly-update.js";
+import { SUBSCRIPTION_OUT_OF_CREDITS_EVENT } from "./lib/subscription-out-of-credits.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -62,6 +64,16 @@ const TEMPLATES = [
     // no upsell (owner 2026-10-04). Subject, card and plain text are composed in
     // code (lib/subscription-monthly-update-email), wrapped in the official layout.
     name: SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
+    subject: "{{subject}}",
+    htmlBody: "{{bodyHtml}}",
+    textBody: "{{bodyText}}",
+    layout: "brand",
+  },
+  {
+    // A subscription org ran out of credit: what stopped (reactive first) and one
+    // upgrade button (owner 2026-10-10). Composed in code
+    // (lib/subscription-out-of-credits-email), wrapped in the official layout.
+    name: SUBSCRIPTION_OUT_OF_CREDITS_EVENT,
     subject: "{{subject}}",
     htmlBody: "{{bodyHtml}}",
     textBody: "{{bodyText}}",

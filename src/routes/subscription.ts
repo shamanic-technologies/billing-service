@@ -24,6 +24,7 @@ import {
 } from "../lib/subscription.js";
 import { sumSubscriptionExpiriesForOrg } from "../lib/subscription-expiries.js";
 import { attributeUnassignedPlan } from "../lib/subscription-plans.js";
+import { reallocateDerivedPlans } from "../lib/subscriber-plan-budgets.js";
 import type { Subscription } from "../db/schema.js";
 import {
   ChangeSubscriptionAmountRequestSchema,
@@ -52,6 +53,16 @@ function refuseAmount(res: Response, cents: number): boolean {
     code,
   });
   return true;
+}
+
+/**
+ * A plan started or upgraded today: its plan-derived campaign budgets follow the
+ * new amount now rather than at the next hourly tick. Fire-and-forget, never throws.
+ */
+function reallocateAfterStartNow(): void {
+  void reallocateDerivedPlans(new Date()).catch((err) =>
+    console.error("[billing-service] plan budgets after start-now failed (hourly tick retries):", err)
+  );
 }
 
 /** Whether this org still sends, for the dashboard ("sending has stopped"). */
@@ -190,6 +201,7 @@ router.patch("/v1/accounts/subscription", requireOrgHeaders, async (req, res) =>
     const sub = parsed.data.start_now
       ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents)
       : await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents);
+    if (parsed.data.start_now) reallocateAfterStartNow();
     res.json(await actionResponse(orgId, sub));
   } catch (err) {
     if (err instanceof SubscriptionRefused) return refuse(res, err);
@@ -335,6 +347,7 @@ router.patch("/v1/accounts/subscriptions/:subscriptionId", requireOrgHeaders, as
     const sub = parsed.data.start_now
       ? await startSubscriptionNow(orgId, parsed.data.monthly_amount_cents, new Date(), id)
       : await changeSubscriptionAmount(orgId, parsed.data.monthly_amount_cents, new Date(), id);
+    if (parsed.data.start_now) reallocateAfterStartNow();
     res.json(await actionResponse(orgId, sub));
   } catch (err) {
     if (err instanceof SubscriptionRefused) return refuse(res, err);

@@ -26,6 +26,7 @@ import acquirerRoutes from "./routes/acquirer.js";
 import { requireApiKey } from "./middleware/auth.js";
 import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 import { deployEmailTemplates } from "./instrument.js";
+import { startSubscriptionOutOfCreditsWatcher } from "./lib/subscription-out-of-credits.js";
 import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
 import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
@@ -89,6 +90,8 @@ if (process.env.NODE_ENV !== "test") {
       console.log("Migrations complete");
       // Self-rescheduling, non-blocking — first tick deferred past boot.
       startDunningScheduler();
+      // Subscription orgs out of credit are told within minutes (lib/subscription-out-of-credits).
+      startSubscriptionOutOfCreditsWatcher();
       app.listen(Number(PORT), "::", () => {
         console.log(`Billing service running on port ${PORT}`);
         // Register the email templates this service sends. Fired only once the
