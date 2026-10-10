@@ -61,12 +61,6 @@ import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
-import {
-  capOfFunnelCampaign,
-  fetchSalesFunnelCampaigns,
-  funnelBudgetCaps,
-  recurringDailyCentsOf,
-} from "./funnel-campaigns.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
 import {
   subscriptions,
@@ -240,25 +234,11 @@ async function resolveBudgets(
     }
   }
 
-  // SALES FUNNEL campaigns: their money is the funnel's MAX BUDGET (recurring,
-  // per day; a one_off cap adds nothing), configured whatever the campaign does,
-  // running while the funnel campaign is `ongoing`. Their units carry no ceiling,
-  // so campaign-service's per-ceiling split above never counts them.
-  const caps = await funnelBudgetCaps(orgId);
-  if (caps.length > 0) {
-    for (const c of caps) configured = addCents(configured, recurringDailyCentsOf(c)!);
-    if (running !== null) {
-      const fcs = await fetchSalesFunnelCampaigns(orgId);
-      if (!fcs.ok) {
-        running = null;
-      } else {
-        for (const fc of fcs.campaigns) {
-          const cap = capOfFunnelCampaign(caps, fc);
-          if (fc.status === "ongoing" && cap) running = addCents(running, recurringDailyCentsOf(cap)!);
-        }
-      }
-    }
-  }
+  // SALES FUNNEL campaigns are already IN campaign-service's served totals
+  // (spendable-budget `salesFunnels`, campaign-service f69629b): never add them
+  // here again (v0.83.9-v0.83.12 did, and the outlook read 3628.57 for a brand
+  // whose spendable said 2914.29). Each cap's money per day is billing's
+  // `maxBudget.dailyBudgetCents` on the caps reads (reactive / one_off = 0).
   return { configuredCents: configured, runningCents: running };
 }
 

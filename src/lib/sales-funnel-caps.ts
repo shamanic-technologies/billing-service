@@ -126,7 +126,15 @@ export const ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName
  * (polling workflow runs, LLM calls, judgments), so nothing is pinned rather
  * than a guess. Add a channel here once one run = one prospect is verified.
  */
-export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string }>> = {};
+export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string; distinctParent: true }>> = {
+  // AI meeting booking answers a prospect who replied: one run of its workflow
+  // that did work = one prospect taken on. Its workflow polls ~400 times a day
+  // doing nothing (no paid child); the runs that take a prospect on call the LLM
+  // (`chat-service` `complete`). Counted as DISTINCT parent workflow runs of
+  // those calls (prod 14d 2026-10-10: 15 workflow runs with a completion, 14 of
+  // them the only runs with any cost, out of 6,035).
+  "ai-meeting-booking": { serviceName: "chat-service", taskName: "complete", distinctParent: true },
+};
 
 export type ConsumedUnavailableReason =
   | "sales_funnel_not_found"
@@ -241,7 +249,12 @@ const CONVERSION_TOLERANCE_CENTS = new Decimal(1);
 
 export async function setSalesFunnelCaps(
   k: FunnelCapKey,
-  input: { maxBudget: BudgetCapInput | null; maxVolume: VolumeCapInput | null },
+  input: {
+    maxBudget: BudgetCapInput | null;
+    maxVolume: VolumeCapInput | null;
+    /** features-service's type of the funnel, read by the caller at write; null = not served. */
+    salesFunnelType?: "proactive" | "reactive" | null;
+  },
   changedByUserId: string | null,
   now: Date = new Date(),
   replacesCeilings: ReplacedCeilingKey[] | null = null
@@ -297,6 +310,7 @@ export async function setSalesFunnelCaps(
       maxVolume: input.maxVolume?.count ?? null,
       maxVolumePeriod: input.maxVolume?.period ?? null,
       maxVolumeSince: volumeSince,
+      salesFunnelType: input.salesFunnelType ?? existing?.salesFunnelType ?? null,
       updatedAt: now,
     };
     const [row] = await tx
@@ -417,6 +431,28 @@ async function convertCeilings(
  */
 export async function reconcileFunnelCapHistory(): Promise<void> {
   try {
+    // First the TYPE of caps written before billing stored it (migration 0080),
+    // so the daily figures below count a reactive funnel as 0.
+    const untyped = await db
+      .select()
+      .from(salesFunnelCaps)
+      .where(isNull(salesFunnelCaps.salesFunnelType));
+    for (const row of untyped) {
+      try {
+        const funnel = await getSalesFunnel(row.salesFunnelId);
+        if (!funnel.type) {
+          console.error(`[billing-service] funnel cap type: features-service serves no type for ${row.salesFunnelId}, left unknown (counted as proactive)`);
+          continue;
+        }
+        await db
+          .update(salesFunnelCaps)
+          .set({ salesFunnelType: funnel.type })
+          .where(keyWhere(row));
+        console.log(`[billing-service] funnel cap type: ${row.salesFunnelId} org=${row.orgId} -> ${funnel.type}`);
+      } catch (err) {
+        console.error(`[billing-service] funnel cap type of ${row.salesFunnelId} unreadable, retried next boot: ${(err as Error).message}`);
+      }
+    }
     const brands = await db
       .selectDistinct({ orgId: salesFunnelCaps.orgId, brandId: salesFunnelCaps.brandId })
       .from(salesFunnelCaps);
@@ -566,14 +602,56 @@ async function spendSince(orgId: string, campaignIds: string[], start: Date): Pr
   return total.toFixed(10);
 }
 
-/** First contacts (completed + in flight) of these campaigns on one item task. */
-async function itemsSince(
+const DISTINCT_PARENT_PAGE = 500;
+const MAX_DISTINCT_PARENT_PAGES = 100;
+
+/** Distinct PARENT runs of this task's runs (completed or in flight) on these campaigns since `start`. */
+async function distinctParentsSince(
   orgId: string,
   campaignIds: string[],
   task: { serviceName: string; taskName: string },
   start: Date
 ): Promise<number> {
+  const parents = new Set<string>();
+  const seen = new Set<string>();
+  for (let page = 0; ; page += 1) {
+    if (page >= MAX_DISTINCT_PARENT_PAGES) {
+      throw new Error(`runs-service ${task.serviceName}:${task.taskName} walk exceeded ${MAX_DISTINCT_PARENT_PAGES} pages`);
+    }
+    const data = await readJson<{ runs?: Array<{ id: string; parentRunId?: string | null; status?: string }> }>(
+      "/v1/runs",
+      orgId,
+      new URLSearchParams({
+        campaignIds: campaignIds.join(","),
+        serviceName: task.serviceName,
+        taskName: task.taskName,
+        startedAfter: start.toISOString(),
+        limit: String(DISTINCT_PARENT_PAGE),
+        offset: String(page * DISTINCT_PARENT_PAGE),
+      })
+    );
+    if (!Array.isArray(data.runs)) throw new Error("runs-service /v1/runs returned no runs array");
+    for (const r of data.runs) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      if (r.status !== "completed" && r.status !== "running") continue;
+      // A run with no parent is its own prospect.
+      parents.add(r.parentRunId ?? r.id);
+    }
+    if (data.runs.length < DISTINCT_PARENT_PAGE) break;
+  }
+  return parents.size;
+}
+
+/** Items (completed + in flight) of these campaigns on one item task. */
+async function itemsSince(
+  orgId: string,
+  campaignIds: string[],
+  task: { serviceName: string; taskName: string; distinctParent?: true },
+  start: Date
+): Promise<number> {
   if (campaignIds.length === 0) return 0;
+  if (task.distinctParent) return distinctParentsSince(orgId, campaignIds, task, start);
   const body = await readJson<{
     groups?: Array<{ completedCount?: number; runningCount?: number }>;
   }>(
@@ -610,6 +688,13 @@ interface Measured<T> {
 export interface BudgetCapView {
   amountCents: string;
   period: CapPeriod;
+  /**
+   * The cap's money PER DAY in every daily figure (brand daily budget, pace,
+   * MRR, spendable totals): daily x1, weekly / 7, monthly / 30; "0" for a
+   * one_off cap and for a REACTIVE funnel ("Up to $X" is a ceiling, owner rule
+   * 2026-10-01). Read it; never recompute it.
+   */
+  dailyBudgetCents: string;
   periodStart: string;
   /** Exclusive; null on a one_off cap (it never resets). */
   periodEnd: string | null;
@@ -667,6 +752,7 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
   return {
     amountCents: row.maxBudgetCents,
     period,
+    dailyBudgetCents: recurringDailyCentsOf(row)!,
     periodStart: w.start.toISOString(),
     periodEnd: w.end ? w.end.toISOString() : null,
     consumedCents: consumed ? fixed(consumed) : null,
@@ -719,7 +805,9 @@ async function measureBudget(
 async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<number>> {
   // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
   const proactive = pipes.filter((p) => p.mode === "proactive");
-  const counted = proactive.length > 0 ? proactive : pipes;
+  // A reactive funnel takes a prospect on at its FIRST pipe; the later pipes
+  // handle that same prospect, so only the first is counted (never twice).
+  const counted = proactive.length > 0 ? proactive : pipes.slice(0, 1);
   const tasks = proactive.length > 0 ? ITEM_TASKS : REACTIVE_ITEM_TASKS;
   if (counted.length === 0) {
     return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no pipe` };
@@ -735,7 +823,7 @@ async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: Mea
   }
   const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
   // One read per item task: the campaigns of every counted pipe making it.
-  const byTask = new Map<string, { task: { serviceName: string; taskName: string }; ids: Set<string> }>();
+  const byTask = new Map<string, { task: { serviceName: string; taskName: string; distinctParent?: true }; ids: Set<string> }>();
   for (const p of counted) {
     const task = tasks[p.channelSlug];
     const key = `${task.serviceName}\u0000${task.taskName}`;
@@ -859,7 +947,7 @@ export async function statedCapsOf(row: SalesFunnelCapRow) {
     salesFunnelTypeUnavailableReason: identity.salesFunnelTypeUnavailableReason,
     maxBudget:
       row.maxBudgetCents != null
-        ? { amountCents: row.maxBudgetCents, period: row.maxBudgetPeriod as CapPeriod }
+        ? { amountCents: row.maxBudgetCents, period: row.maxBudgetPeriod as CapPeriod, dailyBudgetCents: recurringDailyCentsOf(row)! }
         : null,
     maxVolume:
       row.maxVolume != null

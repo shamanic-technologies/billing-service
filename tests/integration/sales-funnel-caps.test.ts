@@ -110,12 +110,13 @@ const campaign = (id: string, offerId: string, featureSlug: string, legKey: stri
 interface Calls {
   costs: URLSearchParams[];
   outcomes: URLSearchParams[];
+  runs: URLSearchParams[];
   features: number;
   campaigns: number;
 }
 
 function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = {}): Calls {
-  const calls: Calls = { costs: [], outcomes: [], features: 0, campaigns: 0 };
+  const calls: Calls = { costs: [], outcomes: [], runs: [], features: 0, campaigns: 0 };
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.pathname.startsWith("/internal/catalogue/sales-funnels/")) {
@@ -150,6 +151,21 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = 
           .get("campaignIds")!
           .split(",")
           .map((id) => ({ dimensions: { campaignId: id }, totalCostInUsdCents: "999", netTotalCostInUsdCents: "1000.5" })),
+      });
+    }
+    if (url.pathname === "/v1/runs") {
+      calls.runs.push(url.searchParams);
+      if (opts.runsStatus) return new Response("down", { status: opts.runsStatus });
+      // A reactive pipe's LLM completions: two under one workflow run (one prospect),
+      // one under another, one failed, one still running under a third.
+      return Response.json({
+        runs: [
+          { id: "r1", parentRunId: "w1", status: "completed" },
+          { id: "r2", parentRunId: "w1", status: "completed" },
+          { id: "r3", parentRunId: "w2", status: "completed" },
+          { id: "r4", parentRunId: "w9", status: "failed" },
+          { id: "r5", parentRunId: "w3", status: "running" },
+        ],
       });
     }
     if (url.pathname === "/v1/stats/run-outcomes") {
@@ -455,26 +471,50 @@ describe("sales funnel caps", () => {
     expect(res.body.salesFunnelTypeUnavailableReason).toBe("type_not_served_by_features_service");
   });
 
-  it("a reactive funnel states its relayed type; its volume counts prospects handled (unmeasured yet: null + reason)", async () => {
+  it("a reactive funnel: relayed type, volume COUNTED in prospects handled, its Up-to budget counts 0 per day", async () => {
     const calls = mockUpstreams();
-    const res = await put({ maxBudget: { amountCents: 2000, period: "daily" }, maxVolume: { count: 30, period: "weekly" } }, REACTIVE_FUNNEL);
+    const res = await put({ maxBudget: { amountCents: 2000, period: "daily" }, maxVolume: { count: 3, period: "weekly" } }, REACTIVE_FUNNEL);
     expect(res.status).toBe(200);
     const read = await readInternal(REACTIVE_FUNNEL);
     expect(read.body.salesFunnelType).toBe("reactive");
     expect(read.body.volumeUnit).toBe("prospects_handled");
+    // Distinct workflow runs that called the LLM (completed or in flight): w1, w2, w3.
     expect(read.body.maxVolume).toMatchObject({
-      count: 30,
+      count: 3,
       period: "weekly",
       unit: "prospects_handled",
-      consumed: null,
-      reached: null,
-      consumedUnavailableReason: "volume_not_measured_on_channel",
+      consumed: 3,
+      remaining: 0,
+      reached: true,
+      consumedUnavailableReason: null,
     });
-    expect(read.body.maxVolume.consumedUnavailableDetail).toContain("prospect-handled measure on ai-meeting-booking");
-    // The budget is still measured on the reactive pipe's campaign.
+    const runsCall = calls.runs.at(-1)!;
+    expect(runsCall.get("campaignIds")).toBe(CAMPAIGN_BOOKING);
+    expect(runsCall.get("serviceName")).toBe("chat-service");
+    expect(runsCall.get("taskName")).toBe("complete");
+    expect(runsCall.get("startedAfter")).toBe(read.body.maxVolume.periodStart);
+    // The budget is still measured on the reactive pipe's campaign (hard ceiling), and counts 0 per day.
     expect(calls.costs.at(-1)!.get("campaignIds")).toBe(CAMPAIGN_BOOKING);
-    expect(read.body.maxBudget.consumedCents).toBe("1000.5000000000");
-    expect(calls.outcomes).toHaveLength(0);
+    expect(read.body.maxBudget).toMatchObject({ consumedCents: "1000.5000000000", dailyBudgetCents: "0.0000000000" });
+    const [row] = await db.select().from(salesFunnelCaps);
+    expect(row.salesFunnelType).toBe("reactive");
+    // The brand's daily budget: an Up-to cap adds nothing.
+    const daily = await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId));
+    expect(daily.body.dailyBudgetCents).toBeNull();
+  });
+
+  it("boot backfills the type of caps written before it was stored", async () => {
+    mockUpstreams();
+    await db.insert(salesFunnelCaps).values({
+      orgId, brandId, offerId: OFFER, salesFunnelId: REACTIVE_FUNNEL,
+      maxBudgetCents: "3000", maxBudgetPeriod: "monthly", maxBudgetSince: new Date(),
+    });
+    expect((await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body.dailyBudgetCents).toBe("100.0000000000");
+    const { reconcileFunnelCapHistory } = await import("../../src/lib/sales-funnel-caps.js");
+    await reconcileFunnelCapHistory();
+    const [row] = await db.select().from(salesFunnelCaps);
+    expect(row.salesFunnelType).toBe("reactive");
+    expect((await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body.dailyBudgetCents).toBeNull();
   });
 
   it("an unreadable catalogue reads the type null with a reason", async () => {
