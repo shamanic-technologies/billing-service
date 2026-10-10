@@ -227,9 +227,15 @@ export async function getBrandDailyBudget(
  */
 export async function getLegacyBrandDailyBudget(
   orgId: string,
-  brandId: string
+  brandId: string,
+  /** Read through an open transaction to see its own writes (a funnel conversion). */
+  ex: Pick<typeof db, "select"> = db
 ): Promise<BrandDailyBudget | null> {
-  const sales = await getBrandSalesBudget(orgId, brandId);
+  const [sales] = await ex
+    .select()
+    .from(brandSalesBudgets)
+    .where(and(eq(brandSalesBudgets.orgId, orgId), eq(brandSalesBudgets.brandId, brandId)))
+    .limit(1);
   if (sales) {
     return {
       brandId,
@@ -239,7 +245,7 @@ export async function getLegacyBrandDailyBudget(
     };
   }
 
-  const ceilingRows = await db
+  const ceilingRows = await ex
     .select()
     .from(campaignDailyBudgets)
     .where(
@@ -261,7 +267,7 @@ export async function getLegacyBrandDailyBudget(
     };
   }
 
-  const [row] = await db
+  const [row] = await ex
     .select()
     .from(brandDailyBudgets)
     .where(

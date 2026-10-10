@@ -45,7 +45,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   salesFunnelCapChanges,
@@ -59,20 +59,31 @@ import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import { brandFunnelDailyCentsVia } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
-import { brandDailyBudgetChanges } from "../db/schema.js";
+import {
+  billingAccounts,
+  brandDailyBudgetChanges,
+  brandSalesBudgets,
+  campaignDailyBudgets,
+  type CeilingRow,
+} from "../db/schema.js";
+import { campaignCeilingRows, type CampaignKey } from "./campaign-budgets.js";
+import { recurringDailyCentsOf } from "./funnel-campaigns.js";
 import { cmpCents } from "./cents.js";
 import {
   getSalesFunnel,
   SalesFunnelCatalogueUnavailableError,
   SalesFunnelNotFoundError,
+  volumeUnitOf,
   type SalesFunnel,
   type SalesFunnelPipe,
+  type SalesFunnelType,
+  type VolumeUnit,
 } from "./sales-funnel-catalogue.js";
 
 export const CAP_PERIODS = ["one_off", "daily", "weekly", "monthly"] as const;
 export type CapPeriod = (typeof CAP_PERIODS)[number];
 
-/** The volume unit, named on every answer. */
+/** The volume unit of a PROACTIVE funnel; a reactive funnel's is its first pipe's to-step (lib/sales-funnel-catalogue). */
 export const VOLUME_UNIT = "first_contacts" as const;
 
 /**
@@ -176,16 +187,46 @@ export async function listBrandSalesFunnelCaps(
  * stated); a new period, or a cap stated from nothing, starts now.
  * Journaled in the same transaction. Returns the row, or null when cleared.
  */
+/** A pre-funnel campaign whose per-campaign ceiling a funnel cap replaces (campaign-service conversion). */
+export interface ReplacedCeilingKey {
+  featureSlug: string;
+  legKey: string | null;
+}
+
+/** What a conversion moved, served to campaign-service so it can log it. */
+export interface CeilingConversion {
+  replacedCeilings: Array<{ featureSlug: string; offerId: string | null; legKey: string | null; dailyBudgetCents: string }>;
+  /** Sum of the replaced ceilings per day. */
+  replacedDailyCents: string;
+  /** The new max budget per day (weekly / 7, monthly / 30). */
+  capDailyCents: string;
+  brandDailyBudgetBefore: string | null;
+  brandDailyBudgetAfter: string | null;
+}
+
+/** A conversion billing refuses (nothing written): 409 with the reason. */
+export class FunnelConversionRefusedError extends Error {
+  constructor(public readonly reason: string, message: string, public readonly detail: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "FunnelConversionRefusedError";
+  }
+}
+
+/** Rounding a weekly / monthly cap per day may leave: at most one cent. */
+const CONVERSION_TOLERANCE_CENTS = new Decimal(1);
+
 export async function setSalesFunnelCaps(
   k: FunnelCapKey,
   input: { maxBudget: BudgetCapInput | null; maxVolume: VolumeCapInput | null },
   changedByUserId: string | null,
-  now: Date = new Date()
-): Promise<SalesFunnelCapRow | null> {
+  now: Date = new Date(),
+  replacesCeilings: ReplacedCeilingKey[] | null = null
+): Promise<{ row: SalesFunnelCapRow | null; conversion: CeilingConversion | null }> {
   return db.transaction(async (tx) => {
     const [existing] = await tx.select().from(salesFunnelCaps).where(keyWhere(k)).limit(1).for("update");
     // Clearing what was never stated writes nothing (idempotent DELETE).
-    if (!input.maxBudget && !input.maxVolume && !existing) return null;
+    if (!input.maxBudget && !input.maxVolume && !existing && !replacesCeilings) return { row: null, conversion: null };
+    const conversion = replacesCeilings ? await convertCeilings(tx, k, input.maxBudget, replacesCeilings) : null;
     const funnelDailyBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
     // The brand's by-day history (`brand_daily_budget_changes`) follows its daily
     // figure: legacy total + every recurring funnel cap per day. Appended only
@@ -194,7 +235,7 @@ export async function setSalesFunnelCaps(
     const journalBrandDaily = async () => {
       const after = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
       if (cmpCents(funnelDailyBefore ?? "0", after ?? "0") === 0 && (funnelDailyBefore === null) === (after === null)) return;
-      const legacy = await getLegacyBrandDailyBudget(k.orgId, k.brandId);
+      const legacy = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
       const total = new Decimal(legacy?.dailyBudgetCents ?? "0").plus(after ?? "0").toFixed(10);
       await tx.insert(brandDailyBudgetChanges).values({ orgId: k.orgId, brandId: k.brandId, dailyBudgetCents: total, changedAt: now });
     };
@@ -212,7 +253,7 @@ export async function setSalesFunnelCaps(
     if (!input.maxBudget && !input.maxVolume) {
       if (existing) await tx.delete(salesFunnelCaps).where(keyWhere(k));
       await journalBrandDaily();
-      return null;
+      return { row: null, conversion };
     }
 
     const budgetSince = !input.maxBudget
@@ -243,8 +284,104 @@ export async function setSalesFunnelCaps(
       })
       .returning();
     await journalBrandDaily();
-    return row;
+    if (conversion) {
+      const after = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
+      const funnel = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+      conversion.brandDailyBudgetAfter =
+        after === null && funnel === null ? null : new Decimal(after?.dailyBudgetCents ?? "0").plus(funnel ?? "0").toFixed(10);
+    }
+    return { row, conversion };
   });
+}
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * CONVERSION (campaign-service turns a pre-funnel campaign family into a funnel
+ * campaign): the named per-campaign ceilings of this brand x offer are DELETED
+ * and the funnel's max budget takes their place, in the caller's transaction.
+ * Refused (409, nothing written) unless it moves no figure beyond rounding:
+ * the cap per day must equal the replaced ceilings' sum within one cent, the
+ * cap must recur (a one_off cap would drop the brand's daily money), the brand
+ * is not on a global sales budget, and the org is not a subscriber (its plan is
+ * priced from those rows). Ceilings resolve with the same rule every read uses
+ * (`campaignCeilingRows`: offer, channel, either leg spelling).
+ */
+async function convertCeilings(
+  tx: Tx,
+  k: FunnelCapKey,
+  maxBudget: BudgetCapInput | null,
+  keys: ReplacedCeilingKey[]
+): Promise<CeilingConversion> {
+  const [global] = await tx
+    .select()
+    .from(brandSalesBudgets)
+    .where(and(eq(brandSalesBudgets.orgId, k.orgId), eq(brandSalesBudgets.brandId, k.brandId)))
+    .limit(1);
+  if (global) {
+    throw new FunnelConversionRefusedError("brand_in_global_mode", "the brand is funded by one global sales budget, not per-campaign ceilings");
+  }
+  const [account] = await tx
+    .select({ paymentMode: billingAccounts.paymentMode })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, k.orgId))
+    .limit(1);
+  if (account?.paymentMode === "subscription") {
+    throw new FunnelConversionRefusedError("subscription_org", "a subscriber's plan is priced from its per-campaign rows; convert it once the plan reads funnel caps");
+  }
+  const ceilings = await tx
+    .select()
+    .from(campaignDailyBudgets)
+    .where(and(eq(campaignDailyBudgets.orgId, k.orgId), eq(campaignDailyBudgets.brandId, k.brandId)))
+    .for("update");
+  const before = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
+  const funnelBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+  const picked = new Map<string, CeilingRow>();
+  for (const key of keys) {
+    const rows = campaignCeilingRows(ceilings, { offerId: k.offerId, featureSlug: key.featureSlug, legKey: key.legKey } as CampaignKey);
+    if (rows.length === 0) {
+      throw new FunnelConversionRefusedError("ceiling_not_found", `no ceiling funds ${key.featureSlug}|${key.legKey ?? ""} on offer ${k.offerId}`, { key });
+    }
+    for (const r of rows) picked.set(`${r.featureSlug}\u0000${r.offerId ?? ""}\u0000${r.legKey ?? ""}`, r);
+  }
+  const replaced = [...picked.values()];
+  if (replaced.some((r) => r.monthlyBudgetCents != null || r.planDerived)) {
+    throw new FunnelConversionRefusedError("subscriber_plan_rows", "a replaced ceiling carries a subscriber monthly budget");
+  }
+  const replacedDaily = replaced.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0));
+  const capDaily = maxBudget ? new Decimal(recurringDailyCentsOf({ maxBudgetCents: maxBudget.amountCents, maxBudgetPeriod: maxBudget.period })!) : new Decimal(0);
+  if (capDaily.minus(replacedDaily).abs().greaterThan(CONVERSION_TOLERANCE_CENTS)) {
+    throw new FunnelConversionRefusedError(
+      "conversion_moves_budget",
+      `the max budget is ${capDaily.toFixed(2)} cents a day but the replaced ceilings sum to ${replacedDaily.toFixed(2)}${maxBudget?.period === "one_off" ? " (a one_off cap is not daily money)" : ""}`,
+      { capDailyCents: capDaily.toFixed(10), replacedDailyCents: replacedDaily.toFixed(10) }
+    );
+  }
+  for (const r of replaced) {
+    await tx
+      .delete(campaignDailyBudgets)
+      .where(
+        and(
+          eq(campaignDailyBudgets.orgId, k.orgId),
+          eq(campaignDailyBudgets.brandId, k.brandId),
+          eq(campaignDailyBudgets.featureSlug, r.featureSlug),
+          r.offerId === null ? isNull(campaignDailyBudgets.offerId) : eq(campaignDailyBudgets.offerId, r.offerId),
+          r.legKey === null ? isNull(campaignDailyBudgets.legKey) : eq(campaignDailyBudgets.legKey, r.legKey)
+        )
+      );
+  }
+  console.log(
+    `[billing-service] funnel conversion: org=${k.orgId} brand=${k.brandId} offer=${k.offerId} funnel=${k.salesFunnelId} ` +
+      `replaced ${replaced.length} ceiling(s) ${replacedDaily.toFixed(2)} cents/day with a cap of ${capDaily.toFixed(2)} cents/day`
+  );
+  return {
+    replacedCeilings: replaced.map((r) => ({ featureSlug: r.featureSlug, offerId: r.offerId, legKey: r.legKey, dailyBudgetCents: r.dailyBudgetCents })),
+    replacedDailyCents: replacedDaily.toFixed(10),
+    capDailyCents: capDaily.toFixed(10),
+    brandDailyBudgetBefore:
+      before === null && funnelBefore === null ? null : new Decimal(before?.dailyBudgetCents ?? "0").plus(funnelBefore ?? "0").toFixed(10),
+    brandDailyBudgetAfter: null,
+  };
 }
 
 /**
@@ -461,7 +598,9 @@ export interface BudgetCapView {
 export interface VolumeCapView {
   count: number;
   period: CapPeriod;
-  unit: typeof VOLUME_UNIT;
+  /** `first_contacts` (proactive funnel) or the first pipe's to-step (reactive funnel); null when the funnel is unreadable. */
+  unit: string | null;
+  unitLabel: string | null;
   periodStart: string;
   periodEnd: string | null;
   consumed: number | null;
@@ -479,6 +618,11 @@ export interface SalesFunnelCapsView extends FunnelCapKey {
   maxVolume: VolumeCapView | null;
   /** features-service's name of the funnel; null when not read (nothing stated) or unreadable. */
   salesFunnelName: string | null;
+  /** proactive (at least one proactive pipe) | reactive (all reactive); null when not read or unreadable. */
+  salesFunnelType: SalesFunnelType | null;
+  salesFunnelTypeSource: "features_service" | "derived_from_pipe_modes" | null;
+  /** What this funnel's MAX VOLUME counts; null when not read or unreadable. */
+  volumeUnit: { unit: string; unitLabel: string | null } | null;
   /** The pipes measured and the campaigns found on each; null when not read or unreadable. */
   pipes: MeasuredPipe[] | null;
   /**
@@ -509,14 +653,15 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
   };
 }
 
-function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>): VolumeCapView | null {
+function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>, unit: VolumeUnit | null): VolumeCapView | null {
   if (row.maxVolume == null || row.maxVolumePeriod == null || row.maxVolumeSince == null) return null;
   const period = row.maxVolumePeriod as CapPeriod;
   const w = periodWindow(period, row.maxVolumeSince, now);
   return {
     count: row.maxVolume,
     period,
-    unit: VOLUME_UNIT,
+    unit: unit?.unit ?? null,
+    unitLabel: unit?.unitLabel ?? null,
     periodStart: w.start.toISOString(),
     periodEnd: w.end ? w.end.toISOString() : null,
     consumed: m.consumed,
@@ -548,7 +693,24 @@ async function measureBudget(
   }
 }
 
-async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<number>> {
+async function measureVolume(
+  k: FunnelCapKey,
+  row: SalesFunnelCapRow,
+  pipes: MeasuredPipe[],
+  funnel: SalesFunnel,
+  unit: VolumeUnit | null,
+  now: Date
+): Promise<Measured<number>> {
+  if (funnel.type === "reactive") {
+    // What a reactive pipe handles (meetings booked, calls placed, ...) has no
+    // per-campaign, per-period count anywhere yet: said, never 0.
+    const first = pipes[0];
+    return {
+      consumed: null,
+      reason: "volume_not_measured_on_channel",
+      detail: `no per-period count of ${unit?.unitLabel ?? unit?.unit ?? "what the funnel's first pipe handles"} on ${first?.channelSlug ?? "its first pipe"} yet`,
+    };
+  }
   const proactive = pipes.filter((p) => p.mode === "proactive");
   if (proactive.length === 0) {
     return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no proactive pipe` };
@@ -588,18 +750,35 @@ export async function composeSalesFunnelCapsView(
 ): Promise<SalesFunnelCapsView> {
   const row = await getSalesFunnelCaps(k);
   if (!row) {
-    return { ...k, stated: false, updatedAt: null, maxBudget: null, maxVolume: null, salesFunnelName: null, pipes: null, sources: null };
+    return {
+      ...k, stated: false, updatedAt: null, maxBudget: null, maxVolume: null, salesFunnelName: null,
+      salesFunnelType: null, salesFunnelTypeSource: null, volumeUnit: null, pipes: null, sources: null,
+    };
   }
   const answer = await measuredPipes(k);
   let budget: Measured<string> = NOT_MEASURED();
   let volume: Measured<number> = NOT_MEASURED();
+  let unit: VolumeUnit | null = null;
+  let unitError: string | null = null;
+  if (answer.funnel) {
+    try {
+      unit = await volumeUnitOf(answer.funnel);
+    } catch (err) {
+      unitError = (err as Error).message;
+      console.error(`[billing-service] sales funnel caps: volume unit of ${k.salesFunnelId} unreadable: ${unitError}`);
+    }
+  }
   if (!answer.ok) {
     budget = { consumed: null, reason: answer.reason, detail: answer.detail };
     volume = { consumed: null, reason: answer.reason, detail: answer.detail };
   } else {
     [budget, volume] = await Promise.all([
       row.maxBudgetCents != null ? measureBudget(k, row, answer.pipes, answer.sources, now) : Promise.resolve(NOT_MEASURED<string>()),
-      row.maxVolume != null ? measureVolume(k, row, answer.pipes, now) : Promise.resolve(NOT_MEASURED<number>()),
+      row.maxVolume == null
+        ? Promise.resolve(NOT_MEASURED<number>())
+        : unitError !== null
+          ? Promise.resolve<Measured<number>>({ consumed: null, reason: "sales_funnel_catalogue_unavailable", detail: unitError })
+          : measureVolume(k, row, answer.pipes, answer.funnel, unit, now),
     ]);
   }
   return {
@@ -607,15 +786,18 @@ export async function composeSalesFunnelCapsView(
     stated: true,
     updatedAt: row.updatedAt.toISOString(),
     maxBudget: budgetView(row, now, budget),
-    maxVolume: volumeView(row, now, volume),
+    maxVolume: volumeView(row, now, volume, unit),
     salesFunnelName: answer.funnel?.name ?? null,
+    salesFunnelType: answer.funnel?.type ?? null,
+    salesFunnelTypeSource: answer.funnel ? answer.funnel.typeSource : null,
+    volumeUnit: unit ? { unit: unit.unit, unitLabel: unit.unitLabel } : null,
     pipes: answer.ok ? answer.pipes : null,
     sources: answer.ok && answer.sources.ok ? answer.sources.sources : null,
   };
 }
 
-/** The stated caps of a row, without measurement (the brand list). */
-export function statedCapsOf(row: SalesFunnelCapRow) {
+/** The stated caps of a row, without measurement (the brand list). `unit` = the funnel's volume unit, null when unreadable. */
+export function statedCapsOf(row: SalesFunnelCapRow, unit: VolumeUnit | null = null) {
   return {
     offerId: row.offerId,
     salesFunnelId: row.salesFunnelId,
@@ -624,7 +806,9 @@ export function statedCapsOf(row: SalesFunnelCapRow) {
         ? { amountCents: row.maxBudgetCents, period: row.maxBudgetPeriod as CapPeriod }
         : null,
     maxVolume:
-      row.maxVolume != null ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: VOLUME_UNIT } : null,
+      row.maxVolume != null
+        ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: unit?.unit ?? null, unitLabel: unit?.unitLabel ?? null }
+        : null,
     updatedAt: row.updatedAt.toISOString(),
   };
 }

@@ -64,7 +64,19 @@ describe("salesFunnelFromDetail", () => {
           mode: "proactive",
         },
       ],
+      type: "proactive",
+      typeSource: "derived_from_pipe_modes",
     });
+  });
+
+  it("reads features-service's served type when present (any case), else derives it from the pipe modes", () => {
+    const reactiveOnly = {
+      ...epiphany,
+      legs: [{ legKey: "conversation_to_meeting_booked", pipe: { id: "ai-meeting-booking|conversation_to_meeting_booked", mode: "reactive" } }],
+    };
+    expect(salesFunnelFromDetail("f", reactiveOnly)).toMatchObject({ type: "reactive", typeSource: "derived_from_pipe_modes" });
+    expect(salesFunnelFromDetail("f", { ...epiphany, type: "Reactive" })).toMatchObject({ type: "reactive", typeSource: "features_service" });
+    expect(() => salesFunnelFromDetail("f", { ...epiphany, type: "hybrid" })).toThrow(SalesFunnelCatalogueUnavailableError);
   });
 
   it("refuses a pipe id without <channel>|<leg>, a missing mode, or no legs", () => {

@@ -4846,6 +4846,20 @@ export const SetSalesFunnelCapsRequestSchema = z
       "A cap restated in the same period keeps its window start (a one_off cap keeps counting).",
   });
 
+export const InternalSetSalesFunnelCapsRequestSchema = SetSalesFunnelCapsRequestSchema.extend({
+  /**
+   * CONVERSION: the pre-funnel campaigns (this offer, a channel and a leg) whose
+   * per-campaign ceilings this cap replaces. They are deleted in the same
+   * transaction; refused (409) unless the cap per day equals their sum within one cent.
+   */
+  replacesCeilings: z
+    .array(z.object({ featureSlug: z.string().min(1), legKey: z.string().min(1).nullable() }).strict())
+    .max(50)
+    .optional(),
+})
+  .strict()
+  .openapi("InternalSetSalesFunnelCapsRequest");
+
 const ConsumedUnavailableReasonSchema = z
   .enum([
     "sales_funnel_not_found",
@@ -4884,7 +4898,9 @@ const VolumeCapViewSchema = z
   .object({
     count: z.number().int(),
     period: CapPeriodSchema,
-    unit: z.literal("first_contacts"),
+    /** first_contacts (proactive funnel) or the first pipe's to-step, e.g. meeting_booked (reactive funnel); null = funnel unreadable. */
+    unit: z.string().nullable(),
+    unitLabel: z.string().nullable(),
     periodStart: z.string(),
     periodEnd: z.string().nullable(),
     consumed: z.number().int().nullable(),
@@ -4895,9 +4911,10 @@ const VolumeCapViewSchema = z
   })
   .openapi("SalesFunnelVolumeCap", {
     description:
-      "consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first " +
-      "email of each prospect's sequence, completed or in flight). A proactive pipe on a channel with no " +
-      "first-contact measure yet answers null + volume_not_measured_on_channel.",
+      "PROACTIVE funnel: unit first_contacts, consumed = first contacts its proactive pipes made in the window " +
+      "(cold email: the first email of each prospect's sequence, completed or in flight). REACTIVE funnel: unit = " +
+      "its first pipe's to-step (what it handles, e.g. meeting_booked); not counted per period anywhere yet, so " +
+      "consumed is null + volume_not_measured_on_channel, never 0.",
   });
 
 const MeasuredPipeSchema = z
@@ -4932,6 +4949,11 @@ export const SalesFunnelCapsSchema = z
     maxBudget: BudgetCapViewSchema.nullable(),
     maxVolume: VolumeCapViewSchema.nullable(),
     salesFunnelName: z.string().nullable(),
+    /** proactive = at least one proactive pipe, reactive = all reactive (a reactive funnel's caps read "Up to"). */
+    salesFunnelType: z.enum(["proactive", "reactive"]).nullable(),
+    /** features_service once it serves the type; until then derived from its served pipe modes by the same rule. */
+    salesFunnelTypeSource: z.enum(["features_service", "derived_from_pipe_modes"]).nullable(),
+    volumeUnit: z.object({ unit: z.string(), unitLabel: z.string().nullable() }).nullable(),
     pipes: z.array(MeasuredPipeSchema).nullable(),
     sources: z.array(MeasuredSourceSchema).nullable(),
   })
@@ -4942,7 +4964,9 @@ const StatedSalesFunnelCapsSchema = z
     offerId: z.string().uuid(),
     salesFunnelId: z.string(),
     maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema }).nullable(),
-    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: z.literal("first_contacts") }).nullable(),
+    maxVolume: z
+      .object({ count: z.number().int(), period: CapPeriodSchema, unit: z.string().nullable(), unitLabel: z.string().nullable() })
+      .nullable(),
     updatedAt: z.string(),
   })
   .openapi("StatedSalesFunnelCaps");
@@ -5013,6 +5037,31 @@ registry.registerPath({
     200: { description: "Stated", content: funnelCapsJson },
     400: funnelCapsError("Invalid ids or body"),
     404: funnelCapsError("sales_funnel_not_found"),
+    502: funnelCapsError("sales_funnel_catalogue_unavailable"),
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: `/internal${funnelCapsPath}`,
+  summary: "State a sales funnel's caps as a service (campaign-service), optionally CONVERTING pre-funnel ceilings",
+  description:
+    "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT plus replacesCeilings: the " +
+    "pre-funnel campaigns of this offer whose per-campaign ceilings the cap replaces; they are deleted in the same " +
+    "transaction. 409 conversion_moves_budget when the cap per day (weekly / 7, monthly / 30, one_off = 0) differs " +
+    "from their sum by more than one cent; 409 ceiling_not_found | brand_in_global_mode | subscription_org | " +
+    "subscriber_plan_rows. Answers the read's shape plus conversion {replacedCeilings, replacedDailyCents, " +
+    "capDailyCents, brandDailyBudgetBefore, brandDailyBudgetAfter}.",
+  request: {
+    headers: internalOrgHeaders,
+    params: funnelCapParams,
+    body: { content: { "application/json": { schema: InternalSetSalesFunnelCapsRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Stated", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids or body"),
+    404: funnelCapsError("sales_funnel_not_found"),
+    409: funnelCapsError("conversion refused (nothing written)"),
     502: funnelCapsError("sales_funnel_catalogue_unavailable"),
   },
 });
