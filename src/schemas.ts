@@ -3878,6 +3878,23 @@ export const RevenueCampaignLineSchema = z
   })
   .openapi("RevenueCampaignLine");
 
+export const RevenueSalesFunnelLineSchema = z
+  .object({
+    salesFunnelCampaignId: z.string(),
+    brandId: z.string(),
+    offerId: z.string(),
+    salesFunnelId: z.string(),
+    status: z.string(),
+    unitCampaignIds: z.array(z.string()),
+    /** The funnel's MAX BUDGET per day (weekly / 7, monthly / 30, one_off "0"); null = no budget stated. */
+    dailyBudgetCents: z.string().nullable(),
+    counted: z.boolean(),
+  })
+  .openapi("RevenueSalesFunnelLine", {
+    description:
+      "A sales funnel campaign: its money is the funnel's MAX BUDGET, never a per-pipe ceiling (its units carry none).",
+  });
+
 const revenueCore = {
   orgId: z.string().uuid(),
   paymentMode: PaymentModeSchema,
@@ -3910,6 +3927,7 @@ export const OrgRevenueResponseSchema = z
     cash: ChargeScheduleResponseSchema,
     brands: z.array(RevenueBrandLineSchema),
     campaigns: z.array(RevenueCampaignLineSchema),
+    salesFunnelCampaigns: z.array(RevenueSalesFunnelLineSchema),
   })
   .openapi("OrgRevenueResponse");
 

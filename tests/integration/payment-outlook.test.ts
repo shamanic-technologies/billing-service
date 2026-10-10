@@ -419,6 +419,44 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
     expect(res.body.runningDailyBudgetCents).toBe("0");
   });
 
+  it("a SALES FUNNEL campaign counts by its MAX BUDGET per day: configured always, running while ongoing", async () => {
+    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
+    setUsage("0.0000000000");
+    const { db } = await import("../../src/db/index.js");
+    const { salesFunnelCaps } = await import("../../src/db/schema.js");
+    const brandId = "00000000-0000-0000-0000-0000000000b7";
+    const offerId = "00000000-0000-0000-0000-0000000000f7";
+    const capOf = (salesFunnelId: string, period: string, cents: string) => ({
+      orgId, brandId, offerId, salesFunnelId, maxBudgetCents: cents, maxBudgetPeriod: period, maxBudgetSince: new Date(),
+    });
+    await db.insert(salesFunnelCaps).values([
+      capOf("f-weekly", "weekly", "7000"), // $10/day, ongoing
+      capOf("f-monthly", "monthly", "30000"), // $10/day, stopped
+      capOf("f-oneoff", "one_off", "99900"), // not recurring: nothing
+    ]);
+    const campaignClient = await import("../../src/lib/campaign-service-client.js");
+    vi.spyOn(campaignClient, "fetchSpendableBudget").mockResolvedValue({
+      orgId, brandId, grain: "campaign", configuredDailyBudgetCents: 0, runningDailyBudgetCents: 0, campaigns: [], rows: [],
+    });
+    const fcm = await import("../../src/lib/funnel-campaigns.js");
+    const fc = (id: string, salesFunnelId: string, status: string) => ({ id, brandId, offerId, salesFunnelId, status, units: [] });
+    const spy = vi.spyOn(fcm, "fetchSalesFunnelCampaigns").mockResolvedValue({
+      ok: true,
+      campaigns: [fc("a", "f-weekly", "ongoing"), fc("b", "f-monthly", "stopped"), fc("c", "f-oneoff", "ongoing")],
+    });
+
+    const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+    expect(res.status).toBe(200);
+    expect(res.body.configuredDailyBudgetCents).toBe("2000.0000000000");
+    expect(res.body.runningDailyBudgetCents).toBe("1000.0000000000");
+
+    // Funnel campaigns unreadable: the running total is unknown, never the configured one.
+    spy.mockResolvedValue({ ok: false, reason: "campaign_service_unavailable" });
+    const down = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
+    expect(down.body.configuredDailyBudgetCents).toBe("2000.0000000000");
+    expect(down.body.runningDailyBudgetCents).toBeNull();
+  });
+
   it("is a PURE read: it opens no depletion episode and records no attempt", async () => {
     await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 5000 });
     setUsage("46000.0000000000"); // past the floor — the state that opens episodes elsewhere

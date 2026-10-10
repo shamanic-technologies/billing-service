@@ -24,6 +24,8 @@ import {
   sumCeilings,
 } from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
+import { brandFunnelDailyCents, funnelBudgetCaps } from "./funnel-campaigns.js";
+import { Decimal } from "decimal.js";
 
 /** A brand-scalar write against a brand that stated a global sales budget. */
 export class BrandBudgetManagedBySalesBudgetError extends Error {}
@@ -188,8 +190,41 @@ export async function getBrandDailyBudgetHistory(
  * A brand in GLOBAL mode (it stated one daily sales budget) answers THAT amount:
  * it is the money the brand allows to be spent per day, whatever its stored
  * campaign ceilings say. A brand that never stated one reads exactly as before.
+ *
+ * SALES FUNNEL campaigns (owner 2026-10-10): their money is the funnel's MAX
+ * BUDGET, so every RECURRING cap of the brand is ADDED, normalised to a day
+ * (weekly / 7, monthly / 30; a one_off cap is not recurring and adds nothing,
+ * lib/funnel-campaigns.ts). A brand with no recurring funnel cap reads exactly
+ * as before; a brand funded only by funnel caps reads their sum (never null).
+ * The by-day replay (`brand_daily_budget_changes`) keeps the legacy total; the
+ * caps have their own journal (`sales_funnel_cap_changes`).
  */
 export async function getBrandDailyBudget(
+  orgId: string,
+  brandId: string
+): Promise<BrandDailyBudget | null> {
+  const [legacy, caps] = await Promise.all([
+    getLegacyBrandDailyBudget(orgId, brandId),
+    funnelBudgetCaps(orgId, brandId),
+  ]);
+  const funnel = brandFunnelDailyCents(caps);
+  if (funnel === null) return legacy;
+  const funnelUpdatedAt = caps.reduce((l, c) => (c.updatedAt > l ? c.updatedAt : l), caps[0].updatedAt);
+  if (!legacy) return { brandId, orgId, dailyBudgetCents: funnel, updatedAt: funnelUpdatedAt };
+  return {
+    brandId,
+    orgId,
+    dailyBudgetCents: new Decimal(legacy.dailyBudgetCents).plus(funnel).toFixed(10),
+    updatedAt: legacy.updatedAt > funnelUpdatedAt ? legacy.updatedAt : funnelUpdatedAt,
+  };
+}
+
+/**
+ * The brand's daily budget from its ceilings / global amount / scalar only (no
+ * funnel caps): what a NON-funnel campaign may be paced on, and what a brand-grain
+ * mission is. Never hand a funnel's money to a per-campaign read.
+ */
+export async function getLegacyBrandDailyBudget(
   orgId: string,
   brandId: string
 ): Promise<BrandDailyBudget | null> {
