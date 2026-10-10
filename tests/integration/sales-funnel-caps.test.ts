@@ -485,6 +485,63 @@ describe("sales funnel caps", () => {
     expect((await brandTotal()).dailyBudgetCents).toBe("2700.0000000000");
   });
 
+  it("the by-day history records the brand's daily figure with its recurring funnel caps", async () => {
+    mockUpstreams();
+    const { brandDailyBudgetChanges } = await import("../../src/db/schema.js");
+    const history = async () =>
+      (await db.select().from(brandDailyBudgetChanges)).map((r) => r.dailyBudgetCents).sort();
+    // A legacy ceiling written through the ceiling route (it journals the legacy total).
+    const ceiling = await request(app)
+      .put(`/v1/brands/${brandId}/campaign-budget`)
+      .set(auth)
+      .send({ offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 800 });
+    expect(ceiling.status).toBe(200);
+    expect(await history()).toEqual(["800.0000000000"]);
+
+    // One_off and volume-only caps do not move the daily figure: nothing journaled.
+    await put({ maxBudget: { amountCents: 100000, period: "one_off" }, maxVolume: null });
+    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
+    expect(await history()).toEqual(["800.0000000000"]);
+
+    // $70 a week = $10 a day: the figure moves to 1700 and is journaled.
+    await put({ maxBudget: { amountCents: 7000, period: "weekly" }, maxVolume: null });
+    expect(await history()).toEqual(["1800.0000000000", "800.0000000000"]);
+
+    // A later ceiling write journals legacy + the funnel caps, never the legacy alone.
+    await request(app)
+      .put(`/v1/brands/${brandId}/campaign-budget`)
+      .set(auth)
+      .send({ offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 900 });
+    expect(await history()).toContain("1900.0000000000");
+
+    // Clearing the cap returns the figure to the legacy total.
+    await request(app).delete(`/v1${capsPath()}`).set(auth);
+    const rows = await db.select().from(brandDailyBudgetChanges);
+    const latest = rows.sort((a, b) => +a.changedAt - +b.changedAt || a.id - b.id).at(-1)!;
+    expect(latest.dailyBudgetCents).toBe("900.0000000000");
+
+    // The by-day read agrees with the brand's current figure.
+    const today = new Date().toISOString().slice(0, 10);
+    const byDay = await request(app)
+      .get(`/internal/brands/${brandId}/daily-budget/by-day`)
+      .query({ from: today, to: today })
+      .set(internal(orgId));
+    expect(byDay.body.days[0].dailyBudgetCents).toBe("900.0000000000");
+  });
+
+  it("boot reconcile journals a recurring cap stated before the history counted it, once", async () => {
+    const { brandDailyBudgetChanges } = await import("../../src/db/schema.js");
+    const { reconcileFunnelCapHistory } = await import("../../src/lib/sales-funnel-caps.js");
+    await db.insert(salesFunnelCaps).values({
+      orgId, brandId, offerId: OFFER, salesFunnelId: FUNNEL,
+      maxBudgetCents: "3000", maxBudgetPeriod: "monthly", maxBudgetSince: new Date(),
+    });
+    await reconcileFunnelCapHistory();
+    await reconcileFunnelCapHistory();
+    const rows = await db.select().from(brandDailyBudgetChanges);
+    expect(rows.map((r) => r.dailyBudgetCents)).toEqual(["100.0000000000"]);
+  });
+
   it("a brand funded ONLY by a funnel cap reads its daily amount, never null", async () => {
     mockUpstreams();
     const brandTotal = async () =>

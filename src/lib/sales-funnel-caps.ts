@@ -45,7 +45,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   salesFunnelCapChanges,
@@ -57,6 +57,10 @@ import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { calendarMonthOf } from "./campaign-items.js";
 import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
+import { brandFunnelDailyCentsVia } from "./funnel-campaigns.js";
+import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
+import { brandDailyBudgetChanges } from "../db/schema.js";
+import { cmpCents } from "./cents.js";
 import {
   getSalesFunnel,
   SalesFunnelCatalogueUnavailableError,
@@ -182,6 +186,18 @@ export async function setSalesFunnelCaps(
     const [existing] = await tx.select().from(salesFunnelCaps).where(keyWhere(k)).limit(1).for("update");
     // Clearing what was never stated writes nothing (idempotent DELETE).
     if (!input.maxBudget && !input.maxVolume && !existing) return null;
+    const funnelDailyBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+    // The brand's by-day history (`brand_daily_budget_changes`) follows its daily
+    // figure: legacy total + every recurring funnel cap per day. Appended only
+    // when the recurring funnel part moved (a one_off or volume-only change does
+    // not move the daily figure).
+    const journalBrandDaily = async () => {
+      const after = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+      if (cmpCents(funnelDailyBefore ?? "0", after ?? "0") === 0 && (funnelDailyBefore === null) === (after === null)) return;
+      const legacy = await getLegacyBrandDailyBudget(k.orgId, k.brandId);
+      const total = new Decimal(legacy?.dailyBudgetCents ?? "0").plus(after ?? "0").toFixed(10);
+      await tx.insert(brandDailyBudgetChanges).values({ orgId: k.orgId, brandId: k.brandId, dailyBudgetCents: total, changedAt: now });
+    };
 
     await tx.insert(salesFunnelCapChanges).values({
       ...k,
@@ -195,6 +211,7 @@ export async function setSalesFunnelCaps(
 
     if (!input.maxBudget && !input.maxVolume) {
       if (existing) await tx.delete(salesFunnelCaps).where(keyWhere(k));
+      await journalBrandDaily();
       return null;
     }
 
@@ -225,8 +242,45 @@ export async function setSalesFunnelCaps(
         set: values,
       })
       .returning();
+    await journalBrandDaily();
     return row;
   });
+}
+
+/**
+ * Boot reconcile, idempotent: a brand whose recurring funnel caps were stated
+ * BEFORE the by-day history learned about them (v0.83.10) gets one row, dated
+ * now, carrying its current daily figure. A brand whose latest row already
+ * says that figure gets nothing. Never throws (logged).
+ */
+export async function reconcileFunnelCapHistory(): Promise<void> {
+  try {
+    const brands = await db
+      .selectDistinct({ orgId: salesFunnelCaps.orgId, brandId: salesFunnelCaps.brandId })
+      .from(salesFunnelCaps);
+    for (const b of brands) {
+      const current = await getBrandDailyBudget(b.orgId, b.brandId);
+      if (!current) continue;
+      const [latest] = await db
+        .select()
+        .from(brandDailyBudgetChanges)
+        .where(and(eq(brandDailyBudgetChanges.orgId, b.orgId), eq(brandDailyBudgetChanges.brandId, b.brandId)))
+        .orderBy(desc(brandDailyBudgetChanges.changedAt), desc(brandDailyBudgetChanges.id))
+        .limit(1);
+      if (latest?.dailyBudgetCents != null && cmpCents(latest.dailyBudgetCents, current.dailyBudgetCents) === 0) continue;
+      await db.insert(brandDailyBudgetChanges).values({
+        orgId: b.orgId,
+        brandId: b.brandId,
+        dailyBudgetCents: current.dailyBudgetCents,
+        changedAt: new Date(),
+      });
+      console.log(
+        `[billing-service] funnel cap history: brand=${b.brandId} org=${b.orgId} daily ${latest?.dailyBudgetCents ?? "none"} -> ${current.dailyBudgetCents}`
+      );
+    }
+  } catch (err) {
+    console.error("[billing-service] funnel cap history reconcile failed:", err);
+  }
 }
 
 // ── Measurement ───────────────────────────────────────────────────────────────

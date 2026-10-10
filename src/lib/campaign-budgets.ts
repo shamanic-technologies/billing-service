@@ -46,6 +46,7 @@
  */
 
 import { and, eq, isNull } from "drizzle-orm";
+import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
@@ -622,7 +623,8 @@ export async function setCampaignDailyBudget(
       await tx.insert(brandDailyBudgetChanges).values({
         orgId,
         brandId,
-        dailyBudgetCents: brandDailyBudgetCents,
+        // The brand's daily figure includes its recurring sales funnel caps.
+        dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, brandDailyBudgetCents),
         changedAt,
       });
     }
