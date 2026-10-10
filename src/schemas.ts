@@ -673,6 +673,7 @@ export const InternalAccountTeardownDeletedRowsSchema = z
     campaignAuthorizeCosts: z.number().int(),
     brandDailyBudgets: z.number().int(),
     campaignDailyBudgets: z.number().int(),
+    salesFunnelCaps: z.number().int(),
     welcomeCreditClaims: z.number().int(),
     freeCreditPromises: z.number().int(),
     staffDebits: z.number().int(),
@@ -4787,5 +4788,235 @@ registry.registerPath({
     200: { description: "Campaign budgets", content: { "application/json": { schema: CampaignItemBudgetsSchema } } },
     400: itemRefusal("Invalid ids, campaigns query or x-org-id"),
     502: itemRefusal("minimums_unavailable | campaign_status_unavailable"),
+  },
+});
+
+// --- Sales funnel caps: MAX BUDGET + MAX VOLUME per brand x offer x funnel ---
+// (lib/sales-funnel-caps.ts, migration 0078, owner 2026-10-10)
+
+const CapPeriodSchema = z
+  .enum(["one_off", "daily", "weekly", "monthly"])
+  .openapi("SalesFunnelCapPeriod", {
+    description:
+      "UTC. daily = the calendar day; weekly = Monday 00:00 to the next Monday; monthly = the calendar " +
+      "month; one_off = once, counted from when the cap was first stated in this period (never resets).",
+  });
+
+export const SetSalesFunnelCapsRequestSchema = z
+  .object({
+    /** The funnel's MAX BUDGET (a ceiling, never discounted), or null = no budget cap. */
+    maxBudget: z
+      .object({
+        amountCents: z.union([z.string(), z.number()]),
+        period: CapPeriodSchema,
+      })
+      .strict()
+      .nullable(),
+    /** The funnel's MAX VOLUME (first contacts), or null = no volume cap. */
+    maxVolume: z
+      .object({
+        count: z.number().int().min(0),
+        period: CapPeriodSchema,
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+  .openapi("SetSalesFunnelCapsRequest", {
+    description:
+      "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. " +
+      "A cap restated in the same period keeps its window start (a one_off cap keeps counting).",
+  });
+
+const ConsumedUnavailableReasonSchema = z
+  .enum([
+    "sales_funnel_not_found",
+    "sales_funnel_catalogue_unavailable",
+    "campaign_service_unconfigured",
+    "campaign_service_unavailable",
+    "runs_service_unavailable",
+    "no_proactive_pipe",
+    "volume_not_measured_on_channel",
+  ])
+  .openapi("SalesFunnelConsumedUnavailableReason");
+
+const BudgetCapViewSchema = z
+  .object({
+    amountCents: CentsStringSchema,
+    period: CapPeriodSchema,
+    periodStart: z.string(),
+    periodEnd: z.string().nullable(),
+    consumedCents: CentsStringSchema.nullable(),
+    remainingCents: CentsStringSchema.nullable(),
+    reached: z.boolean().nullable(),
+    consumedUnavailableReason: ConsumedUnavailableReasonSchema.nullable(),
+    consumedUnavailableDetail: z.string().nullable(),
+  })
+  .openapi("SalesFunnelBudgetCap", {
+    description:
+      "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign " +
+      "on the funnel's pipes for this brand x offer, runs started in [periodStart, periodEnd). " +
+      "reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0.",
+  });
+
+const VolumeCapViewSchema = z
+  .object({
+    count: z.number().int(),
+    period: CapPeriodSchema,
+    unit: z.literal("first_contacts"),
+    periodStart: z.string(),
+    periodEnd: z.string().nullable(),
+    consumed: z.number().int().nullable(),
+    remaining: z.number().int().nullable(),
+    reached: z.boolean().nullable(),
+    consumedUnavailableReason: ConsumedUnavailableReasonSchema.nullable(),
+    consumedUnavailableDetail: z.string().nullable(),
+  })
+  .openapi("SalesFunnelVolumeCap", {
+    description:
+      "consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first " +
+      "email of each prospect's sequence, completed or in flight). A proactive pipe on a channel with no " +
+      "first-contact measure yet answers null + volume_not_measured_on_channel.",
+  });
+
+const MeasuredPipeSchema = z
+  .object({
+    pipeId: z.string(),
+    channelSlug: z.string(),
+    legKey: z.string(),
+    mode: z.enum(["proactive", "reactive"]),
+    campaignIds: z.array(z.string()),
+  })
+  .openapi("SalesFunnelMeasuredPipe");
+
+export const SalesFunnelCapsSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    brandId: z.string().uuid(),
+    offerId: z.string().uuid(),
+    salesFunnelId: z.string(),
+    stated: z.boolean(),
+    updatedAt: z.string().nullable(),
+    maxBudget: BudgetCapViewSchema.nullable(),
+    maxVolume: VolumeCapViewSchema.nullable(),
+    salesFunnelName: z.string().nullable(),
+    pipes: z.array(MeasuredPipeSchema).nullable(),
+  })
+  .openapi("SalesFunnelCaps");
+
+const StatedSalesFunnelCapsSchema = z
+  .object({
+    offerId: z.string().uuid(),
+    salesFunnelId: z.string(),
+    maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema }).nullable(),
+    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: z.literal("first_contacts") }).nullable(),
+    updatedAt: z.string(),
+  })
+  .openapi("StatedSalesFunnelCaps");
+
+export const BrandSalesFunnelCapsSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    brandId: z.string().uuid(),
+    caps: z.array(StatedSalesFunnelCapsSchema),
+  })
+  .openapi("BrandSalesFunnelCaps");
+
+const funnelCapParams = z.object({
+  brandId: z.string().uuid(),
+  offerId: z.string().uuid(),
+  salesFunnelId: z.string().openapi({
+    description:
+      "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. " +
+      "lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+  }),
+});
+const funnelCapsPath = "/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps";
+const funnelCapsJson = { "application/json": { schema: SalesFunnelCapsSchema } };
+const funnelCapsError = (description: string) => ({
+  description,
+  content: { "application/json": { schema: ErrorResponseSchema } },
+});
+
+registry.registerPath({
+  method: "get",
+  path: `/internal${funnelCapsPath}`,
+  summary: "Read a sales funnel's MAX BUDGET / MAX VOLUME and what it consumed this period",
+  description:
+    "campaign-service reads this to decide whether to STOP the funnel's pipes (x-api-key + x-org-id). " +
+    "Each cap carries its window, consumed, remaining and reached; nothing stated answers stated:false " +
+    "with both caps null. A measurement that fails answers null + a reason, the caps are still served.",
+  request: { headers: internalOrgHeaders, params: funnelCapParams },
+  responses: {
+    200: { description: "Caps", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids or x-org-id"),
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: `/v1${funnelCapsPath}`,
+  summary: "Read this sales funnel's caps and what it consumed this period (dashboard)",
+  request: { headers: protectedHeaders, params: funnelCapParams },
+  responses: {
+    200: { description: "Caps", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids"),
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: `/v1${funnelCapsPath}`,
+  summary: "State a sales funnel's MAX BUDGET and MAX VOLUME",
+  description:
+    "Both caps in one write (object = state, null = clear). The funnel must exist in features-service's " +
+    "catalogue. Charges nothing; the per-campaign ceilings are not touched. Answers the read's shape.",
+  request: {
+    headers: protectedHeaders,
+    params: funnelCapParams,
+    body: { content: { "application/json": { schema: SetSalesFunnelCapsRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Stated", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids or body"),
+    404: funnelCapsError("sales_funnel_not_found"),
+    502: funnelCapsError("sales_funnel_catalogue_unavailable"),
+  },
+});
+
+registry.registerPath({
+  method: "delete",
+  path: `/v1${funnelCapsPath}`,
+  summary: "Clear both caps of a sales funnel",
+  description: "Idempotent: a funnel with nothing stated answers stated:false.",
+  request: { headers: protectedHeaders, params: funnelCapParams },
+  responses: {
+    200: { description: "Cleared", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids"),
+  },
+});
+
+const brandFunnelCapsQuery = z.object({ offerId: z.string().uuid().optional() });
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/brands/{brandId}/sales-funnel-caps",
+  summary: "Every sales funnel of a brand with a stated cap (no measurement)",
+  description: "x-api-key + x-org-id. Optional offerId narrows to one offer. Read one funnel's caps for its consumption.",
+  request: { headers: internalOrgHeaders, params: brandIdParam, query: brandFunnelCapsQuery },
+  responses: {
+    200: { description: "Stated caps", content: { "application/json": { schema: BrandSalesFunnelCapsSchema } } },
+    400: funnelCapsError("Invalid brandId, offerId or x-org-id"),
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/brands/{brandId}/sales-funnel-caps",
+  summary: "Every sales funnel of this brand with a stated cap (dashboard)",
+  request: { headers: protectedHeaders, params: brandIdParam, query: brandFunnelCapsQuery },
+  responses: {
+    200: { description: "Stated caps", content: { "application/json": { schema: BrandSalesFunnelCapsSchema } } },
+    400: funnelCapsError("Invalid brandId or offerId"),
   },
 });
