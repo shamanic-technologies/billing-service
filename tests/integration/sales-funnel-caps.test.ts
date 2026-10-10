@@ -301,6 +301,16 @@ describe("sales funnel caps", () => {
     expect(b.maxVolume).toMatchObject({ reached: true, remaining: 0, periodEnd: null });
   });
 
+  it("a monthly / one-off budget above $9,999.99 is stored (the 2026-10-10 overflow), up to 12 integer digits", async () => {
+    mockUpstreams();
+    const res = await put({ maxBudget: { amountCents: "999999999999.5", period: "one_off" }, maxVolume: null });
+    expect(res.status).toBe(200);
+    expect(res.body.maxBudget.amountCents).toBe("999999999999.5000000000");
+    const monthly = await put({ maxBudget: { amountCents: 10_000_000, period: "monthly" }, maxVolume: null });
+    expect(monthly.status).toBe(200);
+    expect(monthly.body.maxBudget.amountCents).toBe("10000000.0000000000");
+  });
+
   it("either cap can be unset; only the stated one is measured", async () => {
     const calls = mockUpstreams();
     await put({ maxBudget: null, maxVolume: { count: 10, period: "daily" } });
@@ -366,6 +376,7 @@ describe("sales funnel caps", () => {
       { maxBudget: null, maxVolume: { count: 1.5, period: "daily" } },
       { maxBudget: null, maxVolume: { count: -1, period: "daily" } },
       { maxBudget: { amountCents: "abc", period: "daily" }, maxVolume: null },
+      { maxBudget: { amountCents: "1000000000000", period: "monthly" }, maxVolume: null },
     ];
     for (const body of cases) {
       const res = await put(body);

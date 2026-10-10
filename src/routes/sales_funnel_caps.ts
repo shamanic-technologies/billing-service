@@ -28,6 +28,7 @@ const router = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** features-service funnel ids are leg keys, `@`, `+`, channel slugs. Opaque, bounded. */
+const MAX_BUDGET_INT_DIGITS = 12;
 const FUNNEL_ID_RE = /^[A-Za-z0-9_@+\-.:|]{1,1000}$/;
 
 function internalOrgId(req: Request, res: Response): string | null {
@@ -92,6 +93,10 @@ router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
   if (parsed.data.maxBudget) {
     try {
       amountCents = parseNonNegativeCents(parsed.data.maxBudget.amountCents);
+      // numeric(22,10): 12 integer digits of cents (migration 0079).
+      if (amountCents.split(".")[0].length > MAX_BUDGET_INT_DIGITS) {
+        throw new Error(`must be below ${"1" + "0".repeat(MAX_BUDGET_INT_DIGITS)} cents`);
+      }
     } catch (err) {
       res.status(400).json({ error: `maxBudget.amountCents: ${(err as Error).message}` });
       return;

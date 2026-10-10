@@ -18,6 +18,8 @@ import { sql } from "drizzle-orm";
 // Drizzle returns numeric columns as JS strings to preserve precision.
 const FRACTIONAL_PRECISION = 16;
 const FRACTIONAL_SCALE = 10;
+// sales funnel MAX BUDGET (migration 0079): 12 integer digits of cents.
+const FUNNEL_CAP_PRECISION = 22;
 
 // --- Free-credit offer: a PER-ACCOUNT property, frozen at account creation ---
 //
@@ -926,8 +928,10 @@ export const salesFunnelCaps = pgTable(
     brandId: uuid("brand_id").notNull(),
     offerId: uuid("offer_id").notNull(),
     salesFunnelId: text("sales_funnel_id").notNull(),
+    // numeric(22,10), migration 0079: a monthly / one-off cap outgrows the
+    // daily ceilings' numeric(16,10) ($9,999.99).
     maxBudgetCents: numeric("max_budget_cents", {
-      precision: FRACTIONAL_PRECISION,
+      precision: FUNNEL_CAP_PRECISION,
       scale: FRACTIONAL_SCALE,
     }),
     maxBudgetPeriod: text("max_budget_period"),
@@ -958,8 +962,10 @@ export const salesFunnelCapChanges = pgTable(
     brandId: uuid("brand_id").notNull(),
     offerId: uuid("offer_id").notNull(),
     salesFunnelId: text("sales_funnel_id").notNull(),
+    // numeric(22,10), migration 0079: a monthly / one-off cap outgrows the
+    // daily ceilings' numeric(16,10) ($9,999.99).
     maxBudgetCents: numeric("max_budget_cents", {
-      precision: FRACTIONAL_PRECISION,
+      precision: FUNNEL_CAP_PRECISION,
       scale: FRACTIONAL_SCALE,
     }),
     maxBudgetPeriod: text("max_budget_period"),
