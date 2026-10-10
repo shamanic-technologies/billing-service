@@ -4837,6 +4837,7 @@ const ConsumedUnavailableReasonSchema = z
     "runs_service_unavailable",
     "no_proactive_pipe",
     "volume_not_measured_on_channel",
+    "sourcing_catalogue_unavailable",
   ])
   .openapi("SalesFunnelConsumedUnavailableReason");
 
@@ -4855,7 +4856,9 @@ const BudgetCapViewSchema = z
   .openapi("SalesFunnelBudgetCap", {
     description:
       "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign " +
-      "on the funnel's pipes for this brand x offer, runs started in [periodStart, periodEnd). " +
+      "on the funnel's pipes for this brand x offer PLUS every lead SOURCE campaign (Start -> Lead found) " +
+      "feeding those pipes (sources[]): ALL-INCLUSIVE, sourcing + sending + LLM. Runs started in " +
+      "[periodStart, periodEnd). " +
       "reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0.",
   });
 
@@ -4889,6 +4892,17 @@ const MeasuredPipeSchema = z
   })
   .openapi("SalesFunnelMeasuredPipe");
 
+const MeasuredSourceSchema = z
+  .object({
+    channelSlug: z.string(),
+    legKey: z.string(),
+    feedsPipeIds: z.array(z.string()),
+    campaignIds: z.array(z.string()),
+  })
+  .openapi("SalesFunnelMeasuredSource", {
+    description: "A lead source (features-service sourcing origin) feeding the funnel's pipes; its spend counts in the budget.",
+  });
+
 export const SalesFunnelCapsSchema = z
   .object({
     orgId: z.string().uuid(),
@@ -4901,6 +4915,7 @@ export const SalesFunnelCapsSchema = z
     maxVolume: VolumeCapViewSchema.nullable(),
     salesFunnelName: z.string().nullable(),
     pipes: z.array(MeasuredPipeSchema).nullable(),
+    sources: z.array(MeasuredSourceSchema).nullable(),
   })
   .openapi("SalesFunnelCaps");
 

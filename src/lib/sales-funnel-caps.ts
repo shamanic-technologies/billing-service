@@ -22,8 +22,12 @@
  * CONSUMED, measured (never estimated):
  * - SPEND = the committed NET spend (actual + provisioned, what the org pays,
  *   exactly what campaign-service paces on) of every campaign working one of
- *   the funnel's pipes for this brand x offer, runs started in the window
- *   (runs-service `/v1/stats/costs`).
+ *   the funnel's pipes for this brand x offer, PLUS every SOURCE campaign
+ *   (Start -> Lead found) of this brand x offer on an origin feeding one of
+ *   those pipes (features-service `originsByChannel`): a budget is ALL-INCLUSIVE,
+ *   sourcing + sending + LLM (owner 2026-10-09). Runs started in the window
+ *   (runs-service `/v1/stats/costs`). An outreach campaign whose sourcing still
+ *   runs under its own id is covered by its own campaign id.
  * - VOLUME = the items the funnel's PROACTIVE pipes produced: the first contact
  *   each makes with a prospect. Measured per channel from the run that makes it
  *   (`ITEM_TASKS`); a proactive pipe on a channel we cannot measure yet makes the
@@ -33,8 +37,8 @@
  *
  * A campaign belongs to a pipe when campaign-service states it for this brand,
  * this offer, the pipe's channel and the pipe's leg (`sameLeg`). A pipe shared
- * by two funnels of one offer counts its spend in both: a cap can only stop
- * EARLIER because of it, never later.
+ * by two funnels of one offer counts its spend in both, and so does a source
+ * feeding two funnels: a cap can only stop EARLIER because of it, never later.
  *
  * Every figure that cannot be established is null with a named reason; a read
  * never fails because a measurement did (campaign-service still gets the caps).
@@ -52,6 +56,7 @@ import { readJson } from "./campaign-sourcing.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { calendarMonthOf } from "./campaign-items.js";
 import { sameLeg } from "./leg-identity.js";
+import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import {
   getSalesFunnel,
   SalesFunnelCatalogueUnavailableError,
@@ -84,7 +89,8 @@ export type ConsumedUnavailableReason =
   | "campaign_service_unavailable"
   | "runs_service_unavailable"
   | "no_proactive_pipe"
-  | "volume_not_measured_on_channel";
+  | "volume_not_measured_on_channel"
+  | "sourcing_catalogue_unavailable";
 
 export interface FunnelCapKey {
   orgId: string;
@@ -230,8 +236,28 @@ export interface MeasuredPipe extends SalesFunnelPipe {
   campaignIds: string[];
 }
 
+/**
+ * A lead SOURCE feeding the funnel (Start -> Lead found). Not a leg of the sales
+ * path, but the funnel's leads are bought there, so its spend is the funnel's
+ * (owner 2026-10-09: a budget is ALL-INCLUSIVE, sourcing + sending + LLM).
+ */
+export interface MeasuredSource {
+  /** The origin's feature slug (a features-service sourcing origin). */
+  channelSlug: string;
+  /** The published source leg (`start_to_lead_found`). */
+  legKey: string;
+  /** The funnel's pipes it feeds (`<channel>|<leg>`). */
+  feedsPipeIds: string[];
+  /** The source campaigns campaign-service states for this brand x offer on this origin. */
+  campaignIds: string[];
+}
+
+type SourcesAnswer =
+  | { ok: true; sources: MeasuredSource[] }
+  | { ok: false; reason: ConsumedUnavailableReason; detail: string };
+
 type PipesAnswer =
-  | { ok: true; funnel: SalesFunnel; pipes: MeasuredPipe[] }
+  | { ok: true; funnel: SalesFunnel; pipes: MeasuredPipe[]; sources: SourcesAnswer }
   | { ok: false; reason: ConsumedUnavailableReason; detail: string; funnel: SalesFunnel | null };
 
 async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
@@ -255,6 +281,7 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
     return { ok: false, reason: statuses.reason, detail: "campaign-service recurring-status unreadable", funnel };
   }
   const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
+  const sources = await feedingSources(funnel, ofOffer);
   const pipes = funnel.pipes.map((p) => ({
     ...p,
     campaignIds: ofOffer
@@ -262,7 +289,42 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
       .map((c) => c.campaignId)
       .sort(),
   }));
-  return { ok: true, funnel, pipes };
+  return { ok: true, funnel, pipes, sources };
+}
+
+/**
+ * The lead sources feeding the funnel's pipes: features-service publishes which
+ * origins feed which outreach channel (`/public/sourcing-origins`
+ * `originsByChannel`) and the source leg; a source campaign is campaign-service's
+ * campaign of this brand x offer on that origin and leg. One source feeding two
+ * pipes is listed once. An unreadable catalogue is a REASON, never "no sources"
+ * (that would under-count the spend and stop the funnel late).
+ */
+async function feedingSources(
+  funnel: SalesFunnel,
+  ofOffer: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }>
+): Promise<SourcesAnswer> {
+  let terms: SalesPathTerms;
+  try {
+    terms = await getSalesPathTerms();
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
+    return { ok: false, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
+  }
+  const byOrigin = new Map<string, MeasuredSource>();
+  for (const p of funnel.pipes) {
+    for (const origin of terms.originsFeeding(p.channelSlug)) {
+      const entry = byOrigin.get(origin) ?? { channelSlug: origin, legKey: "", feedsPipeIds: [], campaignIds: [] };
+      entry.feedsPipeIds.push(p.pipeId);
+      byOrigin.set(origin, entry);
+    }
+  }
+  for (const src of byOrigin.values()) {
+    const campaigns = ofOffer.filter((c) => c.featureSlug === src.channelSlug && terms.isSourceItem(src.channelSlug, c.legKey));
+    src.campaignIds = campaigns.map((c) => c.campaignId).sort();
+    src.legKey = campaigns[0]?.legKey ?? "start_to_lead_found";
+  }
+  return { ok: true, sources: [...byOrigin.values()].sort((a, b) => a.channelSlug.localeCompare(b.channelSlug)) };
 }
 
 /** Committed NET spend of these campaigns, runs started at or after `start`. */
@@ -365,6 +427,11 @@ export interface SalesFunnelCapsView extends FunnelCapKey {
   salesFunnelName: string | null;
   /** The pipes measured and the campaigns found on each; null when not read or unreadable. */
   pipes: MeasuredPipe[] | null;
+  /**
+   * The lead sources feeding the pipes (their spend is in maxBudget.consumedCents);
+   * null when not read, unreadable (see the budget's reason) or nothing stated.
+   */
+  sources: MeasuredSource[] | null;
 }
 
 const fixed = (v: Decimal) => v.toFixed(10);
@@ -408,9 +475,17 @@ function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>): Vol
 
 const NOT_MEASURED = <T>(): Measured<T> => ({ consumed: null, reason: null, detail: null });
 
-async function measureBudget(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<string>> {
+async function measureBudget(
+  k: FunnelCapKey,
+  row: SalesFunnelCapRow,
+  pipes: MeasuredPipe[],
+  sources: SourcesAnswer,
+  now: Date
+): Promise<Measured<string>> {
+  // ALL-INCLUSIVE: the pipes' campaigns AND the lead sources feeding them.
+  if (!sources.ok) return { consumed: null, reason: sources.reason, detail: sources.detail };
   const w = periodWindow(row.maxBudgetPeriod as CapPeriod, row.maxBudgetSince!, now);
-  const ids = [...new Set(pipes.flatMap((p) => p.campaignIds))];
+  const ids = [...new Set([...pipes.flatMap((p) => p.campaignIds), ...sources.sources.flatMap((s) => s.campaignIds)])];
   try {
     return { consumed: await spendSince(k.orgId, ids, w.start), reason: null, detail: null };
   } catch (err) {
@@ -459,7 +534,7 @@ export async function composeSalesFunnelCapsView(
 ): Promise<SalesFunnelCapsView> {
   const row = await getSalesFunnelCaps(k);
   if (!row) {
-    return { ...k, stated: false, updatedAt: null, maxBudget: null, maxVolume: null, salesFunnelName: null, pipes: null };
+    return { ...k, stated: false, updatedAt: null, maxBudget: null, maxVolume: null, salesFunnelName: null, pipes: null, sources: null };
   }
   const answer = await measuredPipes(k);
   let budget: Measured<string> = NOT_MEASURED();
@@ -469,7 +544,7 @@ export async function composeSalesFunnelCapsView(
     volume = { consumed: null, reason: answer.reason, detail: answer.detail };
   } else {
     [budget, volume] = await Promise.all([
-      row.maxBudgetCents != null ? measureBudget(k, row, answer.pipes, now) : Promise.resolve(NOT_MEASURED<string>()),
+      row.maxBudgetCents != null ? measureBudget(k, row, answer.pipes, answer.sources, now) : Promise.resolve(NOT_MEASURED<string>()),
       row.maxVolume != null ? measureVolume(k, row, answer.pipes, now) : Promise.resolve(NOT_MEASURED<number>()),
     ]);
   }
@@ -481,6 +556,7 @@ export async function composeSalesFunnelCapsView(
     maxVolume: volumeView(row, now, volume),
     salesFunnelName: answer.funnel?.name ?? null,
     pipes: answer.ok ? answer.pipes : null,
+    sources: answer.ok && answer.sources.ok ? answer.sources.sources : null,
   };
 }
 

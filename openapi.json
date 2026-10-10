@@ -4419,7 +4419,8 @@
           "campaign_service_unavailable",
           "runs_service_unavailable",
           "no_proactive_pipe",
-          "volume_not_measured_on_channel"
+          "volume_not_measured_on_channel",
+          "sourcing_catalogue_unavailable"
         ]
       },
       "SalesFunnelBudgetCap": {
@@ -4470,7 +4471,7 @@
           "consumedUnavailableReason",
           "consumedUnavailableDetail"
         ],
-        "description": "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign on the funnel's pipes for this brand x offer, runs started in [periodStart, periodEnd). reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0."
+        "description": "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign on the funnel's pipes for this brand x offer PLUS every lead SOURCE campaign (Start -> Lead found) feeding those pipes (sources[]): ALL-INCLUSIVE, sourcing + sending + LLM. Runs started in [periodStart, periodEnd). reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0."
       },
       "SalesFunnelVolumeCap": {
         "type": "object",
@@ -4563,6 +4564,36 @@
           "campaignIds"
         ]
       },
+      "SalesFunnelMeasuredSource": {
+        "type": "object",
+        "properties": {
+          "channelSlug": {
+            "type": "string"
+          },
+          "legKey": {
+            "type": "string"
+          },
+          "feedsPipeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "campaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "channelSlug",
+          "legKey",
+          "feedsPipeIds",
+          "campaignIds"
+        ],
+        "description": "A lead source (features-service sourcing origin) feeding the funnel's pipes; its spend counts in the budget."
+      },
       "SalesFunnelCaps": {
         "type": "object",
         "properties": {
@@ -4604,6 +4635,13 @@
             "items": {
               "$ref": "#/components/schemas/SalesFunnelMeasuredPipe"
             }
+          },
+          "sources": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/SalesFunnelMeasuredSource"
+            }
           }
         },
         "required": [
@@ -4616,7 +4654,8 @@
           "maxBudget",
           "maxVolume",
           "salesFunnelName",
-          "pipes"
+          "pipes",
+          "sources"
         ]
       },
       "SetSalesFunnelCapsRequest": {
