@@ -4880,11 +4880,27 @@ const BudgetCapViewSchema = z
       "reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0.",
   });
 
+const VolumeUnitSchema = z.enum(["first_contacts", "prospects_handled"]).openapi("SalesFunnelVolumeUnit", {
+  description:
+    "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). " +
+    "prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step).",
+});
+
+const SalesFunnelTypeSchema = z.enum(["proactive", "reactive"]).openapi("SalesFunnelType", {
+  description:
+    "features-service's served funnel type, RELAYED (never derived here): proactive when at least one pipe is " +
+    "proactive, else reactive. Labels the caps: proactive = Max budget / Max volume, reactive = Up to $X / Up to N.",
+});
+
+const SalesFunnelTypeUnavailableReasonSchema = z
+  .enum(["type_not_served_by_features_service", "sales_funnel_not_found", "sales_funnel_catalogue_unavailable"])
+  .openapi("SalesFunnelTypeUnavailableReason");
+
 const VolumeCapViewSchema = z
   .object({
     count: z.number().int(),
     period: CapPeriodSchema,
-    unit: z.literal("first_contacts"),
+    unit: VolumeUnitSchema.nullable(),
     periodStart: z.string(),
     periodEnd: z.string().nullable(),
     consumed: z.number().int().nullable(),
@@ -4895,9 +4911,10 @@ const VolumeCapViewSchema = z
   })
   .openapi("SalesFunnelVolumeCap", {
     description:
-      "consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first " +
-      "email of each prospect's sequence, completed or in flight). A proactive pipe on a channel with no " +
-      "first-contact measure yet answers null + volume_not_measured_on_channel.",
+      "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: " +
+      "the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes " +
+      "reactive): consumed = prospects the reactive pipes took on. A channel with no measure yet answers null + " +
+      "volume_not_measured_on_channel (no reactive channel is measured yet). unit null = the funnel is unreadable.",
   });
 
 const MeasuredPipeSchema = z
@@ -4932,6 +4949,9 @@ export const SalesFunnelCapsSchema = z
     maxBudget: BudgetCapViewSchema.nullable(),
     maxVolume: VolumeCapViewSchema.nullable(),
     salesFunnelName: z.string().nullable(),
+    salesFunnelType: SalesFunnelTypeSchema.nullable(),
+    salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReasonSchema.nullable(),
+    volumeUnit: VolumeUnitSchema.nullable(),
     pipes: z.array(MeasuredPipeSchema).nullable(),
     sources: z.array(MeasuredSourceSchema).nullable(),
   })
@@ -4941,8 +4961,10 @@ const StatedSalesFunnelCapsSchema = z
   .object({
     offerId: z.string().uuid(),
     salesFunnelId: z.string(),
+    salesFunnelType: SalesFunnelTypeSchema.nullable(),
+    salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReasonSchema.nullable(),
     maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema }).nullable(),
-    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: z.literal("first_contacts") }).nullable(),
+    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: VolumeUnitSchema.nullable() }).nullable(),
     updatedAt: z.string(),
   })
   .openapi("StatedSalesFunnelCaps");

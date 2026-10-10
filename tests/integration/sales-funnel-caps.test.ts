@@ -25,6 +25,8 @@ const BOOKING = "ai-meeting-booking";
 const FUNNEL =
   "lead_found_to_conversation@sales-cold-email-outreach+conversation_to_meeting_booked@ai-meeting-booking+meeting_booked_to_meeting_attended+meeting_attended_to_paid_client";
 const ADS_FUNNEL = "start_to_website_visit@google-ads+website_visit_to_purchase+purchase_to_paid_client";
+// Every pipe reactive: contacts nobody first.
+const REACTIVE_FUNNEL = "conversation_to_meeting_booked@ai-meeting-booking+meeting_booked_to_meeting_attended+meeting_attended_to_paid_client";
 
 const CAMPAIGN_COLD = "11111111-0000-4000-8000-000000000001";
 const CAMPAIGN_COLD_LEGACY = "11111111-0000-4000-8000-000000000002";
@@ -60,6 +62,7 @@ const funnelDetail = (id: string) =>
         object: "sales_funnel",
         id,
         name: "Victory",
+        type: "proactive",
         legs: [
           { legKey: "lead_found_to_conversation", pipe: { id: `${COLD}|lead_found_to_conversation`, mode: "proactive" } },
           { legKey: "conversation_to_meeting_booked", pipe: { id: `${BOOKING}|conversation_to_meeting_booked`, mode: "reactive" } },
@@ -74,7 +77,19 @@ const funnelDetail = (id: string) =>
           name: "Mirage",
           legs: [{ legKey: "start_to_website_visit", pipe: { id: "google-ads|start_to_website_visit", mode: "proactive" } }],
         }
-      : null;
+      : id === REACTIVE_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: "Echo",
+            type: "reactive",
+            legs: [
+              { legKey: "conversation_to_meeting_booked", pipe: { id: `${BOOKING}|conversation_to_meeting_booked`, mode: "reactive" } },
+              { legKey: "meeting_booked_to_meeting_attended", pipe: null },
+              { legKey: "meeting_attended_to_paid_client", pipe: null },
+            ],
+          }
+        : null;
 
 const campaign = (id: string, offerId: string, featureSlug: string, legKey: string) => ({
   campaignId: id,
@@ -183,7 +198,7 @@ describe("sales funnel caps", () => {
     await closeDb();
   });
 
-  it("nothing stated: stated false, both caps null, no upstream read", async () => {
+  it("nothing stated: stated false, both caps null, the funnel still named with its relayed type + unit, no measurement", async () => {
     const calls = mockUpstreams();
     const res = await readInternal();
     expect(res.status).toBe(200);
@@ -196,11 +211,15 @@ describe("sales funnel caps", () => {
       updatedAt: null,
       maxBudget: null,
       maxVolume: null,
-      salesFunnelName: null,
+      salesFunnelName: "Victory",
+      salesFunnelType: "proactive",
+      salesFunnelTypeUnavailableReason: null,
+      volumeUnit: "first_contacts",
       pipes: null,
       sources: null,
     });
-    expect(calls.features + calls.campaigns + calls.costs.length + calls.outcomes.length).toBe(0);
+    expect(calls.features).toBe(1);
+    expect(calls.campaigns + calls.costs.length + calls.outcomes.length).toBe(0);
   });
 
   it("$50 weekly + 200 per month reads back with what the funnel consumed this period", async () => {
@@ -216,6 +235,9 @@ describe("sales funnel caps", () => {
     const b = read.body;
     expect(b.stated).toBe(true);
     expect(b.salesFunnelName).toBe("Victory");
+    expect(b.salesFunnelType).toBe("proactive");
+    expect(b.salesFunnelTypeUnavailableReason).toBeNull();
+    expect(b.volumeUnit).toBe("first_contacts");
 
     // Spend is ALL-INCLUSIVE: every campaign of the funnel's pipes for this brand x
     // offer (both spellings of the cold leg + the booking campaign) AND the lead
@@ -428,6 +450,43 @@ describe("sales funnel caps", () => {
       consumedUnavailableReason: "volume_not_measured_on_channel",
     });
     expect(res.body.maxVolume.consumedUnavailableDetail).toContain("google-ads");
+    // features-service served no type on this funnel: absent is null + a reason, never computed here.
+    expect(res.body.salesFunnelType).toBeNull();
+    expect(res.body.salesFunnelTypeUnavailableReason).toBe("type_not_served_by_features_service");
+  });
+
+  it("a reactive funnel states its relayed type; its volume counts prospects handled (unmeasured yet: null + reason)", async () => {
+    const calls = mockUpstreams();
+    const res = await put({ maxBudget: { amountCents: 2000, period: "daily" }, maxVolume: { count: 30, period: "weekly" } }, REACTIVE_FUNNEL);
+    expect(res.status).toBe(200);
+    const read = await readInternal(REACTIVE_FUNNEL);
+    expect(read.body.salesFunnelType).toBe("reactive");
+    expect(read.body.volumeUnit).toBe("prospects_handled");
+    expect(read.body.maxVolume).toMatchObject({
+      count: 30,
+      period: "weekly",
+      unit: "prospects_handled",
+      consumed: null,
+      reached: null,
+      consumedUnavailableReason: "volume_not_measured_on_channel",
+    });
+    expect(read.body.maxVolume.consumedUnavailableDetail).toContain("prospect-handled measure on ai-meeting-booking");
+    // The budget is still measured on the reactive pipe's campaign.
+    expect(calls.costs.at(-1)!.get("campaignIds")).toBe(CAMPAIGN_BOOKING);
+    expect(read.body.maxBudget.consumedCents).toBe("1000.5000000000");
+    expect(calls.outcomes).toHaveLength(0);
+  });
+
+  it("an unreadable catalogue reads the type null with a reason", async () => {
+    mockUpstreams({ featuresStatus: 503 });
+    const res = await readInternal();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      stated: false,
+      salesFunnelType: null,
+      salesFunnelTypeUnavailableReason: "sales_funnel_catalogue_unavailable",
+      volumeUnit: null,
+    });
   });
 
   it("is org-scoped, and the brand list names every stated funnel (optionally one offer)", async () => {
@@ -447,6 +506,8 @@ describe("sales funnel caps", () => {
       {
         offerId: OTHER_OFFER,
         salesFunnelId: ADS_FUNNEL,
+        salesFunnelType: null,
+        salesFunnelTypeUnavailableReason: "type_not_served_by_features_service",
         maxBudget: null,
         maxVolume: { count: 3, period: "daily", unit: "first_contacts" },
         updatedAt: expect.any(String),
