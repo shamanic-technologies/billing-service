@@ -17,6 +17,7 @@ import {
 } from "../../src/lib/unpaid-debt.js";
 import { CARD_UNUSABLE_EVENT } from "../../src/lib/card-usability.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "../../src/lib/subscription-monthly-update.js";
+import { SUBSCRIPTION_OUT_OF_CREDITS_EVENT } from "../../src/lib/subscription-out-of-credits.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -87,6 +88,7 @@ describe("boot-time email template registration", () => {
     expect(names).toEqual([
       "credits-reload-failed",
       SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
+      SUBSCRIPTION_OUT_OF_CREDITS_EVENT,
       CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,
@@ -95,8 +97,9 @@ describe("boot-time email template registration", () => {
       UNPAID_DEBT_STAFF_EVENT,
     ]);
     expect(names).toEqual(REGISTERED_TEMPLATE_NAMES);
-    // Deleted 2026-10-06 (owner): never re-registered at boot.
-    expect(names).not.toContain("subscription-credits-used");
+    // Deleted 2026-10-06 (owner), brought back 2026-10-10 as the subscription "out of
+    // credits" mail under the same eventType (postmark-service bills it to the platform).
+    expect(SUBSCRIPTION_OUT_OF_CREDITS_EVENT).toBe("subscription-credits-used");
   });
 
   // AC4 — no template for an event this service never sends. `credits-depleted`
