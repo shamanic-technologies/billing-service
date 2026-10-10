@@ -112,6 +112,17 @@ export interface OpenEpisodeParams {
   recipientEmail?: string | null;
 }
 
+/**
+ * Fire-and-forget: the subscription "out of credits" mail decides for itself
+ * (once per period, only when the org truly cannot spend). Imported lazily: that
+ * module reads lib/subscription, which this one must not load at boot.
+ */
+function notifySubscriptionOutOfCredits(orgId: string): void {
+  void import("./subscription-out-of-credits.js")
+    .then((m) => m.notifySubscriptionOutOfCreditsIfDue(orgId))
+    .catch((err) => console.error(`[billing-service] out-of-credits trigger failed for org ${orgId}:`, err));
+}
+
 async function isSubscriptionOrg(orgId: string): Promise<boolean> {
   const [row] = await db
     .select({ paymentMode: billingAccounts.paymentMode })
@@ -135,10 +146,12 @@ export async function openDepletionEpisodeIfDepleted(
   params: OpenEpisodeParams
 ): Promise<{ opened: boolean }> {
   // A SUBSCRIPTION org running out of the month's credit is the plan working, not
-  // a payment problem: no episode, no dunning, and NO email at all (the "credits
-  // used" upsell email was deleted, owner 2026-10-06). Keep this branch: removing
-  // it would route subscription orgs into the generic out-of-credit dunning.
+  // a payment problem: no episode and no dunning. Keep this branch: removing it
+  // would route subscription orgs into the generic out-of-credit dunning. It gets
+  // its OWN mail instead, once per period: "you are out of credits, upgrade"
+  // (lib/subscription-out-of-credits, owner 2026-10-10), fire-and-forget.
   if (await isSubscriptionOrg(params.orgId)) {
+    notifySubscriptionOutOfCredits(params.orgId);
     return { opened: false };
   }
   const blocked = cannotSpend(
@@ -272,7 +285,10 @@ export async function openBlockedCampaignEpisode(params: {
   sendT0?: boolean;
 }): Promise<{ opened: boolean }> {
   // Same as openDepletionEpisodeIfDepleted: never for a subscription org.
-  if (await isSubscriptionOrg(params.orgId)) return { opened: false };
+  if (await isSubscriptionOrg(params.orgId)) {
+    notifySubscriptionOutOfCredits(params.orgId);
+    return { opened: false };
+  }
   const sendT0 = params.sendT0 ?? true;
   // Marked sent when we suppress it too: the marker claims the stage, and the
   // stage is genuinely spent — the customer WAS told, by the message the caller

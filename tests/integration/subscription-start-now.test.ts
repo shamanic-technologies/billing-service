@@ -2,7 +2,8 @@
  * START NOW (owner 2026-10-03; lib/subscription `startSubscriptionNow`). A customer
  * in the free trial ends it early and pays today, at the current amount or any
  * other ladder value. Pins:
- *   - the read offers it while trialing (can_start_now), never on an active plan;
+ *   - the read offers it while trialing AND on an active plan (upgrade now, owner
+ *     2026-10-10: higher amount only, charged today, cycle restarts today);
  *   - PATCH without start_now on a trialing plan is still 409 subscription_trialing
  *     (no charge is ever implicit);
  *   - start_now: charged today at the chosen amount, active, trial ended now, next
@@ -135,7 +136,8 @@ describe("subscription: start a trialing plan now", () => {
     expect(res.body.subscription).toMatchObject({
       status: "active",
       monthly_amount_cents: 9900,
-      can_start_now: false,
+      // Active: start-now is the UPGRADE NOW (a higher amount only).
+      can_start_now: true,
       can_change_amount: true,
     });
     const start = new Date(res.body.subscription.current_period_start);
@@ -221,7 +223,7 @@ describe("subscription: start a trialing plan now", () => {
     expect((await getLiveSubscription(orgId))!.status).toBe("trialing");
   });
 
-  it("refusals: active plan → subscription_not_trialing; cancel pending → subscription_cancel_pending; no card → card_required", async () => {
+  it("refusals: active plan at the same amount → amount_not_upgrade; cancel pending → subscription_cancel_pending; no card → card_required", async () => {
     await startTrial(9900);
     await request(app).post("/v1/accounts/subscription/cancel").set(headers);
     let res = await request(app)
@@ -250,8 +252,59 @@ describe("subscription: start a trialing plan now", () => {
       .set(headers)
       .send({ monthly_amount_cents: 9900, start_now: true });
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("subscription_not_trialing");
+    expect(res.body.code).toBe("amount_not_upgrade");
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("UPGRADE NOW on an active plan: charged today at the new amount, credited at once, cycle restarts today", async () => {
+    const trial = await startTrial(9900);
+    // Trial ends: the first $99 repays the trial credit (adds none).
+    let live = (await getLiveSubscription(orgId))!;
+    live = await advanceSubscription(live, new Date(trial.trialEndsAt!.getTime() + HOUR));
+    expect(live.status).toBe("active");
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    const before = await request(app).get("/v1/accounts/subscription").set(headers);
+    expect(before.body.subscription.can_start_now).toBe(true);
+    const balanceBefore = Number(before.body.credits_remaining_cents);
+
+    // A lower amount is never charged today.
+    let res = await request(app)
+      .patch("/v1/accounts/subscription")
+      .set(headers)
+      .send({ monthly_amount_cents: 4900, start_now: true });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("amount_not_upgrade");
+
+    const t0 = Date.now();
+    res = await request(app)
+      .patch("/v1/accounts/subscription")
+      .set(headers)
+      .send({ monthly_amount_cents: 29900, start_now: true });
+    expect(res.status).toBe(200);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(2);
+    expect(ssMocks.reloadOffSession.mock.calls[1][1]).toBe(29900);
+    expect(res.body.subscription).toMatchObject({ status: "active", monthly_amount_cents: 29900 });
+    // The trial end stays where it was: only the period restarts.
+    expect(res.body.subscription.trial_end).toBe(live.trialEndsAt!.toISOString());
+    const start = new Date(res.body.subscription.current_period_start);
+    expect(start.getTime()).toBeGreaterThanOrEqual(t0);
+    expect(res.body.subscription.next_charge_at).toBe(nextPeriodEnd(start, start).toISOString());
+    // Credited at once: the whole $299 lands on top of what was left.
+    expect(Number(res.body.credits_remaining_cents)).toBe(balanceBefore + 29900);
+    // Nothing expired early.
+    const expiries = await db
+      .select()
+      .from(subscriptionCreditExpiries)
+      .where(eq(subscriptionCreditExpiries.orgId, orgId));
+    expect(expiries.filter((e) => e.boundaryAt.getTime() >= t0)).toHaveLength(0);
+
+    // A second click at the amount just paid charges nothing.
+    res = await request(app)
+      .patch("/v1/accounts/subscription")
+      .set(headers)
+      .send({ monthly_amount_cents: 29900, start_now: true });
+    expect(res.body.code).toBe("amount_not_upgrade");
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(2);
   });
 
   it("per-plan route starts that plan now", async () => {
