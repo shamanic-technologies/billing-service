@@ -335,6 +335,32 @@ export async function setSalesFunnelCaps(
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
+ * A pre-offer ceiling (`offer_id IS NULL`, written before offers existed) that the
+ * shared resolver leaves unattributed because the brand names another offer
+ * somewhere. In a CONVERSION it is attributed to the converting campaign's offer
+ * when it is the ONLY ceiling of that channel and leg on the brand (any offer,
+ * either leg spelling): nothing else could be its campaign. Two or more such
+ * rows, or an offer-named row beside it, is ambiguous and refused (409
+ * `ceiling_ambiguous`), never guessed. A leg-less row is never attributed here.
+ */
+function offerLessSoleCeiling(ceilings: CeilingRow[], key: ReplacedCeilingKey): CeilingRow[] {
+  if (key.legKey === null) return [];
+  const sameChannelLeg = ceilings.filter(
+    (r) => r.featureSlug === key.featureSlug && r.legKey !== null && sameLeg(key.featureSlug, r.legKey, key.legKey)
+  );
+  const offerLess = sameChannelLeg.filter((r) => r.offerId === null);
+  if (offerLess.length === 0) return [];
+  if (sameChannelLeg.length > 1) {
+    throw new FunnelConversionRefusedError(
+      "ceiling_ambiguous",
+      `${sameChannelLeg.length} ceilings fund ${key.featureSlug}|${key.legKey} on the brand, ${offerLess.length} of them with no offer: which one is this offer's cannot be told`,
+      { key, ceilings: sameChannelLeg.length }
+    );
+  }
+  return offerLess;
+}
+
+/**
  * CONVERSION (campaign-service turns a pre-funnel campaign family into a funnel
  * campaign): the named per-campaign ceilings of this brand x offer are DELETED
  * and the funnel's max budget takes their place, in the caller's transaction.
@@ -376,7 +402,8 @@ async function convertCeilings(
   const funnelBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
   const picked = new Map<string, CeilingRow>();
   for (const key of keys) {
-    const rows = campaignCeilingRows(ceilings, { offerId: k.offerId, featureSlug: key.featureSlug, legKey: key.legKey } as CampaignKey);
+    let rows = campaignCeilingRows(ceilings, { offerId: k.offerId, featureSlug: key.featureSlug, legKey: key.legKey } as CampaignKey);
+    if (rows.length === 0) rows = offerLessSoleCeiling(ceilings, key);
     if (rows.length === 0) {
       throw new FunnelConversionRefusedError("ceiling_not_found", `no ceiling funds ${key.featureSlug}|${key.legKey ?? ""} on offer ${k.offerId}`, { key });
     }

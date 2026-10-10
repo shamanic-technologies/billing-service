@@ -728,6 +728,57 @@ describe("sales funnel caps", () => {
       expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
     });
 
+    it("converts the prod shape of brand a179bbd9: its only ceiling has no offer (a sourcing split on it)", async () => {
+      mockUpstreams();
+      await db.insert(campaignDailyBudgets).values({
+        orgId, brandId, featureSlug: COLD, offerId: null, legKey: "lead_found_to_conversation",
+        dailyBudgetCents: "800", sourcingCeilingCents: "350", updatedAt: new Date(),
+      });
+      const before = await brandDaily();
+      const res = await internalPut({
+        maxBudget: { amountCents: "800", period: "daily" },
+        maxVolume: null,
+        replacesCeilings: [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }],
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.conversion).toMatchObject({ replacedDailyCents: "800.0000000000", capDailyCents: "800.0000000000" });
+      expect(res.body.conversion.replacedCeilings).toEqual([
+        { featureSlug: COLD, offerId: null, legKey: "lead_found_to_conversation", dailyBudgetCents: "800.0000000000" },
+      ]);
+      expect(await brandDaily()).toBe(before);
+      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
+    });
+
+    it("attributes an offer-less ceiling to the converting offer when it is the ONLY one of its channel and leg, even if the brand names another offer elsewhere", async () => {
+      mockUpstreams();
+      await ceiling(COLD, "lead_found_to_conversation", "800", null);
+      // Another offer named on ANOTHER channel: the shared read resolver no longer attributes the row.
+      await ceiling(BOOKING, "conversation_to_meeting_booked", "300", OTHER_OFFER);
+      const res = await internalPut({
+        maxBudget: { amountCents: "800", period: "daily" },
+        maxVolume: null,
+        replacesCeilings: [{ featureSlug: COLD, legKey: "start_to_conversation" }],
+      });
+      expect(res.status).toBe(200);
+      const left = await db.select().from(campaignDailyBudgets);
+      expect(left.map((r) => [r.featureSlug, r.offerId])).toEqual([[BOOKING, OTHER_OFFER]]);
+    });
+
+    it("refuses an offer-less ceiling when another ceiling funds the same channel and leg (ambiguous), nothing written", async () => {
+      mockUpstreams();
+      await ceiling(COLD, "lead_found_to_conversation", "800", null);
+      await ceiling(COLD, "lead_found_to_conversation", "900", OTHER_OFFER);
+      const res = await internalPut({
+        maxBudget: { amountCents: "800", period: "daily" },
+        maxVolume: null,
+        replacesCeilings: [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }],
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.reason).toBe("ceiling_ambiguous");
+      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(2);
+      expect(await db.select().from(salesFunnelCaps)).toHaveLength(0);
+    });
+
     it("refuses a subscriber org and a brand on a global sales budget", async () => {
       mockUpstreams();
       await ceiling(COLD, "lead_found_to_conversation", "1000");
