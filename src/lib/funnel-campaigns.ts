@@ -40,6 +40,8 @@ export interface SalesFunnelCampaign {
   brandId: string;
   offerId: string;
   salesFunnelId: string;
+  /** features-service's name of the funnel, as campaign-service stored it; null when absent. */
+  salesFunnelName?: string | null;
   status: string;
   units: SalesFunnelUnit[];
 }
@@ -120,6 +122,7 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
       brandId: String(c.brandId),
       offerId: String(c.offerId),
       salesFunnelId: String(c.salesFunnelId),
+      salesFunnelName: typeof c.salesFunnelName === "string" ? c.salesFunnelName : null,
       status: String(c.status),
       units: Array.isArray(c.units)
         ? (c.units as Array<Record<string, unknown>>).map((u) => ({
@@ -140,4 +143,32 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
 /** Every unit campaign id of these funnel campaigns. */
 export function unitIdsOf(campaigns: SalesFunnelCampaign[]): Set<string> {
   return new Set(campaigns.flatMap((c) => c.units.map((u) => u.campaignId)));
+}
+
+/** Anything that can read (the db or an open transaction). */
+type Reader = Pick<typeof db, "select">;
+
+/** The brand's recurring funnel caps per day, read through `ex` (a transaction sees its own writes). */
+export async function brandFunnelDailyCentsVia(ex: Reader, orgId: string, brandId: string): Promise<string | null> {
+  const caps = await ex
+    .select()
+    .from(salesFunnelCaps)
+    .where(and(eq(salesFunnelCaps.orgId, orgId), eq(salesFunnelCaps.brandId, brandId), isNotNull(salesFunnelCaps.maxBudgetCents)));
+  return brandFunnelDailyCents(caps);
+}
+
+/**
+ * The brand's DAILY figure for its by-day history (`brand_daily_budget_changes`):
+ * the legacy total a writer computed + every recurring funnel cap of the brand
+ * per day, so the replay agrees with `getBrandDailyBudget`. Every writer of that
+ * table goes through this.
+ */
+export async function withRecurringFunnelCaps(
+  ex: Reader,
+  orgId: string,
+  brandId: string,
+  legacyCents: string
+): Promise<string> {
+  const funnel = await brandFunnelDailyCentsVia(ex, orgId, brandId);
+  return funnel === null ? legacyCents : new Decimal(legacyCents).plus(funnel).toFixed(10);
 }

@@ -379,3 +379,34 @@ describe("buildBudgetChangeEmail: unreadable sources are said, never guessed", (
     expect(email.actionHtml).toBe("paused sales cold email outreach (offer &lt;s&gt;Y&lt;/s&gt;)");
   });
 });
+
+// --- SALES FUNNEL campaigns in "Spending now" (owner 2026-10-10) ----------------
+// A running funnel campaign spends up to its recurring max budget: counted per
+// day (weekly / 7) and named, never left out of the brand's real spend.
+describe("buildBudgetChangeEmail: running sales funnel campaigns", () => {
+  it("adds a running funnel's recurring cap per day to Spending now, and names it", () => {
+    const email = buildBudgetChangeEmail(
+      legistai({
+        funnels: {
+          running: [
+            { name: "Victory", offerId: L_OFFER, dailyBudgetCents: "1000", amountCents: "7000", period: "weekly" },
+          ],
+        },
+      })
+    );
+    expect(email.summaryText.split("\n")[0]).toBe(
+      "Spending now: $10/day on sales funnel Victory (offer LegistAI) at $10/day ($70/week)."
+    );
+  });
+
+  it("funnel campaigns that could not be read are said, never counted as 0", () => {
+    const email = buildBudgetChangeEmail(legistai({ funnels: null }));
+    expect(email.summaryText.split("\n")[0]).toBe(
+      "Spending now: $0/day, not counting sales funnel campaigns (they could not be read)."
+    );
+  });
+
+  it("a brand with no recurring funnel cap reads exactly as before", () => {
+    expect(buildBudgetChangeEmail(legistai({ funnels: undefined }))).toEqual(buildBudgetChangeEmail(legistai()));
+  });
+});

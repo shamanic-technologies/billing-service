@@ -23,6 +23,7 @@
  */
 
 import { and, asc, eq } from "drizzle-orm";
+import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
 import { db } from "../db/index.js";
 import {
   brandDailyBudgetChanges,
@@ -105,11 +106,11 @@ export async function setBrandSalesBudget(
       dailyBudgetCents,
       changedAt,
     });
-    // The brand total is the global amount from now on.
+    // The brand total is the global amount (+ recurring funnel caps) from now on.
     await tx.insert(brandDailyBudgetChanges).values({
       orgId,
       brandId,
-      dailyBudgetCents,
+      dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, dailyBudgetCents),
       changedAt,
     });
 
@@ -171,7 +172,7 @@ export async function clearBrandSalesBudget(
     await tx.insert(brandDailyBudgetChanges).values({
       orgId,
       brandId,
-      dailyBudgetCents: campaignsDailyBudgetCents ?? "0",
+      dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, campaignsDailyBudgetCents ?? "0"),
       changedAt,
     });
 

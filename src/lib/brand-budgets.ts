@@ -10,6 +10,7 @@
  */
 
 import { and, asc, eq, lt } from "drizzle-orm";
+import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
 import { db } from "../db/index.js";
 import {
   brandDailyBudgets,
@@ -140,7 +141,7 @@ export async function upsertBrandDailyBudget(
     await tx.insert(brandDailyBudgetChanges).values({
       orgId,
       brandId,
-      dailyBudgetCents,
+      dailyBudgetCents: await withRecurringFunnelCaps(tx, orgId, brandId, dailyBudgetCents),
       changedAt,
     });
 

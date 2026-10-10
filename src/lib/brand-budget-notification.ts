@@ -56,6 +56,49 @@ import {
 } from "./budget-change-email.js";
 import { getBrandCeilings } from "./campaign-budgets.js";
 import { getLegacyBrandDailyBudget } from "./brand-budgets.js";
+import {
+  capOfFunnelCampaign,
+  fetchSalesFunnelCampaigns,
+  funnelBudgetCaps,
+  recurringDailyCentsOf,
+} from "./funnel-campaigns.js";
+import type { FunnelSpend } from "./budget-change-email.js";
+
+/**
+ * The brand's running SALES FUNNEL campaigns with a recurring max budget, for
+ * "Spending now". undefined = the brand has no recurring funnel cap; null = it
+ * has some but the funnel campaigns (or the caps) could not be read. Never throws.
+ */
+async function readFunnelSpend(
+  orgId: string,
+  brandId: string
+): Promise<{ running: FunnelSpend[] } | null | undefined> {
+  try {
+    const caps = (await funnelBudgetCaps(orgId, brandId)).filter((c) => c.maxBudgetPeriod !== "one_off");
+    if (caps.length === 0) return undefined;
+    const fcs = await fetchSalesFunnelCampaigns(orgId);
+    if (!fcs.ok) return null;
+    const running = fcs.campaigns
+      .filter((fc) => fc.brandId === brandId && fc.status === "ongoing")
+      .flatMap((fc) => {
+        const cap = capOfFunnelCampaign(caps, fc);
+        if (!cap) return [];
+        return [
+          {
+            name: fc.salesFunnelName ?? fc.salesFunnelId,
+            offerId: fc.offerId,
+            dailyBudgetCents: recurringDailyCentsOf(cap)!,
+            amountCents: cap.maxBudgetCents!,
+            period: cap.maxBudgetPeriod as FunnelSpend["period"],
+          },
+        ];
+      });
+    return { running };
+  } catch (err) {
+    console.error(`[billing-service] funnel spend read failed for the staff email, brand=${brandId}:`, err);
+    return null;
+  }
+}
 
 /** Byte-equal to the transactional-email-service event key AND template name. */
 export const BRAND_DAILY_BUDGET_CHANGED_EVENT = "brand_daily_budget_changed";
@@ -162,15 +205,17 @@ export async function notifyBrandDailyBudgetChanged(
 
     // The write has already committed, so every read sees the NEW state. All
     // five are fail-soft; the email says in words which part is missing.
-    const [spendable, catalogue, brandName, offerNames, org] = await Promise.all([
+    const [spendable, catalogue, brandName, offerNames, org, funnels] = await Promise.all([
       fetchSpendableBudget(params.orgId, params.brandId),
       fetchChannelCatalogue(),
       fetchBrandName(params.orgId, params.brandId),
       fetchOfferNames(params.orgId, params.brandId),
       fetchOrgIdentity(params.orgId),
+      readFunnelSpend(params.orgId, params.brandId),
     ]);
 
     const email = buildBudgetChangeEmail({
+      funnels,
       brandId: params.brandId,
       orgId: params.orgId,
       firstBudget: params.previousDailyBudgetCents === null,
@@ -261,16 +306,18 @@ export async function notifyMissionStatusChanged(
     const move = statusMoveOf(params.fromStatus, params.toStatus);
     if (!move) return false;
 
-    const [ceilings, spendable, catalogue, brandName, offerNames, org] = await Promise.all([
+    const [ceilings, spendable, catalogue, brandName, offerNames, org, funnels] = await Promise.all([
       readCeilingsAfter(params.orgId, params.brandId),
       fetchSpendableBudget(params.orgId, params.brandId),
       fetchChannelCatalogue(),
       fetchBrandName(params.orgId, params.brandId),
       fetchOfferNames(params.orgId, params.brandId),
       fetchOrgIdentity(params.orgId),
+      readFunnelSpend(params.orgId, params.brandId),
     ]);
 
     const email = buildBudgetChangeEmail({
+      funnels,
       brandId: params.brandId,
       orgId: params.orgId,
       firstBudget: false,
