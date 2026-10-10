@@ -4877,6 +4877,8 @@ const BudgetCapViewSchema = z
   .object({
     amountCents: CentsStringSchema,
     period: CapPeriodSchema,
+    /** Per day in every daily figure: daily x1, weekly / 7, monthly / 30; "0" for one_off and for a reactive funnel. */
+    dailyBudgetCents: CentsStringSchema,
     periodStart: z.string(),
     periodEnd: z.string().nullable(),
     consumedCents: CentsStringSchema.nullable(),
@@ -4977,7 +4979,7 @@ const StatedSalesFunnelCapsSchema = z
     salesFunnelId: z.string(),
     salesFunnelType: SalesFunnelTypeSchema.nullable(),
     salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReasonSchema.nullable(),
-    maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema }).nullable(),
+    maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema, dailyBudgetCents: CentsStringSchema }).nullable(),
     maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: VolumeUnitSchema.nullable() }).nullable(),
     updatedAt: z.string(),
   })

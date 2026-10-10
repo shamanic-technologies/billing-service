@@ -939,6 +939,8 @@ export const salesFunnelCaps = pgTable(
     maxVolume: integer("max_volume"),
     maxVolumePeriod: text("max_volume_period"),
     maxVolumeSince: timestamp("max_volume_since", { withTimezone: true }),
+    // features-service's funnel type at write (migration 0080); NULL = not known yet.
+    salesFunnelType: text("sales_funnel_type"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

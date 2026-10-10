@@ -116,9 +116,11 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     res.status(400).json({ error: "x-user-id must be a valid UUID" });
     return;
   }
-  // Only a funnel features-service knows can be capped.
+  // Only a funnel features-service knows can be capped; its served type is stored
+  // with the caps (a reactive funnel's "Up to $X" counts 0 in daily figures).
+  let salesFunnelType: "proactive" | "reactive" | null = null;
   try {
-    await getSalesFunnel(key.salesFunnelId);
+    salesFunnelType = (await getSalesFunnel(key.salesFunnelId)).type;
   } catch (err) {
     if (err instanceof SalesFunnelNotFoundError) {
       res.status(404).json({ error: err.message, reason: "sales_funnel_not_found" });
@@ -138,6 +140,7 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
       {
         maxBudget: body.maxBudget ? { amountCents: amountCents!, period: body.maxBudget.period } : null,
         maxVolume: body.maxVolume,
+        salesFunnelType,
       },
       userId ?? null,
       new Date(),

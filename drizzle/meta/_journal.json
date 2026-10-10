@@ -561,6 +561,13 @@
       "when": 1794996000000,
       "tag": "0079_sales_funnel_caps_wide_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1795082400000,
+      "tag": "0080_sales_funnel_caps_type",
+      "breakpoints": true
     }
   ]
 }
