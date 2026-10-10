@@ -4798,6 +4798,43 @@
         "additionalProperties": false,
         "description": "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. A cap restated in the same period keeps its window start (a one_off cap keeps counting)."
       },
+      "InternalSetSalesFunnelCapsRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "replacesCeilings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "featureSlug": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "legKey": {
+                      "type": "string",
+                      "nullable": true,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "featureSlug",
+                    "legKey"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 50
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "description": "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. A cap restated in the same period keeps its window start (a one_off cap keeps counting)."
+      },
       "StatedSalesFunnelCaps": {
         "type": "object",
         "properties": {
@@ -13454,6 +13491,117 @@
           },
           "400": {
             "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State a sales funnel's caps as a service (campaign-service), optionally CONVERTING pre-funnel ceilings",
+        "description": "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT plus replacesCeilings: the pre-funnel campaigns of this offer whose per-campaign ceilings the cap replaces; they are deleted in the same transaction. 409 conversion_moves_budget when the cap per day (weekly / 7, monthly / 30, one_off = 0) differs from their sum by more than one cent; 409 ceiling_not_found | brand_in_global_mode | subscription_org | subscriber_plan_rows. Answers the read's shape plus conversion {replacedCeilings, replacedDailyCents, capDailyCents, brandDailyBudgetBefore, brandDailyBudgetAfter}.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternalSetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "conversion refused (nothing written)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
             "content": {
               "application/json": {
                 "schema": {

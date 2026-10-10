@@ -4846,6 +4846,20 @@ export const SetSalesFunnelCapsRequestSchema = z
       "A cap restated in the same period keeps its window start (a one_off cap keeps counting).",
   });
 
+export const InternalSetSalesFunnelCapsRequestSchema = SetSalesFunnelCapsRequestSchema.extend({
+  /**
+   * CONVERSION: the pre-funnel campaigns (this offer, a channel and a leg) whose
+   * per-campaign ceilings this cap replaces. They are deleted in the same
+   * transaction; refused (409) unless the cap per day equals their sum within one cent.
+   */
+  replacesCeilings: z
+    .array(z.object({ featureSlug: z.string().min(1), legKey: z.string().min(1).nullable() }).strict())
+    .max(50)
+    .optional(),
+})
+  .strict()
+  .openapi("InternalSetSalesFunnelCapsRequest");
+
 const ConsumedUnavailableReasonSchema = z
   .enum([
     "sales_funnel_not_found",
@@ -5035,6 +5049,31 @@ registry.registerPath({
     200: { description: "Stated", content: funnelCapsJson },
     400: funnelCapsError("Invalid ids or body"),
     404: funnelCapsError("sales_funnel_not_found"),
+    502: funnelCapsError("sales_funnel_catalogue_unavailable"),
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: `/internal${funnelCapsPath}`,
+  summary: "State a sales funnel's caps as a service (campaign-service), optionally CONVERTING pre-funnel ceilings",
+  description:
+    "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT plus replacesCeilings: the " +
+    "pre-funnel campaigns of this offer whose per-campaign ceilings the cap replaces; they are deleted in the same " +
+    "transaction. 409 conversion_moves_budget when the cap per day (weekly / 7, monthly / 30, one_off = 0) differs " +
+    "from their sum by more than one cent; 409 ceiling_not_found | brand_in_global_mode | subscription_org | " +
+    "subscriber_plan_rows. Answers the read's shape plus conversion {replacedCeilings, replacedDailyCents, " +
+    "capDailyCents, brandDailyBudgetBefore, brandDailyBudgetAfter}.",
+  request: {
+    headers: internalOrgHeaders,
+    params: funnelCapParams,
+    body: { content: { "application/json": { schema: InternalSetSalesFunnelCapsRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Stated", content: funnelCapsJson },
+    400: funnelCapsError("Invalid ids or body"),
+    404: funnelCapsError("sales_funnel_not_found"),
+    409: funnelCapsError("conversion refused (nothing written)"),
     502: funnelCapsError("sales_funnel_catalogue_unavailable"),
   },
 });

@@ -11,7 +11,7 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { requireOrgHeaders } from "../middleware/auth.js";
-import { SetSalesFunnelCapsRequestSchema } from "../schemas.js";
+import { InternalSetSalesFunnelCapsRequestSchema, SetSalesFunnelCapsRequestSchema } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
   composeSalesFunnelCapsView,
@@ -20,7 +20,10 @@ import {
   statedCapsOf,
   SalesFunnelCatalogueUnavailableError,
   SalesFunnelNotFoundError,
+  FunnelConversionRefusedError,
+  type CapPeriod,
   type FunnelCapKey,
+  type ReplacedCeilingKey,
 } from "../lib/sales-funnel-caps.js";
 import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 
@@ -80,19 +83,25 @@ router.get(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
   res.json(await composeSalesFunnelCapsView(key));
 }));
 
-router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
-  const key = keyOf(req, res, req.headers["x-org-id"] as string);
-  if (!key) return;
-  const parsed = SetSalesFunnelCapsRequestSchema.safeParse(req.body);
+/**
+ * State a funnel's caps. The user writes through `/v1` (org headers); campaign-
+ * service writes through `/internal` with its service identity (x-api-key +
+ * x-org-id, x-user-id optional) and may name `replacesCeilings`: the pre-funnel
+ * campaigns whose per-campaign ceilings this cap replaces (a conversion, refused
+ * with 409 when it would move the brand's money beyond rounding).
+ */
+async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal: boolean) {
+  const parsed = (internal ? InternalSetSalesFunnelCapsRequestSchema : SetSalesFunnelCapsRequestSchema).safeParse(req.body);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     res.status(400).json({ error: `${issue.path.join(".") || "body"}: ${issue.message}` });
     return;
   }
+  const body = parsed.data as { maxBudget: { amountCents: string | number; period: CapPeriod } | null; maxVolume: { count: number; period: CapPeriod } | null; replacesCeilings?: ReplacedCeilingKey[] };
   let amountCents: string | null = null;
-  if (parsed.data.maxBudget) {
+  if (body.maxBudget) {
     try {
-      amountCents = parseNonNegativeCents(parsed.data.maxBudget.amountCents);
+      amountCents = parseNonNegativeCents(body.maxBudget.amountCents);
       // numeric(22,10): 12 integer digits of cents (migration 0079).
       if (amountCents.split(".")[0].length > MAX_BUDGET_INT_DIGITS) {
         throw new Error(`must be below ${"1" + "0".repeat(MAX_BUDGET_INT_DIGITS)} cents`);
@@ -101,6 +110,11 @@ router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
       res.status(400).json({ error: `maxBudget.amountCents: ${(err as Error).message}` });
       return;
     }
+  }
+  const userId = req.headers["x-user-id"] as string | undefined;
+  if (userId !== undefined && !UUID_RE.test(userId)) {
+    res.status(400).json({ error: "x-user-id must be a valid UUID" });
+    return;
   }
   // Only a funnel features-service knows can be capped.
   try {
@@ -117,15 +131,41 @@ router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
     }
     throw err;
   }
-  await setSalesFunnelCaps(
-    key,
-    {
-      maxBudget: parsed.data.maxBudget ? { amountCents: amountCents!, period: parsed.data.maxBudget.period } : null,
-      maxVolume: parsed.data.maxVolume,
-    },
-    (req.headers["x-user-id"] as string) ?? null
-  );
-  res.json(await composeSalesFunnelCapsView(key));
+  let conversion = null;
+  try {
+    ({ conversion } = await setSalesFunnelCaps(
+      key,
+      {
+        maxBudget: body.maxBudget ? { amountCents: amountCents!, period: body.maxBudget.period } : null,
+        maxVolume: body.maxVolume,
+      },
+      userId ?? null,
+      new Date(),
+      body.replacesCeilings && body.replacesCeilings.length > 0 ? body.replacesCeilings : null
+    ));
+  } catch (err) {
+    if (err instanceof FunnelConversionRefusedError) {
+      res.status(409).json({ error: err.message, reason: err.reason, ...err.detail });
+      return;
+    }
+    throw err;
+  }
+  const view = await composeSalesFunnelCapsView(key);
+  res.json(internal ? { ...view, conversion } : view);
+}
+
+router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
+  const key = keyOf(req, res, req.headers["x-org-id"] as string);
+  if (!key) return;
+  await putCaps(req, res, key, false);
+}));
+
+router.put(`/internal${FUNNEL_PATH}`, handle(async (req, res) => {
+  const orgId = internalOrgId(req, res);
+  if (!orgId) return;
+  const key = keyOf(req, res, orgId);
+  if (!key) return;
+  await putCaps(req, res, key, true);
 }));
 
 router.delete(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {

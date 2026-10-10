@@ -58,7 +58,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   salesFunnelCapChanges,
@@ -72,7 +72,15 @@ import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import { brandFunnelDailyCentsVia } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
-import { brandDailyBudgetChanges } from "../db/schema.js";
+import {
+  billingAccounts,
+  brandDailyBudgetChanges,
+  brandSalesBudgets,
+  campaignDailyBudgets,
+  type CeilingRow,
+} from "../db/schema.js";
+import { campaignCeilingRows, type CampaignKey } from "./campaign-budgets.js";
+import { recurringDailyCentsOf } from "./funnel-campaigns.js";
 import { cmpCents } from "./cents.js";
 import {
   getSalesFunnel,
@@ -203,23 +211,46 @@ export async function listBrandSalesFunnelCaps(
     .orderBy(asc(salesFunnelCaps.offerId), asc(salesFunnelCaps.salesFunnelId));
 }
 
-/**
- * State (or restate) a funnel's caps. Both caps are given: an object states it,
- * null clears it; both null deletes the row. A cap restated in the SAME period
- * keeps its `since` (a one_off cap keeps counting from when it was first
- * stated); a new period, or a cap stated from nothing, starts now.
- * Journaled in the same transaction. Returns the row, or null when cleared.
- */
+/** A pre-funnel campaign whose per-campaign ceiling a funnel cap replaces (campaign-service conversion). */
+export interface ReplacedCeilingKey {
+  featureSlug: string;
+  legKey: string | null;
+}
+
+/** What a conversion moved, served to campaign-service so it can log it. */
+export interface CeilingConversion {
+  replacedCeilings: Array<{ featureSlug: string; offerId: string | null; legKey: string | null; dailyBudgetCents: string }>;
+  /** Sum of the replaced ceilings per day. */
+  replacedDailyCents: string;
+  /** The new max budget per day (weekly / 7, monthly / 30). */
+  capDailyCents: string;
+  brandDailyBudgetBefore: string | null;
+  brandDailyBudgetAfter: string | null;
+}
+
+/** A conversion billing refuses (nothing written): 409 with the reason. */
+export class FunnelConversionRefusedError extends Error {
+  constructor(public readonly reason: string, message: string, public readonly detail: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "FunnelConversionRefusedError";
+  }
+}
+
+/** Rounding a weekly / monthly cap per day may leave: at most one cent. */
+const CONVERSION_TOLERANCE_CENTS = new Decimal(1);
+
 export async function setSalesFunnelCaps(
   k: FunnelCapKey,
   input: { maxBudget: BudgetCapInput | null; maxVolume: VolumeCapInput | null },
   changedByUserId: string | null,
-  now: Date = new Date()
-): Promise<SalesFunnelCapRow | null> {
+  now: Date = new Date(),
+  replacesCeilings: ReplacedCeilingKey[] | null = null
+): Promise<{ row: SalesFunnelCapRow | null; conversion: CeilingConversion | null }> {
   return db.transaction(async (tx) => {
     const [existing] = await tx.select().from(salesFunnelCaps).where(keyWhere(k)).limit(1).for("update");
     // Clearing what was never stated writes nothing (idempotent DELETE).
-    if (!input.maxBudget && !input.maxVolume && !existing) return null;
+    if (!input.maxBudget && !input.maxVolume && !existing && !replacesCeilings) return { row: null, conversion: null };
+    const conversion = replacesCeilings ? await convertCeilings(tx, k, input.maxBudget, replacesCeilings) : null;
     const funnelDailyBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
     // The brand's by-day history (`brand_daily_budget_changes`) follows its daily
     // figure: legacy total + every recurring funnel cap per day. Appended only
@@ -228,7 +259,7 @@ export async function setSalesFunnelCaps(
     const journalBrandDaily = async () => {
       const after = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
       if (cmpCents(funnelDailyBefore ?? "0", after ?? "0") === 0 && (funnelDailyBefore === null) === (after === null)) return;
-      const legacy = await getLegacyBrandDailyBudget(k.orgId, k.brandId);
+      const legacy = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
       const total = new Decimal(legacy?.dailyBudgetCents ?? "0").plus(after ?? "0").toFixed(10);
       await tx.insert(brandDailyBudgetChanges).values({ orgId: k.orgId, brandId: k.brandId, dailyBudgetCents: total, changedAt: now });
     };
@@ -246,7 +277,7 @@ export async function setSalesFunnelCaps(
     if (!input.maxBudget && !input.maxVolume) {
       if (existing) await tx.delete(salesFunnelCaps).where(keyWhere(k));
       await journalBrandDaily();
-      return null;
+      return { row: null, conversion };
     }
 
     const budgetSince = !input.maxBudget
@@ -277,9 +308,106 @@ export async function setSalesFunnelCaps(
       })
       .returning();
     await journalBrandDaily();
-    return row;
+    if (conversion) {
+      const after = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
+      const funnel = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+      conversion.brandDailyBudgetAfter =
+        after === null && funnel === null ? null : new Decimal(after?.dailyBudgetCents ?? "0").plus(funnel ?? "0").toFixed(10);
+    }
+    return { row, conversion };
   });
 }
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * CONVERSION (campaign-service turns a pre-funnel campaign family into a funnel
+ * campaign): the named per-campaign ceilings of this brand x offer are DELETED
+ * and the funnel's max budget takes their place, in the caller's transaction.
+ * Refused (409, nothing written) unless it moves no figure beyond rounding:
+ * the cap per day must equal the replaced ceilings' sum within one cent, the
+ * cap must recur (a one_off cap would drop the brand's daily money), the brand
+ * is not on a global sales budget, and the org is not a subscriber (its plan is
+ * priced from those rows). Ceilings resolve with the same rule every read uses
+ * (`campaignCeilingRows`: offer, channel, either leg spelling).
+ */
+async function convertCeilings(
+  tx: Tx,
+  k: FunnelCapKey,
+  maxBudget: BudgetCapInput | null,
+  keys: ReplacedCeilingKey[]
+): Promise<CeilingConversion> {
+  const [global] = await tx
+    .select()
+    .from(brandSalesBudgets)
+    .where(and(eq(brandSalesBudgets.orgId, k.orgId), eq(brandSalesBudgets.brandId, k.brandId)))
+    .limit(1);
+  if (global) {
+    throw new FunnelConversionRefusedError("brand_in_global_mode", "the brand is funded by one global sales budget, not per-campaign ceilings");
+  }
+  const [account] = await tx
+    .select({ paymentMode: billingAccounts.paymentMode })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, k.orgId))
+    .limit(1);
+  if (account?.paymentMode === "subscription") {
+    throw new FunnelConversionRefusedError("subscription_org", "a subscriber's plan is priced from its per-campaign rows; convert it once the plan reads funnel caps");
+  }
+  const ceilings = await tx
+    .select()
+    .from(campaignDailyBudgets)
+    .where(and(eq(campaignDailyBudgets.orgId, k.orgId), eq(campaignDailyBudgets.brandId, k.brandId)))
+    .for("update");
+  const before = await getLegacyBrandDailyBudget(k.orgId, k.brandId, tx);
+  const funnelBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
+  const picked = new Map<string, CeilingRow>();
+  for (const key of keys) {
+    const rows = campaignCeilingRows(ceilings, { offerId: k.offerId, featureSlug: key.featureSlug, legKey: key.legKey } as CampaignKey);
+    if (rows.length === 0) {
+      throw new FunnelConversionRefusedError("ceiling_not_found", `no ceiling funds ${key.featureSlug}|${key.legKey ?? ""} on offer ${k.offerId}`, { key });
+    }
+    for (const r of rows) picked.set(`${r.featureSlug}\u0000${r.offerId ?? ""}\u0000${r.legKey ?? ""}`, r);
+  }
+  const replaced = [...picked.values()];
+  if (replaced.some((r) => r.monthlyBudgetCents != null || r.planDerived)) {
+    throw new FunnelConversionRefusedError("subscriber_plan_rows", "a replaced ceiling carries a subscriber monthly budget");
+  }
+  const replacedDaily = replaced.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0));
+  const capDaily = maxBudget ? new Decimal(recurringDailyCentsOf({ maxBudgetCents: maxBudget.amountCents, maxBudgetPeriod: maxBudget.period })!) : new Decimal(0);
+  if (capDaily.minus(replacedDaily).abs().greaterThan(CONVERSION_TOLERANCE_CENTS)) {
+    throw new FunnelConversionRefusedError(
+      "conversion_moves_budget",
+      `the max budget is ${capDaily.toFixed(2)} cents a day but the replaced ceilings sum to ${replacedDaily.toFixed(2)}${maxBudget?.period === "one_off" ? " (a one_off cap is not daily money)" : ""}`,
+      { capDailyCents: capDaily.toFixed(10), replacedDailyCents: replacedDaily.toFixed(10) }
+    );
+  }
+  for (const r of replaced) {
+    await tx
+      .delete(campaignDailyBudgets)
+      .where(
+        and(
+          eq(campaignDailyBudgets.orgId, k.orgId),
+          eq(campaignDailyBudgets.brandId, k.brandId),
+          eq(campaignDailyBudgets.featureSlug, r.featureSlug),
+          r.offerId === null ? isNull(campaignDailyBudgets.offerId) : eq(campaignDailyBudgets.offerId, r.offerId),
+          r.legKey === null ? isNull(campaignDailyBudgets.legKey) : eq(campaignDailyBudgets.legKey, r.legKey)
+        )
+      );
+  }
+  console.log(
+    `[billing-service] funnel conversion: org=${k.orgId} brand=${k.brandId} offer=${k.offerId} funnel=${k.salesFunnelId} ` +
+      `replaced ${replaced.length} ceiling(s) ${replacedDaily.toFixed(2)} cents/day with a cap of ${capDaily.toFixed(2)} cents/day`
+  );
+  return {
+    replacedCeilings: replaced.map((r) => ({ featureSlug: r.featureSlug, offerId: r.offerId, legKey: r.legKey, dailyBudgetCents: r.dailyBudgetCents })),
+    replacedDailyCents: replacedDaily.toFixed(10),
+    capDailyCents: capDaily.toFixed(10),
+    brandDailyBudgetBefore:
+      before === null && funnelBefore === null ? null : new Decimal(before?.dailyBudgetCents ?? "0").plus(funnelBefore ?? "0").toFixed(10),
+    brandDailyBudgetAfter: null,
+  };
+}
+
 
 /**
  * Boot reconcile, idempotent: a brand whose recurring funnel caps were stated
