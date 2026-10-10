@@ -150,6 +150,8 @@ describe("We match your first $100", () => {
     const full = await account(orgId);
     // $200 paid: $30 advance + $170, plus the $100 match it earned.
     expect(full.body.credited_paid_cents).toBe(cents(17000));
+    // The cash paid is the whole $200: repaying the advance does not shrink it.
+    expect(full.body.cash_paid_cents).toBe(cents(20000));
     expect(full.body.credited_advance_cents).toBe(cents(3000));
     expect(full.body.credited_gifted_cents).toBe(cents(10000));
     expect(full.body.credited_cents).toBe(cents(30000));

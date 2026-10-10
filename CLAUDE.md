@@ -634,6 +634,7 @@ Two things made it invisible. The per-minute time bucket in `reloadIdempotencyKe
   "org_id": "<uuid>",
   "credited_cents": "55200.0000000000",      // SUM(succeeded PI.(amount_received − amount_returned)) + SUM(local_promos.amount_cents). Refunds + lost disputes are netted out — see "Refunds and lost disputes"
   "credited_paid_cents": "52700.0000000000", // the PAID half of credited_cents: succeeded Stripe payments NET of returns. Render as "Credit paid Stripe"
+  "cash_paid_cents": "52700.0000000000",     // CASH the org paid us ("invested"): every succeeded payment, all acquirers, NET of refunds + lost disputes, NEVER reduced by what it repaid (trial-end charge, match_100 advance). credited_paid_cents = cash_paid − trial_repaid − advance repaid. Never compose it from the credited_* pieces
   "credited_gifted_cents": "2500.0000000000",// the GIFTED half: SUM(local_promos) — welcome, welcome-completion, invite + staff grants, redeemed promos. Render as "Welcome credits". INVARIANT: credited_cents === credited_paid_cents + credited_gifted_cents
   "usage_cents": "38289.2958000000",         // runs-service spent_cents (platform actual+provisioned). Already NET of any usage discount (frozen at cost-write in runs-service).
   "balance_cents": "16910.7042000000",       // credited_cents − usage_cents; USE THIS for depletion/budget gates

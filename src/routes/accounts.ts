@@ -259,6 +259,10 @@ function buildAccountResponse(
     // Paid money that repaid a free trial (the trial-end subscription charge) and so
     // added NO credit. Additive; credited_paid_cents already excludes it.
     credited_trial_repaid_cents: funds.trialRepaidCents,
+    // Every payment the org made us, NET of refunds and lost disputes, whatever it
+    // repaid (trial, onboarding advance) or credited: the CASH figure ("invested").
+    // Unlike credited_paid_cents it is never reduced by a repayment.
+    cash_paid_cents: funds.paidTopupsCents,
     credited_gifted_cents: funds.giftedCreditsCents,
     credited_advance_cents: funds.advanceCents,
     usage_cents: funds.usageCents,

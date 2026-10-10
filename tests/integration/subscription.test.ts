@@ -290,6 +290,8 @@ describe("subscription (billing-owned)", () => {
     expect(acct.body.credited_cents).toBe("10400.0000000000");
     expect(acct.body.credited_trial_repaid_cents).toBe("9900.0000000000");
     expect(acct.body.credited_paid_cents).toBe("0.0000000000");
+    // The cash paid is the whole $99, whatever it repaid.
+    expect(acct.body.cash_paid_cents).toBe("9900.0000000000");
     expect(acct.body.credited_gifted_cents).toBe("10400.0000000000");
     expect(Number(acct.body.expired_cents)).toBe(0);
     expect(acct.body.balance_cents).toBe("1427.0000000000");
