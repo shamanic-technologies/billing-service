@@ -23,8 +23,10 @@ import {
   brandSalesBudgets,
   campaignDailyBudgets,
   campaignReloadSweepAttempts,
+  salesFunnelCaps,
 } from "../../src/db/schema.js";
 import type { RecurringCampaignStatus } from "../../src/lib/campaign-service-client.js";
+import type { SalesFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
 
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
 
@@ -34,6 +36,7 @@ const REACTIVE = "00000000-0000-0000-0000-00000000a003"; // postpaid, card, reac
 const NO_CARD = "00000000-0000-0000-0000-00000000a004"; // postpaid, no card
 const CS_DOWN = "00000000-0000-0000-0000-00000000a005"; // campaign-service cannot answer
 const GLOBAL = "00000000-0000-0000-0000-00000000a006"; // global sales budget brand
+const FUNNEL = "00000000-0000-0000-0000-00000000a007"; // a SALES FUNNEL campaign beside a legacy ceiling
 
 const brandOf = (org: string) => org.replace(/a0(\d\d)$/, "b0$1");
 const OFFER = "00000000-0000-0000-0000-0000000000f1";
@@ -48,6 +51,7 @@ const PAID: Record<string, string> = {
   [NO_CARD]: "0",
   [CS_DOWN]: "25000.0000000000",
   [GLOBAL]: "25000.0000000000",
+  [FUNNEL]: "25000.0000000000",
 };
 const USAGE: Record<string, string> = {
   [RECURRING]: "40000.0000000000", // −$150: owes, within the −$200 line
@@ -56,6 +60,7 @@ const USAGE: Record<string, string> = {
   [NO_CARD]: "0",
   [CS_DOWN]: "0",
   [GLOBAL]: "0",
+  [FUNNEL]: "0",
 };
 
 function status(
@@ -94,7 +99,41 @@ const STATUSES: Record<string, RecurringCampaignStatus[] | null> = {
     status(GLOBAL, "c-f1", { audience: "exhausted", allAudiencesExhausted: true, recurring: false }),
     status(GLOBAL, "c-f2", { legKey: "leg-entry-2" }),
   ],
+  [FUNNEL]: [
+    // The legacy campaign on the pipe is STOPPED; the funnel unit on the SAME pipe runs.
+    status(FUNNEL, "c-g1", { status: "stopped", running: false, recurring: false }),
+    status(FUNNEL, "u-g1", {}),
+    status(FUNNEL, "u-g2", { legKey: REPLY, kind: "reactive", recurring: false }),
+  ],
 };
+
+const FUNNEL_ID = "leg-entry@cold-email+leg-from-reply@cold-email";
+const funnelCampaign = (over: Partial<SalesFunnelCampaign> = {}): SalesFunnelCampaign => ({
+  id: "fc-g",
+  brandId: brandOf(FUNNEL),
+  offerId: OFFER,
+  salesFunnelId: FUNNEL_ID,
+  status: "ongoing",
+  units: [
+    { campaignId: "u-g1", featureSlug: CHANNEL, legKey: ENTRY, status: "ongoing" },
+    { campaignId: "u-g2", featureSlug: CHANNEL, legKey: REPLY, status: "ongoing" },
+  ],
+  ...over,
+});
+let FUNNELS: Record<string, SalesFunnelCampaign[] | null> = {};
+
+async function funnelCap(period: string, cents: string) {
+  const now = new Date();
+  await db.insert(salesFunnelCaps).values({
+    orgId: FUNNEL,
+    brandId: brandOf(FUNNEL),
+    offerId: OFFER,
+    salesFunnelId: FUNNEL_ID,
+    maxBudgetCents: cents,
+    maxBudgetPeriod: period,
+    maxBudgetSince: now,
+  });
+}
 
 async function ceiling(org: string, legKey: string, cents: string) {
   await db.insert(campaignDailyBudgets).values({
@@ -139,6 +178,13 @@ describe("revenue: recurring, one-off, cash", () => {
       return s ? { ok: true, campaigns: s } : { ok: false, reason: "campaign_service_unavailable" };
     });
 
+    const fcm = await import("../../src/lib/funnel-campaigns.js");
+    FUNNELS = {};
+    vi.spyOn(fcm, "fetchSalesFunnelCampaigns").mockImplementation(async (org: string) => {
+      const f = FUNNELS[org] === undefined ? [] : FUNNELS[org];
+      return f ? { ok: true, campaigns: f } : { ok: false, reason: "campaign_service_unavailable" };
+    });
+
     const burn = await import("../../src/lib/realized-burn.js");
     vi.spyOn(burn, "fetchRealizedDailyBurn").mockResolvedValue({
       dailyCents: "1000.0000000000",
@@ -157,6 +203,7 @@ describe("revenue: recurring, one-off, cash", () => {
     await insertTestAccount({ orgId: NO_CARD, topupAmountCents: null, topupThresholdCents: null });
     await insertTestAccount({ orgId: CS_DOWN, topupAmountCents: 5000, topupThresholdCents: 5000 });
     await insertTestAccount({ orgId: GLOBAL, topupAmountCents: 5000, topupThresholdCents: 5000 });
+    await insertTestAccount({ orgId: FUNNEL, topupAmountCents: 5000, topupThresholdCents: 5000 });
 
     await ceiling(RECURRING, ENTRY, "5000");
     await ceiling(RECURRING, REPLY, "3000");
@@ -164,6 +211,8 @@ describe("revenue: recurring, one-off, cash", () => {
     await ceiling(REACTIVE, REPLY, "3000");
     await ceiling(NO_CARD, ENTRY, "2000");
     await ceiling(CS_DOWN, ENTRY, "4000");
+    // A legacy ceiling on the very pipe the funnel unit runs: it must not be the unit's money.
+    await ceiling(FUNNEL, ENTRY, "5000");
     await db.insert(brandSalesBudgets).values({
       orgId: GLOBAL,
       brandId: brandOf(GLOBAL),
@@ -239,21 +288,24 @@ describe("revenue: recurring, one-off, cash", () => {
   });
 
   it("fleet: one class per org, MRR = sum of rows, 30-day cash = sum of per-org schedules", async () => {
+    // The funnel org runs one funnel campaign, $70 a week.
+    FUNNELS[FUNNEL] = [funnelCampaign()];
+    await funnelCap("weekly", "7000");
     const res = await request(app).get("/internal/revenue/fleet").set(apiKeyHeaders);
     expect(res.status).toBe(200);
     const body = res.body;
 
-    expect(body.accountCount).toBe(6);
-    expect(body.orgs).toHaveLength(6);
+    expect(body.accountCount).toBe(7);
+    expect(body.orgs).toHaveLength(7);
     expect(body.unreadableOrgs).toEqual([]);
     const counts = body.classCounts;
-    expect(counts.recurring + counts.one_off + counts.none).toBe(6);
-    expect(counts).toEqual({ recurring: 3, one_off: 1, none: 2 });
+    expect(counts.recurring + counts.one_off + counts.none).toBe(7);
+    expect(counts).toEqual({ recurring: 4, one_off: 1, none: 2 });
 
     const known = body.orgs.filter((o: { mrrCents: string | null }) => o.mrrCents !== null);
     const mrrSum = known.reduce((s: Decimal, o: { mrrCents: string }) => s.plus(o.mrrCents), new Decimal(0));
     expect(new Decimal(body.totals.mrrCents).equals(mrrSum)).toBe(true);
-    expect(body.totals.mrrCents).toBe("360000.0000000000"); // (5000 + 7000) x 30
+    expect(body.totals.mrrCents).toBe("390000.0000000000"); // (5000 + 7000 + 7000 / 7) x 30
     expect(body.totals.drrUnknownOrgIds).toEqual([CS_DOWN]);
     expect(body.totals.oneOffRemainingCents).toBe("5000.0000000000");
 
@@ -325,6 +377,84 @@ describe("revenue: recurring, one-off, cash", () => {
     const res = await request(app).get(`/internal/revenue/by-org/${RECURRING}`).set(apiKeyHeaders);
     expect(calls).toBe(2);
     expect(res.body.drrCents).toBe("5000.0000000000");
+  });
+
+  describe("SALES FUNNEL campaigns count by their MAX BUDGET, never by a per-pipe ceiling", () => {
+    const revenueOf = async () =>
+      (await request(app).get(`/internal/revenue/by-org/${FUNNEL}`).set(apiKeyHeaders)).body;
+
+    it("weekly cap / 7 per day; the unit is never resolved onto the legacy ceiling of its pipe", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign()];
+      await funnelCap("weekly", "7000");
+      const b = await revenueOf();
+      // Not 5000 (the stopped legacy campaign's ceiling, which the running unit would have woken).
+      expect(b.drrCents).toBe("1000.0000000000");
+      expect(b.mrrCents).toBe("30000.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("6000.0000000000");
+      expect(b.salesFunnelCampaigns).toEqual([
+        {
+          salesFunnelCampaignId: "fc-g",
+          brandId: brandOf(FUNNEL),
+          offerId: OFFER,
+          salesFunnelId: FUNNEL_ID,
+          status: "ongoing",
+          unitCampaignIds: ["u-g1", "u-g2"],
+          dailyBudgetCents: "1000.0000000000",
+          counted: true,
+        },
+      ]);
+      const units = b.campaigns.filter((c: { campaignId: string }) => c.campaignId.startsWith("u-"));
+      expect(units.map((c: { dailyBudgetCents: string | null; counted: boolean }) => [c.dailyBudgetCents, c.counted])).toEqual([
+        [null, false],
+        [null, false],
+      ]);
+    });
+
+    it("a monthly cap reads back as its own amount in MRR", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign()];
+      await funnelCap("monthly", "30000");
+      const b = await revenueOf();
+      expect(b.drrCents).toBe("1000.0000000000");
+      expect(b.mrrCents).toBe("30000.0000000000");
+    });
+
+    it("a one_off cap is not recurring: nothing in DRR, the org reads idle", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign()];
+      await funnelCap("one_off", "30000");
+      const b = await revenueOf();
+      expect(b.drrCents).toBe("0.0000000000");
+      expect(b.classReason).toBe("postpaid_idle");
+      expect(b.salesFunnelCampaigns[0]).toMatchObject({ dailyBudgetCents: "0.0000000000", counted: false });
+    });
+
+    it("a stopped funnel campaign counts nothing (its configured budget stays)", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign({ status: "stopped" })];
+      await funnelCap("daily", "2000");
+      const b = await revenueOf();
+      expect(b.drrCents).toBe("0.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("7000.0000000000");
+    });
+
+    it("an unknown unit verdict, or unreadable funnel campaigns, is NULL with a reason, never 0", async () => {
+      FUNNELS[FUNNEL] = [funnelCampaign()];
+      await funnelCap("daily", "2000");
+      const cs = await import("../../src/lib/campaign-service-client.js");
+      vi.spyOn(cs, "fetchRecurringCampaignStatuses").mockResolvedValue({
+        ok: true,
+        campaigns: [
+          status(FUNNEL, "c-g1", { status: "stopped", running: false, recurring: false }),
+          status(FUNNEL, "u-g1", { recurring: null, recurringUnknownReason: "audience_unknown" }),
+        ],
+      });
+      const unknown = await revenueOf();
+      expect(unknown.drrCents).toBeNull();
+      expect(unknown.proactiveDailyBudgetUnknownReason).toBe("campaign_recurrence_unknown");
+
+      FUNNELS[FUNNEL] = null;
+      const down = await revenueOf();
+      expect(down.drrCents).toBeNull();
+      expect(down.proactiveDailyBudgetUnknownReason).toBe("campaign_service_unavailable");
+    });
   });
 
   it("400s on a bad orgId or horizon, 404s for an unknown org", async () => {

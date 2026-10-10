@@ -61,6 +61,12 @@ import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
+import {
+  capOfFunnelCampaign,
+  fetchSalesFunnelCampaigns,
+  funnelBudgetCaps,
+  recurringDailyCentsOf,
+} from "./funnel-campaigns.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
 import {
   subscriptions,
@@ -154,7 +160,8 @@ export interface PaymentOutlook {
 
 /**
  * Every brand of this org that carries a funded ceiling — a campaign ceiling, a
- * brand-level scalar, or a brand-level "global" sales budget. A brand funded
+ * brand-level scalar, a brand-level "global" sales budget, or a sales funnel's
+ * MAX BUDGET (lib/funnel-campaigns.ts). A brand funded
  * ONLY by the global sales budget carries neither of the first two, and leaving
  * it out made its money read as zero.
  */
@@ -171,6 +178,10 @@ export async function fundedBrandIds(orgId: string): Promise<string[]> {
     SELECT DISTINCT brand_id
       FROM brand_sales_budgets
      WHERE org_id = ${orgId}
+     UNION
+    SELECT DISTINCT brand_id
+      FROM sales_funnel_caps
+     WHERE org_id = ${orgId} AND max_budget_cents IS NOT NULL
   `);
   return (rows as unknown as { brand_id: string }[]).map((r) => r.brand_id);
 }
@@ -226,6 +237,26 @@ async function resolveBudgets(
     configured = addCents(configured, String(answer.configuredDailyBudgetCents));
     if (running !== null) {
       running = addCents(running, String(answer.runningDailyBudgetCents));
+    }
+  }
+
+  // SALES FUNNEL campaigns: their money is the funnel's MAX BUDGET (recurring,
+  // per day; a one_off cap adds nothing), configured whatever the campaign does,
+  // running while the funnel campaign is `ongoing`. Their units carry no ceiling,
+  // so campaign-service's per-ceiling split above never counts them.
+  const caps = await funnelBudgetCaps(orgId);
+  if (caps.length > 0) {
+    for (const c of caps) configured = addCents(configured, recurringDailyCentsOf(c)!);
+    if (running !== null) {
+      const fcs = await fetchSalesFunnelCampaigns(orgId);
+      if (!fcs.ok) {
+        running = null;
+      } else {
+        for (const fc of fcs.campaigns) {
+          const cap = capOfFunnelCampaign(caps, fc);
+          if (fc.status === "ongoing" && cap) running = addCents(running, recurringDailyCentsOf(cap)!);
+        }
+      }
     }
   }
   return { configuredCents: configured, runningCents: running };

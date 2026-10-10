@@ -3067,6 +3067,50 @@
           "counted"
         ]
       },
+      "RevenueSalesFunnelLine": {
+        "type": "object",
+        "properties": {
+          "salesFunnelCampaignId": {
+            "type": "string"
+          },
+          "brandId": {
+            "type": "string"
+          },
+          "offerId": {
+            "type": "string"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "unitCampaignIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "counted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "salesFunnelCampaignId",
+          "brandId",
+          "offerId",
+          "salesFunnelId",
+          "status",
+          "unitCampaignIds",
+          "dailyBudgetCents",
+          "counted"
+        ],
+        "description": "A sales funnel campaign: its money is the funnel's MAX BUDGET, never a per-pipe ceiling (its units carry none)."
+      },
       "OrgRevenueResponse": {
         "type": "object",
         "properties": {
@@ -3190,6 +3234,12 @@
             "items": {
               "$ref": "#/components/schemas/RevenueCampaignLine"
             }
+          },
+          "salesFunnelCampaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueSalesFunnelLine"
+            }
           }
         },
         "required": [
@@ -3215,7 +3265,8 @@
           "cardUnusable",
           "cash",
           "brands",
-          "campaigns"
+          "campaigns",
+          "salesFunnelCampaigns"
         ]
       },
       "CashBucket": {
