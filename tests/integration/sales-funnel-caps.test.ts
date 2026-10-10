@@ -10,6 +10,7 @@ import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets, salesFunnelCapChanges, salesFunnelCaps } from "../../src/db/schema.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
+import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 
 const orgId = "00000000-0000-0000-0000-0000000078a1";
 const otherOrgId = "00000000-0000-0000-0000-0000000078a2";
@@ -30,6 +31,22 @@ const CAMPAIGN_COLD_LEGACY = "11111111-0000-4000-8000-000000000002";
 const CAMPAIGN_BOOKING = "11111111-0000-4000-8000-000000000003";
 const CAMPAIGN_OTHER_OFFER = "11111111-0000-4000-8000-000000000004";
 const CAMPAIGN_OTHER_LEG = "11111111-0000-4000-8000-000000000005";
+// Lead sources (Start -> Lead found) feeding cold email, as features-service publishes them.
+const APOLLO = "sourcing-apollo-cold-filters";
+const SIGNALS = "sourcing-linkedin-engagement-signals";
+const CRM = "sourcing-crm-contacts";
+const CAMPAIGN_SOURCE_APOLLO = "11111111-0000-4000-8000-000000000006";
+const CAMPAIGN_SOURCE_SIGNALS = "11111111-0000-4000-8000-000000000007";
+const CAMPAIGN_SOURCE_CRM = "11111111-0000-4000-8000-000000000008";
+const CAMPAIGN_SOURCE_OTHER_OFFER = "11111111-0000-4000-8000-000000000009";
+const ORIGINS = {
+  sourceLegKey: "start_to_lead_found",
+  origins: [{ slug: APOLLO }, { slug: SIGNALS }, { slug: CRM }],
+  originsByChannel: {
+    "sales-cold-email-outreach": [APOLLO, SIGNALS],
+    "sales-crm-email-outreach": [CRM],
+  },
+};
 
 const app = createTestApp();
 const auth = getAuthHeaders(orgId, userId, runId);
@@ -102,6 +119,11 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = 
           campaign(CAMPAIGN_BOOKING, OFFER, BOOKING, "conversation_to_meeting_booked"),
           campaign(CAMPAIGN_OTHER_OFFER, OTHER_OFFER, COLD, "lead_found_to_conversation"),
           campaign(CAMPAIGN_OTHER_LEG, OFFER, COLD, "lead_found_to_website_visit"),
+          campaign(CAMPAIGN_SOURCE_APOLLO, OFFER, APOLLO, "start_to_lead_found"),
+          campaign(CAMPAIGN_SOURCE_SIGNALS, OFFER, SIGNALS, "start_to_lead_found"),
+          // A source feeding a channel the funnel has no pipe on, and another offer's source: not counted.
+          campaign(CAMPAIGN_SOURCE_CRM, OFFER, CRM, "start_to_lead_found"),
+          campaign(CAMPAIGN_SOURCE_OTHER_OFFER, OTHER_OFFER, APOLLO, "start_to_lead_found"),
         ],
       });
     }
@@ -146,9 +168,11 @@ describe("sales funnel caps", () => {
   beforeEach(async () => {
     await cleanTestData();
     __resetSalesFunnelCache();
+    __primeSalesPathTerms([], ORIGINS as never);
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    __resetSalesPathTerms();
   });
   afterAll(async () => {
     for (const k of ["FEATURES_SERVICE_API_KEY", "CAMPAIGN_SERVICE_URL", "CAMPAIGN_SERVICE_API_KEY"]) {
@@ -174,6 +198,7 @@ describe("sales funnel caps", () => {
       maxVolume: null,
       salesFunnelName: null,
       pipes: null,
+      sources: null,
     });
     expect(calls.features + calls.campaigns + calls.costs.length + calls.outcomes.length).toBe(0);
   });
@@ -192,16 +217,19 @@ describe("sales funnel caps", () => {
     expect(b.stated).toBe(true);
     expect(b.salesFunnelName).toBe("Victory");
 
-    // Spend: every campaign of the funnel's pipes for this brand x offer (both
-    // spellings of the cold leg + the booking campaign), never another offer or leg.
+    // Spend is ALL-INCLUSIVE: every campaign of the funnel's pipes for this brand x
+    // offer (both spellings of the cold leg + the booking campaign) AND the lead
+    // sources feeding cold email; never another offer, leg or unfed source.
     const spendIds = calls.costs.at(-1)!.get("campaignIds")!.split(",").sort();
-    expect(spendIds).toEqual([CAMPAIGN_COLD, CAMPAIGN_COLD_LEGACY, CAMPAIGN_BOOKING].sort());
+    expect(spendIds).toEqual(
+      [CAMPAIGN_COLD, CAMPAIGN_COLD_LEGACY, CAMPAIGN_BOOKING, CAMPAIGN_SOURCE_APOLLO, CAMPAIGN_SOURCE_SIGNALS].sort()
+    );
     expect(b.maxBudget).toMatchObject({
       amountCents: "5000.0000000000",
       period: "weekly",
-      consumedCents: "3001.5000000000",
-      remainingCents: "1998.5000000000",
-      reached: false,
+      consumedCents: "5002.5000000000",
+      remainingCents: "0.0000000000",
+      reached: true,
       consumedUnavailableReason: null,
     });
     // The week starts on a Monday, UTC, and lasts 7 days.
@@ -243,6 +271,21 @@ describe("sales funnel caps", () => {
         campaignIds: [CAMPAIGN_BOOKING],
       },
     ]);
+
+    expect(b.sources).toEqual([
+      {
+        channelSlug: SIGNALS,
+        legKey: "start_to_lead_found",
+        feedsPipeIds: [`${COLD}|lead_found_to_conversation`],
+        campaignIds: [CAMPAIGN_SOURCE_SIGNALS],
+      },
+      {
+        channelSlug: APOLLO,
+        legKey: "start_to_lead_found",
+        feedsPipeIds: [`${COLD}|lead_found_to_conversation`],
+        campaignIds: [CAMPAIGN_SOURCE_APOLLO],
+      },
+    ].sort((x, y) => x.channelSlug.localeCompare(y.channelSlug)));
 
     // The user read answers the same caps.
     const v1 = await request(app).get(`/v1${capsPath()}`).set(auth);
@@ -345,6 +388,23 @@ describe("sales funnel caps", () => {
       consumedUnavailableReason: "runs_service_unavailable",
     });
     expect(res.body.maxVolume).toMatchObject({ consumed: null, reached: null, consumedUnavailableReason: "runs_service_unavailable" });
+  });
+
+  it("an unreadable sourcing catalogue leaves the budget unmeasured (never sourcing-less), volume still measured", async () => {
+    __resetSalesPathTerms();
+    const calls = mockUpstreams();
+    await put({ maxBudget: { amountCents: 1000, period: "daily" }, maxVolume: { count: 5, period: "daily" } });
+    // /public/channels + /public/sourcing-origins hit the mock and fail.
+    const res = await readInternal();
+    expect(res.status).toBe(200);
+    expect(res.body.maxBudget).toMatchObject({
+      consumedCents: null,
+      reached: null,
+      consumedUnavailableReason: "sourcing_catalogue_unavailable",
+    });
+    expect(res.body.maxVolume).toMatchObject({ consumed: 72, consumedUnavailableReason: null });
+    expect(res.body.sources).toBeNull();
+    expect(calls.costs).toHaveLength(0);
   });
 
   it("volume on a proactive channel with no first-contact measure is null with a reason, never 0", async () => {
