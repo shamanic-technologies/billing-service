@@ -41,6 +41,7 @@
 import { and, eq } from "drizzle-orm";
 import {
   brandFunnelCaps,
+  capOfFunnelCampaign,
   fetchSalesFunnelCampaigns,
   fundingOf,
   withRecurringFunnelCaps,
@@ -854,7 +855,7 @@ export function addFunnelCampaignTotals(
   for (const fc of funnels) {
     if (fc.status !== "ongoing") continue;
     const id = { salesFunnelCampaignId: fc.id, salesFunnelId: fc.salesFunnelId, salesFunnelName: fc.salesFunnelName ?? null };
-    const cap = caps.find((c) => c.salesFunnelId === fc.salesFunnelId) ?? null;
+    const cap = capOfFunnelCampaign(caps, fc);
     if (!cap || cap.maxBudgetCents == null || cap.maxBudgetPeriod == null) {
       // A max volume alone funds the funnel (owner rule 2026-10-11), with no $ figure to add.
       const reason = fundingOf(cap).fundedBy === "max_volume" ? "volume_only" : "no_budget";
