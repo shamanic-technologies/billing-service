@@ -14,6 +14,7 @@ import { requireOrgHeaders } from "../middleware/auth.js";
 import { InternalSetSalesFunnelCapsRequestSchema, SetSalesFunnelCapsRequestSchema } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
+  composeSalesFunnelCampaignCapsView,
   composeSalesFunnelCapsView,
   listBrandSalesFunnelCaps,
   setSalesFunnelCaps,
@@ -55,6 +56,18 @@ function keyOf(req: Request, res: Response, orgId: string): FunnelCapKey | null 
     return null;
   }
   return { orgId, brandId, offerId, salesFunnelId };
+}
+
+/** The key of ONE funnel campaign's cap (campaign-service's funnel campaign id, a UUID). */
+function campaignKeyOf(req: Request, res: Response, orgId: string): (FunnelCapKey & { salesFunnelCampaignId: string }) | null {
+  const key = keyOf(req, res, orgId);
+  if (!key) return null;
+  const { salesFunnelCampaignId } = req.params;
+  if (!UUID_RE.test(salesFunnelCampaignId)) {
+    res.status(400).json({ error: "salesFunnelCampaignId must be a valid UUID" });
+    return null;
+  }
+  return { ...key, salesFunnelCampaignId: salesFunnelCampaignId.toLowerCase() };
 }
 
 /** Express 4 does not catch a rejected async handler: answer 500, loudly. */
@@ -153,7 +166,9 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     }
     throw err;
   }
-  const view = await composeSalesFunnelCapsView(key);
+  const view = key.salesFunnelCampaignId
+    ? await composeSalesFunnelCampaignCapsView({ ...key, salesFunnelCampaignId: key.salesFunnelCampaignId })
+    : await composeSalesFunnelCapsView(key);
   res.json(internal ? { ...view, conversion } : view);
 }
 
@@ -176,6 +191,67 @@ router.delete(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) =>
   if (!key) return;
   await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null);
   res.json(await composeSalesFunnelCapsView(key));
+}));
+
+/**
+ * ONE sales funnel CAMPAIGN's caps (migration 0083): several funnel campaigns may
+ * share one funnel (each naming different people); each may hold its own max
+ * budget / max volume, consumed on its own units only. The read answers the cap
+ * the campaign is HELD to: its own (`capScope: "sales_funnel_campaign"`), else
+ * the funnel-wide one (`capScope: "sales_funnel"`). PUT/DELETE write the
+ * campaign's own cap only; the funnel-wide routes above are unchanged.
+ */
+const CAMPAIGN_PATH = "/brands/:brandId/offers/:offerId/sales-funnels/:salesFunnelId/campaigns/:salesFunnelCampaignId/caps";
+
+router.get(`/internal${CAMPAIGN_PATH}`, handle(async (req, res) => {
+  const orgId = internalOrgId(req, res);
+  if (!orgId) return;
+  const key = campaignKeyOf(req, res, orgId);
+  if (!key) return;
+  res.json(await composeSalesFunnelCampaignCapsView(key));
+}));
+
+router.get(`/v1${CAMPAIGN_PATH}`, requireOrgHeaders, handle(async (req, res) => {
+  const key = campaignKeyOf(req, res, req.headers["x-org-id"] as string);
+  if (!key) return;
+  res.json(await composeSalesFunnelCampaignCapsView(key));
+}));
+
+router.put(`/internal${CAMPAIGN_PATH}`, handle(async (req, res) => {
+  const orgId = internalOrgId(req, res);
+  if (!orgId) return;
+  const key = campaignKeyOf(req, res, orgId);
+  if (!key) return;
+  if (req.body?.replacesCeilings?.length) {
+    res.status(400).json({ error: "replacesCeilings: a conversion is written on the funnel-wide cap, not a funnel campaign's" });
+    return;
+  }
+  await putCaps(req, res, key, true);
+}));
+
+router.put(`/v1${CAMPAIGN_PATH}`, requireOrgHeaders, handle(async (req, res) => {
+  const key = campaignKeyOf(req, res, req.headers["x-org-id"] as string);
+  if (!key) return;
+  await putCaps(req, res, key, false);
+}));
+
+async function deleteCampaignCaps(req: Request, res: Response, key: FunnelCapKey & { salesFunnelCampaignId: string }) {
+  await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null);
+  res.json(await composeSalesFunnelCampaignCapsView(key));
+}
+
+router.delete(`/internal${CAMPAIGN_PATH}`, handle(async (req, res) => {
+  const orgId = internalOrgId(req, res);
+  if (!orgId) return;
+  const key = campaignKeyOf(req, res, orgId);
+  if (!key) return;
+  await deleteCampaignCaps(req, res, key);
+}));
+
+router.delete(`/v1${CAMPAIGN_PATH}`, requireOrgHeaders, handle(async (req, res) => {
+  const key = campaignKeyOf(req, res, req.headers["x-org-id"] as string);
+  if (!key) return;
+  await deleteCampaignCaps(req, res, key);
 }));
 
 async function respondBrandList(req: Request, res: Response, orgId: string) {

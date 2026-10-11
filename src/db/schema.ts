@@ -942,14 +942,16 @@ export const salesFunnelCaps = pgTable(
     maxVolumeSince: timestamp("max_volume_since", { withTimezone: true }),
     // features-service's funnel type at write (migration 0080); NULL = not known yet.
     salesFunnelType: text("sales_funnel_type"),
+    // campaign-service's funnel campaign id when the cap is ONE funnel campaign's
+    // (migration 0083); NULL = the funnel-wide cap. See lib/sales-funnel-caps.ts.
+    salesFunnelCampaignId: text("sales_funnel_campaign_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    primaryKey({
-      name: "sales_funnel_caps_pkey",
-      columns: [table.orgId, table.brandId, table.offerId, table.salesFunnelId],
-    }),
+    unique("sales_funnel_caps_key")
+      .on(table.orgId, table.brandId, table.offerId, table.salesFunnelId, table.salesFunnelCampaignId)
+      .nullsNotDistinct(),
   ]
 );
 
@@ -974,6 +976,7 @@ export const salesFunnelCapChanges = pgTable(
     maxBudgetPeriod: text("max_budget_period"),
     maxVolume: integer("max_volume"),
     maxVolumePeriod: text("max_volume_period"),
+    salesFunnelCampaignId: text("sales_funnel_campaign_id"),
     changedByUserId: uuid("changed_by_user_id"),
     changedAt: timestamp("changed_at", { withTimezone: true }).notNull().defaultNow(),
   },

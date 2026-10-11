@@ -5171,6 +5171,7 @@ const ConsumedUnavailableReasonSchema = z
     "no_proactive_pipe",
     "volume_not_measured_on_channel",
     "sourcing_catalogue_unavailable",
+    "sales_funnel_campaign_not_found",
   ])
   .openapi("SalesFunnelConsumedUnavailableReason");
 
@@ -5230,8 +5231,9 @@ const VolumeCapViewSchema = z
     description:
       "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: " +
       "the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes " +
-      "reactive): consumed = prospects the reactive pipes took on. A channel with no measure yet answers null + " +
-      "volume_not_measured_on_channel (no reactive channel is measured yet). unit null = the funnel is unreadable.",
+      "reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called " +
+      "the LLM; AI Follow-up Email: each email sent to one person). A channel with no measure yet answers null + " +
+      "volume_not_measured_on_channel. unit null = the funnel is unreadable.",
   });
 
 const MeasuredPipeSchema = z
@@ -5283,6 +5285,9 @@ const StatedSalesFunnelCapsSchema = z
   .object({
     offerId: z.string().uuid(),
     salesFunnelId: z.string(),
+    salesFunnelCampaignId: z.string().optional().openapi({
+      description: "Present only on ONE funnel campaign's cap: campaign-service's funnel campaign id. Absent = the funnel-wide cap.",
+    }),
     salesFunnelType: SalesFunnelTypeSchema.nullable(),
     salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReasonSchema.nullable(),
     funded: z.boolean().openapi({
@@ -5402,6 +5407,81 @@ registry.registerPath({
     400: funnelCapsError("Invalid ids"),
   },
 });
+
+export const SalesFunnelCampaignCapsSchema = SalesFunnelCapsSchema.extend({
+  salesFunnelCampaignId: z.string().uuid(),
+  capScope: z.enum(["sales_funnel_campaign", "sales_funnel"]).openapi({
+    description:
+      "sales_funnel_campaign = this funnel campaign's OWN cap, consumption counted on its units only (pipes[].campaignIds " +
+      "are its units). sales_funnel = it states none, so it is held to the funnel-wide cap: figures byte-identical to " +
+      "the funnel read (consumption over every campaign on the funnel's pipes). Nothing stated anywhere = sales_funnel + stated:false.",
+  }),
+}).openapi("SalesFunnelCampaignCaps");
+
+const funnelCampaignCapParams = funnelCapParams.extend({
+  salesFunnelCampaignId: z.string().uuid().openapi({ description: "campaign-service's sales funnel campaign id" }),
+});
+const funnelCampaignCapsPath = "/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps";
+const funnelCampaignCapsJson = { "application/json": { schema: SalesFunnelCampaignCapsSchema } };
+
+registry.registerPath({
+  method: "get",
+  path: `/internal${funnelCampaignCapsPath}`,
+  summary: "Read the caps ONE sales funnel campaign is held to, and what it consumed this period",
+  description:
+    "campaign-service reads this per funnel campaign (x-api-key + x-org-id). Several funnel campaigns may share one " +
+    "funnel (each naming different people); each may hold its own MAX BUDGET / MAX VOLUME, consumed on its own units " +
+    "only. Without its own cap it is held to the funnel-wide cap (capScope sales_funnel). Same fields as the funnel read " +
+    "(funded, fundedBy, maxBudget, maxVolume with consumed / remaining / reached). A funnel campaign campaign-service " +
+    "does not state on this brand, offer and funnel answers consumed null + sales_funnel_campaign_not_found.",
+  request: { headers: internalOrgHeaders, params: funnelCampaignCapParams },
+  responses: {
+    200: { description: "Caps", content: funnelCampaignCapsJson },
+    400: funnelCapsError("Invalid ids or x-org-id"),
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: `/v1${funnelCampaignCapsPath}`,
+  summary: "Read the caps one sales funnel campaign is held to (dashboard)",
+  request: { headers: protectedHeaders, params: funnelCampaignCapParams },
+  responses: {
+    200: { description: "Caps", content: funnelCampaignCapsJson },
+    400: funnelCapsError("Invalid ids"),
+  },
+});
+
+for (const [prefix, headers, body] of [
+  ["/internal", internalOrgHeaders, SetSalesFunnelCapsRequestSchema],
+  ["/v1", protectedHeaders, SetSalesFunnelCapsRequestSchema],
+] as const) {
+  registry.registerPath({
+    method: "put",
+    path: `${prefix}${funnelCampaignCapsPath}`,
+    summary: "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME",
+    description:
+      "Same body as the funnel PUT (no replacesCeilings: a conversion is funnel-wide). The funnel must exist in " +
+      "features-service's catalogue; the funnel campaign need not exist yet. Charges nothing. Answers the campaign read.",
+    request: { headers, params: funnelCampaignCapParams, body: { content: { "application/json": { schema: body } } } },
+    responses: {
+      200: { description: "Stated", content: funnelCampaignCapsJson },
+      400: funnelCapsError("Invalid ids or body"),
+      404: funnelCapsError("sales_funnel_not_found"),
+      502: funnelCapsError("sales_funnel_catalogue_unavailable"),
+    },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: `${prefix}${funnelCampaignCapsPath}`,
+    summary: "Clear one sales funnel campaign's own caps (it falls back to the funnel-wide cap)",
+    request: { headers, params: funnelCampaignCapParams },
+    responses: {
+      200: { description: "Cleared", content: funnelCampaignCapsJson },
+      400: funnelCapsError("Invalid ids"),
+    },
+  });
+}
 
 const brandFunnelCapsQuery = z.object({ offerId: z.string().uuid().optional() });
 
