@@ -303,6 +303,73 @@
           "depleted"
         ]
       },
+      "RunwayResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "days",
+              "depleted",
+              "no_budget",
+              "budget_unavailable",
+              "not_prepaid"
+            ],
+            "description": "days = balance > 0 and a running daily budget > 0 (days_left + runs_out_at set); depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running behind a budget (or none configured), no runway to state; budget_unavailable = campaign-service could not be read; not_prepaid = postpaid or subscription org."
+          },
+          "balance_cents": {
+            "type": "string",
+            "description": "Spendable balance the runway is computed on (same figure as balance_cents on GET /v1/accounts)."
+          },
+          "daily_budget_cents": {
+            "type": "string",
+            "nullable": true,
+            "description": "Sum of the RUNNING daily budgets across the org's brands (campaign ceilings, global sales budgets, recurring sales funnel caps per day) with a campaign running behind them. Paused or stopped campaigns count 0. Never discounted. Null for not_prepaid / budget_unavailable."
+          },
+          "configured_daily_budget_cents": {
+            "type": "string",
+            "description": "Configured daily total, running or not (informational). \"0\" for not_prepaid."
+          },
+          "days_left": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Whole days the balance lasts, rounded DOWN (0 = less than a day). Null unless state = days."
+          },
+          "days_left_exact": {
+            "type": "string",
+            "nullable": true,
+            "description": "balance_cents / daily_budget_cents, 2 decimals rounded down. Null unless state = days."
+          },
+          "runs_out_at": {
+            "type": "string",
+            "nullable": true,
+            "description": "ISO 8601 instant the balance reaches zero at the running daily budget. Null unless state = days."
+          }
+        },
+        "required": [
+          "org_id",
+          "payment_mode",
+          "state",
+          "balance_cents",
+          "daily_budget_cents",
+          "configured_daily_budget_cents",
+          "days_left",
+          "days_left_exact",
+          "runs_out_at"
+        ]
+      },
       "UpdateAutoTopupRequest": {
         "type": "object",
         "properties": {
@@ -5455,6 +5522,126 @@
           },
           "404": {
             "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/runway": {
+      "get": {
+        "summary": "How many days a prepaid org's spendable balance lasts at its running daily budgets",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runway",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunwayResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service unavailable",
             "content": {
               "application/json": {
                 "schema": {
