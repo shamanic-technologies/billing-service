@@ -1878,6 +1878,53 @@ registry.registerPath({
   },
 });
 
+export const RunwayResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    payment_mode: z.enum(["prepaid", "postpaid", "subscription"]),
+    state: z.enum(["days", "depleted", "no_budget", "budget_unavailable", "not_prepaid"]).openapi({
+      description:
+        "days = balance > 0 and a running daily budget > 0 (days_left + runs_out_at set); " +
+        "depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running " +
+        "behind a budget (or none configured), no runway to state; budget_unavailable = " +
+        "campaign-service could not be read; not_prepaid = postpaid or subscription org.",
+    }),
+    balance_cents: z.string().openapi({
+      description: "Spendable balance the runway is computed on (same figure as balance_cents on GET /v1/accounts).",
+    }),
+    daily_budget_cents: z.string().nullable().openapi({
+      description:
+        "Sum of the RUNNING daily budgets across the org's brands (campaign ceilings, global sales " +
+        "budgets, recurring sales funnel caps per day) with a campaign running behind them. Paused " +
+        "or stopped campaigns count 0. Never discounted. Null for not_prepaid / budget_unavailable.",
+    }),
+    configured_daily_budget_cents: z.string().openapi({
+      description: "Configured daily total, running or not (informational). \"0\" for not_prepaid.",
+    }),
+    days_left: z.number().int().nullable().openapi({
+      description: "Whole days the balance lasts, rounded DOWN (0 = less than a day). Null unless state = days.",
+    }),
+    days_left_exact: z.string().nullable().openapi({
+      description: "balance_cents / daily_budget_cents, 2 decimals rounded down. Null unless state = days.",
+    }),
+    runs_out_at: z.string().nullable().openapi({
+      description: "ISO 8601 instant the balance reaches zero at the running daily budget. Null unless state = days.",
+    }),
+  })
+  .openapi("RunwayResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/runway",
+  summary: "How many days a prepaid org's spendable balance lasts at its running daily budgets",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Runway", content: { "application/json": { schema: RunwayResponseSchema } } },
+    404: { description: "Billing account not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "stripe-service or runs-service unavailable", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/auto_topup",

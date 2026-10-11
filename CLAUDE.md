@@ -745,6 +745,7 @@ Two live consumers read this endpoint: the staff metrics console and the PUBLIC 
 |---|---|---|
 | `GET` | `/v1/accounts` | account snapshot (credited, usage, balance, topup config) |
 | `GET` | `/v1/accounts/balance` | shortcut: `{ balance_cents, depleted }` |
+| `GET` | `/v1/accounts/runway` | PREPAID runway for the dashboard balance card (`lib/runway.ts`): spendable `balance_cents` / RUNNING daily budget (payment outlook `resolveBudgets`: paused campaigns count 0, never discounted). `state` = `days` (`days_left` floored, `days_left_exact`, `runs_out_at`) \| `depleted` (balance <= 0) \| `no_budget` \| `budget_unavailable` (campaign-service unreadable) \| `not_prepaid`. Pure read; 404 no account, 502 stripe/runs down. |
 | `PATCH` | `/v1/accounts/auto_topup` | configure auto-topup; body must include both `topup_amount_cents` and `topup_threshold_cents` |
 | `DELETE` | `/v1/accounts/auto_topup` | disable auto-topup |
 | `DELETE` | `/v1/accounts/saved_payment_method` | Stop holding this org's card (user via gateway, org headers). **Collects what is owed FIRST, on the card that is about to go, then removes it whatever that collection did** — charged, declined, skipped or backed off. Refused for nobody; an org with no card is a 200. Nothing is forgiven. Auto-topup is disarmed. `502` = the removal could not be performed, retry. See "Removing the card". |

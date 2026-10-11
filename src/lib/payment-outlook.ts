@@ -193,7 +193,7 @@ export async function fundedBrandIds(orgId: string): Promise<string[]> {
  * null: a partial sum presented as a total would understate silently, which is
  * the failure mode a null exists to avoid.
  */
-async function resolveBudgets(
+export async function resolveBudgets(
   orgId: string
 ): Promise<{ configuredCents: string; runningCents: string | null }> {
   const brandIds = await fundedBrandIds(orgId);
