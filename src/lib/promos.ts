@@ -5,6 +5,7 @@ import {
   billingAccounts,
   localPromoCodes,
   localPromos,
+  offPlatformPayments,
   WELCOME_PROMO_CODE,
   INVITE_WELCOME_CODE,
   ADMIN_GRANT_CODE,
@@ -414,7 +415,8 @@ export async function grantAdminCredit(
   amountCents: number,
   note: string | null,
   grantedBy: string | null,
-  idempotencyKey: string
+  idempotencyKey: string,
+  paidOffPlatformAt: Date | null = null
 ): Promise<AdminGrantResult> {
   return insertStackingGrant({
     code: ADMIN_GRANT_CODE,
@@ -423,6 +425,7 @@ export async function grantAdminCredit(
     description: note,
     grantedBy,
     idempotencyKey,
+    paidOffPlatformAt,
   });
 }
 
@@ -472,6 +475,13 @@ interface StackingGrantParams {
   description: string | null;
   grantedBy: string | null;
   idempotencyKey: string;
+  /**
+   * Staff grant only: the client PAID this amount off-platform on this date (bank
+   * transfer to the owner). Written with the grant, in the same transaction, as an
+   * off_platform_payments row, so the credit counts as CASH (lib/off-platform-payments).
+   * Only on a FRESH grant: a retry of an existing key never turns a gift into a payment.
+   */
+  paidOffPlatformAt?: Date | null;
 }
 
 /**
@@ -490,6 +500,7 @@ async function insertStackingGrant({
   description,
   grantedBy,
   idempotencyKey,
+  paidOffPlatformAt = null,
 }: StackingGrantParams): Promise<AdminGrantResult> {
   const [promoCode] = await db
     .select()
@@ -521,6 +532,15 @@ async function insertStackingGrant({
       .returning();
 
     if (inserted.length > 0) {
+      if (paidOffPlatformAt) {
+        await tx.insert(offPlatformPayments).values({
+          localPromoId: inserted[0].id,
+          orgId,
+          paidAt: paidOffPlatformAt,
+          recordedBy: grantedBy,
+          note: description,
+        });
+      }
       return { localPromoId: inserted[0].id, alreadyGranted: false };
     }
 
@@ -548,6 +568,11 @@ export interface GrantListItem {
   note: string | null;
   grantedBy: string | null;
   createdAt: string;
+  /**
+   * When the client PAID this amount off-platform (an off_platform_payments row marks
+   * the grant as cash, not a gift); null for every other grant.
+   */
+  offPlatformPaidAt: string | null;
 }
 
 const GRANT_LIST_COLUMNS = {
@@ -558,6 +583,7 @@ const GRANT_LIST_COLUMNS = {
   note: localPromos.description,
   grantedBy: localPromos.grantedBy,
   createdAt: localPromos.createdAt,
+  offPlatformPaidAt: offPlatformPayments.paidAt,
 } as const;
 
 function toGrantItem(row: {
@@ -568,8 +594,13 @@ function toGrantItem(row: {
   note: string | null;
   grantedBy: string | null;
   createdAt: Date;
+  offPlatformPaidAt: Date | null;
 }): GrantListItem {
-  return { ...row, createdAt: row.createdAt.toISOString() };
+  return {
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    offPlatformPaidAt: row.offPlatformPaidAt ? row.offPlatformPaidAt.toISOString() : null,
+  };
 }
 
 /**
@@ -582,6 +613,7 @@ export async function listGrantsForOrg(orgId: string): Promise<GrantListItem[]> 
     .select(GRANT_LIST_COLUMNS)
     .from(localPromos)
     .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .leftJoin(offPlatformPayments, eq(offPlatformPayments.localPromoId, localPromos.id))
     .where(eq(localPromos.orgId, orgId))
     .orderBy(desc(localPromos.createdAt));
   return rows.map(toGrantItem);
@@ -596,6 +628,7 @@ export async function listAllGrants(): Promise<GrantListItem[]> {
     .select(GRANT_LIST_COLUMNS)
     .from(localPromos)
     .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
+    .leftJoin(offPlatformPayments, eq(offPlatformPayments.localPromoId, localPromos.id))
     .orderBy(desc(localPromos.createdAt));
   return rows.map(toGrantItem);
 }

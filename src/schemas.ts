@@ -88,7 +88,7 @@ export const BillingAccountSchema = z
     }),
     cash_paid_cents: CentsStringSchema.openapi({
       description:
-        "Total CASH the org has paid us: every succeeded payment, on every acquirer, NET of refunds and lost disputes. Never reduced by what a payment repaid (the trial-end subscription charge, the match_100 onboarding advance) and never includes credits we gave. credited_paid_cents === cash_paid_cents − credited_trial_repaid_cents − (advance repaid). 0 for an org that never paid.",
+        "Total CASH the org has paid us: every succeeded payment, on every acquirer, NET of refunds and lost disputes, plus payments it made OFF-platform (a staff grant recorded as a payment, paidOffPlatformAt). Never reduced by what a payment repaid (the trial-end subscription charge, the match_100 onboarding advance) and never includes credits we gave. credited_paid_cents === cash_paid_cents − credited_trial_repaid_cents − (advance repaid). 0 for an org that never paid.",
     }),
     credited_trial_advance_cents: CentsStringSchema.openapi({
       description:
@@ -575,6 +575,20 @@ export const AdminCreditGrantRequestSchema = z
      * retried never double-grants. Required — no silent default.
      */
     idempotencyKey: z.string().min(1),
+    /**
+     * Set when this grant RECORDS A PAYMENT the client made off-platform (bank
+     * transfer to staff) on this date: the credit then counts as CASH the client paid
+     * (cash_paid_cents, credited_paid_cents, cash_by_month at this date), not as a
+     * gift. Omit for a gift. `YYYY-MM-DD` (UTC) or an ISO date-time, never in the future.
+     */
+    paidOffPlatformAt: z
+      .string()
+      .optional()
+      .openapi({
+        description:
+          "Set when this grant records a PAYMENT the client made off-platform (bank transfer to staff) on this date: the credit then counts as CASH the client paid (cash_paid_cents, credited_paid_cents, cash_by_month at this date), not as a gift. Omit for a gift. YYYY-MM-DD (UTC) or an ISO date-time with offset, never in the future. Balance is credited exactly as any grant.",
+        example: "2026-09-28",
+      }),
   })
   .openapi("AdminCreditGrantRequest");
 
@@ -599,8 +613,42 @@ export const CreditGrantItemSchema = z
     /** Staff email behind an admin_grant; null for non-admin grants. */
     grantedBy: z.string().nullable(),
     createdAt: z.string(),
+    /**
+     * When the client PAID this amount off-platform: the grant records a payment
+     * (counted as cash), not a gift. Null for every other grant.
+     */
+    offPlatformPaidAt: z.string().nullable().openapi({
+      description:
+        "When the client PAID this amount off-platform: this grant records a payment (counted as cash the client paid), not a gift. Null for every other grant.",
+    }),
   })
   .openapi("CreditGrantItem");
+
+export const OffPlatformPaymentReclassifyRequestSchema = z
+  .object({
+    /** When the client paid: `YYYY-MM-DD` (UTC) or an ISO date-time, never in the future. */
+    paidAt: z.string().min(1),
+    /** Who states the payment (staff email). Stored, traceable. */
+    recordedBy: z.string().trim().min(1, "recordedBy is required"),
+    /** Why — stored on the marking row. */
+    note: z.string().trim().min(1, "note is required"),
+  })
+  .openapi("OffPlatformPaymentReclassifyRequest");
+
+export const OffPlatformPaymentReclassifyResponseSchema = z
+  .object({
+    grantId: z.string().uuid(),
+    orgId: z.string().uuid(),
+    amountCents: CentsStringSchema,
+    paidAt: z.string(),
+    recordedBy: z.string().nullable(),
+    note: z.string().nullable(),
+    /** When the grant was marked as a payment (the grant keeps its own createdAt). */
+    recordedAt: z.string(),
+    /** True when the grant was already marked with the same date (no write). */
+    alreadyRecorded: z.boolean(),
+  })
+  .openapi("OffPlatformPaymentReclassifyResponse");
 
 export const CreditGrantsListResponseSchema = z
   .object({
@@ -2448,6 +2496,9 @@ registry.registerPath({
     "Inserts a stacking admin_grant local_promos row for x-org-id. Grants STACK — a " +
     "fresh idempotencyKey per call adds another grant; the same key retried never " +
     "double-grants. The note is stored on the row; x-email is recorded as grantedBy. " +
+    "paidOffPlatformAt (optional) records the grant as a PAYMENT the client made " +
+    "off-platform on that date: counted as cash (cash_paid_cents, credited_paid_cents, " +
+    "cash_by_month), not a gift; the balance is credited exactly the same. " +
     "Returns the org's spendable balance after the grant.",
   request: {
     headers: adminGrantHeaders,
@@ -2463,7 +2514,7 @@ registry.registerPath({
       },
     },
     400: {
-      description: "Invalid body or missing/invalid x-org-id",
+      description: "Invalid body (incl. an unreadable or future paidOffPlatformAt) or missing/invalid x-org-id",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     500: {
@@ -2671,6 +2722,47 @@ registry.registerPath({
       content: {
         "application/json": { schema: CreditGrantsListResponseSchema },
       },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/credits/grants/{grantId}/off-platform-payment",
+  summary: "Mark an existing staff grant as a payment the client made off-platform",
+  description:
+    "Service-auth only (x-api-key; staff tooling on the box). For an admin_grant created as " +
+    "a gift BEFORE paidOffPlatformAt existed, when the client in fact PAID that amount " +
+    "off-platform on paidAt (owner 2026-10-11: revenue is cash the client paid). Appends a " +
+    "traceable marking (recordedBy, note, recordedAt); the grant row is never edited and the " +
+    "balance does not move. The amount then counts as cash (cash_paid_cents, " +
+    "credited_paid_cents, cash_by_month at paidAt), out of credited_gifted_cents. Same grant, " +
+    "same date → 200 alreadyRecorded; a different date → 409.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ grantId: z.string().uuid() }),
+    body: {
+      content: { "application/json": { schema: OffPlatformPaymentReclassifyRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Grant marked as an off-platform payment (or already marked with that date)",
+      content: {
+        "application/json": { schema: OffPlatformPaymentReclassifyResponseSchema },
+      },
+    },
+    400: {
+      description: "grantId not a UUID, or invalid body (paidAt unreadable or in the future)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No grant with this id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Not an admin_grant, or already marked with a different payment date",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });
@@ -3195,8 +3287,10 @@ registry.registerPath({
     "on GET /v1/accounts (every succeeded payment, every acquirer, net of refunds and lost " +
     "disputes, never reduced by what it repaid). credited_cents = the org's credited total. " +
     "non_cash_credit_cents = credited_cents − cash_paid_cents (gifts, advances not yet repaid). " +
+    "Cash includes payments the client made OFF-platform (a staff grant recorded as one: " +
+    "paidOffPlatformAt on POST /v1/credits/grant, or POST /internal/credits/grants/{grantId}/off-platform-payment). " +
     "?by_month=true adds cash_by_month: net cash collected per UTC month (a refund counts in the " +
-    "month it happened), from the org's first activity month to now; the months sum to " +
+    "month it happened, an off-platform payment in its payment month), from the org's first activity month to now; the months sum to " +
     "cash_paid_cents. Pure read. 0 everywhere for an org that never paid or has no account.",
   request: {
     headers: internalHeaders,
