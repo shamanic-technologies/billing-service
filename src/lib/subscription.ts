@@ -771,6 +771,17 @@ export async function reactiveCollectedInPeriod(sub: Subscription): Promise<numb
   return fromCharge + (await reactiveChargedNowInPeriod(sub));
 }
 
+/** Every auto-upgrade step PAID for this plan, all periods (cents/month it added). */
+async function autoUpgradeStepsPaidCents(sub: Subscription): Promise<number> {
+  const [row] = await db
+    .select({
+      total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.toAmountCents} - ${subscriptionAutoUpgrades.fromAmountCents}), 0)::text`,
+    })
+    .from(subscriptionAutoUpgrades)
+    .where(and(eq(subscriptionAutoUpgrades.subscriptionId, sub.id), eq(subscriptionAutoUpgrades.status, "paid")));
+  return Number(row?.total ?? 0);
+}
+
 /** Auto-upgrade steps PAID for this plan during its current period (lib/subscription-auto-upgrade). */
 export async function autoUpgradePaidInPeriod(sub: Subscription): Promise<number> {
   const [row] = await db
@@ -937,6 +948,10 @@ export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Pr
     return sub;
   }
   if (!pricing) return sub;
+  // Auto-upgrade steps (lib/subscription-auto-upgrade) sit ON TOP of the items:
+  // re-pricing from items must never undo an upgrade the customer already paid for.
+  const steps = await autoUpgradeStepsPaidCents(sub);
+  if (steps > 0) pricing = { ...pricing, monthlyAmountCents: pricing.monthlyAmountCents + steps };
   if (
     pricing.monthlyAmountCents === sub.monthlyAmountCents &&
     pricing.reactiveMonthlyCents === sub.itemReactiveMonthlyCents

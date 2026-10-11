@@ -173,6 +173,34 @@ describe("subscription auto-upgrade", () => {
     expect(Number((await computeBalance(orgId)).balanceCents)).toBe(10000);
   });
 
+  it("a plan priced from customer-stated items keeps its step: trial end charges $199, not $99", async () => {
+    const start = new Date(Date.now() - DAY * 1.5);
+    const sub = await startTrial(start);
+    await db.update(subscriptions).set({ brandId, offerId }).where(eq(subscriptions.id, sub.id));
+    // The offer holds customer-stated monthly items worth $99 (ON, on a channel we run).
+    const store = await import("../../src/lib/campaign-items-store.js");
+    vi.spyOn(store, "listOfferItems").mockResolvedValue([{} as never]);
+    vi.spyOn(store, "itemsPlanPricing").mockReturnValue({
+      monthlyAmountCents: 9900,
+      reactiveMonthlyCents: 0,
+      deferredMonthlyCents: 0,
+      offMonthlyCents: 0,
+    });
+    const terms = await import("../../src/lib/sales-path-terms.js");
+    vi.spyOn(terms, "getSalesPathTerms").mockResolvedValue({} as never);
+
+    usage = "9900.0000000000";
+    expect(await notifySubscriptionOutOfCreditsIfDue(orgId)).toBe("upgraded");
+    const upgraded = (await getLiveSubscription(orgId))!;
+    expect(upgraded.monthlyAmountCents).toBe(19900);
+
+    usage = "19900.0000000000";
+    const afterTrial = await advanceSubscription(upgraded, new Date(sub.trialEndsAt!.getTime() + 1000));
+    expect(afterTrial.status).toBe("active");
+    expect(afterTrial.monthlyAmountCents).toBe(19900);
+    expect(charges.map((c) => c.amount)).toEqual([10000, 19900]);
+  });
+
   it("after the trial: one step per run-out, the period does not restart", async () => {
     const start = new Date(Date.now() - 10 * DAY);
     const sub = await startTrial(start);
