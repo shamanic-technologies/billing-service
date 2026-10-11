@@ -399,6 +399,20 @@ describe("buildBudgetChangeEmail: running sales funnel campaigns", () => {
     );
   });
 
+  it("a running funnel funded by a max volume alone is named, never counted (no $ ceiling)", () => {
+    const email = buildBudgetChangeEmail(
+      legistai({
+        funnels: {
+          running: [],
+          volumeOnly: [{ name: "Moving", offerId: L_OFFER, count: 50, period: "weekly" }],
+        },
+      })
+    );
+    expect(email.summaryText.split("\n")[0]).toBe(
+      "Spending now: $0/day, not counting sales funnel Moving (offer LegistAI) (capped at 50 a week, no $ ceiling)."
+    );
+  });
+
   it("funnel campaigns that could not be read are said, never counted as 0", () => {
     const email = buildBudgetChangeEmail(legistai({ funnels: null }));
     expect(email.summaryText.split("\n")[0]).toBe(

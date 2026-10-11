@@ -4458,6 +4458,7 @@
                   "type": "string",
                   "enum": [
                     "no_budget",
+                    "volume_only",
                     "one_off",
                     "type_unknown"
                   ]
@@ -4903,6 +4904,20 @@
           "stated": {
             "type": "boolean"
           },
+          "funded": {
+            "type": "boolean",
+            "description": "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it."
+          },
+          "fundedBy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "max_budget",
+              "max_volume",
+              "both"
+            ],
+            "description": "Which stated cap funds the funnel; null when not funded."
+          },
           "updatedAt": {
             "type": "string",
             "nullable": true
@@ -4947,6 +4962,8 @@
           "offerId",
           "salesFunnelId",
           "stated",
+          "funded",
+          "fundedBy",
           "updatedAt",
           "maxBudget",
           "maxVolume",
@@ -5064,6 +5081,20 @@
           "salesFunnelTypeUnavailableReason": {
             "$ref": "#/components/schemas/SalesFunnelTypeUnavailableReason"
           },
+          "funded": {
+            "type": "boolean",
+            "description": "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it."
+          },
+          "fundedBy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "max_budget",
+              "max_volume",
+              "both"
+            ],
+            "description": "Which stated cap funds the funnel; null when not funded."
+          },
           "maxBudget": {
             "type": "object",
             "nullable": true,
@@ -5113,6 +5144,8 @@
           "salesFunnelId",
           "salesFunnelType",
           "salesFunnelTypeUnavailableReason",
+          "funded",
+          "fundedBy",
           "maxBudget",
           "maxVolume",
           "updatedAt"

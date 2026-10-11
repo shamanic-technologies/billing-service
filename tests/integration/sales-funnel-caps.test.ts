@@ -224,6 +224,8 @@ describe("sales funnel caps", () => {
       offerId: OFFER,
       salesFunnelId: FUNNEL,
       stated: false,
+      funded: false,
+      fundedBy: null,
       updatedAt: null,
       maxBudget: null,
       maxVolume: null,
@@ -356,6 +358,27 @@ describe("sales funnel caps", () => {
     expect(b.maxBudget).toBeNull();
     expect(b.maxVolume.count).toBe(10);
     expect(calls.costs).toHaveLength(0);
+  });
+
+  it("funding (owner rule 2026-10-11): a max budget AND/OR a max volume funds the funnel; neither, or a stated 0, does not", async () => {
+    mockUpstreams();
+    const funding = async () => {
+      const b = (await readInternal()).body;
+      return [b.funded, b.fundedBy];
+    };
+    expect(await funding()).toEqual([false, null]);
+    await put({ maxBudget: null, maxVolume: { count: 10, period: "daily" } });
+    expect(await funding()).toEqual([true, "max_volume"]);
+    await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: null });
+    expect(await funding()).toEqual([true, "max_budget"]);
+    await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: { count: 10, period: "daily" } });
+    expect(await funding()).toEqual([true, "both"]);
+    await put({ maxBudget: { amountCents: 0, period: "daily" }, maxVolume: { count: 10, period: "daily" } });
+    expect(await funding()).toEqual([false, null]);
+    await put({ maxBudget: null, maxVolume: { count: 0, period: "daily" } });
+    expect(await funding()).toEqual([false, null]);
+    await put({ maxBudget: null, maxVolume: null });
+    expect(await funding()).toEqual([false, null]);
   });
 
   it("one_off keeps counting from when it was first stated; a new period starts now", async () => {
@@ -548,6 +571,8 @@ describe("sales funnel caps", () => {
         salesFunnelId: ADS_FUNNEL,
         salesFunnelType: null,
         salesFunnelTypeUnavailableReason: "type_not_served_by_features_service",
+        funded: true,
+        fundedBy: "max_volume",
         maxBudget: null,
         maxVolume: { count: 3, period: "daily", unit: "first_contacts" },
         updatedAt: expect.any(String),

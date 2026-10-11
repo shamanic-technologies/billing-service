@@ -93,9 +93,18 @@ export interface BudgetChangeEmailInput {
    * (lib/funnel-campaigns.ts): `running` = the `ongoing` ones, each counted in
    * "Spending now" at its cap per day. null = the brand has such caps but the
    * funnel campaigns could not be read (said in words, never counted as 0).
-   * Absent = the brand has no recurring funnel cap.
+   * Absent = the brand has no recurring funnel cap. `volumeOnly` = the `ongoing`
+   * ones funded by a max volume alone: named, never counted (no $ figure).
    */
-  funnels?: { running: FunnelSpend[] } | null;
+  funnels?: { running: FunnelSpend[]; volumeOnly?: FunnelVolumeOnly[] } | null;
+}
+
+/** A running sales funnel campaign funded by a MAX VOLUME alone (no $ ceiling). */
+export interface FunnelVolumeOnly {
+  name: string;
+  offerId: string;
+  count: number;
+  period: "one_off" | "daily" | "weekly" | "monthly";
 }
 
 /** A running sales funnel campaign and its recurring MAX BUDGET. */
@@ -396,6 +405,11 @@ export function buildBudgetChangeEmail(input: BudgetChangeEmailInput): BudgetCha
     }
     if (unclassified.length > 0) {
       spending += `, not counting ${joinList(unclassified)} (running, could not be classified)`;
+    }
+    for (const f of input.funnels?.volumeOnly ?? []) {
+      const offer = offerPhrase(f.offerId, offerNames);
+      const per = f.period === "one_off" ? "in total" : `a ${f.period === "daily" ? "day" : f.period === "weekly" ? "week" : "month"}`;
+      spending += `, not counting sales funnel ${f.name}${offer ? ` (${offer})` : ""} (capped at ${f.count} ${per}, no $ ceiling)`;
     }
     if (input.funnels === null) {
       spending += ", not counting sales funnel campaigns (they could not be read)";

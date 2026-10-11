@@ -4805,13 +4805,17 @@ const OfferBudgetTotalsSchema = z
         budgetCents: z.number(),
       })
     ),
-    /** ON funnel campaigns not counted: no max budget, a one-off cap, or an unrecorded funnel type. */
+    /**
+     * ON funnel campaigns not counted: `no_budget` (nothing funds it: no cap stated), `volume_only`
+     * (funded by a max volume alone: it spends, but states no $ figure to add), a one-off cap, or an
+     * unrecorded funnel type.
+     */
     salesFunnelsNotCounted: z.array(
       z.object({
         salesFunnelCampaignId: z.string(),
         salesFunnelId: z.string(),
         salesFunnelName: z.string().nullable(),
-        reason: z.enum(["no_budget", "one_off", "type_unknown"]),
+        reason: z.enum(["no_budget", "volume_only", "one_off", "type_unknown"]),
       })
     ),
   })
@@ -5117,6 +5121,11 @@ export const SalesFunnelCapsSchema = z
     offerId: z.string().uuid(),
     salesFunnelId: z.string(),
     stated: z.boolean(),
+    funded: z.boolean().openapi({
+      description:
+        "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it.",
+    }),
+    fundedBy: z.enum(["max_budget", "max_volume", "both"]).nullable().openapi({ description: "Which stated cap funds the funnel; null when not funded." }),
     updatedAt: z.string().nullable(),
     maxBudget: BudgetCapViewSchema.nullable(),
     maxVolume: VolumeCapViewSchema.nullable(),
@@ -5135,6 +5144,11 @@ const StatedSalesFunnelCapsSchema = z
     salesFunnelId: z.string(),
     salesFunnelType: SalesFunnelTypeSchema.nullable(),
     salesFunnelTypeUnavailableReason: SalesFunnelTypeUnavailableReasonSchema.nullable(),
+    funded: z.boolean().openapi({
+      description:
+        "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it.",
+    }),
+    fundedBy: z.enum(["max_budget", "max_volume", "both"]).nullable().openapi({ description: "Which stated cap funds the funnel; null when not funded." }),
     maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema, dailyBudgetCents: CentsStringSchema }).nullable(),
     maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: VolumeUnitSchema.nullable() }).nullable(),
     updatedAt: z.string(),

@@ -70,7 +70,7 @@ import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { calendarMonthOf } from "./campaign-items.js";
 import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
-import { brandFunnelDailyCentsVia } from "./funnel-campaigns.js";
+import { brandFunnelDailyCentsVia, fundingOf, type FundedBy } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import {
   billingAccounts,
@@ -749,6 +749,13 @@ export interface VolumeCapView {
 export interface SalesFunnelCapsView extends FunnelCapKey {
   /** false = nothing stated for this funnel (both caps null). */
   stated: boolean;
+  /**
+   * May the funnel's campaign spend at all (`fundingOf`): true when a max budget
+   * AND/OR a max volume is stated, each above 0. A volume-only funnel is funded.
+   */
+  funded: boolean;
+  /** Which cap funds it; null when not funded. */
+  fundedBy: FundedBy | null;
   updatedAt: string | null;
   maxBudget: BudgetCapView | null;
   maxVolume: VolumeCapView | null;
@@ -880,6 +887,8 @@ export async function composeSalesFunnelCapsView(
     return {
       ...k,
       stated: false,
+      funded: false,
+      fundedBy: null,
       updatedAt: null,
       maxBudget: null,
       maxVolume: null,
@@ -903,6 +912,7 @@ export async function composeSalesFunnelCapsView(
   return {
     ...k,
     stated: true,
+    ...fundingOf(row),
     updatedAt: row.updatedAt.toISOString(),
     maxBudget: budgetView(row, now, budget),
     maxVolume: volumeView(row, now, volume, answer.funnel ? volumeUnitOf(answer.funnel) : null),
@@ -972,6 +982,7 @@ export async function statedCapsOf(row: SalesFunnelCapRow) {
     salesFunnelId: row.salesFunnelId,
     salesFunnelType: identity.salesFunnelType,
     salesFunnelTypeUnavailableReason: identity.salesFunnelTypeUnavailableReason,
+    ...fundingOf(row),
     maxBudget:
       row.maxBudgetCents != null
         ? { amountCents: row.maxBudgetCents, period: row.maxBudgetPeriod as CapPeriod, dailyBudgetCents: recurringDailyCentsOf(row)! }
