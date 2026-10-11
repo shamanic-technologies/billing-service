@@ -2,8 +2,16 @@ import { Router } from "express";
 import {
   CreditGrantRequestSchema,
   AdminCreditGrantRequestSchema,
+  OffPlatformPaymentReclassifyRequestSchema,
   StaffDebitRequestSchema,
 } from "../schemas.js";
+import {
+  GrantNotFoundError,
+  GrantNotReclassifiableError,
+  OffPlatformPaymentConflictError,
+  parseOffPlatformPaidAt,
+  reclassifyGrantAsOffPlatformPayment,
+} from "../lib/off-platform-payments.js";
 import {
   grantCredit,
   grantAdminCredit,
@@ -159,10 +167,25 @@ router.post("/v1/credits/grant", async (req, res) => {
     res.status(400).json({ error: parsed.error.issues[0].message });
     return;
   }
-  const { amountCents, note, idempotencyKey } = parsed.data;
+  const { amountCents, note, idempotencyKey, paidOffPlatformAt } = parsed.data;
+  // A grant that records a client's off-platform payment counts as CASH, not a gift
+  // (lib/off-platform-payments). The date is the payment's, so it must be real.
+  let paidAt: Date | null = null;
+  if (paidOffPlatformAt !== undefined) {
+    paidAt = parseOffPlatformPaidAt(paidOffPlatformAt);
+    if (!paidAt) {
+      console.error(
+        `[billing-400] ${req.method} ${req.path}: paidOffPlatformAt="${paidOffPlatformAt}" unreadable or in the future`
+      );
+      res.status(400).json({
+        error: "paidOffPlatformAt must be YYYY-MM-DD or an ISO date-time, not in the future",
+      });
+      return;
+    }
+  }
 
   try {
-    await grantAdminCredit(orgId, amountCents, note ?? null, grantedBy, idempotencyKey);
+    await grantAdminCredit(orgId, amountCents, note ?? null, grantedBy, idempotencyKey, paidAt);
   } catch (err) {
     if (err instanceof GrantPromoCodeMissingError) {
       console.error("[billing-service] credits/grant admin seed missing:", err);
@@ -185,7 +208,7 @@ router.post("/v1/credits/grant", async (req, res) => {
   }
 
   console.log(
-    `[billing-service] admin credit grant: org=${orgId} amount=${amountCents} by=${grantedBy ?? "(unknown)"} key=${idempotencyKey} balance=${newBalanceCents}`
+    `[billing-service] admin credit grant: org=${orgId} amount=${amountCents} by=${grantedBy ?? "(unknown)"} key=${idempotencyKey}${paidAt ? ` off_platform_payment_at=${paidAt.toISOString()}` : ""} balance=${newBalanceCents}`
   );
 
   res.json({ ok: true as const, newBalanceCents });
@@ -217,6 +240,51 @@ router.get("/v1/credits/grants", async (req, res) => {
 router.get("/internal/credits/grants", async (_req, res) => {
   const grants = await listAllGrants();
   res.json({ grants });
+});
+
+// POST /internal/credits/grants/:grantId/off-platform-payment — mark an EXISTING
+// admin_grant as a payment the client made off-platform on paidAt (a grant created as
+// a gift before paidOffPlatformAt existed). Appends a traceable marking row; the grant
+// row and the balance never move. x-api-key only (staff tooling on the box). See
+// lib/off-platform-payments.
+router.post("/internal/credits/grants/:grantId/off-platform-payment", async (req, res) => {
+  const { grantId } = req.params;
+  if (!UUID_RE.test(grantId)) {
+    res.status(400).json({ error: "grantId must be a valid UUID" });
+    return;
+  }
+  const parsed = OffPlatformPaymentReclassifyRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0].message });
+    return;
+  }
+  const paidAt = parseOffPlatformPaidAt(parsed.data.paidAt);
+  if (!paidAt) {
+    res.status(400).json({ error: "paidAt must be YYYY-MM-DD or an ISO date-time, not in the future" });
+    return;
+  }
+  try {
+    const result = await reclassifyGrantAsOffPlatformPayment({
+      grantId,
+      paidAt,
+      recordedBy: parsed.data.recordedBy,
+      note: parsed.data.note,
+    });
+    console.log(
+      `[billing-service] grant marked as off-platform payment: grant=${grantId} org=${result.orgId} amount=${result.amountCents} paid_at=${result.paidAt} by=${result.recordedBy} already=${result.alreadyRecorded}`
+    );
+    res.json(result);
+  } catch (err) {
+    if (err instanceof GrantNotFoundError) {
+      res.status(404).json({ error: err.message });
+      return;
+    }
+    if (err instanceof GrantNotReclassifiableError || err instanceof OffPlatformPaymentConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
 });
 
 // POST /v1/credits/debit — staff debit: take credit OFF an org's balance, with a

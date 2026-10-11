@@ -627,7 +627,7 @@ router.get("/internal/accounts/by-org/:orgId/cash", async (req, res) => {
       non_cash_credit_cents: cash.nonCashCreditCents,
     };
     if (byMonthParam === "true") {
-      const months = await getOrgCashByMonth(orgId, cash.cashPaidCents);
+      const months = await getOrgCashByMonth(orgId, cash.stripePaidCents);
       body.cash_by_month = months.map((m) => ({ month: m.month, cash_paid_cents: m.cashPaidCents }));
     }
     res.json(body);
