@@ -4669,6 +4669,29 @@ const OfferBudgetTotalsSchema = z
         reason: z.enum(["role_unknown", "channel_not_run"]),
       })
     ),
+    /**
+     * ON (campaign-service `ongoing`) SALES FUNNEL campaigns counted in the totals above
+     * by their MAX BUDGET cap, in `period`: proactive in `proactive`, reactive ("Up to")
+     * in `reactive`. A cap is all-inclusive, so it adds nothing to sourcingBudgetCents.
+     */
+    salesFunnels: z.array(
+      z.object({
+        salesFunnelCampaignId: z.string(),
+        salesFunnelId: z.string(),
+        salesFunnelName: z.string().nullable(),
+        role: z.enum(["proactive", "reactive"]),
+        budgetCents: z.number(),
+      })
+    ),
+    /** ON funnel campaigns not counted: no max budget, a one-off cap, or an unrecorded funnel type. */
+    salesFunnelsNotCounted: z.array(
+      z.object({
+        salesFunnelCampaignId: z.string(),
+        salesFunnelId: z.string(),
+        salesFunnelName: z.string().nullable(),
+        reason: z.enum(["no_budget", "one_off", "type_unknown"]),
+      })
+    ),
   })
   .openapi("OfferBudgetTotals");
 
