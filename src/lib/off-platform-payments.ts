@@ -158,3 +158,26 @@ export function parseOffPlatformPaidAt(value: string, now: Date = new Date()): D
   if (d.getTime() > now.getTime()) return null;
   return d;
 }
+
+export interface FleetOffPlatformPayment {
+  orgId: string;
+  paidAt: Date;
+  amountCents: string;
+}
+
+/**
+ * Every off-platform payment of the fleet, oldest first: the input the PLATFORM cash
+ * series (`GET /public/stats/billing`) adds on top of stripe-service's acquirer and
+ * `direct_payments` figures, so one bank transfer counts once whichever store holds it.
+ */
+export async function listAllOffPlatformPayments(): Promise<FleetOffPlatformPayment[]> {
+  return db
+    .select({
+      orgId: offPlatformPayments.orgId,
+      paidAt: offPlatformPayments.paidAt,
+      amountCents: localPromos.amountCents,
+    })
+    .from(offPlatformPayments)
+    .innerJoin(localPromos, eq(offPlatformPayments.localPromoId, localPromos.id))
+    .orderBy(offPlatformPayments.paidAt);
+}
