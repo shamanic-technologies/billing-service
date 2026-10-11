@@ -16,6 +16,9 @@ import {
 } from "../../src/lib/subscription-out-of-credits.js";
 import { composeOutOfCreditsEmail } from "../../src/lib/subscription-out-of-credits-email.js";
 import type { SalesFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
+import { eq } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
+import { subscriptions } from "../../src/db/schema.js";
 
 const orgId = "00000000-0000-0000-0000-0000000008c1";
 const prepaidOrgId = "00000000-0000-0000-0000-0000000008c2";
@@ -102,9 +105,13 @@ describe("subscription out of credits email", () => {
     await closeDb();
   });
 
+  // A GRANDFATHERED plan (created before migration 0081): it stops at zero and is
+  // told by email. Plans that auto-upgrade: subscription-auto-upgrade.test.ts.
   async function startTrial() {
     await insertTestAccount({ orgId });
-    return startSubscription({ orgId, userId, monthlyAmountCents: 9900 });
+    const sub = await startSubscription({ orgId, userId, monthlyAmountCents: 9900 });
+    await db.update(subscriptions).set({ autoUpgrade: false }).where(eq(subscriptions.id, sub.id));
+    return sub;
   }
 
   it("credit at zero: exactly one email, reactive campaigns first, then proactive, one upgrade link", async () => {

@@ -568,6 +568,13 @@
       "when": 1795082400000,
       "tag": "0080_sales_funnel_caps_type",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1795168800000,
+      "tag": "0081_subscription_auto_upgrade_and_consents",
+      "breakpoints": true
     }
   ]
 }
