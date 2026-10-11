@@ -319,6 +319,31 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     ]);
   });
 
+  it("a funnel funded by a max volume alone is not counted, and named volume_only, never no_budget", async () => {
+    await insertTestAccount({ orgId });
+    await cap(BLISS, 1000, "daily", "proactive");
+    await db.insert(salesFunnelCaps).values({
+      orgId,
+      brandId: BRAND,
+      offerId: OFFER,
+      salesFunnelId: MOVING,
+      maxVolume: 50,
+      maxVolumePeriod: "daily",
+      maxVolumeSince: new Date(),
+      salesFunnelType: "proactive",
+    });
+    funnelCampaigns = [
+      funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]]),
+      funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]]),
+    ];
+    const res = await request(app).get(itemsPath).set(headers);
+    expect(res.status).toBe(200);
+    expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
+    expect(res.body.totals.salesFunnelsNotCounted).toEqual([
+      { salesFunnelCampaignId: "bbbbbbbb-0067-4000-8000-000000000030", salesFunnelId: MOVING, salesFunnelName: "Moving", reason: "volume_only" },
+    ]);
+  });
+
   it("a stopped funnel campaign counts nothing; weekly / one-off caps; monthly for a subscriber-style period", async () => {
     await insertTestAccount({ orgId });
     await cap(BLISS, 7000, "weekly", "proactive");

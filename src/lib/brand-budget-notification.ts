@@ -57,32 +57,49 @@ import {
 import { getBrandCeilings } from "./campaign-budgets.js";
 import { getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import {
+  brandFunnelCaps,
   capOfFunnelCampaign,
   fetchSalesFunnelCampaigns,
-  funnelBudgetCaps,
+  fundingOf,
   recurringDailyCentsOf,
 } from "./funnel-campaigns.js";
-import type { FunnelSpend } from "./budget-change-email.js";
+import type { FunnelSpend, FunnelVolumeOnly } from "./budget-change-email.js";
 
 /**
  * The brand's running SALES FUNNEL campaigns with a recurring max budget, for
- * "Spending now". undefined = the brand has no recurring funnel cap; null = it
- * has some but the funnel campaigns (or the caps) could not be read. Never throws.
+ * "Spending now", and the running VOLUME-ONLY ones (funded by a max volume alone,
+ * owner rule 2026-10-11: named, never counted, they state no $ figure).
+ * undefined = the brand has neither; null = it has some but the funnel campaigns
+ * (or the caps) could not be read. Never throws.
  */
 async function readFunnelSpend(
   orgId: string,
   brandId: string
-): Promise<{ running: FunnelSpend[] } | null | undefined> {
+): Promise<{ running: FunnelSpend[]; volumeOnly: FunnelVolumeOnly[] } | null | undefined> {
   try {
+    const all = await brandFunnelCaps(orgId, brandId);
     // Reactive funnels ("Up to $X") are ceilings, never "Spending now" (owner rule 2026-10-01).
-    const caps = (await funnelBudgetCaps(orgId, brandId)).filter(
-      (c) => c.maxBudgetPeriod !== "one_off" && c.salesFunnelType !== "reactive"
+    const caps = all.filter(
+      (c) => c.maxBudgetCents != null && c.maxBudgetPeriod !== "one_off" && c.salesFunnelType !== "reactive"
     );
-    if (caps.length === 0) return undefined;
+    const volumeCaps = all.filter((c) => fundingOf(c).fundedBy === "max_volume");
+    if (caps.length === 0 && volumeCaps.length === 0) return undefined;
     const fcs = await fetchSalesFunnelCampaigns(orgId);
     if (!fcs.ok) return null;
-    const running = fcs.campaigns
-      .filter((fc) => fc.brandId === brandId && fc.status === "ongoing")
+    const ongoing = fcs.campaigns.filter((fc) => fc.brandId === brandId && fc.status === "ongoing");
+    const volumeOnly = ongoing.flatMap((fc) => {
+      const cap = capOfFunnelCampaign(volumeCaps, fc);
+      if (!cap) return [];
+      return [
+        {
+          name: fc.salesFunnelName ?? fc.salesFunnelId,
+          offerId: fc.offerId,
+          count: cap.maxVolume!,
+          period: cap.maxVolumePeriod as FunnelVolumeOnly["period"],
+        },
+      ];
+    });
+    const running = ongoing
       .flatMap((fc) => {
         const cap = capOfFunnelCampaign(caps, fc);
         if (!cap) return [];
@@ -96,7 +113,7 @@ async function readFunnelSpend(
           },
         ];
       });
-    return { running };
+    return { running, volumeOnly };
   } catch (err) {
     console.error(`[billing-service] funnel spend read failed for the staff email, brand=${brandId}:`, err);
     return null;

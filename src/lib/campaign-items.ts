@@ -40,8 +40,9 @@
 
 import { and, eq } from "drizzle-orm";
 import {
+  brandFunnelCaps,
   fetchSalesFunnelCampaigns,
-  funnelBudgetCaps,
+  fundingOf,
   withRecurringFunnelCaps,
   type SalesFunnelCampaign,
 } from "./funnel-campaigns.js";
@@ -816,7 +817,8 @@ export interface OfferBudgetTotals {
     budgetCents: number;
   }>;
   /**
-   * ON funnel campaigns neither total counts: `no_budget` (no max budget stated),
+   * ON funnel campaigns neither total counts: `no_budget` (no cap funds it),
+   * `volume_only` (funded by a max volume alone: it runs, but has no $ figure),
    * `one_off` (a one-off cap is not a per-day or per-month figure), `type_unknown`
    * (features-service's funnel type was not recorded on the cap).
    */
@@ -824,7 +826,7 @@ export interface OfferBudgetTotals {
     salesFunnelCampaignId: string;
     salesFunnelId: string;
     salesFunnelName: string | null;
-    reason: "no_budget" | "one_off" | "type_unknown";
+    reason: "no_budget" | "volume_only" | "one_off" | "type_unknown";
   }>;
 }
 
@@ -854,7 +856,9 @@ export function addFunnelCampaignTotals(
     const id = { salesFunnelCampaignId: fc.id, salesFunnelId: fc.salesFunnelId, salesFunnelName: fc.salesFunnelName ?? null };
     const cap = caps.find((c) => c.salesFunnelId === fc.salesFunnelId) ?? null;
     if (!cap || cap.maxBudgetCents == null || cap.maxBudgetPeriod == null) {
-      totals.salesFunnelsNotCounted.push({ ...id, reason: "no_budget" });
+      // A max volume alone funds the funnel (owner rule 2026-10-11), with no $ figure to add.
+      const reason = fundingOf(cap).fundedBy === "max_volume" ? "volume_only" : "no_budget";
+      totals.salesFunnelsNotCounted.push({ ...id, reason });
       continue;
     }
     if (cap.maxBudgetPeriod === "one_off") {
@@ -1023,7 +1027,8 @@ export async function getOfferItemsView(
   // SALES FUNNEL campaigns (owner 2026-10-10): their money is the funnel's caps, not a
   // ceiling. A ceiling left on one of their pipes is never counted for them (it would
   // count the pipe twice).
-  const offerCaps = (await funnelBudgetCaps(orgId, brandId)).filter((c) => c.offerId === offerId);
+  // Every stated cap, a volume-only one included (it funds its funnel, owner rule 2026-10-11).
+  const offerCaps = (await brandFunnelCaps(orgId, brandId)).filter((c) => c.offerId === offerId);
   const funnelAnswer = stored.length > 0 || offerCaps.length > 0 ? await fetchSalesFunnelCampaigns(orgId) : null;
   const offerFunnels =
     funnelAnswer?.ok === true
