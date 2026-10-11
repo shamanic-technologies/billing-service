@@ -70,6 +70,37 @@ export function recurringDailyCentsOf(
   return new Decimal(cap.maxBudgetCents).dividedBy(days).toFixed(10);
 }
 
+/** Which stated cap funds a funnel; null = not funded. */
+export type FundedBy = "max_budget" | "max_volume" | "both";
+
+/**
+ * PURE: is this funnel FUNDED, i.e. may its campaign spend at all? Owner rule
+ * 2026-10-11: "Pour créer une campaign il FAUT une contrainte qui doit être SOIT
+ * un max $ ET/OU un max volume." Funded = at least one cap stated and every
+ * stated cap above 0 (a $0 max budget spends nothing, a max volume of 0 touches
+ * nobody). A volume-only funnel is funded: it spends from the org's balance
+ * (every balance / payment hold still applies) until its max volume is reached.
+ * Nothing stated = not funded (no constraint, no spend). This is the ONE answer;
+ * readers (campaign-service, the dashboard) read it, never re-derive it.
+ */
+export function fundingOf(
+  row: Pick<SalesFunnelCapRow, "maxBudgetCents" | "maxVolume"> | null | undefined
+): { funded: boolean; fundedBy: FundedBy | null } {
+  const budget = row?.maxBudgetCents != null ? new Decimal(row.maxBudgetCents).greaterThan(0) : null;
+  const volume = row?.maxVolume != null ? row.maxVolume > 0 : null;
+  if (budget === null && volume === null) return { funded: false, fundedBy: null };
+  if (budget === false || volume === false) return { funded: false, fundedBy: null };
+  return { funded: true, fundedBy: budget && volume ? "both" : budget ? "max_budget" : "max_volume" };
+}
+
+/** Every stated cap of a brand: a max budget, a max volume, or both. */
+export async function brandFunnelCaps(orgId: string, brandId: string): Promise<SalesFunnelCapRow[]> {
+  return db
+    .select()
+    .from(salesFunnelCaps)
+    .where(and(eq(salesFunnelCaps.orgId, orgId), eq(salesFunnelCaps.brandId, brandId)));
+}
+
 /** Every cap of an org (optionally one brand) that states a budget. */
 export async function funnelBudgetCaps(orgId: string, brandId?: string): Promise<SalesFunnelCapRow[]> {
   const where = brandId
