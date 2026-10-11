@@ -582,6 +582,13 @@
       "when": 1795255200000,
       "tag": "0082_off_platform_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1795341600000,
+      "tag": "0083_sales_funnel_campaign_caps",
+      "breakpoints": true
     }
   ]
 }

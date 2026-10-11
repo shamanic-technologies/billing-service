@@ -34,8 +34,10 @@
  *   - `prospects_handled` when every pipe is REACTIVE (a reactive funnel
  *     contacts nobody first): each prospect a reactive pipe takes on once they
  *     reached its start step (a reply, a visit...). Measured per channel from
- *     the run that handles one (`REACTIVE_ITEM_TASKS`); no reactive channel is
- *     pinned yet, so it reads null + `volume_not_measured_on_channel`, never 0.
+ *     the run that handles one (`REACTIVE_ITEM_TASKS`: AI meeting booking, AI
+ *     Follow-up Email); another channel reads null + `volume_not_measured_on_channel`, never 0.
+ * - ONE funnel CAMPAIGN may hold its own cap (`salesFunnelCampaignId`, migration
+ *   0083): consumption is then counted on that campaign's units only.
  *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
  *   not the relayed type; the two use the same rule upstream.
  * - The proactive measure: Measured per channel from the run that makes it
@@ -70,7 +72,7 @@ import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { calendarMonthOf } from "./campaign-items.js";
 import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
-import { brandFunnelDailyCentsVia, fundingOf, type FundedBy } from "./funnel-campaigns.js";
+import { brandFunnelDailyCentsVia, fetchSalesFunnelCampaigns, fundingOf, type FundedBy } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import {
   billingAccounts,
@@ -126,7 +128,7 @@ export const ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName
  * (polling workflow runs, LLM calls, judgments), so nothing is pinned rather
  * than a guess. Add a channel here once one run = one prospect is verified.
  */
-export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string; distinctParent: true }>> = {
+export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string; distinctParent?: true }>> = {
   // AI meeting booking answers a prospect who replied: one run of its workflow
   // that did work = one prospect taken on. Its workflow polls ~400 times a day
   // doing nothing (no paid child); the runs that take a prospect on call the LLM
@@ -134,6 +136,13 @@ export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string;
   // those calls (prod 14d 2026-10-10: 15 workflow runs with a completion, 14 of
   // them the only runs with any cost, out of 6,035).
   "ai-meeting-booking": { serviceName: "chat-service", taskName: "complete", distinctParent: true },
+  // AI Follow-up Email (features-service #1573, reactive leg signup_to_paid_client,
+  // trigger follow_up_due) writes ONE email to ONE named person and sends it as a
+  // new thread through email-gateway's broadcast send, which instantly-service
+  // records as one `email-send-step-1` run on the unit campaign (one-step
+  // sequence): one run = one person emailed = 1 (2026-10-11, workflow-service
+  // ai-follow-up-email workflow).
+  "ai-follow-up-email": { serviceName: "instantly-service", taskName: "email-send-step-1" },
 };
 
 export type ConsumedUnavailableReason =
@@ -144,13 +153,19 @@ export type ConsumedUnavailableReason =
   | "runs_service_unavailable"
   | "no_proactive_pipe"
   | "volume_not_measured_on_channel"
-  | "sourcing_catalogue_unavailable";
+  | "sourcing_catalogue_unavailable"
+  | "sales_funnel_campaign_not_found";
 
 export interface FunnelCapKey {
   orgId: string;
   brandId: string;
   offerId: string;
   salesFunnelId: string;
+  /**
+   * campaign-service's funnel campaign id when the cap is ONE funnel campaign's
+   * (migration 0083); absent / null = the funnel-wide cap.
+   */
+  salesFunnelCampaignId?: string | null;
 }
 
 export interface BudgetCapInput {
@@ -195,7 +210,10 @@ const keyWhere = (k: FunnelCapKey) =>
     eq(salesFunnelCaps.orgId, k.orgId),
     eq(salesFunnelCaps.brandId, k.brandId),
     eq(salesFunnelCaps.offerId, k.offerId),
-    eq(salesFunnelCaps.salesFunnelId, k.salesFunnelId)
+    eq(salesFunnelCaps.salesFunnelId, k.salesFunnelId),
+    k.salesFunnelCampaignId
+      ? eq(salesFunnelCaps.salesFunnelCampaignId, k.salesFunnelCampaignId)
+      : isNull(salesFunnelCaps.salesFunnelCampaignId)
   );
 
 export async function getSalesFunnelCaps(k: FunnelCapKey): Promise<SalesFunnelCapRow | null> {
@@ -317,7 +335,13 @@ export async function setSalesFunnelCaps(
       .insert(salesFunnelCaps)
       .values({ ...k, ...values, createdAt: now })
       .onConflictDoUpdate({
-        target: [salesFunnelCaps.orgId, salesFunnelCaps.brandId, salesFunnelCaps.offerId, salesFunnelCaps.salesFunnelId],
+        target: [
+          salesFunnelCaps.orgId,
+          salesFunnelCaps.brandId,
+          salesFunnelCaps.offerId,
+          salesFunnelCaps.salesFunnelId,
+          salesFunnelCaps.salesFunnelCampaignId,
+        ],
         set: values,
       })
       .returning();
@@ -561,9 +585,34 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   }
   const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
   const sources = await feedingSources(funnel, ofOffer);
+  // ONE funnel campaign's cap counts that campaign's UNITS only (its pipes'
+  // campaigns), never a sibling funnel campaign's on the same pipe.
+  let onPipe: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }> = ofOffer;
+  if (k.salesFunnelCampaignId) {
+    const fcs = await fetchSalesFunnelCampaigns(k.orgId);
+    if (!fcs.ok) {
+      return { ok: false, reason: fcs.reason, detail: "campaign-service sales-funnel-campaigns unreadable", funnel };
+    }
+    const fc = fcs.campaigns.find(
+      (c) =>
+        c.id === k.salesFunnelCampaignId &&
+        c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
+        c.offerId.toLowerCase() === k.offerId.toLowerCase() &&
+        c.salesFunnelId === k.salesFunnelId
+    );
+    if (!fc) {
+      return {
+        ok: false,
+        reason: "sales_funnel_campaign_not_found",
+        detail: `campaign-service states no funnel campaign ${k.salesFunnelCampaignId} on this brand, offer and sales funnel`,
+        funnel,
+      };
+    }
+    onPipe = fc.units;
+  }
   const pipes = funnel.pipes.map((p) => ({
     ...p,
-    campaignIds: ofOffer
+    campaignIds: onPipe
       .filter((c) => c.featureSlug === p.channelSlug && sameLeg(p.channelSlug, c.legKey, p.legKey))
       .map((c) => c.campaignId)
       .sort(),
@@ -922,6 +971,38 @@ export async function composeSalesFunnelCapsView(
   };
 }
 
+/** Which cap a funnel campaign is held to (the campaign read). */
+export type CapScope = "sales_funnel_campaign" | "sales_funnel";
+
+export interface SalesFunnelCampaignCapsView extends SalesFunnelCapsView {
+  salesFunnelCampaignId: string;
+  /**
+   * `sales_funnel_campaign` = this campaign's own cap, consumption counted on its
+   * units only; `sales_funnel` = it states none, so it is held to the funnel-wide
+   * cap (consumption over every campaign on the funnel's pipes, as on the funnel
+   * read). Nothing stated anywhere = `sales_funnel` with `stated: false`.
+   */
+  capScope: CapScope;
+}
+
+/**
+ * The caps ONE funnel campaign is held to: its own cap when stated, else the
+ * funnel-wide cap (byte-identical figures to the funnel read).
+ */
+export async function composeSalesFunnelCampaignCapsView(
+  k: FunnelCapKey & { salesFunnelCampaignId: string },
+  now: Date = new Date()
+): Promise<SalesFunnelCampaignCapsView> {
+  const own = await getSalesFunnelCaps(k);
+  if (own) {
+    const view = await composeSalesFunnelCapsView(k, now);
+    return { ...view, salesFunnelCampaignId: k.salesFunnelCampaignId, capScope: "sales_funnel_campaign" };
+  }
+  const { salesFunnelCampaignId, ...funnelKey } = k;
+  const view = await composeSalesFunnelCapsView(funnelKey, now);
+  return { ...view, salesFunnelCampaignId, capScope: "sales_funnel" };
+}
+
 /** The funnel read fail-soft: the funnel, or null with the reason it could not be read. */
 async function readFunnelSoft(
   id: string
@@ -980,6 +1061,9 @@ export async function statedCapsOf(row: SalesFunnelCapRow) {
   return {
     offerId: row.offerId,
     salesFunnelId: row.salesFunnelId,
+    // Present only on ONE funnel campaign's cap (migration 0083): a funnel-wide
+    // entry stays byte-identical to before.
+    ...(row.salesFunnelCampaignId ? { salesFunnelCampaignId: row.salesFunnelCampaignId } : {}),
     salesFunnelType: identity.salesFunnelType,
     salesFunnelTypeUnavailableReason: identity.salesFunnelTypeUnavailableReason,
     ...fundingOf(row),

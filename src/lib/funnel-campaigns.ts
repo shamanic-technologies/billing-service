@@ -118,15 +118,21 @@ export function brandFunnelDailyCents(caps: SalesFunnelCapRow[]): string | null 
   return recurring.reduce((s, c) => s.plus(recurringDailyCentsOf(c)!), new Decimal(0)).toFixed(10);
 }
 
-/** The cap of a funnel campaign (same org, brand, offer, funnel), or null. */
+/**
+ * The cap a funnel campaign is held to: its OWN cap (migration 0083) when stated,
+ * else its funnel's funnel-wide cap (same org, brand, offer, funnel), else null.
+ */
 export function capOfFunnelCampaign(
   caps: SalesFunnelCapRow[],
-  fc: Pick<SalesFunnelCampaign, "brandId" | "offerId" | "salesFunnelId">
+  fc: Pick<SalesFunnelCampaign, "id" | "brandId" | "offerId" | "salesFunnelId">
 ): SalesFunnelCapRow | null {
-  return (
-    caps.find((c) => c.brandId === fc.brandId && c.offerId === fc.offerId && c.salesFunnelId === fc.salesFunnelId) ??
-    null
+  const ofFunnel = caps.filter(
+    (c) =>
+      c.brandId.toLowerCase() === fc.brandId.toLowerCase() &&
+      c.offerId.toLowerCase() === fc.offerId.toLowerCase() &&
+      c.salesFunnelId === fc.salesFunnelId
   );
+  return ofFunnel.find((c) => c.salesFunnelCampaignId === fc.id) ?? ofFunnel.find((c) => c.salesFunnelCampaignId == null) ?? null;
 }
 
 /**
