@@ -35,6 +35,7 @@ import {
 import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
+import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
 import { cannotSpend, resolveOrgFloor } from "../lib/spend-block.js";
 import { fetchOrgActualUsageTotal } from "../lib/transfer-usage.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
@@ -599,6 +600,43 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
 // A known org with NO discount returns discount_percent = 0 / discount_pct = 0
 // (NOT null, NOT 404) so a non-discounted org resolves to "0% off" = no change.
 // The `orgId` echo is additive. 400 on a non-UUID orgId.
+/**
+ * Cash vs credit for one org, x-api-key + orgId PATH only (no user / run identity):
+ * staff revenue reads (features-service) follow the owner rule « revenue is cash the
+ * client paid; a granted or advanced credit being consumed is never revenue ».
+ * `?by_month=true` adds net cash collected per UTC month. Pure read. 502 when
+ * stripe-service cannot be read. See lib/org-cash.
+ */
+router.get("/internal/accounts/by-org/:orgId/cash", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  const byMonthParam = req.query.by_month;
+  if (byMonthParam !== undefined && byMonthParam !== "true" && byMonthParam !== "false") {
+    res.status(400).json({ error: "by_month must be true or false" });
+    return;
+  }
+  try {
+    const cash = await getOrgCash(orgId);
+    const body: Record<string, unknown> = {
+      org_id: orgId,
+      cash_paid_cents: cash.cashPaidCents,
+      credited_cents: cash.creditedCents,
+      non_cash_credit_cents: cash.nonCashCreditCents,
+    };
+    if (byMonthParam === "true") {
+      const months = await getOrgCashByMonth(orgId, cash.cashPaidCents);
+      body.cash_by_month = months.map((m) => ({ month: m.month, cash_paid_cents: m.cashPaidCents }));
+    }
+    res.json(body);
+  } catch (err) {
+    console.error(`[billing-service] internal cash-by-org: read failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to read the org's cash" });
+  }
+});
+
 router.get("/internal/accounts/by-org/:orgId/usage-discount", async (req, res) => {
   const { orgId } = req.params;
   if (!UUID_RE.test(orgId)) {

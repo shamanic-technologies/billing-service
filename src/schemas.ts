@@ -3139,6 +3139,53 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/internal/accounts/by-org/{orgId}/cash",
+  summary: "Cash an org paid vs credit it received without paying (staff revenue reads)",
+  description:
+    "Callable with the service x-api-key ONLY (orgId in the PATH, no x-org-id / x-user-id / " +
+    "x-run-id). Owner rule 2026-10-11: revenue is cash the client paid; a granted or advanced " +
+    "credit being consumed is never revenue. cash_paid_cents = the same figure as cash_paid_cents " +
+    "on GET /v1/accounts (every succeeded payment, every acquirer, net of refunds and lost " +
+    "disputes, never reduced by what it repaid). credited_cents = the org's credited total. " +
+    "non_cash_credit_cents = credited_cents − cash_paid_cents (gifts, advances not yet repaid). " +
+    "?by_month=true adds cash_by_month: net cash collected per UTC month (a refund counts in the " +
+    "month it happened), from the org's first activity month to now; the months sum to " +
+    "cash_paid_cents. Pure read. 0 everywhere for an org that never paid or has no account.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+    query: z.object({ by_month: z.enum(["true", "false"]).optional() }),
+  },
+  responses: {
+    200: {
+      description: "Cash vs credit",
+      content: {
+        "application/json": {
+          schema: z.object({
+            org_id: z.string().uuid(),
+            cash_paid_cents: CentsStringSchema,
+            credited_cents: CentsStringSchema,
+            non_cash_credit_cents: CentsStringSchema,
+            cash_by_month: z
+              .array(z.object({ month: z.string(), cash_paid_cents: CentsStringSchema }))
+              .optional(),
+          }),
+        },
+      },
+    },
+    400: {
+      description: "orgId is not a valid UUID, or by_month is not true/false",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "stripe-service unavailable",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/accounts/by-org/{orgId}/usage-discount",
   summary: "User-less read of an org's platform-usage discount (service-to-service)",
   description:
