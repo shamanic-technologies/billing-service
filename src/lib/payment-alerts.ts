@@ -82,6 +82,7 @@ export function kindFromChargeReason(reason: string | undefined): PaymentKind {
   switch (reason) {
     case "subscription":
     case "subscription_reactive_items":
+    case "subscription_auto_upgrade":
       return "subscription";
     case "month_end_sweep":
       return "month_end_settle";

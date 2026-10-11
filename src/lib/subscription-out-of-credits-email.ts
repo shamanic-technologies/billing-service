@@ -43,6 +43,8 @@ export function composeOutOfCreditsEmail(params: {
   campaigns: StoppedCampaign[];
   brandName: string | null;
   trialing: boolean;
+  /** The automatic move to the next plan was refused by the card (lib/subscription-auto-upgrade). */
+  cardDeclined?: boolean;
   monthlyAmountCents: number;
   ctaUrl: string;
 }): OutOfCreditsEmail {
@@ -54,9 +56,11 @@ export function composeOutOfCreditsEmail(params: {
     ? `Your campaigns for ${params.brandName} have stopped`
     : "Your campaigns have stopped";
   const heading = "You are out of credits";
-  const intro = params.trialing
-    ? "Your free trial credit is used up. Your campaigns have stopped."
-    : `Your credit for this month is used up. Your campaigns have stopped until your next charge.`;
+  const intro = params.cardDeclined
+    ? "Your credit is used up. We tried to move you to the next plan, but your card was refused. Your campaigns have stopped."
+    : params.trialing
+      ? "Your free trial credit is used up. Your campaigns have stopped."
+      : `Your credit for this month is used up. Your campaigns have stopped until your next charge.`;
 
   const sections: Array<{ title: string; lead: string; names: string[] }> = [];
   if (reactive.length > 0) {
@@ -77,7 +81,9 @@ export function composeOutOfCreditsEmail(params: {
     sections.push({ title: "Also stopped", lead: "", names: other });
   }
 
-  const upgrade = params.trialing
+  const upgrade = params.cardDeclined
+    ? `You are on the ${usdPerMonth(params.monthlyAmountCents)} plan. Upgrade with a card that works to restart today. Your credit lands right away.`
+    : params.trialing
     ? `You are on the ${usdPerMonth(params.monthlyAmountCents)} plan. Upgrade to start now. You pay today and your credit lands right away.`
     : `You are on the ${usdPerMonth(params.monthlyAmountCents)} plan. Upgrade to restart today. You pay the new amount now and your credit lands right away.`;
 

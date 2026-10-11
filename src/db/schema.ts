@@ -11,6 +11,7 @@ import {
   unique,
   bigserial,
   boolean,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -1167,6 +1168,13 @@ export const subscriptions = pgTable(
      * per-campaign item budgets (migrations 0062/0063, lib/campaign-items); 0 otherwise.
      */
     itemReactiveMonthlyCents: integer("item_reactive_monthly_cents").notNull().default(0),
+    /**
+     * Credit runs out → the plan moves up one step and the step is charged at once
+     * (migration 0081, lib/subscription-auto-upgrade, owner 2026-10-11). False on
+     * every plan that existed before 0081 (grandfathered), true for every new one.
+     * Not a customer setting: the only exit is cancelling.
+     */
+    autoUpgrade: boolean("auto_upgrade").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1216,6 +1224,52 @@ export const subscriptionCreditExpiries = pgTable(
   },
   (table) => [unique("subscription_credit_expiries_sub_boundary").on(table.subscriptionId, table.boundaryAt)]
 );
+
+// One auto-upgrade attempt of a subscription (migration 0081). At most one
+// `pending` (claimed, charge in flight) per plan: partial unique index.
+export const subscriptionAutoUpgrades = pgTable(
+  "subscription_auto_upgrades",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subscriptionId: uuid("subscription_id").notNull(),
+    orgId: uuid("org_id").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    fromAmountCents: integer("from_amount_cents").notNull(),
+    toAmountCents: integer("to_amount_cents").notNull(),
+    chargedCents: integer("charged_cents").notNull(),
+    /** pending | paid | declined */
+    status: text("status").notNull(),
+    reference: text("reference"),
+    failureCode: text("failure_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (table) => [index("idx_subscription_auto_upgrades_org").on(table.orgId)]
+);
+export type SubscriptionAutoUpgrade = typeof subscriptionAutoUpgrades.$inferSelect;
+
+// Proof the customer accepted the payment terms before a first payment
+// (migration 0081, lib/payment-consents). Append-only; kept on org teardown.
+export const paymentConsents = pgTable(
+  "payment_consents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull(),
+    userId: uuid("user_id"),
+    email: text("email"),
+    /** Where it was given: topup_checkout | subscription_checkout | subscription_start */
+    context: text("context").notNull(),
+    /** The statements as shown to the customer, verbatim. */
+    statements: jsonb("statements").$type<string[]>().notNull(),
+    termsVersion: text("terms_version").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }).notNull(),
+    userAgent: text("user_agent"),
+    ipAddress: text("ip_address"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_payment_consents_org").on(table.orgId)]
+);
+export type PaymentConsent = typeof paymentConsents.$inferSelect;
 
 // Platform orgs (migration 0057): our OWN internal organizations, exempt from every
 // balance / card gate. Explicit and auditable: one row per org, with why and who.

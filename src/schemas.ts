@@ -189,6 +189,29 @@ export const UpdateAutoTopupRequestSchema = z
   })
   .openapi("UpdateAutoTopupRequest");
 
+// --- Payment consent (migration 0081) ---
+
+/**
+ * Proof the customer ticked the consent boxes before a first payment (owner
+ * 2026-10-11). OPTIONAL on every route that carries it: a request without it works
+ * exactly as before. Stored append-only per org (lib/payment-consents) with who
+ * (x-user-id, x-email), where (the route), and when.
+ */
+export const PaymentConsentSchema = z
+  .object({
+    /** The statements as shown on the page, verbatim, one per ticked box (1 to 10). */
+    statements: z.array(z.string().trim().min(1).max(2000)).min(1).max(10),
+    /** The version of the terms the statements refer to (e.g. "2026-10-11"). */
+    terms_version: z.string().trim().min(1).max(100),
+    /** When the boxes were ticked (ISO 8601). Absent = when billing received the request. */
+    accepted_at: z.string().datetime({ offset: true }).optional(),
+    /** The browser's user agent, for the dispute file. */
+    user_agent: z.string().max(1000).optional(),
+    /** The customer's IP address as the dashboard saw it, for the dispute file. */
+    ip_address: z.string().max(100).optional(),
+  })
+  .openapi("PaymentConsent");
+
 // --- Checkout ---
 
 export const CreateCheckoutRequestSchema = z
@@ -226,6 +249,8 @@ export const CreateCheckoutRequestSchema = z
      * (`welcome_gift_covers_budget` → open a setup-mode checkout instead).
      */
     apply_welcome_gift: z.boolean().optional(),
+    /** The consent boxes ticked before this payment. Optional; stored when present. */
+    consent: PaymentConsentSchema.optional(),
   })
   .refine(
     (data) => data.ui_mode === "embedded" || (!!data.success_url && !!data.cancel_url),
@@ -2719,6 +2744,46 @@ registry.registerPath({
   },
 });
 
+export const PaymentConsentRecordSchema = z
+  .object({
+    id: z.string().uuid(),
+    org_id: z.string().uuid(),
+    user_id: z.string().uuid().nullable(),
+    email: z.string().nullable(),
+    /** topup_checkout | subscription_checkout | subscription_start */
+    context: z.string(),
+    statements: z.array(z.string()),
+    terms_version: z.string(),
+    accepted_at: z.string(),
+    user_agent: z.string().nullable(),
+    ip_address: z.string().nullable(),
+    recorded_at: z.string(),
+  })
+  .openapi("PaymentConsentRecord");
+
+export const PaymentConsentsResponseSchema = z
+  .object({ org_id: z.string().uuid(), consents: z.array(PaymentConsentRecordSchema) })
+  .openapi("PaymentConsentsResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/payment-consents",
+  summary: "Every payment consent an org gave (dispute evidence)",
+  description:
+    "Staff read, oldest first. One row per acceptance recorded from the optional `consent` field of " +
+    "POST /v1/checkout-sessions, POST /v1/accounts/subscription/checkout_session and " +
+    "POST /v1/accounts/subscription/start: who (x-user-id, x-email), where, when, the statements " +
+    "verbatim and the terms version. Kept when the org is deleted.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: z.string().uuid() }),
+  },
+  responses: {
+    200: { description: "Consents", content: { "application/json": { schema: PaymentConsentsResponseSchema } } },
+    400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
 registry.registerPath({
   method: "get",
   path: "/internal/unpaid-debts",
@@ -4056,6 +4121,8 @@ export const SubscriptionCheckoutRequestSchema = z
     ui_mode: z.enum(["embedded", "hosted"]).optional(),
     /** Where a hosted card form returns to. Required for hosted. */
     return_url: z.string().url().optional(),
+    /** The consent boxes ticked before the subscription. Optional; stored when present. */
+    consent: PaymentConsentSchema.optional(),
   })
   .openapi("SubscriptionCheckoutRequest");
 
@@ -4080,6 +4147,8 @@ export const StartSubscriptionRequestSchema = z
   .object({
     /** Overrides the amount picked at checkout. */
     monthly_amount_cents: MonthlyAmountSchema.optional(),
+    /** The consent boxes ticked before the subscription. Optional; stored when present. */
+    consent: PaymentConsentSchema.optional(),
   })
   .openapi("StartSubscriptionRequest");
 
@@ -4134,6 +4203,12 @@ export const SubscriptionViewSchema = z
     can_unpause: z.boolean(),
     /** This plan no longer sends: paused, cancelled (stops at once, not at period end) or ended. */
     sending_stopped: z.boolean(),
+    /**
+     * Credit runs out → this plan moves up one step (+$100/month) and the step is charged
+     * at once, inside or after the trial (owner 2026-10-11). Not a customer setting: the
+     * only exit is cancelling. False only on plans that existed before the rule.
+     */
+    auto_upgrade: z.boolean(),
     /** Same as can_change_amount (kept for the first shape). */
     can_raise: z.boolean(),
     next_raise_monthly_amount_cents: z.number().int().nullable(),

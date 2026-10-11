@@ -1,4 +1,5 @@
 import { recordCheckoutOpened } from "../lib/payment-alerts.js";
+import { recordPaymentConsent } from "../lib/payment-consents.js";
 import { Router } from "express";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CreateCheckoutRequestSchema } from "../schemas.js";
@@ -66,6 +67,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { mode: isSetup ? "setup" : "payment", ui_mode: isEmbedded ? "embedded" : "hosted", topup_amount_cents } }, req.headers);
 
     await findOrCreateAccount(orgId, userId);
+    // Consent boxes ticked on the page: on file BEFORE anything is charged.
+    if (parsed.data.consent) {
+      await recordPaymentConsent({ orgId, req, context: "topup_checkout", consent: parsed.data.consent });
+    }
 
     // "We match your first $100" (lib/free-credit-offer): a top-up is at least $100,
     // and the $30 up-front gift is credit, never a coupon off the charge. Legacy

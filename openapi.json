@@ -622,6 +622,42 @@
           "welcome_gift_cents"
         ]
       },
+      "PaymentConsent": {
+        "type": "object",
+        "properties": {
+          "statements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "ip_address": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "statements",
+          "terms_version"
+        ]
+      },
       "CreateCheckoutRequest": {
         "type": "object",
         "properties": {
@@ -653,6 +689,9 @@
           },
           "apply_welcome_gift": {
             "type": "boolean"
+          },
+          "consent": {
+            "$ref": "#/components/schemas/PaymentConsent"
           }
         }
       },
@@ -1309,6 +1348,86 @@
         },
         "required": [
           "orgId"
+        ]
+      },
+      "PaymentConsentRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "context": {
+            "type": "string"
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "terms_version": {
+            "type": "string"
+          },
+          "accepted_at": {
+            "type": "string"
+          },
+          "user_agent": {
+            "type": "string",
+            "nullable": true
+          },
+          "ip_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "recorded_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "user_id",
+          "email",
+          "context",
+          "statements",
+          "terms_version",
+          "accepted_at",
+          "user_agent",
+          "ip_address",
+          "recorded_at"
+        ]
+      },
+      "PaymentConsentsResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentConsentRecord"
+            }
+          }
+        },
+        "required": [
+          "org_id",
+          "consents"
         ]
       },
       "UnpaidDebtsResponse": {
@@ -3719,6 +3838,9 @@
           "return_url": {
             "type": "string",
             "format": "uri"
+          },
+          "consent": {
+            "$ref": "#/components/schemas/PaymentConsent"
           }
         }
       },
@@ -3809,6 +3931,9 @@
           "sending_stopped": {
             "type": "boolean"
           },
+          "auto_upgrade": {
+            "type": "boolean"
+          },
           "can_raise": {
             "type": "boolean"
           },
@@ -3839,6 +3964,7 @@
           "can_pause",
           "can_unpause",
           "sending_stopped",
+          "auto_upgrade",
           "can_raise",
           "next_raise_monthly_amount_cents"
         ]
@@ -3904,6 +4030,9 @@
             "minimum": 0,
             "exclusiveMinimum": true,
             "description": "Monthly plan in cents: any whole-dollar amount from 2900 ($29). 400 code amount_below_minimum (< 2900) | amount_not_whole_dollars (not a multiple of 100)."
+          },
+          "consent": {
+            "$ref": "#/components/schemas/PaymentConsent"
           }
         }
       },
@@ -7592,6 +7721,53 @@
           },
           "502": {
             "description": "Could not evaluate the org's balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/payment-consents": {
+      "get": {
+        "summary": "Every payment consent an org gave (dispute evidence)",
+        "description": "Staff read, oldest first. One row per acceptance recorded from the optional `consent` field of POST /v1/checkout-sessions, POST /v1/accounts/subscription/checkout_session and POST /v1/accounts/subscription/start: who (x-user-id, x-email), where, when, the statements verbatim and the terms version. Kept when the org is deleted.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentConsentsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a UUID",
             "content": {
               "application/json": {
                 "schema": {
