@@ -4274,13 +4274,82 @@
                 "reason"
               ]
             }
+          },
+          "salesFunnels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "salesFunnelCampaignId": {
+                  "type": "string"
+                },
+                "salesFunnelId": {
+                  "type": "string"
+                },
+                "salesFunnelName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "proactive",
+                    "reactive"
+                  ]
+                },
+                "budgetCents": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "salesFunnelCampaignId",
+                "salesFunnelId",
+                "salesFunnelName",
+                "role",
+                "budgetCents"
+              ]
+            }
+          },
+          "salesFunnelsNotCounted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "salesFunnelCampaignId": {
+                  "type": "string"
+                },
+                "salesFunnelId": {
+                  "type": "string"
+                },
+                "salesFunnelName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "no_budget",
+                    "one_off",
+                    "type_unknown"
+                  ]
+                }
+              },
+              "required": [
+                "salesFunnelCampaignId",
+                "salesFunnelId",
+                "salesFunnelName",
+                "reason"
+              ]
+            }
           }
         },
         "required": [
           "period",
           "proactive",
           "reactive",
-          "notCounted"
+          "notCounted",
+          "salesFunnels",
+          "salesFunnelsNotCounted"
         ]
       },
       "CampaignItemBudgets": {

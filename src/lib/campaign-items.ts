@@ -39,7 +39,13 @@
  */
 
 import { and, eq } from "drizzle-orm";
-import { withRecurringFunnelCaps } from "./funnel-campaigns.js";
+import {
+  fetchSalesFunnelCampaigns,
+  funnelBudgetCaps,
+  withRecurringFunnelCaps,
+  type SalesFunnelCampaign,
+} from "./funnel-campaigns.js";
+import type { SalesFunnelCapRow } from "../db/schema.js";
 import { db } from "../db/index.js";
 import { canonicalLegKey, legIdentityKey, sameLeg } from "./leg-identity.js";
 import {
@@ -795,6 +801,92 @@ export interface OfferBudgetTotals {
    * not run yet: recorded, spends nothing).
    */
   notCounted: Array<{ featureSlug: string; legKey: string; reason: "role_unknown" | "channel_not_run" }>;
+  /**
+   * The ON (campaign-service `ongoing`) SALES FUNNEL campaigns of the offer counted
+   * above by their MAX BUDGET cap: a proactive funnel's budget in `proactive`, a
+   * reactive funnel's "Up to" amount in `reactive` (a MAX, never spend), each
+   * converted to `period`. The cap is all-inclusive (sourcing + sending), so it adds
+   * nothing to `sourcingBudgetCents`.
+   */
+  salesFunnels: Array<{
+    salesFunnelCampaignId: string;
+    salesFunnelId: string;
+    salesFunnelName: string | null;
+    role: ItemRoleServed;
+    budgetCents: number;
+  }>;
+  /**
+   * ON funnel campaigns neither total counts: `no_budget` (no max budget stated),
+   * `one_off` (a one-off cap is not a per-day or per-month figure), `type_unknown`
+   * (features-service's funnel type was not recorded on the cap).
+   */
+  salesFunnelsNotCounted: Array<{
+    salesFunnelCampaignId: string;
+    salesFunnelId: string;
+    salesFunnelName: string | null;
+    reason: "no_budget" | "one_off" | "type_unknown";
+  }>;
+}
+
+const CAP_DAYS = { daily: 1, weekly: 7, monthly: DAYS_PER_MONTH } as const;
+
+/** A recurring cap's amount in `period` (a monthly cap read in month is its own amount). */
+function capInPeriod(cap: SalesFunnelCapRow, period: ItemPeriod): number {
+  const cents = Number(cap.maxBudgetCents);
+  if (cap.maxBudgetPeriod === "monthly" && period === "month") return cents;
+  const days = CAP_DAYS[cap.maxBudgetPeriod as keyof typeof CAP_DAYS];
+  if (!days) throw new Error(`unknown sales funnel cap period ${cap.maxBudgetPeriod}`);
+  return inPeriod(cents / days, "day", period);
+}
+
+/**
+ * Adds the offer's ON funnel campaigns to `totals`, by their caps. Pure. `funnels`
+ * are the offer's funnel campaigns; `caps` the offer's caps.
+ */
+export function addFunnelCampaignTotals(
+  totals: OfferBudgetTotals,
+  funnels: SalesFunnelCampaign[],
+  caps: SalesFunnelCapRow[],
+  terms: SalesPathTerms
+): OfferBudgetTotals {
+  for (const fc of funnels) {
+    if (fc.status !== "ongoing") continue;
+    const id = { salesFunnelCampaignId: fc.id, salesFunnelId: fc.salesFunnelId, salesFunnelName: fc.salesFunnelName ?? null };
+    const cap = caps.find((c) => c.salesFunnelId === fc.salesFunnelId) ?? null;
+    if (!cap || cap.maxBudgetCents == null || cap.maxBudgetPeriod == null) {
+      totals.salesFunnelsNotCounted.push({ ...id, reason: "no_budget" });
+      continue;
+    }
+    if (cap.maxBudgetPeriod === "one_off") {
+      totals.salesFunnelsNotCounted.push({ ...id, reason: "one_off" });
+      continue;
+    }
+    if (cap.salesFunnelType !== "proactive" && cap.salesFunnelType !== "reactive") {
+      totals.salesFunnelsNotCounted.push({ ...id, reason: "type_unknown" });
+      continue;
+    }
+    const budget = capInPeriod(cap, totals.period);
+    totals.salesFunnels.push({ ...id, role: cap.salesFunnelType, budgetCents: budget });
+    if (cap.salesFunnelType === "proactive") {
+      totals.proactive.budgetCents += budget;
+      totals.proactive.campaigns += 1;
+      continue;
+    }
+    totals.reactive.maxBudgetCents += budget;
+    totals.reactive.campaigns += 1;
+    // The funnel reacts on its FIRST pipe's step.
+    const first = fc.units[0];
+    const t = first ? terms.termsFor(first.featureSlug, first.legKey) : null;
+    const triggerKey = t?.trigger?.key ?? null;
+    let bucket = totals.reactive.byTrigger.find((b) => b.triggerKey === triggerKey);
+    if (!bucket) {
+      bucket = { triggerKey, triggerLabel: t?.trigger?.label ?? null, maxBudgetCents: 0, campaigns: 0 };
+      totals.reactive.byTrigger.push(bucket);
+    }
+    bucket.maxBudgetCents += budget;
+    bucket.campaigns += 1;
+  }
+  return totals;
 }
 
 /**
@@ -813,6 +905,8 @@ export function offerBudgetTotals(
     proactive: { budgetCents: 0, sourcingBudgetCents: 0, campaigns: 0 },
     reactive: { maxBudgetCents: 0, campaigns: 0, byTrigger: [] },
     notCounted: [],
+    salesFunnels: [],
+    salesFunnelsNotCounted: [],
   };
   for (const i of stored) {
     if (!isOn(i)) continue;
@@ -926,8 +1020,28 @@ export async function getOfferItemsView(
       pricing = itemsPlanPricing(stored, terms, isOn);
     }
   }
-  const totals = isOn ? offerBudgetTotals(stored, terms, isOn, period) : null;
-  const totalsUnavailableReason = statuses && !statuses.ok ? statuses.reason : null;
+  // SALES FUNNEL campaigns (owner 2026-10-10): their money is the funnel's caps, not a
+  // ceiling. A ceiling left on one of their pipes is never counted for them (it would
+  // count the pipe twice).
+  const offerCaps = (await funnelBudgetCaps(orgId, brandId)).filter((c) => c.offerId === offerId);
+  const funnelAnswer = stored.length > 0 || offerCaps.length > 0 ? await fetchSalesFunnelCampaigns(orgId) : null;
+  const offerFunnels =
+    funnelAnswer?.ok === true
+      ? funnelAnswer.campaigns.filter((c) => c.brandId.toLowerCase() === brandId && c.offerId.toLowerCase() === offerId)
+      : [];
+  const isUnitPipe = (i: Pick<CampaignItem, "featureSlug" | "legKey">) =>
+    offerFunnels.some((fc) => fc.units.some((u) => u.featureSlug === i.featureSlug && sameLeg(i.featureSlug, u.legKey, i.legKey)));
+  const totals =
+    isOn && funnelAnswer?.ok !== false
+      ? addFunnelCampaignTotals(
+          offerBudgetTotals(stored, terms, (i) => isOn(i) && !isUnitPipe(i), period),
+          offerFunnels,
+          offerCaps,
+          terms
+        )
+      : null;
+  const totalsUnavailableReason =
+    statuses && !statuses.ok ? statuses.reason : funnelAnswer && !funnelAnswer.ok ? funnelAnswer.reason : null;
   if (totalsUnavailableReason) {
     console.error(
       `[billing-service] offer ${offerId} budget totals unavailable for org ${orgId}: ${totalsUnavailableReason}`
