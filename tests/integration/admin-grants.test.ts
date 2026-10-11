@@ -179,7 +179,7 @@ describe("Admin credit grants (POST /v1/credits/grant, GET grants)", () => {
     expect(res.body.grants).toHaveLength(1);
     const g = res.body.grants[0];
     expect(Object.keys(g).sort()).toEqual(
-      ["amountCents", "createdAt", "grantedBy", "id", "note", "orgId", "reason"].sort()
+      ["amountCents", "createdAt", "grantedBy", "id", "note", "offPlatformPaidAt", "orgId", "reason"].sort()
     );
     expect(g.orgId).toBe(orgId);
     expect(g.amountCents).toBe("5000.0000000000");
@@ -187,6 +187,8 @@ describe("Admin credit grants (POST /v1/credits/grant, GET grants)", () => {
     expect(g.note).toBe("n1");
     expect(g.grantedBy).toBe(staffEmail);
     expect(typeof g.createdAt).toBe("string");
+    // A gift: no off-platform payment date (additive field, lib/off-platform-payments).
+    expect(g.offPlatformPaidAt).toBeNull();
   });
 
   it("GET /v1/credits/grants is org-scoped (does not leak another org)", async () => {
@@ -228,7 +230,7 @@ describe("Admin credit grants (POST /v1/credits/grant, GET grants)", () => {
     expect(orgs).toEqual([orgId, orgB].sort());
     // locked shape on the platform-wide ledger too
     expect(Object.keys(res.body.grants[0]).sort()).toEqual(
-      ["amountCents", "createdAt", "grantedBy", "id", "note", "orgId", "reason"].sort()
+      ["amountCents", "createdAt", "grantedBy", "id", "note", "offPlatformPaidAt", "orgId", "reason"].sort()
     );
   });
 

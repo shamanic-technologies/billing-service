@@ -23,6 +23,7 @@ import {
 import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "../lib/transfer-usage.js";
 import { sumEntitlementGrantsForOrg, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
+import { sumOffPlatformPaymentsForOrg } from "../lib/off-platform-payments.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
   settleOutstandingBeforeCardChange,
@@ -82,6 +83,7 @@ async function composeAccountFunds(
   actualBalanceCents: string;
   discountPct: number | null;
   paidTopupsCents: string;
+  offPlatformPaidCents: string;
   giftedCreditsCents: string;
   entitlementGrantsCents: string;
   advanceCents: string;
@@ -125,14 +127,24 @@ async function composeAccountFunds(
       customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
     ])
   );
-  const [[paidTopups, hasCardPm, cardDisplay], localCreditsBeforeSettle, runsUsage, actualRunsUsage, discountPct] =
-    await Promise.all([
-      stripeP,
-      sumLocalPromoCreditsForOrg(orgId),
-      fetchOrgUsageTotal(orgId, identity),
-      fetchOrgActualUsageTotal(orgId, identity),
-      getUsageDiscountPct(orgId),
-    ]);
+  const [
+    [paidTopups, hasCardPm, cardDisplay],
+    localCreditsBeforeSettle,
+    runsUsage,
+    actualRunsUsage,
+    discountPct,
+    offPlatformPaidCents,
+  ] = await Promise.all([
+    stripeP,
+    sumLocalPromoCreditsForOrg(orgId),
+    fetchOrgUsageTotal(orgId, identity),
+    fetchOrgActualUsageTotal(orgId, identity),
+    getUsageDiscountPct(orgId),
+    // Staff grants the client PAID for off-platform (lib/off-platform-payments): cash,
+    // not a gift. Only moves cash/paid vs gifted below; credited and balance are the
+    // same local_promos rows either way.
+    sumOffPlatformPaymentsForOrg(orgId),
+  ]);
   // Free-credit promises (welcome + referral): paid topups are the trigger for all
   // of them and we already hold the figure, so settle here — the dashboard reads this
   // endpoint right after a payment, which is what makes a gift land in seconds rather
@@ -179,9 +191,10 @@ async function composeAccountFunds(
     actualBalanceCents,
     discountPct,
     paidTopupsCents: paidTopups,
+    offPlatformPaidCents,
     giftedCreditsCents: subCents(
-      subCents(localCredits, creditParts.advanceCents),
-      trialAdvance
+      subCents(subCents(localCredits, creditParts.advanceCents), trialAdvance),
+      offPlatformPaidCents
     ),
     entitlementGrantsCents,
     advanceCents: creditParts.advanceCents,
@@ -209,6 +222,7 @@ function buildAccountResponse(
     actualBalanceCents: string;
     discountPct: number | null;
     paidTopupsCents: string;
+    offPlatformPaidCents: string;
     giftedCreditsCents: string;
     entitlementGrantsCents: string;
     advanceCents: string;
@@ -265,9 +279,14 @@ function buildAccountResponse(
     //     + credited_trial_advance_cents
     // A subscription trial's credit (trial_seed + subscription_trial) is an ADVANCE on
     // the subscription, never a gift, repaid or not: credited_trial_advance_cents.
-    credited_paid_cents: subCents(
-      subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
-      funds.trialRepaidCents
+    // An off-platform payment (a staff grant marked as paid, lib/off-platform-payments)
+    // is paid money: here and in cash_paid_cents, out of credited_gifted_cents.
+    credited_paid_cents: addCents(
+      subCents(
+        subCents(funds.paidTopupsCents, funds.advanceRepaidCents),
+        funds.trialRepaidCents
+      ),
+      funds.offPlatformPaidCents
     ),
     // Paid money that repaid a free trial (the trial-end subscription charge) and so
     // added NO credit. Additive; credited_paid_cents already excludes it.
@@ -275,7 +294,7 @@ function buildAccountResponse(
     // Every payment the org made us, NET of refunds and lost disputes, whatever it
     // repaid (trial, onboarding advance) or credited: the CASH figure ("invested").
     // Unlike credited_paid_cents it is never reduced by a repayment.
-    cash_paid_cents: funds.paidTopupsCents,
+    cash_paid_cents: addCents(funds.paidTopupsCents, funds.offPlatformPaidCents),
     credited_gifted_cents: funds.giftedCreditsCents,
     credited_advance_cents: funds.advanceCents,
     credited_trial_advance_cents: funds.trialAdvanceCents,

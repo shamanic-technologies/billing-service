@@ -1090,6 +1090,37 @@ export const staffDebits = pgTable(
 
 export type StaffDebit = typeof staffDebits.$inferSelect;
 
+// off_platform_payments (migration 0082, owner 2026-10-11): marks ONE admin_grant
+// local_promos row as money the client PAID us off-platform (bank transfer to the
+// owner) on `paid_at`. The credit stays the local_promos row (balance unchanged, no
+// double credit); this row only moves it from "gifted" to CASH: cash_paid_cents,
+// credited_paid_cents and cash_by_month (at paid_at). Append-only: the grant row is
+// never edited, recorded_by / note / created_at trace who marked it and when.
+// Nothing else reads it: tiers, the welcome trigger and entitlement, referral bars
+// and advance repayment stay on Stripe-recorded payments (lib/off-platform-payments).
+export const offPlatformPayments = pgTable(
+  "off_platform_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    localPromoId: uuid("local_promo_id")
+      .notNull()
+      .references(() => localPromos.id, { onDelete: "cascade" }),
+    orgId: uuid("org_id").notNull(),
+    paidAt: timestamp("paid_at", { withTimezone: true }).notNull(),
+    recordedBy: text("recorded_by"),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("off_platform_payments_local_promo_unique").on(table.localPromoId),
+    index("idx_off_platform_payments_org").on(table.orgId),
+  ]
+);
+
+export type OffPlatformPayment = typeof offPlatformPayments.$inferSelect;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 /**

@@ -575,6 +575,13 @@
       "when": 1795168800000,
       "tag": "0081_subscription_auto_upgrade_and_consents",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1795255200000,
+      "tag": "0082_off_platform_payments",
+      "breakpoints": true
     }
   ]
 }
