@@ -11,6 +11,9 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { db } from "../../src/db/index.js";
+import { salesFunnelCaps } from "../../src/db/schema.js";
+import type { SalesFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import {
   __primeSalesPathTerms,
@@ -85,6 +88,8 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
   /** Campaigns that are ON (campaign-service status ongoing), as `featureSlug:legKey`. */
   let onCampaigns: Set<string>;
   let campaignStatusDown: boolean;
+  /** campaign-service's SALES FUNNEL campaigns for the org (null = unreadable). */
+  let funnelCampaigns: SalesFunnelCampaign[] | null;
 
   beforeEach(async () => {
     vi.restoreAllMocks();
@@ -93,6 +98,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     __primeSalesPathTerms(catalogue());
     onCampaigns = new Set([`${COLD}:${REPLY}`, `${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`, `${META}:${VISIT}`]);
     campaignStatusDown = false;
+    funnelCampaigns = [];
 
     ssMocks = setupStripeMocks();
     ssMocks.fetchOrgCustomer.mockResolvedValue(customerWithEmail("founder@new.test"));
@@ -138,6 +144,13 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
         }),
       };
     });
+
+    const fc = await import("../../src/lib/funnel-campaigns.js");
+    vi.spyOn(fc, "fetchSalesFunnelCampaigns").mockImplementation(async () =>
+      funnelCampaigns === null
+        ? { ok: false, reason: "campaign_service_unavailable" }
+        : { ok: true, campaigns: funnelCampaigns }
+    );
 
     const runsClient = await import("../../src/lib/runs-client.js");
     let usage = "0.0000000000";
@@ -190,6 +203,8 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
         byTrigger: [{ triggerKey: "conversation", triggerLabel: "Positive reply", maxBudgetCents: 300, campaigns: 1 }],
       },
       notCounted: [],
+      salesFunnels: [],
+      salesFunnelsNotCounted: [],
     });
   });
 
@@ -239,5 +254,103 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     expect(res.body.totals.period).toBe("month");
     expect(res.body.totals.proactive.budgetCents).toBe(9900);
     expect(res.body.totals.reactive.maxBudgetCents).toBe(3000);
+  });
+
+  /* ---------------- SALES FUNNEL campaigns (NOVEMIQ 2026-10-11) ---------------- */
+
+  const BLISS = `lead_found_to_conversation@${COLD}+conversation_to_meeting_booked`;
+  const MOTIVATE = `conversation_to_meeting_booked@${MEET}`;
+  const MOVING = "conversation_to_booking_call@ai-instant-call";
+
+  function funnel(id: string, salesFunnelId: string, name: string, pipes: Array<[string, string]>, status = "ongoing"): SalesFunnelCampaign {
+    return {
+      id,
+      brandId: BRAND,
+      offerId: OFFER,
+      salesFunnelId,
+      salesFunnelName: name,
+      status,
+      units: pipes.map(([featureSlug, legKey], i) => ({
+        campaignId: `${id.slice(0, -1)}${i}`,
+        featureSlug,
+        legKey,
+        status,
+      })),
+    };
+  }
+
+  async function cap(salesFunnelId: string, cents: number, period: string, type: string | null) {
+    await db.insert(salesFunnelCaps).values({
+      orgId,
+      brandId: BRAND,
+      offerId: OFFER,
+      salesFunnelId,
+      maxBudgetCents: String(cents),
+      maxBudgetPeriod: period,
+      maxBudgetSince: new Date(),
+      salesFunnelType: type,
+    });
+  }
+
+  it("funnel campaigns only (no ceiling row): counted by their caps, proactive and reactive", async () => {
+    await insertTestAccount({ orgId });
+    await cap(BLISS, 1000, "daily", "proactive");
+    await cap(MOTIVATE, 100, "daily", "reactive");
+    funnelCampaigns = [
+      funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]]),
+      funnel("bbbbbbbb-0067-4000-8000-000000000020", MOTIVATE, "Motivate", [[MEET, MEET_LEG]]),
+      funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]]),
+    ];
+    const res = await request(app).get(itemsPath).set(headers);
+    expect(res.status).toBe(200);
+    expect(res.body.totalsUnavailableReason).toBeNull();
+    expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
+    expect(res.body.totals.reactive).toEqual({
+      maxBudgetCents: 100,
+      campaigns: 1,
+      byTrigger: [{ triggerKey: "conversation", triggerLabel: "Positive reply", maxBudgetCents: 100, campaigns: 1 }],
+    });
+    expect(res.body.totals.salesFunnels.map((f: { salesFunnelName: string; role: string; budgetCents: number }) => [f.salesFunnelName, f.role, f.budgetCents])).toEqual([
+      ["Bliss", "proactive", 1000],
+      ["Motivate", "reactive", 100],
+    ]);
+    expect(res.body.totals.salesFunnelsNotCounted).toEqual([
+      { salesFunnelCampaignId: "bbbbbbbb-0067-4000-8000-000000000030", salesFunnelId: MOVING, salesFunnelName: "Moving", reason: "no_budget" },
+    ]);
+  });
+
+  it("a stopped funnel campaign counts nothing; weekly / one-off caps; monthly for a subscriber-style period", async () => {
+    await insertTestAccount({ orgId });
+    await cap(BLISS, 7000, "weekly", "proactive");
+    await cap(MOTIVATE, 5000, "one_off", "reactive");
+    funnelCampaigns = [
+      funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]]),
+      funnel("bbbbbbbb-0067-4000-8000-000000000020", MOTIVATE, "Motivate", [[MEET, MEET_LEG]]),
+      funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]], "stopped"),
+    ];
+    const res = await request(app).get(itemsPath).set(headers);
+    expect(res.body.totals.proactive.budgetCents).toBe(1000);
+    expect(res.body.totals.reactive.maxBudgetCents).toBe(0);
+    expect(res.body.totals.salesFunnelsNotCounted.map((f: { reason: string }) => f.reason)).toEqual(["one_off"]);
+  });
+
+  it("a ceiling left on a funnel unit's pipe is not counted beside the funnel's cap", async () => {
+    await insertTestAccount({ orgId });
+    expect((await put([[COLD, REPLY, 2000]])).status).toBe(200);
+    await cap(BLISS, 1000, "daily", "proactive");
+    funnelCampaigns = [funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]])];
+    const res = await request(app).get(itemsPath).set(headers);
+    // start_to_conversation and lead_found_to_conversation are ONE outbound leg.
+    expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
+  });
+
+  it("funnel campaigns unreadable: totals null with a reason, never an undercount", async () => {
+    await insertTestAccount({ orgId });
+    await cap(BLISS, 1000, "daily", "proactive");
+    funnelCampaigns = null;
+    const res = await request(app).get(itemsPath).set(headers);
+    expect(res.status).toBe(200);
+    expect(res.body.totals).toBeNull();
+    expect(res.body.totalsUnavailableReason).toBe("campaign_service_unavailable");
   });
 });
