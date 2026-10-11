@@ -23,6 +23,7 @@ import {
   subscriptionCreditExpiries,
   localPromos,
   salesPathReactiveCharges,
+  subscriptionAutoUpgrades,
   ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
 import {
@@ -65,6 +66,7 @@ import {
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
+import { listPaymentConsents, paymentConsentWire } from "../lib/payment-consents.js";
 import {
   getOrgRevenue,
   getFleetRevenue,
@@ -190,6 +192,9 @@ async function deleteBillingStateByOrg(
 
     // A subscriber's follow-up charges (migration 0062) go with the org.
     await tx.delete(salesPathReactiveCharges).where(eq(salesPathReactiveCharges.orgId, orgId));
+    // Its auto-upgrade attempts (migration 0081) too. Its payment CONSENTS are kept:
+    // they are dispute evidence that outlives the org.
+    await tx.delete(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId));
 
     const deletedBillingAccounts = await tx
       .delete(billingAccounts)
@@ -659,6 +664,22 @@ router.post("/internal/payment-methods/lost", async (req, res) => {
 // A plain DB read: the amount was frozen on the depletion episode when the debt
 // was flagged and is refreshed on every hourly tick while it persists, so this
 // costs one query rather than a balance composition per org.
+// Staff read: every payment consent an org gave, oldest first (dispute evidence).
+router.get("/internal/accounts/by-org/:orgId/payment-consents", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a UUID" });
+    return;
+  }
+  try {
+    const rows = await listPaymentConsents(orgId);
+    res.json({ org_id: orgId, consents: rows.map(paymentConsentWire) });
+  } catch (err) {
+    console.error(`[billing-service] payment consents read failed for org ${orgId}:`, err);
+    res.status(500).json({ error: "Failed to read payment consents" });
+  }
+});
+
 router.get("/internal/unpaid-debts", async (_req, res) => {
   try {
     const debts = await listUnpaidDebts();

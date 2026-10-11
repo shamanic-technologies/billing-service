@@ -28,9 +28,16 @@
  * Billing reconstructs neither. A funnel whose type cannot be read is listed apart,
  * never guessed.
  *
+ * AUTO-UPGRADE FIRST (owner 2026-10-11, lib/subscription-auto-upgrade): a plan
+ * created after migration 0081 does not stop at zero. Its plan moves up one step
+ * and the step is charged now; no email. Only a GRANDFATHERED plan, a step the card
+ * REFUSED (sending stops, the email says the card was refused), or a plan with
+ * nothing running gets the email below.
+ *
  * Triggers: a 5-minute watcher over live subscription orgs (first check a minute
- * after boot), and fire-and-forget from the refused-authorize / blocked-campaign
- * paths in lib/dunning. Fail-soft: never throws, nothing here touches money.
+ * after boot; it also re-issues auto-upgrade claims left without an answer), and
+ * fire-and-forget from the refused-authorize / blocked-campaign paths in
+ * lib/dunning. Fail-soft: never throws; the only money it moves is the step charge.
  */
 import { and, eq, isNull, lt, ne, or } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -46,6 +53,7 @@ import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import { DASHBOARD_URL } from "./subscription-email-format.js";
 import { composeOutOfCreditsEmail, type StoppedCampaign } from "./subscription-out-of-credits-email.js";
+import { resumeStaleAutoUpgrades, tryAutoUpgrade } from "./subscription-auto-upgrade.js";
 
 /** Kept from the deleted "credits used" mail: postmark-service bills it to the platform. */
 export const SUBSCRIPTION_OUT_OF_CREDITS_EVENT = "subscription-credits-used";
@@ -58,6 +66,7 @@ export function upgradeUrl(clerkOrgId: string | null, brandId: string | null): s
 }
 
 export type OutOfCreditsOutcome =
+  | "upgraded"
   | "sent"
   | "not_subscription"
   | "sending_stopped"
@@ -112,15 +121,24 @@ export async function notifySubscriptionOutOfCreditsIfDue(orgId: string): Promis
     const sub = await getLiveSubscription(orgId);
     if (!sub || (sub.status !== "trialing" && sub.status !== "active")) return "not_subscription";
     if (sub.pausedAt || sub.cancelAtPeriodEnd || (await getOrgSendingStopped(orgId))) return "sending_stopped";
-    if (
-      sub.creditsUsedNotifiedPeriodStart &&
-      sub.creditsUsedNotifiedPeriodStart.getTime() >= sub.currentPeriodStart.getTime()
-    ) {
-      return "already_notified";
-    }
+    const alreadyNotified =
+      !!sub.creditsUsedNotifiedPeriodStart &&
+      sub.creditsUsedNotifiedPeriodStart.getTime() >= sub.currentPeriodStart.getTime();
+    // A grandfathered plan never auto-upgrades: skip the balance read once told.
+    if (alreadyNotified && !sub.autoUpgrade) return "already_notified";
 
     const block = await resolveSpendBlock(orgId, await computeBalance(orgId));
     if (!block.blocked) return "has_credit";
+
+    let cardDeclined = false;
+    if (sub.autoUpgrade) {
+      const up = await tryAutoUpgrade(sub);
+      if (up.result === "upgraded") return "upgraded";
+      if (up.result === "no_longer_blocked") return "has_credit";
+      if (up.result === "in_flight" || up.result === "unavailable") return "unresolved";
+      cardDeclined = up.result === "declined" || up.result === "declined_this_period";
+    }
+    if (alreadyNotified) return "already_notified";
 
     const stopped = await stoppedCampaigns(orgId);
     if (!stopped) {
@@ -169,6 +187,7 @@ export async function notifySubscriptionOutOfCreditsIfDue(orgId: string): Promis
       campaigns: stopped.campaigns,
       brandName,
       trialing: sub.status === "trialing",
+      cardDeclined,
       monthlyAmountCents: sub.monthlyAmountCents,
       ctaUrl: upgradeUrl(identity?.externalId ?? null, brandId),
     });
@@ -193,6 +212,11 @@ export async function notifySubscriptionOutOfCreditsIfDue(orgId: string): Promis
 
 /** Every org with a plan that has not ended, checked once. */
 export async function runSubscriptionOutOfCreditsCheck(): Promise<{ checked: number; sent: number }> {
+  try {
+    await resumeStaleAutoUpgrades();
+  } catch (err) {
+    console.error("[billing-service] stale auto-upgrade resume failed:", err);
+  }
   const rows = await db
     .selectDistinct({ orgId: subscriptions.orgId })
     .from(subscriptions)

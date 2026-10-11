@@ -25,6 +25,7 @@ import {
 import { sumSubscriptionExpiriesForOrg } from "../lib/subscription-expiries.js";
 import { attributeUnassignedPlan } from "../lib/subscription-plans.js";
 import { reallocateDerivedPlans } from "../lib/subscriber-plan-budgets.js";
+import { recordPaymentConsent } from "../lib/payment-consents.js";
 import type { Subscription } from "../db/schema.js";
 import {
   ChangeSubscriptionAmountRequestSchema,
@@ -142,6 +143,9 @@ router.post("/v1/accounts/subscription/checkout_session", requireOrgHeaders, asy
   }
   try {
     await findOrCreateAccount(orgId, userId);
+    if (parsed.data.consent) {
+      await recordPaymentConsent({ orgId, req, context: "subscription_checkout", consent: parsed.data.consent });
+    }
     const request = await requestSubscription({
       orgId,
       identity: {
@@ -180,6 +184,9 @@ router.post("/v1/accounts/subscription/start", requireOrgHeaders, async (req, re
   if (amount !== undefined && refuseAmount(res, amount)) return;
   try {
     await findOrCreateAccount(orgId, userId);
+    if (parsed.data.consent) {
+      await recordPaymentConsent({ orgId, req, context: "subscription_start", consent: parsed.data.consent });
+    }
     await startSubscription({ orgId, userId, monthlyAmountCents: amount });
     res.json(await readSubscription(orgId));
   } catch (err) {

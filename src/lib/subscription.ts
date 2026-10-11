@@ -22,9 +22,11 @@
  *    (`subscription_credit_expiries`, applied on the usage side like a staff
  *    debit). A negative balance never expires. A cancelled subscription expires
  *    its remainder when its last paid period ends.
- *  - When credit runs out, sending stops (floor 0, no reload). No email: no
- *    depletion episode, no dunning (lib/dunning); the "credits used" upsell email
- *    was deleted (owner 2026-10-06).
+ *  - When credit runs out: a plan created after migration 0081 moves up one step
+ *    (+$100/month) and the step is charged at once (lib/subscription-auto-upgrade,
+ *    owner 2026-10-11). A grandfathered plan, or a refused step, stops sending
+ *    (floor 0, no reload) and the out-of-credits email tells the customer
+ *    (lib/subscription-out-of-credits). No depletion episode, no dunning (lib/dunning).
  *  - Amount change: any ladder value, up or down, from the next charge; not while
  *    trialing. A trialing plan can instead be STARTED NOW (`startSubscriptionNow`):
  *    charged today at the chosen amount, trial over, period restarts. Cancel = no further charge (at period end; immediately when
@@ -70,6 +72,7 @@ import {
   PLATFORM_USER_ID,
   salesPathReactiveCharges,
   SUBSCRIPTION_TRIAL_CODE,
+  subscriptionAutoUpgrades,
   subscriptionCharges,
   subscriptionCreditExpiries,
   subscriptions,
@@ -682,11 +685,22 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
         gte(salesPathReactiveCharges.createdAt, boundary)
       )
     );
+  const [upgradesPaidSince] = await db
+    .select({ total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.chargedCents}), 0)::text` })
+    .from(subscriptionAutoUpgrades)
+    .where(
+      and(
+        eq(subscriptionAutoUpgrades.orgId, sub.orgId),
+        eq(subscriptionAutoUpgrades.status, "paid"),
+        gte(subscriptionAutoUpgrades.settledAt, boundary)
+      )
+    );
   const unspent =
     Number(snapshot.balanceCents) -
     Number(paidSince?.total ?? 0) -
     Number(grantedSince?.total ?? 0) -
-    Number(reactivePaidSince?.total ?? 0);
+    Number(reactivePaidSince?.total ?? 0) -
+    Number(upgradesPaidSince?.total ?? 0);
   // Reactive item budgets (lib/campaign-items) are paid for the month but only
   // spent when leads reach their step: what is left of them CARRIES OVER instead
   // of expiring, up to what the ending period collected for reactive items.
@@ -757,15 +771,44 @@ export async function reactiveCollectedInPeriod(sub: Subscription): Promise<numb
   return fromCharge + (await reactiveChargedNowInPeriod(sub));
 }
 
-/** The credit this plan brought for its current period: its paid charge, or the trial grant. */
+/** Every auto-upgrade step PAID for this plan, all periods (cents/month it added). */
+async function autoUpgradeStepsPaidCents(sub: Subscription): Promise<number> {
+  const [row] = await db
+    .select({
+      total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.toAmountCents} - ${subscriptionAutoUpgrades.fromAmountCents}), 0)::text`,
+    })
+    .from(subscriptionAutoUpgrades)
+    .where(and(eq(subscriptionAutoUpgrades.subscriptionId, sub.id), eq(subscriptionAutoUpgrades.status, "paid")));
+  return Number(row?.total ?? 0);
+}
+
+/** Auto-upgrade steps PAID for this plan during its current period (lib/subscription-auto-upgrade). */
+export async function autoUpgradePaidInPeriod(sub: Subscription): Promise<number> {
+  const [row] = await db
+    .select({ total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.chargedCents}), 0)::text` })
+    .from(subscriptionAutoUpgrades)
+    .where(
+      and(
+        eq(subscriptionAutoUpgrades.subscriptionId, sub.id),
+        eq(subscriptionAutoUpgrades.periodStart, sub.currentPeriodStart),
+        eq(subscriptionAutoUpgrades.status, "paid")
+      )
+    );
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * The credit this plan brought for its current period: its paid charge, or the
+ * trial grant, plus every reactive charge and auto-upgrade step paid during it.
+ */
 async function periodCreditCents(sub: Subscription): Promise<number> {
   const charge = await getCharge(sub.id, sub.currentPeriodStart);
-  const reactiveNow = await reactiveChargedNowInPeriod(sub);
-  if (charge?.status === "paid") return charge.amountCents + reactiveNow;
+  const extra = (await reactiveChargedNowInPeriod(sub)) + (await autoUpgradePaidInPeriod(sub));
+  if (charge?.status === "paid") return charge.amountCents + extra;
   if (sub.trialStartedAt && sub.trialStartedAt.getTime() === sub.currentPeriodStart.getTime()) {
-    return (await getSubscriptionTrialGrantCents(sub.orgId)) ?? 0;
+    return ((await getSubscriptionTrialGrantCents(sub.orgId)) ?? 0) + extra;
   }
-  return 0;
+  return extra;
 }
 
 type AttemptResult = "paid" | "declined" | "permanent" | "error";
@@ -905,6 +948,10 @@ export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Pr
     return sub;
   }
   if (!pricing) return sub;
+  // Auto-upgrade steps (lib/subscription-auto-upgrade) sit ON TOP of the items:
+  // re-pricing from items must never undo an upgrade the customer already paid for.
+  const steps = await autoUpgradeStepsPaidCents(sub);
+  if (steps > 0) pricing = { ...pricing, monthlyAmountCents: pricing.monthlyAmountCents + steps };
   if (
     pricing.monthlyAmountCents === sub.monthlyAmountCents &&
     pricing.reactiveMonthlyCents === sub.itemReactiveMonthlyCents
@@ -1627,6 +1674,11 @@ export function subscriptionWire(sub: Subscription | null, hasPaymentMethod: boo
      */
     sending_stopped: paused || sub.cancelAtPeriodEnd || sub.status === "canceled",
     /** Kept for consumers written against the first (+$100) shape; = can_change_amount. */
+    /**
+     * Credit runs out → the plan moves up one step (+$100/month) and the step is
+     * charged at once. False only on plans that existed before the rule (2026-10-11).
+     */
+    auto_upgrade: sub.autoUpgrade,
     can_raise: canChange,
     next_raise_monthly_amount_cents: canChange ? sub.monthlyAmountCents + SUBSCRIPTION_STEP_CENTS : null,
   };
