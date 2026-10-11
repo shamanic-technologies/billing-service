@@ -8658,6 +8658,114 @@
         }
       }
     },
+    "/internal/accounts/by-org/{orgId}/cash": {
+      "get": {
+        "summary": "Cash an org paid vs credit it received without paying (staff revenue reads)",
+        "description": "Callable with the service x-api-key ONLY (orgId in the PATH, no x-org-id / x-user-id / x-run-id). Owner rule 2026-10-11: revenue is cash the client paid; a granted or advanced credit being consumed is never revenue. cash_paid_cents = the same figure as cash_paid_cents on GET /v1/accounts (every succeeded payment, every acquirer, net of refunds and lost disputes, never reduced by what it repaid). credited_cents = the org's credited total. non_cash_credit_cents = credited_cents − cash_paid_cents (gifts, advances not yet repaid). ?by_month=true adds cash_by_month: net cash collected per UTC month (a refund counts in the month it happened), from the org's first activity month to now; the months sum to cash_paid_cents. Pure read. 0 everywhere for an org that never paid or has no account.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "by_month",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cash vs credit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "org_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "cash_paid_cents": {
+                      "type": "string"
+                    },
+                    "credited_cents": {
+                      "type": "string"
+                    },
+                    "non_cash_credit_cents": {
+                      "type": "string"
+                    },
+                    "cash_by_month": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "cash_paid_cents": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "month",
+                          "cash_paid_cents"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "org_id",
+                    "cash_paid_cents",
+                    "credited_cents",
+                    "non_cash_credit_cents"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID, or by_month is not true/false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/accounts/by-org/{orgId}/usage-discount": {
       "get": {
         "summary": "User-less read of an org's platform-usage discount (service-to-service)",
