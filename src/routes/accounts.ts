@@ -2,7 +2,7 @@ import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts } from "../db/schema.js";
+import { AGENT_API_FREE_CREDIT_OFFER, billingAccounts } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
@@ -815,6 +815,20 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
 
     if (!account) {
       res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    // An org opened through the API pays PREPAID with a MANDATORY auto top-up
+    // (owner 2026-10-12: « Autotopup is mandatory for prepaid because otherwise
+    // their service would stop »). Its amounts can change (PATCH), not switch off.
+    if (
+      account.freeCreditOffer === AGENT_API_FREE_CREDIT_OFFER &&
+      account.paymentMode === "prepaid"
+    ) {
+      res.status(409).json({
+        error: "Automatic top-up is required for this prepaid organization; change its amounts instead.",
+        code: "auto_topup_required",
+      });
       return;
     }
 

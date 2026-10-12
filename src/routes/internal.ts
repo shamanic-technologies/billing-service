@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -420,6 +421,10 @@ router.post("/internal/accounts/by-org/:orgId/trial-seed", async (req, res) => {
     const result = await seedTrialCredit(orgId);
     res.json({ ok: true, ...result });
   } catch (err) {
+if (err instanceof FreeCreditNotOfferedError) {
+      res.status(409).json({ error: err.message, code: err.code });
+      return;
+    }
     if (err instanceof TrialSeedWelcomeAlreadyGrantedError) {
       res.status(409).json({
         error:
@@ -463,6 +468,10 @@ router.post("/internal/accounts/by-org/:orgId/org-creation-bonus", async (req, r
       alreadyGranted: result.alreadyGranted,
     });
   } catch (err) {
+    if (err instanceof FreeCreditNotOfferedError) {
+      res.status(409).json({ error: err.message, code: err.code });
+      return;
+    }
     console.error(`[billing-service] org-creation bonus failed for org ${orgId}:`, err);
     res.status(500).json({ error: "Failed to grant the organization creation bonus" });
   }

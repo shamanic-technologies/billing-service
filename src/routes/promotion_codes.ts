@@ -4,6 +4,7 @@ import {
 } from "../middleware/auth.js";
 import { RedeemPromotionCodeRequestSchema } from "../schemas.js";
 import { findOrCreateAccount } from "../lib/account.js";
+import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
 import { traceEvent } from "../lib/trace-event.js";
 import {
   redeemPromoCode,
@@ -50,6 +51,10 @@ router.post("/v1/promotion_codes/redeem", requireOrgHeaders, async (req, res) =>
     }
     if (err instanceof PromoExhaustedError) {
       res.status(400).json({ error: "Promo code has reached its redemption limit" });
+      return;
+    }
+if (err instanceof FreeCreditNotOfferedError) {
+      res.status(409).json({ error: err.message, code: err.code });
       return;
     }
     if (err instanceof WelcomeNotOfferedError) {

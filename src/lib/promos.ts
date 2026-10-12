@@ -1,6 +1,7 @@
 import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { isMatchOfferOrg } from "./free-credit-offer.js";
+import { assertFreeCreditAllowed } from "./agent-api-org.js";
 import {
   billingAccounts,
   localPromoCodes,
@@ -67,6 +68,8 @@ export async function redeemPromoCode(
     .limit(1);
 
   if (!promo) throw new PromoNotFoundError(code);
+  // An agent/API org receives no free credit of any kind (lib/agent-api-org).
+  await assertFreeCreditAllowed(orgId, `promo ${code}`);
   // A match_100 org's only up-front gift is its org-creation bonus: the welcome
   // gift never stacks on it (lib/free-credit-offer).
   if (code === WELCOME_PROMO_CODE && (await isMatchOfferOrg(orgId))) {
@@ -262,6 +265,7 @@ export async function grantCredit(
   if (!PLATFORM_GRANT_REASONS.includes(reason)) {
     throw new UnknownGrantReasonError(reason);
   }
+  await assertFreeCreditAllowed(orgId, reason);
 
   const [grantCode] = await db
     .select()
@@ -356,6 +360,7 @@ export async function grantOrgCreationBonus(
     .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
     .limit(1);
   if (!code) throw new GrantPromoCodeMissingError(ORG_CREATION_BONUS_CODE);
+  await assertFreeCreditAllowed(orgId, ORG_CREATION_BONUS_CODE);
 
   const inserted = await db
     .insert(localPromos)
@@ -450,6 +455,7 @@ export async function grantProductTaskCredit(
   amountCents: number,
   completionId: string
 ): Promise<AdminGrantResult> {
+  await assertFreeCreditAllowed(orgId, PRODUCT_TASK_REWARD_CODE);
   return insertStackingGrant({
     code: PRODUCT_TASK_REWARD_CODE,
     orgId,

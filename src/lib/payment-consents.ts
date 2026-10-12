@@ -19,7 +19,11 @@ import { paymentConsents, PLATFORM_USER_ID, type PaymentConsent } from "../db/sc
 import { PaymentConsentSchema } from "../schemas.js";
 
 export type PaymentConsentInput = z.infer<typeof PaymentConsentSchema>;
-export type PaymentConsentContext = "topup_checkout" | "subscription_checkout" | "subscription_start";
+export type PaymentConsentContext =
+  | "topup_checkout"
+  | "subscription_checkout"
+  | "subscription_start"
+  | "prepaid_checkout";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

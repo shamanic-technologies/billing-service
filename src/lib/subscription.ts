@@ -100,6 +100,7 @@ import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans
 import { campaignOnPredicateOf, itemsPlanPricing, listOfferItems } from "./campaign-items-store.js";
 import { getSalesPathTerms } from "./sales-path-terms.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
+import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
@@ -257,6 +258,7 @@ export async function getSubscriptionTrialGrantCents(orgId: string): Promise<num
 export async function grantSubscriptionTrial(
   orgId: string
 ): Promise<{ grantedCents: number; alreadyGranted: boolean }> {
+  await assertFreeCreditAllowed(orgId, SUBSCRIPTION_TRIAL_CODE);
   const code = await requireTrialCode();
   const existing = await getSubscriptionTrialGrantCents(orgId);
   if (existing !== null) return { grantedCents: existing, alreadyGranted: true };
@@ -421,7 +423,8 @@ export async function requestSubscription(params: {
     })
     .where(eq(billingAccounts.orgId, orgId));
 
-  const trialDays = (await hadTrial(orgId)) ? null : SUBSCRIPTION_TRIAL_DAYS;
+  const trialDays =
+    (await hadTrial(orgId)) || (await isAgentApiOrg(orgId)) ? null : SUBSCRIPTION_TRIAL_DAYS;
   let cardRefusedReason: "prepaid_card" | null = null;
   if (await confirmChargeableCard(orgId)) {
     // A prepaid card may pay (no trial = first month charged at start), never trial.
@@ -497,7 +500,9 @@ export async function startSubscription(params: {
   const startedBy =
     params.userId && params.userId !== PLATFORM_USER_ID ? params.userId : null;
 
-  if (!(await hadTrial(orgId))) {
+  // An agent/API org never gets a free trial (lib/agent-api-org): its first month
+  // is charged at start, like an org that already had its trial.
+  if (!(await hadTrial(orgId)) && !(await isAgentApiOrg(orgId))) {
     if (await savedCardIsPrepaid(orgId)) {
       console.warn(`[billing-service] subscription: org ${orgId} refused a free trial on a prepaid card`);
       throw new SubscriptionRefused("prepaid_card_trial_refused", PREPAID_CARD_TRIAL_MESSAGE);
