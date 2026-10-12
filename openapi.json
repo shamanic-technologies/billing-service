@@ -1767,6 +1767,7 @@
               "outstanding_balance_no_card",
               "outstanding_balance_charge_declined",
               "outstanding_balance_below_minimum_charge",
+              "outstanding_balance_monthly_limit",
               "subscription_mode_staff_only"
             ]
           },
@@ -3957,6 +3958,7 @@
               "plan_exists_for_offer",
               "offer_not_found",
               "charge_unavailable",
+              "monthly_charge_limit_reached",
               "subscription_paused",
               "subscription_not_paused",
               "subscription_ended",
@@ -4727,6 +4729,7 @@
               "no_plan_for_offer",
               "subscription_not_active",
               "reactive_charge_declined",
+              "monthly_charge_limit_reached",
               "charge_unavailable",
               "minimums_unavailable",
               "campaign_status_unavailable",
@@ -5362,6 +5365,79 @@
           "orgId",
           "brandId",
           "caps"
+        ]
+      },
+      "MonthlyChargeLimitResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "monthly_charge_limit_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "period": {
+            "type": "string",
+            "enum": [
+              "calendar_month_utc"
+            ]
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          },
+          "charged_this_period_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "remaining_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "limit_reached": {
+            "type": "boolean"
+          },
+          "limit_reached_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "refused_amount_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "updated_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "org_id",
+          "monthly_charge_limit_cents",
+          "period",
+          "period_start",
+          "period_end",
+          "charged_this_period_cents",
+          "remaining_cents",
+          "limit_reached",
+          "limit_reached_at",
+          "refused_amount_cents",
+          "updated_at"
+        ]
+      },
+      "SetMonthlyChargeLimitRequest": {
+        "type": "object",
+        "properties": {
+          "monthly_charge_limit_cents": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "monthly_charge_limit_cents"
         ]
       }
     },
@@ -15766,6 +15842,507 @@
           },
           "400": {
             "description": "Invalid brandId or offerId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/monthly_charge_limit": {
+      "get": {
+        "summary": "Read this org's monthly charge limit and this month's card charges",
+        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The limit and this month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "This month's card charges could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State or change this org's monthly charge limit",
+        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all. Settable before the first payment. Changing the limit re-opens this month: spending resumes on the next charge that fits, and a later refusal at the new figure is emailed again.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMonthlyChargeLimitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The limit after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "This month's card charges could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove this org's monthly charge limit (idempotent)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "No limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/monthly-charge-limit": {
+      "get": {
+        "summary": "Staff/service read of an org's monthly charge limit",
+        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The limit and this month",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid orgId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "This month's card charges could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Staff/service: set an org's monthly charge limit",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMonthlyChargeLimitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The limit after the change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "This month's card charges could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Staff/service: remove an org's monthly charge limit (idempotent)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "No limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyChargeLimitResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid orgId",
             "content": {
               "application/json": {
                 "schema": {
