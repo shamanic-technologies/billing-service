@@ -7,6 +7,7 @@ import {
   localPromoCodes,
   localPromos,
   ORG_CREATION_BONUS_CODE,
+  AGENT_API_FREE_CREDIT_OFFER,
   LEGACY_FREE_CREDIT_OFFER,
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
@@ -54,7 +55,9 @@ export class TopupBelowMinimumError extends Error {
 }
 
 export function asFreeCreditOffer(value: string | null | undefined): FreeCreditOfferKind {
-  return value === MATCH_FREE_CREDIT_OFFER ? MATCH_FREE_CREDIT_OFFER : LEGACY_FREE_CREDIT_OFFER;
+  if (value === MATCH_FREE_CREDIT_OFFER) return MATCH_FREE_CREDIT_OFFER;
+  if (value === AGENT_API_FREE_CREDIT_OFFER) return AGENT_API_FREE_CREDIT_OFFER;
+  return LEGACY_FREE_CREDIT_OFFER;
 }
 
 /**
@@ -98,7 +101,7 @@ export function assertAutoTopupMinimums(
   }
 }
 
-/** The reload a match_100 org configured, or null (legacy org, or auto-topup off). */
+/** The reload a match_100 / agent_api org configured, or null (legacy org, or auto-topup off). */
 export interface ConfiguredReload {
   amountCents: number;
   thresholdCents: number;
@@ -114,8 +117,15 @@ export function configuredReloadFor(account: {
   topupAmountCents: number | null;
   topupThresholdCents: number | null;
 }): ConfiguredReload | null {
-  if (asFreeCreditOffer(account.freeCreditOffer) !== MATCH_FREE_CREDIT_OFFER) return null;
+  const offer = asFreeCreditOffer(account.freeCreditOffer);
   if (account.topupAmountCents == null || account.topupThresholdCents == null) return null;
+  // An agent/API org reloads EXACTLY what it chose (pay $10, reload $15 below $5).
+  // Its minimums are the agent-facing API's (owner: customer minimums are a front
+  // validation), so nothing is clamped here.
+  if (offer === AGENT_API_FREE_CREDIT_OFFER) {
+    return { amountCents: account.topupAmountCents, thresholdCents: account.topupThresholdCents };
+  }
+  if (offer !== MATCH_FREE_CREDIT_OFFER) return null;
   return {
     amountCents: Math.max(account.topupAmountCents, MATCH_MIN_TOPUP_CENTS),
     thresholdCents: Math.max(account.topupThresholdCents, MATCH_MIN_RELOAD_THRESHOLD_CENTS),
@@ -176,7 +186,13 @@ export function computeFreeCreditStatus(params: {
  * read, the balance path and the grant route cannot disagree.
  */
 export async function getOnboardingAdvanceCents(orgId: string): Promise<string> {
-  if (!(await isMatchOfferOrg(orgId))) return "0.0000000000";
+  // An agent/API org marked AFTER a first touch already handed it the $30 (lib/
+  // agent-api-org) keeps it as what it was: an advance its first payment repays,
+  // never a gift. A cleanly marked agent org holds no such row.
+  const offer = await getOrgFreeCreditOffer(orgId);
+  if (offer !== MATCH_FREE_CREDIT_OFFER && offer !== AGENT_API_FREE_CREDIT_OFFER) {
+    return "0.0000000000";
+  }
   // A subscription trial started AFTER the bonus tops credit up TO $99 counting the
   // $30 (trialCreditSql): from then on those $30 are part of the TRIAL advance, which
   // the trial-end charge repays. Counting them here too would repay them twice and

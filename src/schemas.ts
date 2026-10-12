@@ -102,9 +102,9 @@ export const BillingAccountSchema = z
      * Where the org stands on its free-credit offer, ready-made for the payment wall
      * ("$30 is already yours, $70 more once you've paid $100"). See lib/free-credit-offer.
      */
-    free_credit_offer: z.enum(["legacy", "match_100"]).openapi({
+    free_credit_offer: z.enum(["legacy", "match_100", "agent_api"]).openapi({
       description:
-        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `legacy` = every older org, unchanged.",
+        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged.",
     }),
     free_credit_entitlement_cents: z.number().int().openapi({
       description: "Total free credit the offer gives, every gift included (10000 for match_100).",
@@ -211,6 +211,72 @@ export const PaymentConsentSchema = z
     ip_address: z.string().max(100).optional(),
   })
   .openapi("PaymentConsent");
+
+// --- Prepaid checkout with mandatory auto top-up (agent/API orgs) ---
+
+export const CreatePrepaidCheckoutRequestSchema = z
+  .object({
+    /** Charged now on the hosted page, credited exactly (no free credit is added). */
+    topup_amount_cents: z.number().int().min(50).openapi({ example: 1000 }),
+    /** What each automatic reload charges. */
+    auto_topup_amount_cents: z.number().int().min(50).openapi({ example: 1500 }),
+    /** Reload when the next run would take the balance below this. */
+    auto_topup_threshold_cents: z.number().int().min(0).openapi({ example: 500 }),
+    success_url: z.string().url(),
+    cancel_url: z.string().url(),
+    /** The consent statements the person accepted. Optional; stored when present. */
+    consent: PaymentConsentSchema.optional(),
+  })
+  .openapi("CreatePrepaidCheckoutRequest");
+
+export const PrepaidCheckoutResponseSchema = z
+  .object({
+    url: z.string().url().openapi({ description: "Hosted payment page. Paying it charges topup_amount_cents and saves the card for the automatic reloads." }),
+    session_id: z.string(),
+    org_id: z.string().uuid(),
+    payment_mode: z.literal("prepaid"),
+    free_credit_offer: z.string(),
+    topup_amount_cents: z.number().int(),
+    auto_topup: z.object({ amount_cents: z.number().int(), threshold_cents: z.number().int() }),
+  })
+  .openapi("PrepaidCheckoutResponse");
+
+export const PrepaidStatusResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    state: z.enum(["awaiting_payment", "active", "card_not_reloadable", "auto_topup_off", "not_prepaid"]).openapi({
+      description:
+        "`awaiting_payment` nothing paid and no card yet. `active` prepaid, auto top-up armed, the saved card can be reloaded. `card_not_reloadable` the payment landed (credit is spendable) but the card cannot be charged with nobody present: no reload will fire, add another card (POST /v1/accounts/card_setup). `auto_topup_off` prepaid without auto top-up. `not_prepaid` postpaid or subscription.",
+    }),
+    payment_mode: z.string(),
+    free_credit_offer: z.string(),
+    paid_cents: z.string().openapi({ description: "Money paid in, net of refunds (decimal cents)." }),
+    balance_cents: z.string().openapi({ description: "Spendable balance (decimal cents)." }),
+    auto_topup: z.object({
+      enabled: z.boolean(),
+      amount_cents: z.number().int().nullable(),
+      threshold_cents: z.number().int().nullable(),
+    }),
+    card: z.object({
+      saved: z.boolean(),
+      reloadable: z.boolean(),
+      not_reloadable_reason: z
+        .enum(["no_saved_card", "card_issuing_country_unsupported", "prepaid_card", "recurring_charge_not_authorized", "card_unusable"])
+        .nullable(),
+    }),
+  })
+  .openapi("PrepaidStatusResponse");
+
+export const AgentApiSignupResponseSchema = z
+  .object({
+    orgId: z.string().uuid(),
+    freeCreditOffer: z.literal("agent_api"),
+    paymentMode: z.string(),
+    created: z.boolean().openapi({ description: "True when this call created the billing account." }),
+    alreadyMarked: z.boolean(),
+    freeCreditHeldCents: z.string().openapi({ description: "Free credit (non-staff) the org already held when marked. \"0\" on the normal path (marked at provisioning). Never clawed back." }),
+  })
+  .openapi("AgentApiSignupResponse");
 
 // --- Checkout ---
 
@@ -2188,6 +2254,53 @@ registry.registerPath({
       description: "stripe-service unavailable, or `welcome_discount_not_applied`",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/prepaid_checkout",
+  summary: "One call: prepay + saved card + mandatory auto top-up (agent/API orgs)",
+  description:
+    "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
+    "Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. " +
+    "A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). " +
+    "409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: CreatePrepaidCheckoutRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Hosted payment page", content: { "application/json": { schema: PrepaidCheckoutResponseSchema } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: { description: "`subscription_mode`, or an outstanding-balance refusal (`code`, `owed_cents`)", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "stripe-service unavailable", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/prepaid_status",
+  summary: "Where the one-step prepaid checkout stands",
+  description: "Paid yet, card saved, and whether that card can be reloaded off-session (mandatory auto top-up). Read it after the payment page to know whether the org is `active` or its card is `card_not_reloadable`.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Prepaid status", content: { "application/json": { schema: PrepaidStatusResponseSchema } } },
+    404: { description: "No billing account", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "stripe-service or runs-service unavailable", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/accounts/by-org/{orgId}/agent-api-signup",
+  summary: "Mark an org as opened by an AI agent through the API (no free credit, ever)",
+  description:
+    "Called by client-service at provisioning, BEFORE anything else touches billing for the org. Creates the billing account as `agent_api` (prepaid, entitlement 0) when none exists; an existing account has its offer switched and any free credit still to come withdrawn (credit already granted is kept and reported in freeCreditHeldCents). From then on every automatic free-credit path refuses the org (welcome, any promo redeem, the $30 advance, trial seed, signup welcome, invite and task grants, subscription trial): the explicit grant routes answer 409 `free_credit_not_offered`, signup answers zeros, a subscription starts with no trial. DELETE /v1/accounts/auto_topup answers 409 `auto_topup_required` while the org is prepaid. Idempotent.",
+  request: { headers: z.object({ "x-api-key": z.string() }), params: z.object({ orgId: z.string().uuid() }) },
+  responses: {
+    200: { description: "Marked", content: { "application/json": { schema: AgentApiSignupResponseSchema } } },
+    400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
