@@ -41,7 +41,7 @@ const REVOLUT_CARD = {
   org_id: orgId,
   acquirer: "revolut",
   saved: true,
-  method: { id: "rpm_1", type: "card", saved_for: "merchant" },
+  method: { id: "rpm_1", type: "card", saved_for: "merchant", funding: "debit", prepaid: false },
 };
 
 describe("subscription: start a trialing plan now", () => {

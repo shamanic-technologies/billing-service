@@ -162,7 +162,7 @@ export function setupStripeMocks(): StripeServiceMocks {
       org_id: "org_mock",
       acquirer: "stripe",
       saved: true,
-      method: { id: "pm_mock", type: "card", saved_for: "merchant" },
+      method: { id: "pm_mock", type: "card", saved_for: "merchant", funding: "credit", prepaid: false },
     }),
     authorizeRecurringCharges: vi.fn().mockResolvedValue({ authorized: true, details: {} }),
     // The acquirer detached one saved method. An org with nothing to remove is

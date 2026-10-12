@@ -164,6 +164,7 @@ router.post("/v1/accounts/subscription/checkout_session", requireOrgHeaders, asy
       trial_days: request.trialDays,
       card_required: request.cardRequired,
       card_setup: request.cardSetup,
+      card_refused_reason: request.cardRefusedReason,
     });
   } catch (err) {
     if (err instanceof SubscriptionRefused) return refuse(res, err);

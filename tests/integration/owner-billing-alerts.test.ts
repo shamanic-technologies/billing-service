@@ -55,7 +55,7 @@ describe("owner Telegram per customer billing event", () => {
       org_id: orgId,
       acquirer: "revolut",
       saved: true,
-      method: { id: "rpm_1", type: "card", saved_for: "merchant" },
+      method: { id: "rpm_1", type: "card", saved_for: "merchant", funding: "debit", prepaid: false },
     });
     ss.authorizeRecurringCharges.mockResolvedValue({ authorized: true, details: {} });
     const runs = await import("../../src/lib/runs-client.js");
