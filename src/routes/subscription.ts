@@ -26,6 +26,7 @@ import { sumSubscriptionExpiriesForOrg } from "../lib/subscription-expiries.js";
 import { attributeUnassignedPlan } from "../lib/subscription-plans.js";
 import { reallocateDerivedPlans } from "../lib/subscriber-plan-budgets.js";
 import { recordPaymentConsent } from "../lib/payment-consents.js";
+import { getTrialAdvanceCents } from "../lib/free-credit-offer.js";
 import type { Subscription } from "../db/schema.js";
 import {
   ChangeSubscriptionAmountRequestSchema,
@@ -97,6 +98,11 @@ async function readSubscription(orgId: string) {
     subscription: subscriptionWire(settled.subscription, saved),
     credits_remaining_cents: snapshot.balanceCents,
     trial_grant_cents: settled.trialGrantCents,
+    // The WHOLE trial credit the customer was given (the grant tops UP TO the trial
+    // amount, so credit held before it is part of it): $30 advance + $69 grant = 9900.
+    // The one figure the dashboard's "of $99" reads; null when the org had no trial.
+    trial_credit_cents:
+      settled.trialGrantCents === null ? null : Number(await getTrialAdvanceCents(orgId)),
     expired_cents: expired,
   };
 }

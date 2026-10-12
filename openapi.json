@@ -4158,6 +4158,10 @@
             "type": "number",
             "nullable": true
           },
+          "trial_credit_cents": {
+            "type": "number",
+            "nullable": true
+          },
           "expired_cents": {
             "type": "string"
           }
@@ -4170,6 +4174,7 @@
           "subscription",
           "credits_remaining_cents",
           "trial_grant_cents",
+          "trial_credit_cents",
           "expired_cents"
         ]
       },

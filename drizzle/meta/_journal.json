@@ -589,6 +589,13 @@
       "when": 1795341600000,
       "tag": "0083_sales_funnel_campaign_caps",
       "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1795428000000,
+      "tag": "0084_subscription_trial_withdraws_welcome_offer",
+      "breakpoints": true
     }
   ]
 }
