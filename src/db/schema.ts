@@ -81,9 +81,20 @@ export const FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS = 3000;
  */
 export const LEGACY_FREE_CREDIT_OFFER = "legacy";
 export const MATCH_FREE_CREDIT_OFFER = "match_100";
+/**
+ * An org opened by an AI agent through the API (owner 2026-10-12: « no free credits
+ * nor free trial with them to avoid free riders. Everything needs to be paid
+ * upfront »). NO free credit of any kind, ever: no welcome, no $30 advance, no
+ * match, no trial seed, no subscription trial, no invite/task grant. Prepaid with a
+ * MANDATORY auto top-up. Never a column default: written only by
+ * `PUT /internal/accounts/by-org/:orgId/agent-api-signup` (or the one-step prepaid
+ * checkout for an org with no account yet). See lib/agent-api-org.
+ */
+export const AGENT_API_FREE_CREDIT_OFFER = "agent_api";
 export type FreeCreditOfferKind =
   | typeof LEGACY_FREE_CREDIT_OFFER
-  | typeof MATCH_FREE_CREDIT_OFFER;
+  | typeof MATCH_FREE_CREDIT_OFFER
+  | typeof AGENT_API_FREE_CREDIT_OFFER;
 
 /** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
 export const MATCH_MIN_TOPUP_CENTS = 10000;

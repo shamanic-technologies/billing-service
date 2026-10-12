@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
 import {
   CreditGrantRequestSchema,
   AdminCreditGrantRequestSchema,
@@ -91,6 +92,10 @@ router.post("/internal/credits/grant", async (req, res) => {
       await grantCredit(orgId, amountCents, reason);
     }
   } catch (err) {
+if (err instanceof FreeCreditNotOfferedError) {
+      res.status(409).json({ error: err.message, code: err.code });
+      return;
+    }
     if (err instanceof UnknownGrantReasonError) {
       res.status(400).json({ error: err.message });
       return;

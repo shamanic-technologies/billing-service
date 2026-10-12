@@ -14,6 +14,7 @@ import {
 } from "./welcome-recipient.js";
 import { getSubscriptionTrialGrantCents } from "./subscription.js";
 import { getOrgFreeCreditOffer } from "./free-credit-offer.js";
+import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
 import { grantOrgCreationBonus, sumEntitlementGrantsForOrg } from "./promos.js";
 import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
 
@@ -135,6 +136,8 @@ export interface TrialSeedResult {
  * is exactly the "welcome amount PLUS the seed" outcome this exists to prevent.
  */
 export async function seedTrialCredit(orgId: string): Promise<TrialSeedResult> {
+  // An agent/API org never gets a trial seed (lib/agent-api-org).
+  await assertFreeCreditAllowed(orgId, "trial_seed");
   // "We match your first $100": a NEW org's up-front free credit is its ONE
   // org-creation bonus ($30), whichever path asks first — so the anonymous walk gets
   // the same $30 a dashboard-created org gets, and a racing first billing touch can
@@ -242,6 +245,17 @@ export async function settleSignupWelcome(
   // person's history: its whole up-front gift is the org-creation bonus (granted here
   // too, idempotently, for an org that reached signup without one).
   // The account first, so its offer is the one the DB default gives a new org.
+  // An agent/API org's signup grants nothing at all (lib/agent-api-org).
+  if (await isAgentApiOrg(orgId)) {
+    return {
+      orgId,
+      trialSeedCents: 0,
+      welcomeGrantedCents: 0,
+      totalFreeCreditCents: 0,
+      alreadySettled: true,
+      welcomeReceivedElsewhere: false,
+    };
+  }
   await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
   if ((await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER) {
     await grantOrgCreationBonus(orgId);
