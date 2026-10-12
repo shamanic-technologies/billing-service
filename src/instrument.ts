@@ -24,6 +24,7 @@
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
  *   - `subscription-monthly-update` → src/lib/subscription-monthly-update.ts
  *   - `subscription-credits-used`  → src/lib/subscription-out-of-credits.ts
+ *   - `monthly-charge-limit-reached` → src/lib/monthly-charge-limit.ts
  * The six dunning templates (`credit-depleted*`) are registered by the dashboard
  * (distribute.you#1420, which owns their copy) and are present in prod.
  */
@@ -40,6 +41,7 @@ import {
 import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "./lib/subscription-monthly-update.js";
 import { SUBSCRIPTION_OUT_OF_CREDITS_EVENT } from "./lib/subscription-out-of-credits.js";
+import { MONTHLY_CHARGE_LIMIT_REACHED_EVENT } from "./lib/monthly-charge-limit.js";
 
 /**
  * The sibling can be cold (Neon scale-to-zero), suspended, or down at our boot.
@@ -74,6 +76,16 @@ const TEMPLATES = [
     // upgrade button (owner 2026-10-10). Composed in code
     // (lib/subscription-out-of-credits-email), wrapped in the official layout.
     name: SUBSCRIPTION_OUT_OF_CREDITS_EVENT,
+    subject: "{{subject}}",
+    htmlBody: "{{bodyHtml}}",
+    textBody: "{{bodyText}}",
+    layout: "brand",
+  },
+  {
+    // The org's monthly charge limit refused an automatic charge: one email a
+    // month, one button to raise the limit (owner 2026-10-12). Composed in code
+    // (lib/monthly-charge-limit), wrapped in the official layout.
+    name: MONTHLY_CHARGE_LIMIT_REACHED_EVENT,
     subject: "{{subject}}",
     htmlBody: "{{bodyHtml}}",
     textBody: "{{bodyText}}",

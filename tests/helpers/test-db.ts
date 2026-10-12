@@ -5,6 +5,8 @@ import {
   localPromoCodes,
   localPromos,
   offPlatformPayments,
+  monthlyChargeLimits,
+  monthlyChargeLimitRefusals,
   creditDepletionEpisodes,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
@@ -94,6 +96,8 @@ export async function cleanTestData() {
   await db.delete(brandDailyBudgets);
   await db.delete(orgUsageDiscounts);
   await db.delete(offPlatformPayments);
+  await db.delete(monthlyChargeLimitRefusals);
+  await db.delete(monthlyChargeLimits);
   await db.delete(localPromos);
   await db.delete(billingAccounts);
   // Keep the seeded codes; remove any test-created code (and any stale

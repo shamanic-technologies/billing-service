@@ -51,6 +51,8 @@ export type OnDemandChargeCode =
   | "card_not_chargeable_off_session"
   /** A recent reload failure put this org in backoff — no charge attempted. */
   | "charge_backoff"
+  /** The org's monthly charge limit refused it — no charge attempted (409). */
+  | "monthly_charge_limit_reached"
   /** stripe-service (or another upstream) could not be asked or errored. */
   | "upstream_error";
 
@@ -210,6 +212,14 @@ export async function chargeOrgOnDemand(
       message: `Failed to charge the saved card: ${
         err instanceof Error ? err.message : String(err)
       }`,
+    });
+  }
+
+  if (outcome.limitReached) {
+    throw new OnDemandChargeError({
+      code: "monthly_charge_limit_reached",
+      amountCents,
+      message: "This charge would go over the org's monthly charge limit, so it was not made",
     });
   }
 

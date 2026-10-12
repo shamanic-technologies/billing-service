@@ -89,6 +89,7 @@ describe("boot-time email template registration", () => {
       "credits-reload-failed",
       SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
       SUBSCRIPTION_OUT_OF_CREDITS_EVENT,
+      "monthly-charge-limit-reached",
       CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,

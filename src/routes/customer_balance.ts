@@ -293,6 +293,20 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
+    if (reloadResult.limitReached) {
+      // The org's monthly charge limit refused the reload before any acquirer was
+      // asked (lib/monthly-charge-limit). Spend is refused like an empty balance.
+      // No card-refused email and no out-of-credit dunning: the customer gets the
+      // one limit email, with one button to raise it.
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "monthly_charge_limit_reached", charge_cents: chargeAmount } }, req.headers);
+      res.json({
+        sufficient: false,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
+      return;
+    }
+
     if (reloadResult.status !== "succeeded") {
       console.warn(`[billing-service] reload status=${reloadResult.status} for org ${orgId}: ${reloadResult.failure_reason ?? ""}`);
       // A backoff-skipped reload attempted no charge and learned nothing new: the

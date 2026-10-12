@@ -18,6 +18,7 @@ import freeCreditPromisesRoutes from "../../src/routes/free_credit_promises.js";
 import paymentModeRoutes from "../../src/routes/payment_mode.js";
 import subscriptionRoutes from "../../src/routes/subscription.js";
 import acquirerRoutes from "../../src/routes/acquirer.js";
+import monthlyChargeLimitRoutes from "../../src/routes/monthly_charge_limit.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 import { ownerAlertActorMiddleware } from "../../src/lib/owner-alerts.js";
 import { legacyOutboundLegKeyLogMiddleware } from "../../src/lib/legacy-leg-key-log.js";
@@ -44,6 +45,7 @@ export function createTestApp() {
   app.use(paymentModeRoutes);
   app.use(subscriptionRoutes);
   app.use(acquirerRoutes);
+  app.use(monthlyChargeLimitRoutes);
   app.use(accountsRoutes);
   app.use(customerBalanceRoutes);
   app.use(checkoutRoutes);

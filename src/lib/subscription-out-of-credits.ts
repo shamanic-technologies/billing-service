@@ -67,6 +67,7 @@ export function upgradeUrl(clerkOrgId: string | null, brandId: string | null): s
 
 export type OutOfCreditsOutcome =
   | "upgraded"
+  | "monthly_limit_reached"
   | "sent"
   | "not_subscription"
   | "sending_stopped"
@@ -136,6 +137,9 @@ export async function notifySubscriptionOutOfCreditsIfDue(orgId: string): Promis
       if (up.result === "upgraded") return "upgraded";
       if (up.result === "no_longer_blocked") return "has_credit";
       if (up.result === "in_flight" || up.result === "unavailable") return "unresolved";
+      // The monthly charge limit refused the step: the customer gets the ONE limit
+      // email (lib/monthly-charge-limit), never this one beside it.
+      if (up.result === "limit_reached") return "monthly_limit_reached";
       cardDeclined = up.result === "declined" || up.result === "declined_this_period";
     }
     if (alreadyNotified) return "already_notified";

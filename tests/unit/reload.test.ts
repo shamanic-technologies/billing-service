@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as ssClient from "../../src/lib/stripe-service-client.js";
 import { reloadOffSession } from "../../src/lib/reload.js";
+import * as monthlyLimit from "../../src/lib/monthly-charge-limit.js";
 
 const ORG_ID = "org_test";
 const IDEMPOTENCY_KEY = "ik_test_123";
@@ -25,6 +26,8 @@ describe("reloadOffSession", () => {
   let chargeOrgOffSession: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    // No monthly charge limit (lib/monthly-charge-limit): no DB in a unit test.
+    vi.spyOn(monthlyLimit, "getMonthlyChargeLimit").mockResolvedValue(null);
     chargeOrgOffSession = vi
       .spyOn(ssClient, "chargeOrgOffSession")
       .mockResolvedValue(buildCharge());
@@ -140,6 +143,8 @@ describe("reloadOffSession on a refused card", () => {
   let chargeOrgOffSession: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    // No monthly charge limit (lib/monthly-charge-limit): no DB in a unit test.
+    vi.spyOn(monthlyLimit, "getMonthlyChargeLimit").mockResolvedValue(null);
     chargeOrgOffSession = vi.spyOn(ssClient, "chargeOrgOffSession");
   });
 
