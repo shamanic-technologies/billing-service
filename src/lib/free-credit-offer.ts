@@ -177,13 +177,22 @@ export function computeFreeCreditStatus(params: {
  */
 export async function getOnboardingAdvanceCents(orgId: string): Promise<string> {
   if (!(await isMatchOfferOrg(orgId))) return "0.0000000000";
-  const [row] = await db
-    .select({ amountCents: localPromos.amountCents })
-    .from(localPromos)
-    .innerJoin(localPromoCodes, eq(localPromos.promoCodeId, localPromoCodes.id))
-    .where(and(eq(localPromos.orgId, orgId), eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE)))
-    .limit(1);
-  return new Decimal(row?.amountCents ?? 0).toFixed(10);
+  // A subscription trial started AFTER the bonus tops credit up TO $99 counting the
+  // $30 (trialCreditSql): from then on those $30 are part of the TRIAL advance, which
+  // the trial-end charge repays. Counting them here too would repay them twice and
+  // read credited_gifted_cents at -$30 (prod 2026-10-12, org 62594115-…).
+  const rows = (await db.execute(sql`
+    SELECT b.amount_cents::text AS amount
+      FROM local_promos b
+      JOIN local_promo_codes bc ON bc.id = b.promo_code_id AND bc.code = ${ORG_CREATION_BONUS_CODE}
+     WHERE b.org_id = ${orgId}
+       AND NOT EXISTS (
+         SELECT 1 FROM local_promos t
+           JOIN local_promo_codes tc ON tc.id = t.promo_code_id AND tc.code = ${SUBSCRIPTION_TRIAL_CODE}
+          WHERE t.org_id = b.org_id AND b.created_at < t.created_at)
+     LIMIT 1
+  `)) as unknown as Array<{ amount: string }>;
+  return new Decimal(rows[0]?.amount ?? 0).toFixed(10);
 }
 
 /**
