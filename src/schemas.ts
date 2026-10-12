@@ -4328,6 +4328,13 @@ export const SubscriptionCheckoutResponseSchema = z
      * hosted_redirect = redirect to url). Null when card_required is false.
      */
     card_setup: z.record(z.unknown()).nullable(),
+    /**
+     * Why the card on file cannot start this subscription, when one is on file:
+     * "prepaid_card" = a prepaid card cannot start a free trial (card_required is
+     * then true and card_setup lets the customer add a debit or credit card).
+     * Null otherwise.
+     */
+    card_refused_reason: z.enum(["prepaid_card"]).nullable(),
   })
   .openapi("SubscriptionCheckoutResponse");
 
@@ -4556,7 +4563,10 @@ registry.registerPath({
   responses: {
     200: { description: "Started", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
     400: { description: "Amount refused (amount_below_minimum | amount_not_whole_dollars)", content: { "application/json": { schema: ErrorResponseSchema } } },
-    409: subscriptionRefusal("card_required | first_charge_declined | subscription_exists | existing_paying_org"),
+    409: subscriptionRefusal(
+      "card_required | first_charge_declined | subscription_exists | existing_paying_org | " +
+        "prepaid_card_trial_refused (the card on file is prepaid: a free trial needs a debit or credit card)"
+    ),
     502: subscriptionUpstream,
   },
 });

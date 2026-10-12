@@ -152,7 +152,8 @@ export type SubscriptionRefusalCode =
   | "charge_unavailable"
   | "subscription_paused"
   | "subscription_not_paused"
-  | "subscription_ended";
+  | "subscription_ended"
+  | "prepaid_card_trial_refused";
 
 export class SubscriptionRefused extends Error {
   readonly code: SubscriptionRefusalCode;
@@ -298,6 +299,44 @@ export async function confirmChargeableCard(orgId: string): Promise<boolean> {
   return (await authorizeRecurringCharges(orgId)).authorized;
 }
 
+/**
+ * Is the org's saved card a PREPAID card? Asked only before granting a free
+ * trial (owner 2026-10-12: a prepaid card loaded with a few dollars passes
+ * card verification, burns the $99 trial credit, then declines every charge;
+ * prod org 62594115-…, Revolut, funding "prepaid").
+ *
+ * Read from stripe-service's saved-method answer, which states the acquirer's
+ * own funding fact (Revolut or Stripe, billing names neither) as `prepaid`:
+ *   - true  -> prepaid;
+ *   - false -> the acquirer states a funding that is not prepaid (debit, credit);
+ *   - null  -> the acquirer does not state it: allowed, logged LOUDLY. A refused
+ *     real customer costs a signup, an allowed unknown costs at most the trial
+ *     credit, and stripe-service says null only when the acquirer is silent;
+ *   - ABSENT (a stripe-service that does not serve it) -> THROWS: "we could not
+ *     ask" is never read as "not prepaid".
+ * stripe-service unreachable already throws inside getSavedPaymentMethod.
+ */
+export async function savedCardIsPrepaid(orgId: string): Promise<boolean> {
+  const answer = await getSavedPaymentMethod(orgId);
+  if (!answer.saved || !answer.method) return false;
+  const prepaid = answer.method.prepaid;
+  if (prepaid === undefined) {
+    throw new Error(
+      `[billing-service] stripe-service saved-method answer for org ${orgId} carries no prepaid fact; cannot decide whether the trial card is prepaid`
+    );
+  }
+  if (prepaid === null) {
+    console.error(
+      `[billing-service] subscription trial: org ${orgId} card funding not stated by acquirer ${answer.acquirer}; trial allowed`
+    );
+  }
+  return prepaid === true;
+}
+
+/** Customer-facing refusal for a free trial on a prepaid card (dashboard shows it). */
+export const PREPAID_CARD_TRIAL_MESSAGE =
+  "Prepaid cards can't start a free trial. Use a debit or credit card, or add credit upfront.";
+
 // --- entering --------------------------------------------------------------
 
 async function assertMayEnter(orgId: string): Promise<void> {
@@ -342,6 +381,8 @@ export interface SubscriptionRequest {
   cardRequired: boolean;
   /** The ordinary card-setup descriptor (as POST /v1/accounts/card_setup), present when a card is required. */
   cardSetup: Record<string, unknown> | null;
+  /** "prepaid_card" when the card on file cannot start the trial; null otherwise. */
+  cardRefusedReason: "prepaid_card" | null;
 }
 
 /**
@@ -369,8 +410,19 @@ export async function requestSubscription(params: {
     .where(eq(billingAccounts.orgId, orgId));
 
   const trialDays = (await hadTrial(orgId)) ? null : SUBSCRIPTION_TRIAL_DAYS;
+  let cardRefusedReason: "prepaid_card" | null = null;
   if (await confirmChargeableCard(orgId)) {
-    return { monthlyAmountCents: params.monthlyAmountCents, trialDays, cardRequired: false, cardSetup: null };
+    // A prepaid card may pay (no trial = first month charged at start), never trial.
+    if (trialDays === null || !(await savedCardIsPrepaid(orgId))) {
+      return {
+        monthlyAmountCents: params.monthlyAmountCents,
+        trialDays,
+        cardRequired: false,
+        cardSetup: null,
+        cardRefusedReason: null,
+      };
+    }
+    cardRefusedReason = "prepaid_card";
   }
 
   // An org on the legacy acquirer needs its customer before a card session.
@@ -383,7 +435,7 @@ export async function requestSubscription(params: {
     params.uiMode,
     params.identity["x-user-id"]
   );
-  return { monthlyAmountCents: params.monthlyAmountCents, trialDays, cardRequired: true, cardSetup };
+  return { monthlyAmountCents: params.monthlyAmountCents, trialDays, cardRequired: true, cardSetup, cardRefusedReason };
 }
 
 /** Enter subscription mode: set the mode, disarm auto top-up, clear the checkout stamp. */
@@ -434,6 +486,10 @@ export async function startSubscription(params: {
     params.userId && params.userId !== PLATFORM_USER_ID ? params.userId : null;
 
   if (!(await hadTrial(orgId))) {
+    if (await savedCardIsPrepaid(orgId)) {
+      console.warn(`[billing-service] subscription: org ${orgId} refused a free trial on a prepaid card`);
+      throw new SubscriptionRefused("prepaid_card_trial_refused", PREPAID_CARD_TRIAL_MESSAGE);
+    }
     const trialEnd = new Date(now.getTime() + SUBSCRIPTION_TRIAL_DAYS * DAY_MS);
     const [sub] = await db
       .insert(subscriptions)
@@ -1132,14 +1188,19 @@ export async function settleOrgSubscription(
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
     if (account?.stampedAt) {
+      let started = false;
       if (await confirmChargeableCard(orgId)) {
         try {
           live = await startSubscription({ orgId, userId: null, now });
+          started = true;
         } catch (err) {
           if (!(err instanceof SubscriptionRefused)) throw err;
           console.warn(`[billing-service] subscription auto-start refused for org ${orgId}: ${err.code}`);
         }
-      } else if (now.getTime() - account.stampedAt.getTime() > ABANDONED_CHECKOUT_MS) {
+      }
+      // A checkout that never started (no card, or a card refused like a prepaid
+      // one) is forgotten after 48h, so the hourly sweep stops re-asking.
+      if (!started && now.getTime() - account.stampedAt.getTime() > ABANDONED_CHECKOUT_MS) {
         await db
           .update(billingAccounts)
           .set({ subscriptionCheckoutStartedAt: null, subscriptionRequestedAmountCents: null })
