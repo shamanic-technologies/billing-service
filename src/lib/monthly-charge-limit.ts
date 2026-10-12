@@ -1,5 +1,5 @@
 /**
- * MONTHLY CHARGE LIMIT (owner 2026-10-12, migration 0084).
+ * MONTHLY CHARGE LIMIT (owner 2026-10-12, migration 0085).
  *
  * Owner, verbatim: « je me demande si ca ne serait pas plus rassurant pour un user
  * de mettre un max budget [...] de sorte à savoir que whatever happens il ne

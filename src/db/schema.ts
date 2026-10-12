@@ -1124,7 +1124,7 @@ export const offPlatformPayments = pgTable(
 
 export type OffPlatformPayment = typeof offPlatformPayments.$inferSelect;
 
-// monthly_charge_limits (migration 0084, owner 2026-10-12): the customer's "never
+// monthly_charge_limits (migration 0085, owner 2026-10-12): the customer's "never
 // charge my card more than $X a month". One row per org; no row = no limit. Every
 // AUTOMATIC charge goes through lib/reload `reloadOffSession`, which refuses one that
 // would push the UTC calendar month's card charges above it (lib/monthly-charge-limit).

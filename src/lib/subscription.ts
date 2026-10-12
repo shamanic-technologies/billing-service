@@ -94,6 +94,7 @@ import {
   sumSucceededTopupsForOrg,
 } from "./stripe-service-client.js";
 import { ensureOrgStripeCustomer } from "./account.js";
+import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
 import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
 import { campaignOnPredicateOf, itemsPlanPricing, listOfferItems } from "./campaign-items-store.js";
@@ -263,20 +264,29 @@ export async function grantSubscriptionTrial(
   const gifted = Number(await sumLocalPromoCreditsForOrg(orgId));
   const amount = Math.max(0, Math.round(code.amountCents - gifted));
 
-  const inserted = await db
-    .insert(localPromos)
-    .values({
-      orgId,
-      userId: PLATFORM_USER_ID,
-      amountCents: String(amount),
-      promoCodeId: code.id,
-      description: `Subscription trial credit: $${(amount / 100).toFixed(2)}`,
-    })
-    .onConflictDoNothing({
-      target: [localPromos.orgId, localPromos.promoCodeId],
-      where: rawSql`idempotency_key IS NULL`,
-    })
-    .returning({ amountCents: localPromos.amountCents });
+  // The trial IS the org's whole free offer (owner 2026-10-12: « Le gars est arrivé
+  // avec un $99/mo - 3 day trial: ok. On ne devrait donc pas lui donner $30 de free
+  // credits en plus »): the welcome / match offer is withdrawn in the same act, so no
+  // welcome promise is listed and the welcome completion never grants on top of it.
+  // A promise materialised later copies the zeroed account columns (worth nothing).
+  const inserted = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(localPromos)
+      .values({
+        orgId,
+        userId: PLATFORM_USER_ID,
+        amountCents: String(amount),
+        promoCodeId: code.id,
+        description: `Subscription trial credit: $${(amount / 100).toFixed(2)}`,
+      })
+      .onConflictDoNothing({
+        target: [localPromos.orgId, localPromos.promoCodeId],
+        where: rawSql`idempotency_key IS NULL`,
+      })
+      .returning({ amountCents: localPromos.amountCents });
+    if (rows.length > 0) await withdrawFreeCreditOffer(tx, orgId);
+    return rows;
+  });
 
   if (inserted.length > 0) {
     console.log(`[billing-service] subscription trial: org ${orgId} granted ${amount} cents`);

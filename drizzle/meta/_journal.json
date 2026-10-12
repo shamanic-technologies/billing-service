@@ -594,7 +594,14 @@
       "idx": 84,
       "version": "7",
       "when": 1795428000000,
-      "tag": "0084_monthly_charge_limit",
+      "tag": "0084_subscription_trial_withdraws_welcome_offer",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1795514400000,
+      "tag": "0085_monthly_charge_limit",
       "breakpoints": true
     }
   ]

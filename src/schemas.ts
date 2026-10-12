@@ -4428,6 +4428,13 @@ export const SubscriptionReadResponseSchema = z
     credits_remaining_cents: z.string(),
     /** The one-shot trial grant this org received; null when it has had none. */
     trial_grant_cents: z.number().nullable(),
+    /**
+     * The org's TOTAL trial credit, in cents: the trial grant plus the credit it held
+     * before it (the grant tops UP TO the trial amount). $30 onboarding credit + $69
+     * grant = 9900. Null when the org never had a trial. Same figure as
+     * credited_trial_advance_cents on GET /v1/accounts.
+     */
+    trial_credit_cents: z.number().nullable(),
     /** Total credit expired unspent at renewals (= expired_cents on GET /v1/accounts). */
     expired_cents: z.string(),
   })
