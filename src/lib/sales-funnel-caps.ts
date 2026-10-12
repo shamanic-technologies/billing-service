@@ -777,6 +777,11 @@ export interface BudgetCapView {
   consumedCents: string | null;
   remainingCents: string | null;
   reached: boolean | null;
+  /**
+   * The spend billing's authorize REFUSED in this window because it would have
+   * taken the cap past its amount (`reached` is then true); null when none.
+   */
+  refusedSpend: { at: string; requiredCents: string } | null;
   consumedUnavailableReason: ConsumedUnavailableReason | null;
   consumedUnavailableDetail: string | null;
 }
@@ -826,12 +831,104 @@ export interface SalesFunnelCapsView extends FunnelCapKey {
 
 const fixed = (v: Decimal) => v.toFixed(10);
 
+/**
+ * PURE: the spend authorize REFUSED on this max budget (lib/funnel-cap-authorize.ts)
+ * while it still holds: same window, same cap amount. A new period or a changed
+ * cap frees it. null = nothing refused in this window.
+ */
+export function heldRefusalOf(
+  row: Pick<
+    SalesFunnelCapRow,
+    "maxBudgetCents" | "maxBudgetRefusedAt" | "maxBudgetRefusedCents" | "maxBudgetRefusedWindowStart" | "maxBudgetRefusedCapCents"
+  >,
+  windowStart: Date
+): { at: Date; requiredCents: string } | null {
+  if (
+    row.maxBudgetCents == null ||
+    row.maxBudgetRefusedAt == null ||
+    row.maxBudgetRefusedCents == null ||
+    row.maxBudgetRefusedWindowStart == null ||
+    row.maxBudgetRefusedCapCents == null
+  ) {
+    return null;
+  }
+  if (row.maxBudgetRefusedWindowStart.getTime() !== windowStart.getTime()) return null;
+  if (!new Decimal(row.maxBudgetRefusedCapCents).equals(row.maxBudgetCents)) return null;
+  return { at: row.maxBudgetRefusedAt, requiredCents: new Decimal(row.maxBudgetRefusedCents).toFixed(10) };
+}
+
+/**
+ * Record a spend authorize refused on this max budget: the caps read then serves
+ * `reached: true` for the rest of the window at this amount (campaign-service holds
+ * every pipe on it, so it stops dispatching runs authorize would refuse). Writes
+ * only the refusal columns: the cap's `updated_at` is the customer's, untouched.
+ */
+export async function recordMaxBudgetRefusal(
+  row: SalesFunnelCapRow,
+  windowStart: Date,
+  requiredCents: string,
+  at: Date = new Date()
+): Promise<void> {
+  await db
+    .update(salesFunnelCaps)
+    .set({
+      maxBudgetRefusedAt: at,
+      maxBudgetRefusedCents: new Decimal(requiredCents).toFixed(10),
+      maxBudgetRefusedWindowStart: windowStart,
+      maxBudgetRefusedCapCents: row.maxBudgetCents,
+    })
+    .where(keyWhere(capKeyOfRow(row)));
+}
+
+/** The key of a stored cap row. */
+export function capKeyOfRow(row: SalesFunnelCapRow): FunnelCapKey {
+  return {
+    orgId: row.orgId,
+    brandId: row.brandId,
+    offerId: row.offerId,
+    salesFunnelId: row.salesFunnelId,
+    salesFunnelCampaignId: row.salesFunnelCampaignId,
+  };
+}
+
+/** What a max budget has consumed in its current window, and which campaigns it counts. */
+export interface BudgetMeasure {
+  windowStart: Date;
+  /** The campaigns on the funnel's pipes it counts; null when they could not be read. */
+  pipeCampaignIds: string[] | null;
+  /** The lead SOURCE campaigns feeding them it counts; null when unreadable. */
+  sourceCampaignIds: string[] | null;
+  consumedCents: string | null;
+  reason: ConsumedUnavailableReason | null;
+  detail: string | null;
+}
+
+/** The max budget's consumption (the same figure as the caps read's `consumedCents`), budget only. */
+export async function measureMaxBudget(row: SalesFunnelCapRow, now: Date = new Date()): Promise<BudgetMeasure> {
+  const k = capKeyOfRow(row);
+  const windowStart = periodWindow(row.maxBudgetPeriod as CapPeriod, row.maxBudgetSince!, now).start;
+  const answer = await measuredPipes(k);
+  if (!answer.ok) {
+    return { windowStart, pipeCampaignIds: null, sourceCampaignIds: null, consumedCents: null, reason: answer.reason, detail: answer.detail };
+  }
+  const m = await measureBudget(k, row, answer.pipes, answer.sources, now);
+  return {
+    windowStart,
+    pipeCampaignIds: answer.pipes.flatMap((p) => p.campaignIds),
+    sourceCampaignIds: answer.sources.ok ? answer.sources.sources.flatMap((s) => s.campaignIds) : null,
+    consumedCents: m.consumed,
+    reason: m.reason,
+    detail: m.detail,
+  };
+}
+
 function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): BudgetCapView | null {
   if (row.maxBudgetCents == null || row.maxBudgetPeriod == null || row.maxBudgetSince == null) return null;
   const period = row.maxBudgetPeriod as CapPeriod;
   const w = periodWindow(period, row.maxBudgetSince, now);
   const cap = new Decimal(row.maxBudgetCents);
   const consumed = m.consumed === null ? null : new Decimal(m.consumed);
+  const refused = heldRefusalOf(row, w.start);
   return {
     amountCents: row.maxBudgetCents,
     period,
@@ -840,7 +937,10 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
     periodEnd: w.end ? w.end.toISOString() : null,
     consumedCents: consumed ? fixed(consumed) : null,
     remainingCents: consumed ? fixed(Decimal.max(cap.minus(consumed), 0)) : null,
-    reached: consumed ? consumed.greaterThanOrEqualTo(cap) : null,
+    // A spend authorize refused in this window at this amount = reached: the next
+    // run's spends would be refused too (lib/funnel-cap-authorize.ts).
+    reached: refused ? true : consumed ? consumed.greaterThanOrEqualTo(cap) : null,
+    refusedSpend: refused ? { at: refused.at.toISOString(), requiredCents: refused.requiredCents } : null,
     consumedUnavailableReason: m.reason,
     consumedUnavailableDetail: m.detail,
   };

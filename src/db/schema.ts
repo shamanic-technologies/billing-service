@@ -956,6 +956,12 @@ export const salesFunnelCaps = pgTable(
     // campaign-service's funnel campaign id when the cap is ONE funnel campaign's
     // (migration 0083); NULL = the funnel-wide cap. See lib/sales-funnel-caps.ts.
     salesFunnelCampaignId: text("sales_funnel_campaign_id"),
+    // The last spend authorize REFUSED on this max budget (migration 0086,
+    // lib/funnel-cap-authorize.ts): holds `reached` for that window at that amount.
+    maxBudgetRefusedAt: timestamp("max_budget_refused_at", { withTimezone: true }),
+    maxBudgetRefusedCents: numeric("max_budget_refused_cents", { precision: FUNNEL_CAP_PRECISION, scale: FRACTIONAL_SCALE }),
+    maxBudgetRefusedWindowStart: timestamp("max_budget_refused_window_start", { withTimezone: true }),
+    maxBudgetRefusedCapCents: numeric("max_budget_refused_cap_cents", { precision: FUNNEL_CAP_PRECISION, scale: FRACTIONAL_SCALE }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

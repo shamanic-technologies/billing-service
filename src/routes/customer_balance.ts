@@ -15,6 +15,7 @@ import { configuredReloadFor } from "../lib/free-credit-offer.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
+import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
@@ -113,6 +114,31 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       console.error("[billing-service] Failed to compute balance:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
       res.status(502).json({ error: "Failed to compute balance" });
+      return;
+    }
+
+    // A SALES FUNNEL MAX BUDGET binds this spend BEFORE it happens, whatever the
+    // balance, platform org included (lib/funnel-cap-authorize). A campaign no max
+    // budget holds goes on exactly as before. No reload, no depletion episode, no
+    // email: a cap is the customer's statement, not a shortage.
+    let funnelCap;
+    try {
+      funnelCap = await checkFunnelCapsForSpend({ orgId, campaignId: wf.campaignId, requiredCents });
+    } catch (err) {
+      console.error("[billing-service] sales funnel max budget check failed:", err);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.funnel-cap-failed", level: "error", detail: String(err) }, req.headers);
+      res.status(502).json({ error: "Failed to check the sales funnel max budget" });
+      return;
+    }
+    if (!funnelCap.allowed) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: funnelCap.reason, balance_cents: snapshot.balanceCents, required_cents: requiredCents, sales_funnel_cap: funnelCap.cap } }, req.headers);
+      res.json({
+        sufficient: false,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+        reason: funnelCap.reason,
+        sales_funnel_cap: funnelCap.cap,
+      });
       return;
     }
 
