@@ -24,6 +24,8 @@ import {
   localPromos,
   salesPathReactiveCharges,
   subscriptionAutoUpgrades,
+  monthlyChargeLimits,
+  monthlyChargeLimitRefusals,
   ORG_CREATION_BONUS_CODE,
 } from "../db/schema.js";
 import {
@@ -196,6 +198,9 @@ async function deleteBillingStateByOrg(
     // Its auto-upgrade attempts (migration 0081) too. Its payment CONSENTS are kept:
     // they are dispute evidence that outlives the org.
     await tx.delete(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId));
+    // Its monthly charge limit and refusals (migration 0084) describe this org only.
+    await tx.delete(monthlyChargeLimitRefusals).where(eq(monthlyChargeLimitRefusals.orgId, orgId));
+    await tx.delete(monthlyChargeLimits).where(eq(monthlyChargeLimits.orgId, orgId));
 
     const deletedBillingAccounts = await tx
       .delete(billingAccounts)

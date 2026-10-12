@@ -1124,6 +1124,39 @@ export const offPlatformPayments = pgTable(
 
 export type OffPlatformPayment = typeof offPlatformPayments.$inferSelect;
 
+// monthly_charge_limits (migration 0084, owner 2026-10-12): the customer's "never
+// charge my card more than $X a month". One row per org; no row = no limit. Every
+// AUTOMATIC charge goes through lib/reload `reloadOffSession`, which refuses one that
+// would push the UTC calendar month's card charges above it (lib/monthly-charge-limit).
+export const monthlyChargeLimits = pgTable("monthly_charge_limits", {
+  orgId: uuid("org_id").primaryKey(),
+  limitCents: integer("limit_cents").notNull(),
+  setByUserId: uuid("set_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type MonthlyChargeLimit = typeof monthlyChargeLimits.$inferSelect;
+
+// One row per (org, month) once the limit refused an automatic charge: the reason
+// spending stopped, and the once-per-month email claim (notified_at).
+export const monthlyChargeLimitRefusals = pgTable(
+  "monthly_charge_limit_refusals",
+  {
+    orgId: uuid("org_id").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    limitCents: integer("limit_cents").notNull(),
+    chargedCents: integer("charged_cents").notNull(),
+    refusedAmountCents: integer("refused_amount_cents").notNull(),
+    firstRefusedAt: timestamp("first_refused_at", { withTimezone: true }).notNull().defaultNow(),
+    lastRefusedAt: timestamp("last_refused_at", { withTimezone: true }).notNull().defaultNow(),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+  },
+  (table) => [primaryKey({ name: "monthly_charge_limit_refusals_pk", columns: [table.orgId, table.periodStart] })]
+);
+
+export type MonthlyChargeLimitRefusal = typeof monthlyChargeLimitRefusals.$inferSelect;
+
 // Dunning eventTypes — byte-equal to the templates registered by the dashboard
 // app (distribute.you#1420). LOCKED contract; do not rename.
 /**

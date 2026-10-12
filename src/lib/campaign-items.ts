@@ -111,6 +111,7 @@ export type ItemBudgetRefusalCode =
   | "no_plan_for_offer"
   | "subscription_not_active"
   | "reactive_charge_declined"
+  | "monthly_charge_limit_reached"
   | "charge_unavailable"
   | "minimums_unavailable"
   | "campaign_status_unavailable"
@@ -434,6 +435,14 @@ async function chargeReactiveDelta(plan: Subscription, targetReactiveCents: numb
       failureCode: succeeded ? null : outcome.failure_code ?? "declined",
     })
     .where(eq(salesPathReactiveCharges.id, claim.id));
+  if (outcome.limitReached) {
+    throw new ItemBudgetRefused(
+      "monthly_charge_limit_reached",
+      "This charge would go over your monthly limit, so nothing was saved. Raise your limit, then try again.",
+      409,
+      { amountCents: delta }
+    );
+  }
   if (!succeeded) {
     throw new ItemBudgetRefused(
       "reactive_charge_declined",

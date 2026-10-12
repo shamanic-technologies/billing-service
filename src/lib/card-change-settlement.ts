@@ -66,6 +66,8 @@ export type SettlementSkipReason =
   | "charge_failed"
   /** A recent decline put this org in the reload backoff — no charge attempted. */
   | "charge_backoff"
+  /** The org's monthly charge limit refused the settle — no charge attempted. */
+  | "monthly_charge_limit"
   /** The balance itself could not be read, so nothing could be attempted. */
   | "balance_unavailable";
 
@@ -275,6 +277,14 @@ async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcom
     // No acquirer answer reached us, so we cannot claim the CARD was refused —
     // and the thrown text is not customer-readable, so it is never surfaced.
     return skip("charge_failed", "failed");
+  }
+
+  if (outcome.limitReached) {
+    console.warn(
+      `[billing-service] card change: settle of ${chargeAmount} cents for org ${orgId} refused ` +
+        `by its monthly charge limit — opening the session anyway`
+    );
+    return skip("monthly_charge_limit");
   }
 
   if (outcome.status !== "succeeded") {
