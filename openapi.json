@@ -994,6 +994,48 @@
           },
           "required_cents": {
             "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "sales_funnel_max_budget_reached",
+              "sales_funnel_max_budget_unreadable"
+            ],
+            "description": "Present ONLY when the spend is refused by a sales funnel MAX BUDGET, not by the balance: sales_funnel_max_budget_reached = this spend would take the funnel (campaign) past its stated max budget; sales_funnel_max_budget_unreadable = the campaign is held to a max budget whose consumption could not be measured (fail-closed). Absent on every other answer."
+          },
+          "sales_funnel_cap": {
+            "type": "object",
+            "properties": {
+              "salesFunnelId": {
+                "type": "string"
+              },
+              "salesFunnelCampaignId": {
+                "type": "string",
+                "nullable": true
+              },
+              "amountCents": {
+                "type": "string"
+              },
+              "period": {
+                "type": "string"
+              },
+              "consumedCents": {
+                "type": "string",
+                "nullable": true
+              },
+              "reservedCents": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "salesFunnelId",
+              "salesFunnelCampaignId",
+              "amountCents",
+              "period",
+              "consumedCents",
+              "reservedCents"
+            ],
+            "description": "The cap that refused the spend; present only with `reason`."
           }
         },
         "required": [
@@ -5097,6 +5139,23 @@
             "type": "boolean",
             "nullable": true
           },
+          "refusedSpend": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "requiredCents": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at",
+              "requiredCents"
+            ],
+            "description": "The spend POST /v1/customer_balance/authorize refused in this window because it would have taken the cap past amountCents (reason sales_funnel_max_budget_reached). While set, reached is true: the next run's spends would be refused too. Freed by a new period or a changed amount."
+          },
           "consumedUnavailableReason": {
             "$ref": "#/components/schemas/SalesFunnelConsumedUnavailableReason"
           },
@@ -5114,6 +5173,7 @@
           "consumedCents",
           "remainingCents",
           "reached",
+          "refusedSpend",
           "consumedUnavailableReason",
           "consumedUnavailableDetail"
         ],

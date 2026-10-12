@@ -603,6 +603,13 @@
       "when": 1795514400000,
       "tag": "0085_monthly_charge_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1795600800000,
+      "tag": "0086_sales_funnel_cap_refusals",
+      "breakpoints": true
     }
   ]
 }

@@ -101,6 +101,11 @@ export async function brandFunnelCaps(orgId: string, brandId: string): Promise<S
     .where(and(eq(salesFunnelCaps.orgId, orgId), eq(salesFunnelCaps.brandId, brandId)));
 }
 
+/** Every stated cap of an org, every brand (a max budget, a max volume, or both). */
+export async function orgFunnelCaps(orgId: string): Promise<SalesFunnelCapRow[]> {
+  return db.select().from(salesFunnelCaps).where(eq(salesFunnelCaps.orgId, orgId));
+}
+
 /** Every cap of an org (optionally one brand) that states a budget. */
 export async function funnelBudgetCaps(orgId: string, brandId?: string): Promise<SalesFunnelCapRow[]> {
   const where = brandId

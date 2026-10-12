@@ -162,6 +162,26 @@ export const AuthorizeResponseSchema = z
     sufficient: z.boolean(),
     balance_cents: CentsStringSchema,
     required_cents: CentsStringSchema,
+    reason: z
+      .enum(["sales_funnel_max_budget_reached", "sales_funnel_max_budget_unreadable"])
+      .optional()
+      .describe(
+        "Present ONLY when the spend is refused by a sales funnel MAX BUDGET, not by the balance: " +
+          "sales_funnel_max_budget_reached = this spend would take the funnel (campaign) past its stated " +
+          "max budget; sales_funnel_max_budget_unreadable = the campaign is held to a max budget whose " +
+          "consumption could not be measured (fail-closed). Absent on every other answer."
+      ),
+    sales_funnel_cap: z
+      .object({
+        salesFunnelId: z.string(),
+        salesFunnelCampaignId: z.string().nullable(),
+        amountCents: CentsStringSchema,
+        period: z.string(),
+        consumedCents: CentsStringSchema.nullable(),
+        reservedCents: CentsStringSchema,
+      })
+      .optional()
+      .describe("The cap that refused the spend; present only with `reason`."),
   })
   .openapi("AuthorizeResponse");
 
@@ -5319,6 +5339,14 @@ const BudgetCapViewSchema = z
     consumedCents: CentsStringSchema.nullable(),
     remainingCents: CentsStringSchema.nullable(),
     reached: z.boolean().nullable(),
+    refusedSpend: z
+      .object({ at: z.string(), requiredCents: CentsStringSchema })
+      .nullable()
+      .describe(
+        "The spend POST /v1/customer_balance/authorize refused in this window because it would have taken " +
+          "the cap past amountCents (reason sales_funnel_max_budget_reached). While set, reached is true: " +
+          "the next run's spends would be refused too. Freed by a new period or a changed amount."
+      ),
     consumedUnavailableReason: ConsumedUnavailableReasonSchema.nullable(),
     consumedUnavailableDetail: z.string().nullable(),
   })
