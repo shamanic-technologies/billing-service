@@ -1196,7 +1196,15 @@ export interface SavedPaymentMethodAnswer {
   org_id: string;
   acquirer: string;
   saved: boolean;
-  method: { id: string; type: string; saved_for: string | null } | null;
+  method: {
+    id: string;
+    type: string;
+    saved_for: string | null;
+    /** The card's funding as the acquirer states it (`credit`, `debit`, `prepaid`, …); null = not stated. */
+    funding?: string | null;
+    /** true = prepaid card; false = a stated non-prepaid funding; null = not stated. Absent = an older stripe-service. */
+    prepaid?: boolean | null;
+  } | null;
   reason?: string;
 }
 

@@ -3914,6 +3914,13 @@
             "additionalProperties": {
               "nullable": true
             }
+          },
+          "card_refused_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "prepaid_card"
+            ]
           }
         },
         "required": [
@@ -3921,7 +3928,8 @@
           "currency",
           "trial_days",
           "card_required",
-          "card_setup"
+          "card_setup",
+          "card_refused_reason"
         ]
       },
       "SubscriptionRefusal": {
@@ -11795,7 +11803,7 @@
             }
           },
           "409": {
-            "description": "card_required | first_charge_declined | subscription_exists | existing_paying_org",
+            "description": "card_required | first_charge_declined | subscription_exists | existing_paying_org | prepaid_card_trial_refused (the card on file is prepaid: a free trial needs a debit or credit card)",
             "content": {
               "application/json": {
                 "schema": {

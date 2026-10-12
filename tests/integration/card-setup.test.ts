@@ -189,7 +189,7 @@ describe("card setup + saved-card confirmation", () => {
       org_id: orgId,
       acquirer: "revolut",
       saved: true,
-      method: { id: "pm_1", type: "card", saved_for: "merchant" },
+      method: { id: "pm_1", type: "card", saved_for: "merchant", funding: "debit", prepaid: false },
     });
 
     const res = await request(app)
@@ -198,7 +198,7 @@ describe("card setup + saved-card confirmation", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.saved).toBe(true);
-    expect(res.body.method).toEqual({ id: "pm_1", type: "card", saved_for: "merchant" });
+    expect(res.body.method).toEqual({ id: "pm_1", type: "card", saved_for: "merchant", funding: "debit", prepaid: false });
   });
 
   it("answers NOT SAVED with the acquirer's reason, as a 200", async () => {
@@ -285,7 +285,7 @@ describe("card setup + saved-card confirmation", () => {
     ssMocks.getSavedPaymentMethod.mockResolvedValue({
       ...onSecondAcquirer(),
       saved: true,
-      method: { id: "pm_1", type: "card", saved_for: "merchant" },
+      method: { id: "pm_1", type: "card", saved_for: "merchant", funding: "debit", prepaid: false },
       reason: undefined,
     });
     ssMocks.authorizeRecurringCharges.mockResolvedValue({ authorized: true, details: {} });
