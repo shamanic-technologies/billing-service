@@ -13,7 +13,7 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
-import { billingAccounts, localPromos } from "../../src/db/schema.js";
+import { billingAccounts, localPromos, paymentConsents } from "../../src/db/schema.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { reloadTierFor } from "../../src/lib/topup-tier.js";
 
@@ -84,6 +84,29 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     expect(ok.status).toBe(200);
     expect(ok.body.sufficient).toBe(true);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+  });
+
+  it("the consent ticked on the postpaid wall is stored before the switch; malformed is 400", async () => {
+    const statements = [
+      "Nothing is charged today. I pay what my campaigns spend, never more than their budgets.",
+      "I have read and accept the terms and conditions.",
+    ];
+    const res = await request(app)
+      .put("/v1/accounts/payment_mode")
+      .set({ ...getAuthHeaders(orgId), "x-email": "founder@new.test" })
+      .send({ payment_mode: "postpaid", consent: { statements, terms_version: "2026-10-13" } });
+    expect(res.status).toBe(200);
+    const rows = await db.select().from(paymentConsents).where(eq(paymentConsents.orgId, orgId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].context).toBe("payment_mode_postpaid");
+    expect(rows[0].statements).toEqual(statements);
+    expect(rows[0].email).toBe("founder@new.test");
+
+    const bad = await request(app)
+      .put("/v1/accounts/payment_mode")
+      .set(getAuthHeaders(orgId))
+      .send({ payment_mode: "postpaid", consent: { statements: [] } });
+    expect(bad.status).toBe(400);
   });
 
   it("the credit line is the ladder ($50, $200, $500), never a stored $100 prepaid reload", () => {

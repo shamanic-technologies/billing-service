@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import { findOrCreateAccount } from "../lib/account.js";
+import { recordPaymentConsent, type PaymentConsentInput } from "../lib/payment-consents.js";
 import {
   getPaymentMode,
   setPaymentMode,
@@ -36,6 +37,12 @@ async function applySwitch(
     return;
   }
   try {
+    // Proof of the terms accepted on the postpaid wall, stored BEFORE the switch
+    // (the switch is what arms the off-session charges the terms describe).
+    const consent = actor === "customer" ? (parsed.data as { consent?: PaymentConsentInput }).consent : undefined;
+    if (consent) {
+      await recordPaymentConsent({ orgId, req, context: "payment_mode_postpaid", consent });
+    }
     const state = await setPaymentMode(orgId, parsed.data.payment_mode, actor);
     res.json({
       org_id: state.orgId,
