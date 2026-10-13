@@ -2107,7 +2107,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -5701,6 +5701,97 @@ registry.registerPath({
     200: { description: "Stated caps", content: { "application/json": { schema: BrandSalesFunnelCapsSchema } } },
     400: funnelCapsError("Invalid brandId or offerId"),
   },
+});
+
+// --- Per-account top-up minimums (owner 2026-10-13, routes/topup_minimums) ----
+
+export const SetTopupMinimumsRequestSchema = z
+  .object({
+    /** Smallest top-up (checkout, on-demand charge, auto-reload amount), whole cents >= 0. null = back to the offer default; absent = unchanged. */
+    topup_minimum_cents: z.number().int().min(0).nullable().optional(),
+    /** Smallest auto-reload threshold, whole cents >= 0. null = back to the offer default; absent = unchanged. */
+    reload_threshold_minimum_cents: z.number().int().min(0).nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (b) => b.topup_minimum_cents !== undefined || b.reload_threshold_minimum_cents !== undefined,
+    { message: "State topup_minimum_cents and/or reload_threshold_minimum_cents" }
+  )
+  .openapi("SetTopupMinimumsRequest");
+
+export const TopupMinimumsResponseSchema = z
+  .object({
+    org_id: z.string().uuid(),
+    free_credit_offer: z.string(),
+    /** The minimum in force (null = none). */
+    topup_minimum_cents: z.number().int().nullable(),
+    reload_threshold_minimum_cents: z.number().int().nullable(),
+    /** "account" = staff set it for this org; "offer_default" = the org's offer decides. */
+    topup_minimum_source: z.enum(["account", "offer_default"]),
+    reload_threshold_minimum_source: z.enum(["account", "offer_default"]),
+    offer_default_topup_minimum_cents: z.number().int().nullable(),
+    offer_default_reload_threshold_minimum_cents: z.number().int().nullable(),
+    set_by: z.string().nullable(),
+    set_at: z.string().nullable(),
+  })
+  .openapi("TopupMinimumsResponse");
+
+const topupMinimumsDescription =
+  "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest " +
+  "auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 " +
+  "threshold; every other offer: none). Staff can replace either for ONE org; a value below " +
+  "the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) " +
+  "and `minimum_cents`. An org staff never set reads exactly its offer default.";
+
+const topupMinimumsResponses = {
+  200: { description: "Minimums in force", content: { "application/json": { schema: TopupMinimumsResponseSchema } } },
+  400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
+  404: { description: "No billing account for this org", content: { "application/json": { schema: ErrorResponseSchema } } },
+};
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/topup_minimums",
+  summary: "Read this org's top-up minimums",
+  description: topupMinimumsDescription,
+  request: { headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string().uuid() }) },
+  responses: topupMinimumsResponses,
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/v1/accounts/topup_minimums",
+  summary: "Staff: set this org's top-up minimums",
+  description: topupMinimumsDescription + " Staff only (the gateway gates it); x-email is recorded as set_by.",
+  request: {
+    headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string().uuid(), "x-email": z.string() }),
+    body: { content: { "application/json": { schema: SetTopupMinimumsRequestSchema } } },
+  },
+  responses: topupMinimumsResponses,
+});
+
+const topupMinimumsOrgParam = z.object({ orgId: z.string().uuid() });
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/topup-minimums",
+  summary: "Service read of an org's top-up minimums",
+  description: topupMinimumsDescription,
+  request: { headers: internalHeaders, params: topupMinimumsOrgParam },
+  responses: topupMinimumsResponses,
+});
+
+registry.registerPath({
+  method: "put",
+  path: "/internal/accounts/by-org/{orgId}/topup-minimums",
+  summary: "Service/staff: set an org's top-up minimums",
+  description: topupMinimumsDescription + " Optional x-email is recorded as set_by.",
+  request: {
+    headers: internalHeaders,
+    params: topupMinimumsOrgParam,
+    body: { content: { "application/json": { schema: SetTopupMinimumsRequestSchema } } },
+  },
+  responses: topupMinimumsResponses,
 });
 
 // --- Monthly charge limit (owner 2026-10-12, lib/monthly-charge-limit) -------

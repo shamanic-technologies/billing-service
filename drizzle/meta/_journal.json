@@ -610,6 +610,13 @@
       "when": 1795600800000,
       "tag": "0086_sales_funnel_cap_refusals",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1795687200000,
+      "tag": "0087_account_topup_minimums",
+      "breakpoints": true
     }
   ]
 }

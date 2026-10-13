@@ -13,6 +13,7 @@ import { asPaymentMode } from "../lib/payment-mode-types.js";
 import {
   asFreeCreditOffer,
   assertAutoTopupMinimums,
+  topupMinimumsFor,
   composeCreditedFromParts,
   computeFreeCreditStatus,
   getOnboardingAdvanceCents,
@@ -677,7 +678,7 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
     // threshold sit below $5 (lib/free-credit-offer). Legacy orgs: unchanged.
     try {
       assertAutoTopupMinimums(
-        asFreeCreditOffer(account.freeCreditOffer),
+        topupMinimumsFor(account),
         topup_amount_cents,
         topup_threshold_cents
       );

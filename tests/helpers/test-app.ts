@@ -19,6 +19,7 @@ import paymentModeRoutes from "../../src/routes/payment_mode.js";
 import subscriptionRoutes from "../../src/routes/subscription.js";
 import acquirerRoutes from "../../src/routes/acquirer.js";
 import monthlyChargeLimitRoutes from "../../src/routes/monthly_charge_limit.js";
+import topupMinimumsRoutes from "../../src/routes/topup_minimums.js";
 import prepaidCheckoutRoutes from "../../src/routes/prepaid_checkout.js";
 import { requireApiKey } from "../../src/middleware/auth.js";
 import { ownerAlertActorMiddleware } from "../../src/lib/owner-alerts.js";
@@ -47,6 +48,7 @@ export function createTestApp() {
   app.use(subscriptionRoutes);
   app.use(acquirerRoutes);
   app.use(monthlyChargeLimitRoutes);
+  app.use(topupMinimumsRoutes);
   app.use(prepaidCheckoutRoutes);
   app.use(accountsRoutes);
   app.use(customerBalanceRoutes);
