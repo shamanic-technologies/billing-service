@@ -5706,6 +5706,84 @@
           "caps"
         ]
       },
+      "TopupMinimumsResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "free_credit_offer": {
+            "type": "string"
+          },
+          "topup_minimum_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reload_threshold_minimum_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "topup_minimum_source": {
+            "type": "string",
+            "enum": [
+              "account",
+              "offer_default"
+            ]
+          },
+          "reload_threshold_minimum_source": {
+            "type": "string",
+            "enum": [
+              "account",
+              "offer_default"
+            ]
+          },
+          "offer_default_topup_minimum_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "offer_default_reload_threshold_minimum_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "set_by": {
+            "type": "string",
+            "nullable": true
+          },
+          "set_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "org_id",
+          "free_credit_offer",
+          "topup_minimum_cents",
+          "reload_threshold_minimum_cents",
+          "topup_minimum_source",
+          "reload_threshold_minimum_source",
+          "offer_default_topup_minimum_cents",
+          "offer_default_reload_threshold_minimum_cents",
+          "set_by",
+          "set_at"
+        ]
+      },
+      "SetTopupMinimumsRequest": {
+        "type": "object",
+        "properties": {
+          "topup_minimum_cents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          },
+          "reload_threshold_minimum_cents": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "MonthlyChargeLimitResponse": {
         "type": "object",
         "properties": {
@@ -6413,7 +6491,7 @@
             }
           },
           "400": {
-            "description": "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+            "description": "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16605,6 +16683,256 @@
           },
           "400": {
             "description": "Invalid brandId or offerId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/topup_minimums": {
+      "get": {
+        "summary": "Read this org's top-up minimums",
+        "description": "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 threshold; every other offer: none). Staff can replace either for ONE org; a value below the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) and `minimum_cents`. An org staff never set reads exactly its offer default.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimums in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupMinimumsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Staff: set this org's top-up minimums",
+        "description": "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 threshold; every other offer: none). Staff can replace either for ONE org; a value below the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) and `minimum_cents`. An org staff never set reads exactly its offer default. Staff only (the gateway gates it); x-email is recorded as set_by.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-email",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTopupMinimumsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimums in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupMinimumsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/topup-minimums": {
+      "get": {
+        "summary": "Service read of an org's top-up minimums",
+        "description": "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 threshold; every other offer: none). Staff can replace either for ONE org; a value below the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) and `minimum_cents`. An org staff never set reads exactly its offer default.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Minimums in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupMinimumsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Service/staff: set an org's top-up minimums",
+        "description": "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 threshold; every other offer: none). Staff can replace either for ONE org; a value below the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) and `minimum_cents`. An org staff never set reads exactly its offer default. Optional x-email is recorded as set_by.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTopupMinimumsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Minimums in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupMinimumsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
             "content": {
               "application/json": {
                 "schema": {

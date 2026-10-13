@@ -24,6 +24,7 @@ const CHECKOUT_CURRENCY = "usd";
 import {
   assertTopupMinimum,
   getOrgFreeCreditOffer,
+  getOrgTopupMinimums,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
 import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
@@ -78,7 +79,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     if (!isSetup) {
       const offer = await getOrgFreeCreditOffer(orgId);
       try {
-        assertTopupMinimum(offer, topup_amount_cents!);
+        assertTopupMinimum(await getOrgTopupMinimums(orgId), topup_amount_cents!);
       } catch (err) {
         if (err instanceof TopupBelowMinimumError) {
           res.status(400).json({ error: err.message, code: err.code, minimum_cents: err.minimumCents });

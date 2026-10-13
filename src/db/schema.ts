@@ -162,6 +162,14 @@ export const billingAccounts = pgTable(
     // The monthly amount the customer picked when opening the subscription
     // checkout (migration 0056); the subscription starts at it once the card is saved.
     subscriptionRequestedAmountCents: integer("subscription_requested_amount_cents"),
+    // Per-account top-up minimums set by STAFF (migration 0087). NULL = the offer's
+    // default (match_100: MATCH_MIN_TOPUP_CENTS / MATCH_MIN_RELOAD_THRESHOLD_CENTS,
+    // every other offer: none). A value replaces that default for this org only,
+    // whatever its offer. See lib/free-credit-offer `topupMinimumsFor`.
+    topupMinimumCents: integer("topup_minimum_cents"),
+    reloadThresholdMinimumCents: integer("reload_threshold_minimum_cents"),
+    topupMinimumsSetBy: text("topup_minimums_set_by"),
+    topupMinimumsSetAt: timestamp("topup_minimums_set_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

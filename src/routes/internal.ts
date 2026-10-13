@@ -62,6 +62,7 @@ import { grantOrgCreationBonus } from "../lib/promos.js";
 import {
   assertTopupMinimum,
   getOrgFreeCreditOffer,
+  getOrgTopupMinimums,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
 import {
@@ -1025,7 +1026,7 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
   }
   // A top-up by a "We match your first $100" org is at least $100.
   try {
-    assertTopupMinimum(await getOrgFreeCreditOffer(orgId), amountCents);
+    assertTopupMinimum(await getOrgTopupMinimums(orgId), amountCents);
   } catch (err) {
     if (err instanceof TopupBelowMinimumError) {
       res.status(400).json({

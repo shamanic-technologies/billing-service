@@ -33,6 +33,7 @@
  * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
+import { topupMinimumsFor } from "./free-credit-offer.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -311,10 +312,16 @@ export async function setPaymentMode(
       snapshot.autoReloadSupported
     ) {
       // A "We match your first $100" org arms at its minimums ($100 when the
-      // balance would fall below $5); legacy orgs keep the ladder flag as before.
+      // balance would fall below $5, or what staff set for it); legacy orgs keep
+      // the ladder flag as before.
       const match = account.freeCreditOffer === MATCH_FREE_CREDIT_OFFER;
-      patch.topupAmountCents = match ? MATCH_MIN_TOPUP_CENTS : tierFor("0").amountCents;
-      patch.topupThresholdCents = match ? MATCH_MIN_RELOAD_THRESHOLD_CENTS : 0;
+      const minimums = topupMinimumsFor(account);
+      patch.topupAmountCents = match
+        ? (minimums.topupMinimumCents ?? MATCH_MIN_TOPUP_CENTS)
+        : tierFor("0").amountCents;
+      patch.topupThresholdCents = match
+        ? (minimums.reloadThresholdMinimumCents ?? MATCH_MIN_RELOAD_THRESHOLD_CENTS)
+        : 0;
     }
   }
 
