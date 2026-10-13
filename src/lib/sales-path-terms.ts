@@ -72,19 +72,11 @@ export interface ItemTerms {
    * "Positive reply"); null for an entry leg, or when the catalogue names no key.
    */
   trigger: { key: string; label: string | null } | null;
-  /**
-   * The step this leg PRODUCES (the catalogue's `to`: `email_sent`, `meeting_booked`);
-   * null when the catalogue names none (a source item is not read from `/public/channels`).
-   * The sales funnel caps measure a channel's volume by it (lib/sales-funnel-caps
-   * `STEP_ITEM_TASKS`), so a channel declared as data is measured with no code.
-   */
-  outcome: string | null;
 }
 
 interface PublishedTransition {
   legKey?: string | null;
   from?: { key?: unknown; label?: unknown } | null;
-  to?: { key?: unknown } | null;
   /** features-service's explicit flag; absent → derived from `from`. */
   reactive?: boolean | null;
   minimumMonthlyBudgetCents?: number | null;
@@ -141,7 +133,6 @@ export function itemTermsFrom(channels: PublishedSalesChannel[]): Map<string, It
           typeof t.from?.key === "string" && t.from.key.trim()
             ? { key: t.from.key.trim(), label: typeof t.from.label === "string" ? t.from.label : null }
             : null,
-        outcome: typeof t.to?.key === "string" && t.to.key.trim() ? t.to.key.trim() : null,
       });
     }
   }
@@ -164,7 +155,6 @@ export function sourceItemTermsFrom(published: PublishedSourcingOrigins | null |
       managed: true,
       source: true,
       trigger: null,
-      outcome: null,
     });
   }
   return out;

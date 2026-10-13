@@ -6,7 +6,6 @@ import {
   REACTIVE_ITEM_TASKS,
   volumeUnitOf,
 } from "../../src/lib/sales-funnel-caps.js";
-import { itemTermsFrom, salesPathTermsOf } from "../../src/lib/sales-path-terms.js";
 import {
   salesFunnelFromDetail,
   SalesFunnelCatalogueUnavailableError,
@@ -71,8 +70,10 @@ describe("salesFunnelFromDetail", () => {
           legKey: "lead_found_to_website_visit",
           strategyId: null,
           mode: "proactive",
+          toStep: null,
         },
       ],
+      triggerSlug: null,
     });
   });
 
@@ -96,6 +97,7 @@ describe("salesFunnelFromDetail", () => {
       legKey: "lead_found_to_conversation",
       strategyId: "valid-catch-all",
       mode: "proactive",
+      toStep: null,
     });
     expect(() =>
       salesFunnelFromDetail("f", { ...epiphany, legs: [{ legKey: "x", pipe: { id: "a|~s", mode: "proactive" } }] })
@@ -125,49 +127,61 @@ describe("salesFunnelFromDetail", () => {
   });
 });
 
-describe("itemTaskOf: a channel's volume measure, declared by the step its leg produces", () => {
-  // features-service /public/channels, prod shape 2026-10-14.
-  const terms = salesPathTermsOf(
-    itemTermsFrom([
-      {
-        slug: "email-sending",
-        stepTransitions: [{ legKey: "start_to_email_sent", from: null, to: { key: "email_sent" }, reactive: true }],
-      },
-      {
-        slug: "ai-instant-call",
-        stepTransitions: [{ legKey: "form_submitted_to_meeting_booked", from: { key: "form_submitted" }, to: { key: "meeting_booked" }, reactive: true }],
-      },
-      {
-        slug: "sales-cold-email-outreach",
-        stepTransitions: [{ legKey: "lead_found_to_conversation", from: { key: "lead_found" }, to: { key: "conversation" }, reactive: false }],
-      },
-    ])
-  );
-
-  it("reads the published `to` step as the leg's outcome", () => {
-    expect(terms.termsFor("email-sending", "start_to_email_sent")?.outcome).toBe("email_sent");
-  });
-
+describe("itemTaskOf: a pipe's volume measure, declared by step or trigger, never per slug", () => {
   it("a leg ending on email_sent is measured by one instantly email-send-step-1 run, with no channel entry", () => {
     expect(REACTIVE_ITEM_TASKS["email-sending"]).toBeUndefined();
-    expect(itemTaskOf({ channelSlug: "email-sending", legKey: "start_to_email_sent" }, REACTIVE_ITEM_TASKS, terms)).toEqual({
+    expect(itemTaskOf({ channelSlug: "email-sending", toStep: "email_sent" }, REACTIVE_ITEM_TASKS, null)).toEqual({
       serviceName: "instantly-service",
       taskName: "email-send-step-1",
     });
   });
 
-  it("a channel entry wins over its leg's outcome (cold email's first contact is not its reply)", () => {
-    expect(itemTaskOf({ channelSlug: "sales-cold-email-outreach", legKey: "lead_found_to_conversation" }, ITEM_TASKS, terms)).toBe(
-      ITEM_TASKS["sales-cold-email-outreach"]
-    );
-    expect(itemTaskOf({ channelSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked" }, REACTIVE_ITEM_TASKS, null)).toBe(
-      REACTIVE_ITEM_TASKS["ai-meeting-booking"]
-    );
+  it("a reactive funnel on email_pushed_via_api counts each email sent, whatever step its leg ends on (Email Sending moved to start_to_conversation)", () => {
+    expect(itemTaskOf({ channelSlug: "email-sending", toStep: "conversation" }, REACTIVE_ITEM_TASKS, "email_pushed_via_api")).toEqual({
+      serviceName: "instantly-service",
+      taskName: "email-send-step-1",
+    });
   });
 
-  it("no measure (null, never a guess): an outcome no run is declared for, a leg the catalogue does not carry, no catalogue", () => {
-    expect(itemTaskOf({ channelSlug: "ai-instant-call", legKey: "form_submitted_to_meeting_booked" }, REACTIVE_ITEM_TASKS, terms)).toBeNull();
-    expect(itemTaskOf({ channelSlug: "google-ads", legKey: "start_to_website_visit" }, ITEM_TASKS, terms)).toBeNull();
-    expect(itemTaskOf({ channelSlug: "email-sending", legKey: "start_to_email_sent" }, REACTIVE_ITEM_TASKS, null)).toBeNull();
+  it("a channel entry wins over its step and trigger (cold email's first contact is not its reply)", () => {
+    expect(itemTaskOf({ channelSlug: "sales-cold-email-outreach", toStep: "conversation" }, ITEM_TASKS, null)).toBe(
+      ITEM_TASKS["sales-cold-email-outreach"]
+    );
+    expect(
+      itemTaskOf({ channelSlug: "ai-meeting-booking", toStep: "meeting_booked" }, REACTIVE_ITEM_TASKS, "positive_reply_received")
+    ).toBe(REACTIVE_ITEM_TASKS["ai-meeting-booking"]);
+  });
+
+  it("no measure (null, never a guess): a step and a trigger no run is declared for, or nothing served", () => {
+    expect(itemTaskOf({ channelSlug: "ai-instant-call", toStep: "meeting_booked" }, REACTIVE_ITEM_TASKS, "form_submitted")).toBeNull();
+    expect(itemTaskOf({ channelSlug: "google-ads", toStep: "website_visit" }, ITEM_TASKS, null)).toBeNull();
+    expect(itemTaskOf({ channelSlug: "email-sending", toStep: null }, REACTIVE_ITEM_TASKS, null)).toBeNull();
+  });
+});
+
+describe("salesFunnelFromDetail: the leg's outcome step and the funnel's trigger", () => {
+  it("reads legs[].toStep onto the pipe and trigger.slug onto the funnel (prod detail 2026-10-14)", () => {
+    const f = salesFunnelFromDetail("start_to_email_sent@email-sending", {
+      id: "start_to_email_sent@email-sending",
+      name: "Concord",
+      type: "reactive",
+      trigger: { slug: "email_pushed_via_api", name: "Email Pushed Via API" },
+      legs: [
+        {
+          legKey: "start_to_email_sent",
+          fromStep: null,
+          toStep: "email_sent",
+          pipe: { id: "email-sending|start_to_email_sent", mode: "reactive" },
+        },
+      ],
+    });
+    expect(f.triggerSlug).toBe("email_pushed_via_api");
+    expect(f.pipes[0].toStep).toBe("email_sent");
+  });
+
+  it("absent = null, never invented", () => {
+    const f = salesFunnelFromDetail("x", { legs: [{ pipe: { id: "a|b", mode: "reactive" } }] });
+    expect(f.triggerSlug).toBeNull();
+    expect(f.pipes[0].toStep).toBeNull();
   });
 });
