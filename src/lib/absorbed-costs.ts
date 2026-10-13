@@ -3,9 +3,12 @@ import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "./platform-absorbed.js";
 import { db } from "../db/index.js";
 import { billingAccounts, platformOrgs } from "../db/schema.js";
 import { fetchRunsNoCampaignMonthly } from "./runs-client.js";
-import { fetchAcquiringFeesByOrgMonth } from "./stripe-service-client.js";
+import { fetchAcquiringFeesByOrgMonth, fetchOrgCustomerOrNull, listOrgPayments } from "./stripe-service-client.js";
 import { getOrgCash } from "./org-cash.js";
-import { resolveOrgDisplayIdentity } from "./brand-service-client.js";
+import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
+import { fetchOrgNames, fetchOrgUserEmails } from "./client-service-client.js";
+import { isStaffEmail } from "./payment-alerts.js";
+import { listAllOffPlatformPayments } from "./off-platform-payments.js";
 
 /**
  * The cost the platform ABSORBS, per customer and over time, for the staff
@@ -19,7 +22,9 @@ import { resolveOrgDisplayIdentity } from "./brand-service-client.js";
  * absorbed under the rule (the org was billed for it then); from it on, what was.
  *
  * Every figure the page draws is served here; the browser computes nothing.
- * Our own platform orgs are listed apart and kept out of every fleet statistic.
+ * Our OWN orgs (a platform org, or an org whose billing contact is staff and which no
+ * non-staff person uses: see `ownOrgReasonOf`) are listed apart and kept out of every
+ * fleet statistic. A row names the org by its org name (client-service), never a brand.
  * A source we could not read is a 502 upstream, never a zero.
  */
 
@@ -49,9 +54,49 @@ export interface AccountContext {
   freeCreditOffer: string;
 }
 
-export interface CustomerIdentity {
-  name: string | null;
-  domain: string | null;
+/** Why an org is OURS, from a recorded fact (never a name match). */
+export type OwnOrgReason = "platform_org" | "staff_billing_contact";
+
+/**
+ * Is this org one of ours?
+ * - `platform_org`: a `platform_orgs` row (never blocked, never charged).
+ * - `staff_billing_contact`: the person on the org's billing record (the Stripe customer
+ *   email, set to whoever saved the card) is staff, AND no non-staff person uses the org
+ *   (client-service users whose org it is). A client org whose card staff saved still
+ *   reads as a customer the moment the client signs in.
+ */
+export function ownOrgReasonOf(p: {
+  platformOrg: boolean;
+  billingContactEmail: string | null;
+  userEmails: string[];
+}): OwnOrgReason | null {
+  if (p.platformOrg) return "platform_org";
+  if (isStaffEmail(p.billingContactEmail) && p.userEmails.every((e) => isStaffEmail(e))) {
+    return "staff_billing_contact";
+  }
+  return null;
+}
+
+/** What says whether a customer is still a customer today. */
+export interface CustomerActivity {
+  /** Latest succeeded payment (any acquirer, or recorded off-platform). null = never paid. undefined = unreadable. */
+  lastPaymentAt: Date | null | undefined;
+  /** Campaigns running right now (campaign-service). null = unreadable. */
+  campaignsRunning: number | null;
+}
+
+/**
+ * current = at least one campaign running now. A customer who paid before and runs
+ * nothing reads `churned`; one who never paid and runs nothing reads `never_paid`.
+ * null = campaign statuses unreadable (never guessed).
+ */
+export type CustomerStatus = "current" | "churned" | "never_paid";
+
+export function customerStatusOf(a: CustomerActivity | undefined): CustomerStatus | null {
+  if (!a || a.campaignsRunning === null) return null;
+  if (a.campaignsRunning > 0) return "current";
+  if (a.lastPaymentAt === undefined) return null;
+  return a.lastPaymentAt ? "churned" : "never_paid";
 }
 
 export interface AbsorbedInputs {
@@ -59,9 +104,13 @@ export interface AbsorbedInputs {
   fees: FeeMonthRow[];
   accounts: AccountContext[];
   platformOrgIds: Set<string>;
+  /** Our own orgs beyond the platform ones (see `ownOrgReasonOf`). */
+  ownOrgReasons: Map<string, OwnOrgReason>;
   /** Cash the org paid (lib/org-cash), null = unreadable. Absent = not asked. */
   cashPaidCents: Map<string, string | null>;
-  identities: Map<string, CustomerIdentity | null>;
+  /** The org's name (client-service), null = the org holds none. */
+  orgNames: Map<string, string | null>;
+  activity: Map<string, CustomerActivity>;
   now: Date;
 }
 
@@ -177,12 +226,28 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
         };
       });
     const absorbed = total.noCampaign.plus(total.fees);
-    const identity = inp.identities.get(orgId) ?? null;
+    const platformOrg = inp.platformOrgIds.has(orgId);
+    const ownOrgReason: OwnOrgReason | null = platformOrg ? "platform_org" : inp.ownOrgReasons.get(orgId) ?? null;
+    const activity = inp.activity.get(orgId);
+    const lastPaymentAt = activity?.lastPaymentAt;
     return {
       orgId,
-      orgName: identity?.name ?? null,
-      orgDomain: identity?.domain ?? null,
-      platformOrg: inp.platformOrgIds.has(orgId),
+      orgName: inp.orgNames.get(orgId) ?? null,
+      /** Deprecated: was a BRAND's domain (the org's oldest brand), which named a brand as the customer. Always null. */
+      orgDomain: null,
+      platformOrg,
+      ownOrg: ownOrgReason !== null,
+      ownOrgReason,
+      /** ISO; null = never paid (or unreadable: see lastPaymentReadable). */
+      lastPaymentAt: lastPaymentAt ? lastPaymentAt.toISOString() : null,
+      lastPaymentReadable: lastPaymentAt !== undefined,
+      daysSinceLastPayment: lastPaymentAt
+        ? Math.floor((inp.now.getTime() - lastPaymentAt.getTime()) / 86_400_000)
+        : null,
+      campaignsRunning: activity ? activity.campaignsRunning : null,
+      customerStatus: customerStatusOf(activity),
+      /** true = at least one campaign running now; null = unreadable. */
+      current: activity && activity.campaignsRunning !== null ? activity.campaignsRunning > 0 : null,
       hasBillingAccount: acc !== null,
       createdAt: acc ? acc.createdAt.toISOString() : null,
       paymentMode: acc?.paymentMode ?? null,
@@ -202,7 +267,7 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
   });
   customers.sort((a, b) => b._absorbed.comparedTo(a._absorbed) || a.orgId.localeCompare(b.orgId));
 
-  const counted = customers.filter((c) => !c.platformOrg);
+  const counted = customers.filter((c) => !c.ownOrg);
   const groupStats = (group: typeof counted) => {
     const withCost = group.filter((c) => c._absorbed.greaterThan(0));
     const total = withCost.reduce((s, c) => s.plus(c._absorbed), D(0));
@@ -300,7 +365,10 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
         "USD cents, net of any usage discount, as priced in the cost records; card fees are what the acquirer took",
       otherCurrencies:
         "card fees the acquirer took in another currency (the Stripe account settled in EUR until 2026-08-13) are served in cardFeesOtherCurrencies, never converted, and are NOT in any USD figure",
-      excluded: "our own platform orgs (listed with platformOrg: true, kept out of every fleet figure)",
+      excluded:
+        "our own orgs (ownOrg: true): a platform org, or an org whose billing contact is staff and which no non-staff person uses; listed apart, kept out of every fleet figure",
+      customerStatus:
+        "current = a campaign running now; churned = paid before, nothing running; never_paid = never paid, nothing running; null = unreadable",
     },
     firstMonth: months[0] ?? null,
     lastMonth: months[months.length - 1] ?? null,
@@ -317,7 +385,14 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       paying: groupStats(counted.filter((c) => c.paying === true)),
       neverPaid: groupStats(counted.filter((c) => c.paying === false)),
       payingUnknown: counted.filter((c) => c.paying === null).length,
+      currentCustomers: counted.filter((c) => c.customerStatus === "current").length,
+      churnedCustomers: counted.filter((c) => c.customerStatus === "churned").length,
+      neverPaidNotRunningCustomers: counted.filter((c) => c.customerStatus === "never_paid").length,
+      customerStatusUnknown: counted.filter((c) => c.customerStatus === null).length,
     },
+    ownOrgs: customers
+      .filter((c) => c.ownOrg)
+      .map((c) => ({ orgId: c.orgId, orgName: c.orgName, reason: c.ownOrgReason })),
     fleetByMonth,
     distribution,
     customers: customers.map(({ _absorbed, ...c }) => c),
@@ -405,10 +480,20 @@ export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
   ]);
   const spend = spendRowsFromRuns(runs.orgs);
   const orgIds = [...new Set([...accounts.map((a) => a.orgId), ...spend.map((s) => s.orgId), ...fees.flatMap((f) => (f.orgId ? [f.orgId] : []))])];
+  const platformOrgIds = new Set(platform.map((p) => p.orgId));
+  const [orgNames, offPlatform] = orgIds.length
+    ? await Promise.all([fetchOrgNames(orgIds), listAllOffPlatformPayments()])
+    : [new Map<string, string | null>(), []];
+  const lastOffPlatform = new Map<string, Date>();
+  for (const p of offPlatform) {
+    const prev = lastOffPlatform.get(p.orgId);
+    if (!prev || p.paidAt > prev) lastOffPlatform.set(p.orgId, p.paidAt);
+  }
   const cash = new Map<string, string | null>();
-  const identities = new Map<string, CustomerIdentity | null>();
+  const ownOrgReasons = new Map<string, OwnOrgReason>();
+  const activity = new Map<string, CustomerActivity>();
   await mapPool(orgIds, CONCURRENCY, async (orgId) => {
-    const [c, id] = await Promise.all([
+    const [c, customer, userEmails, payments, campaigns] = await Promise.all([
       getOrgCash(orgId).then(
         (r) => r.cashPaidCents,
         (err) => {
@@ -416,18 +501,48 @@ export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
           return null;
         }
       ),
-      resolveOrgDisplayIdentity(orgId).catch(() => null),
+      // Who is behind the org decides whether it is OURS: unreadable = the whole read fails (never guessed).
+      platformOrgIds.has(orgId) ? Promise.resolve(null) : fetchOrgCustomerOrNull(orgId),
+      platformOrgIds.has(orgId) ? Promise.resolve([] as string[]) : fetchOrgUserEmails(orgId),
+      listOrgPayments(orgId).then(
+        (r) => r,
+        (err) => {
+          console.error(`[billing-service] absorbed costs: payments unreadable for org ${orgId}:`, err);
+          return undefined;
+        }
+      ),
+      fetchRecurringCampaignStatuses(orgId),
     ]);
     cash.set(orgId, c);
-    identities.set(orgId, id ? { name: id.name ?? null, domain: id.domain ?? null } : null);
+    const reason = ownOrgReasonOf({
+      platformOrg: platformOrgIds.has(orgId),
+      billingContactEmail: customer?.email ?? null,
+      userEmails,
+    });
+    if (reason) ownOrgReasons.set(orgId, reason);
+    let lastPaymentAt: Date | null | undefined = undefined;
+    if (payments) {
+      const latest = payments
+        .filter((p) => p.status === "succeeded")
+        .reduce((m, p) => Math.max(m, p.created), 0);
+      lastPaymentAt = latest ? new Date(latest * 1000) : null;
+      const off = lastOffPlatform.get(orgId);
+      if (off && (!lastPaymentAt || off > lastPaymentAt)) lastPaymentAt = off;
+    }
+    activity.set(orgId, {
+      lastPaymentAt,
+      campaignsRunning: campaigns.ok ? campaigns.campaigns.filter((x) => x.running).length : null,
+    });
   });
   const value = composeAbsorbedCosts({
     spend,
     fees,
     accounts,
-    platformOrgIds: new Set(platform.map((p) => p.orgId)),
+    platformOrgIds,
+    ownOrgReasons,
     cashPaidCents: cash,
-    identities,
+    orgNames,
+    activity,
     now,
   });
   cache = { at: now.getTime(), value };

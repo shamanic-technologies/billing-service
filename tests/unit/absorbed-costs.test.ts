@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { composeAbsorbedCosts } from "../../src/lib/absorbed-costs.js";
+import { composeAbsorbedCosts, customerStatusOf, ownOrgReasonOf } from "../../src/lib/absorbed-costs.js";
 
 const A = "11111111-1111-1111-1111-111111111111"; // paying customer
 const B = "22222222-2222-2222-2222-222222222222"; // never-paid signup
 const P = "33333333-3333-3333-3333-333333333333"; // our own platform org
 const C = "44444444-4444-4444-4444-444444444444"; // account with no absorbed cost
+const K = "55555555-5555-5555-5555-555555555555"; // our own working org (staff billing contact)
 
 function inputs() {
   return {
@@ -13,6 +14,7 @@ function inputs() {
       { orgId: A, month: "2026-10", noCampaignCents: "300", campaignCents: "2000" },
       { orgId: B, month: "2026-10", noCampaignCents: "250", campaignCents: "0" },
       { orgId: P, month: "2026-10", noCampaignCents: "99999", campaignCents: "0" },
+      { orgId: K, month: "2026-10", noCampaignCents: "3474", campaignCents: "0" },
     ],
     fees: [
       { orgId: A, month: "2026-10", currency: "usd", feeCents: "60" },
@@ -26,8 +28,14 @@ function inputs() {
       { orgId: P, createdAt: new Date("2026-02-01T00:00:00Z"), paymentMode: "postpaid", freeCreditOffer: "legacy" },
     ],
     platformOrgIds: new Set([P]),
+    ownOrgReasons: new Map([[K, "staff_billing_contact" as const]]),
     cashPaidCents: new Map<string, string | null>([[A, "20000"], [B, "0"], [C, null], [P, "0"]]),
-    identities: new Map(),
+    orgNames: new Map<string, string | null>([[A, "Acme Inc"], [K, "GrowthAgency.dev"]]),
+    activity: new Map([
+      [A, { lastPaymentAt: new Date("2026-08-20T00:00:00Z"), campaignsRunning: 0 }],
+      [B, { lastPaymentAt: null, campaignsRunning: 2 }],
+      [C, { lastPaymentAt: undefined, campaignsRunning: null }],
+    ]),
     now: new Date("2026-10-13T15:00:00Z"),
   };
 }
@@ -80,5 +88,47 @@ describe("composeAbsorbedCosts", () => {
     expect(out.fleet.cardFeesOtherCurrencies).toEqual([{ currency: "eur", feeCents: "33.0000000000" }]);
     expect(out.customers.find((c) => c.orgId === C)!.paying).toBeNull();
     expect(out.customers.find((c) => c.orgId === P)!.platformOrg).toBe(true);
+  });
+
+  it("names the org by its org name, lists our own orgs apart, and tells current from churned", () => {
+    const out = composeAbsorbedCosts(inputs());
+    const k = out.customers.find((c) => c.orgId === K)!;
+    expect(k.orgName).toBe("GrowthAgency.dev");
+    expect(k.ownOrg).toBe(true);
+    expect(k.ownOrgReason).toBe("staff_billing_contact");
+    expect(out.ownOrgs.map((o) => o.orgId).sort()).toEqual([P, K].sort());
+    // Our org's $34.74 is in no fleet figure.
+    expect(out.fleet.absorbedCents).toBe("710.0000000000");
+    expect(out.distribution.reduce((s, b) => s + b.customers, 0)).toBe(3);
+
+    const a = out.customers.find((c) => c.orgId === A)!;
+    expect(a.orgName).toBe("Acme Inc");
+    expect(a.orgDomain).toBeNull();
+    expect(a.lastPaymentAt).toBe("2026-08-20T00:00:00.000Z");
+    expect(a.daysSinceLastPayment).toBe(54);
+    expect(a.customerStatus).toBe("churned");
+    expect(a.current).toBe(false);
+    const b = out.customers.find((c) => c.orgId === B)!;
+    expect(b.customerStatus).toBe("current");
+    expect(b.lastPaymentAt).toBeNull();
+    expect(b.lastPaymentReadable).toBe(true);
+    const c = out.customers.find((x) => x.orgId === C)!;
+    expect(c.customerStatus).toBeNull();
+    expect(c.lastPaymentReadable).toBe(false);
+    expect(out.fleet.currentCustomers).toBe(1);
+    expect(out.fleet.churnedCustomers).toBe(1);
+    expect(out.fleet.customerStatusUnknown).toBe(1);
+  });
+
+  it("classifies an org as ours only from who is behind it", () => {
+    expect(ownOrgReasonOf({ platformOrg: true, billingContactEmail: null, userEmails: [] })).toBe("platform_org");
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "kevin.lourd@gmail.com", userEmails: ["kevin.lourd@gmail.com"] })).toBe("staff_billing_contact");
+    // Staff saved the card but a client uses the org: a customer.
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "kevin.lourd@gmail.com", userEmails: ["kevin+x@distribute.you", "client@acme.com"] })).toBeNull();
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "client@acme.com", userEmails: [] })).toBeNull();
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: ["kevin.lourd@gmail.com"] })).toBeNull();
+    expect(customerStatusOf({ lastPaymentAt: undefined, campaignsRunning: 1 })).toBe("current");
+    expect(customerStatusOf({ lastPaymentAt: undefined, campaignsRunning: 0 })).toBeNull();
+    expect(customerStatusOf({ lastPaymentAt: null, campaignsRunning: 0 })).toBe("never_paid");
   });
 });
