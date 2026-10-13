@@ -1276,6 +1276,11 @@ interface AcquiringFeeMonthWire {
   stripe_fee_cents: number | string;
   revolut_fee_cents: number | string;
   fee_cents: number | string;
+  /** v0.58.3: the row's fees in USD cents, converted with each fee's own recorded rate. */
+  fee_usd_cents?: number | string;
+  /** v0.58.3: fees with no recorded rate, left out of fee_usd_cents (amount in the row's own currency). */
+  unconverted_fee_count?: number;
+  unconverted_fee_cents?: number | string;
 }
 
 interface AcquiringFeesByMonthResponse {
@@ -1287,22 +1292,31 @@ interface AcquiringFeesByMonthResponse {
 /**
  * stripe-service `GET /internal/acquiring_fees/monthly` (v0.58.2): card-acquiring fees
  * (Stripe + Revolut) per org per UTC month the acquirer took them, since inception.
- * Currencies are NEVER merged (the Stripe account settled in EUR until 2026-08-13).
- * X-API-Key only. Fail-loud on any non-2xx or an unusable shape.
+ * Every fee is read in USD (`fee_usd_cents`, v0.58.3: converted with the fee's own
+ * recorded rate; the Stripe account settled in EUR until 2026-08-13); a fee stripe-service
+ * could not convert is returned apart in its own currency, never as USD. X-API-Key only. Fail-loud on any non-2xx or an unusable shape.
  */
 export async function fetchAcquiringFeesByOrgMonth(): Promise<AcquiringFeeMonth[]> {
   const body = await call<AcquiringFeesByMonthResponse>("GET", "/internal/acquiring_fees/monthly", {});
   if (body?.object !== "acquiring_fees_by_month" || !Array.isArray(body.orgs) || !Array.isArray(body.unattributed?.months)) {
     throw new Error("[billing-service] stripe-service acquiring fees answered an unusable shape");
   }
-  const row = (orgId: string | null, m: AcquiringFeeMonthWire): AcquiringFeeMonth => {
-    if (typeof m.currency !== "string" || m.fee_cents == null) {
-      throw new Error(`[billing-service] stripe-service acquiring fee month without currency/fee for org ${orgId}`);
+  // One USD basis: each row's USD figure (stripe-service converts with the fee's own
+  // rate). Only a fee stripe-service could NOT convert stays in its own currency.
+  const rows = (orgId: string | null, m: AcquiringFeeMonthWire): AcquiringFeeMonth[] => {
+    if (typeof m.currency !== "string" || m.fee_usd_cents == null || typeof m.unconverted_fee_count !== "number") {
+      throw new Error(
+        `[billing-service] stripe-service acquiring fee month without currency/fee_usd_cents/unconverted_fee_count for org ${orgId} (needs stripe-service >= v0.58.3)`
+      );
     }
-    return { orgId, month: m.month, currency: m.currency.toLowerCase(), feeCents: String(m.fee_cents) };
+    const out: AcquiringFeeMonth[] = [{ orgId, month: m.month, currency: "usd", feeCents: String(m.fee_usd_cents) }];
+    if (m.unconverted_fee_count > 0) {
+      out.push({ orgId, month: m.month, currency: m.currency.toLowerCase(), feeCents: String(m.unconverted_fee_cents ?? 0) });
+    }
+    return out;
   };
   return [
-    ...body.orgs.flatMap((o) => o.months.map((m) => row(o.org_id, m))),
-    ...body.unattributed.months.map((m) => row(null, m)),
+    ...body.orgs.flatMap((o) => o.months.flatMap((m) => rows(o.org_id, m))),
+    ...body.unattributed.months.flatMap((m) => rows(null, m)),
   ];
 }

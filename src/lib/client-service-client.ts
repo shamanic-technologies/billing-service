@@ -8,6 +8,9 @@ import { fetchWithRetry } from "./fetch-retry.js";
 
 const READ_TIMEOUT_MS = 20_000;
 
+/** An RFC 4122 id (version 1-8, variant 8-b), what client-service's validator accepts. The sentinels (00000000-…-0000/0001) are not. */
+export const RFC_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function config(): { url: string; apiKey: string } {
   const url = process.env.CLIENT_SERVICE_URL;
   const apiKey = process.env.CLIENT_SERVICE_API_KEY;
@@ -23,7 +26,9 @@ function config(): { url: string; apiKey: string } {
 export async function fetchOrgNames(orgIds: string[]): Promise<Map<string, string | null>> {
   const { url, apiKey } = config();
   const out = new Map<string, string | null>();
-  const unique = [...new Set(orgIds)];
+  // client-service validates each id as a UUID and refuses the WHOLE batch on one bad id;
+  // an id it would refuse names no org of its own (absent from the map).
+  const unique = [...new Set(orgIds)].filter((id) => RFC_UUID.test(id));
   for (let i = 0; i < unique.length; i += 1000) {
     const res = await fetchWithRetry(`${url}/internal/orgs/names`, {
       method: "POST",
