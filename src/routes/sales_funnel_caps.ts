@@ -31,9 +31,13 @@ import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 const router = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** features-service funnel ids are leg keys, `@`, `+`, channel slugs. Opaque, bounded. */
+/**
+ * features-service funnel ids are leg keys, `@`, `+`, channel slugs, and `~<strategy id>`
+ * after a pipe that runs a non-default PLAY (owner 2026-10-13, features-service v0.179.191:
+ * `lead_found_to_conversation@sales-cold-email-outreach~valid-catch-all`). Opaque, bounded.
+ */
 const MAX_BUDGET_INT_DIGITS = 12;
-const FUNNEL_ID_RE = /^[A-Za-z0-9_@+\-.:|]{1,1000}$/;
+const FUNNEL_ID_RE = /^[A-Za-z0-9_@+\-.:|~]{1,1000}$/;
 
 function internalOrgId(req: Request, res: Response): string | null {
   const orgId = req.headers["x-org-id"] as string | undefined;
