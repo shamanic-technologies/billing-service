@@ -32,12 +32,11 @@ const REACTIVE_FUNNEL = "conversation_to_meeting_booked@ai-meeting-booking+meeti
 const EMAIL_SENDING = "email-sending";
 const EMAIL_SENDING_FUNNEL = "start_to_email_sent@email-sending";
 const CAMPAIGN_EMAIL_SENDING = "11111111-0000-4000-8000-000000000011";
-// The channel catalogue as features-service publishes it (prod shape 2026-10-14).
-const EMAIL_SENDING_CHANNEL = {
-  slug: EMAIL_SENDING,
-  managed: true,
-  stepTransitions: [{ legKey: "start_to_email_sent", from: null, to: { key: "email_sent" }, reactive: true }],
-};
+const CAMPAIGN_EMAIL_SENDING_MOVED = "11111111-0000-4000-8000-000000000012";
+// The owner moved the pipe to start_to_conversation (2026-10-13 19:37): its leg ends on a reply.
+const EMAIL_SENDING_MOVED_FUNNEL = "start_to_conversation@email-sending+conversation_to_paid_client";
+// A reactive pipe whose channel, outcome step and trigger declare no run.
+const UNDECLARED_REACTIVE_FUNNEL = "form_submitted_to_meeting_booked@ai-instant-call+meeting_booked_to_paid_client";
 
 const CAMPAIGN_COLD = "11111111-0000-4000-8000-000000000001";
 const CAMPAIGN_COLD_LEGACY = "11111111-0000-4000-8000-000000000002";
@@ -139,9 +138,48 @@ const funnelDetail = (id: string) =>
         ? {
             object: "sales_funnel",
             id,
-            name: "Email Sending",
+            name: "Concord",
             type: "reactive",
-            legs: [{ legKey: "start_to_email_sent", pipe: { id: `${EMAIL_SENDING}|start_to_email_sent`, mode: "reactive" } }],
+            trigger: { slug: "email_pushed_via_api", name: "Email Pushed Via API" },
+            legs: [
+              {
+                legKey: "start_to_email_sent",
+                toStep: "email_sent",
+                pipe: { id: `${EMAIL_SENDING}|start_to_email_sent`, mode: "reactive" },
+              },
+            ],
+          }
+      : id === UNDECLARED_REACTIVE_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: "Quill",
+            type: "reactive",
+            trigger: { slug: "form_submitted", name: "Form submitted" },
+            legs: [
+              {
+                legKey: "form_submitted_to_meeting_booked",
+                toStep: "meeting_booked",
+                pipe: { id: "ai-instant-call|form_submitted_to_meeting_booked", mode: "reactive" },
+              },
+              { legKey: "meeting_booked_to_paid_client", toStep: "paid_client", pipe: null },
+            ],
+          }
+      : id === EMAIL_SENDING_MOVED_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: "Concord",
+            type: "reactive",
+            trigger: { slug: "email_pushed_via_api", name: "Email Pushed Via API" },
+            legs: [
+              {
+                legKey: "start_to_conversation",
+                toStep: "conversation",
+                pipe: { id: `${EMAIL_SENDING}|start_to_conversation`, mode: "reactive" },
+              },
+              { legKey: "conversation_to_paid_client", toStep: "paid_client", pipe: null },
+            ],
           }
       : id === REACTIVE_FUNNEL
         ? {
@@ -213,6 +251,7 @@ function mockUpstreams(
           ]),
           fc("fc-echo", REACTIVE_FUNNEL, [[CAMPAIGN_ECHO_BOOKING, BOOKING, "conversation_to_meeting_booked"]]),
           fc("fc-email-sending", EMAIL_SENDING_FUNNEL, [[CAMPAIGN_EMAIL_SENDING, EMAIL_SENDING, "start_to_email_sent"]]),
+          fc("fc-email-sending-moved", EMAIL_SENDING_MOVED_FUNNEL, [[CAMPAIGN_EMAIL_SENDING_MOVED, EMAIL_SENDING, "start_to_conversation"]]),
           fc("fc-perky", SIBLING_FUNNEL, [
             [CAMPAIGN_SIBLING_SOURCE, APOLLO, "start_to_lead_found"],
             [CAMPAIGN_SIBLING_COLD, COLD, "lead_found_to_conversation"],
@@ -255,6 +294,7 @@ function mockUpstreams(
           // Units of other funnel campaigns on this offer: never Victory's.
           campaign(CAMPAIGN_ECHO_BOOKING, OFFER, BOOKING, "conversation_to_meeting_booked"),
           campaign(CAMPAIGN_EMAIL_SENDING, OFFER, EMAIL_SENDING, "start_to_email_sent"),
+          campaign(CAMPAIGN_EMAIL_SENDING_MOVED, OFFER, EMAIL_SENDING, "start_to_conversation"),
           campaign(CAMPAIGN_SIBLING_SOURCE, OFFER, APOLLO, "start_to_lead_found"),
           campaign(CAMPAIGN_SIBLING_COLD, OFFER, COLD, "lead_found_to_conversation"),
           ...(opts.newFunnelCampaign
@@ -431,6 +471,7 @@ describe("sales funnel caps", () => {
         legKey: "lead_found_to_conversation",
         strategyId: null,
         mode: "proactive",
+        toStep: null,
         campaignIds: [CAMPAIGN_COLD, CAMPAIGN_COLD_LEGACY].sort(),
       },
       {
@@ -439,6 +480,7 @@ describe("sales funnel caps", () => {
         legKey: "conversation_to_meeting_booked",
         strategyId: null,
         mode: "reactive",
+        toStep: null,
         campaignIds: [CAMPAIGN_BOOKING],
       },
     ]);
@@ -604,6 +646,7 @@ describe("sales funnel caps", () => {
       legKey: "lead_found_to_conversation",
       strategyId: "valid-catch-all",
       mode: "proactive",
+      toStep: null,
       campaignIds: [CAMPAIGN_PLAY_COLD],
     });
     // Both units spend under the cap: consumed = 2 x 1000.5.
@@ -728,8 +771,7 @@ describe("sales funnel caps", () => {
     expect(daily.body.dailyBudgetCents).toBeNull();
   });
 
-  it("Email Sending: a max volume counts each email sent (the leg's published outcome), no channel entry (2026-10-14)", async () => {
-    __primeSalesPathTerms([EMAIL_SENDING_CHANNEL] as never, ORIGINS as never);
+  it("Email Sending: a max volume counts each email sent (the leg's outcome step), no channel entry (2026-10-14)", async () => {
     const calls = mockUpstreams();
     const res = await put(
       { maxBudget: { amountCents: 200, period: "daily" }, maxVolume: { count: 80, period: "daily" } },
@@ -758,21 +800,26 @@ describe("sales funnel caps", () => {
     expect(atCap.body.maxVolume).toMatchObject({ consumed: 36, remaining: 0, reached: true });
   });
 
-  it("a reactive channel whose leg produces a step no run is declared for stays null + reason (fail-closed kept)", async () => {
-    // The same funnel, but the catalogue publishes no outcome for its leg.
-    __primeSalesPathTerms(
-      [{ ...EMAIL_SENDING_CHANNEL, stepTransitions: [{ legKey: "start_to_email_sent", from: null, reactive: true }] }] as never,
-      ORIGINS as never
-    );
+  it("Email Sending moved to start_to_conversation: still one email sent per push, read off the funnel's trigger", async () => {
+    const calls = mockUpstreams();
+    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, EMAIL_SENDING_MOVED_FUNNEL);
+    const read = await readInternal(EMAIL_SENDING_MOVED_FUNNEL);
+    expect(read.body.maxVolume).toMatchObject({ consumed: 36, reached: true, consumedUnavailableReason: null });
+    const outcomes = calls.outcomes.at(-1)!;
+    expect(outcomes.get("campaignIds")).toBe(CAMPAIGN_EMAIL_SENDING_MOVED);
+    expect(outcomes.get("taskName")).toBe("email-send-step-1");
+  });
+
+  it("a reactive first pipe with no channel entry, no declared step and no declared trigger stays null + reason (fail-closed kept)", async () => {
     mockUpstreams();
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, EMAIL_SENDING_FUNNEL);
-    const read = await readInternal(EMAIL_SENDING_FUNNEL);
+    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, UNDECLARED_REACTIVE_FUNNEL);
+    const read = await readInternal(UNDECLARED_REACTIVE_FUNNEL);
     expect(read.body.maxVolume).toMatchObject({
       consumed: null,
       reached: null,
       consumedUnavailableReason: "volume_not_measured_on_channel",
     });
-    expect(read.body.maxVolume.consumedUnavailableDetail).toContain(EMAIL_SENDING);
+    expect(read.body.maxVolume.consumedUnavailableDetail).toContain("ai-instant-call");
   });
 
   it("boot backfills the type of caps written before it was stored", async () => {

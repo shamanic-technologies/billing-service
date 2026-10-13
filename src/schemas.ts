@@ -5427,7 +5427,8 @@ const VolumeCapViewSchema = z
       "the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes " +
       "reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called " +
       "the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a " +
-      "declared run (email_sent: one email sent, e.g. Email Sending) is measured by that run, no per-channel entry. " +
+      "declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run " +
+      "(email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. " +
       "A channel with no measure yet answers null + " +
       "volume_not_measured_on_channel. unit null = the funnel is unreadable.",
   });
@@ -5439,6 +5440,10 @@ const MeasuredPipeSchema = z
     legKey: z.string().describe("The bare leg (no play suffix): what the funnel's campaign units are stored on."),
     strategyId: z.string().nullable().describe("The play's strategy when the funnel names a non-default play; null = default play."),
     mode: z.enum(["proactive", "reactive"]),
+    toStep: z
+      .string()
+      .nullable()
+      .describe("The step this pipe's leg produces (features-service legs[].toStep); null when not served."),
     campaignIds: z.array(z.string()),
   })
   .openapi("SalesFunnelMeasuredPipe");
