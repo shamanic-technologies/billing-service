@@ -1029,7 +1029,28 @@ async function measureBudget(
 
 async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<number>> {
   // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
-  const proactive = pipes.filter((p) => p.mode === "proactive");
+  let proactive = pipes.filter((p) => p.mode === "proactive");
+  // A SOURCE pipe (Start -> Lead found) finds leads and contacts nobody: it is never a
+  // first-contact pipe. Asked only when a proactive pipe has no measure, so a funnel
+  // without a source pipe reads exactly as before (2026-10-13: every funnel opening on
+  // its own source read volume_not_measured_on_channel, its max volume never reached).
+  if (proactive.some((p) => !ITEM_TASKS[p.channelSlug])) {
+    let terms: SalesPathTerms;
+    try {
+      terms = await getSalesPathTerms();
+    } catch (err) {
+      console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
+      return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
+    }
+    proactive = proactive.filter((p) => !terms.isSourceItem(p.channelSlug, p.legKey));
+    if (proactive.length === 0) {
+      return {
+        consumed: null,
+        reason: "volume_not_measured_on_channel",
+        detail: `sales funnel ${k.salesFunnelId} has no first-contact pipe (only lead sources)`,
+      };
+    }
+  }
   // A reactive funnel takes a prospect on at its FIRST pipe; the later pipes
   // handle that same prospect, so only the first is counted (never twice).
   const counted = proactive.length > 0 ? proactive : pipes.slice(0, 1);

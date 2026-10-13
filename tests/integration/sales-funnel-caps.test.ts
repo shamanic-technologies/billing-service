@@ -55,6 +55,8 @@ const CAMPAIGN_SIBLING_COLD = "11111111-0000-4000-8000-00000000000b";
 const CAMPAIGN_ECHO_BOOKING = "11111111-0000-4000-8000-00000000000c";
 const CAMPAIGN_NEW_SOURCE = "11111111-0000-4000-8000-00000000000d";
 const CAMPAIGN_NEW_COLD = "11111111-0000-4000-8000-00000000000e";
+const CAMPAIGN_PLAY_SOURCE = "11111111-0000-4000-8000-00000000000f";
+const CAMPAIGN_PLAY_COLD = "11111111-0000-4000-8000-000000000010";
 const ORIGINS = {
   sourceLegKey: "start_to_lead_found",
   origins: [{ slug: APOLLO }, { slug: SIGNALS }, { slug: CRM }],
@@ -114,7 +116,11 @@ const funnelDetail = (id: string) =>
             type: "proactive",
             legs: [
               { legKey: "start_to_lead_found", pipe: { id: "lead-sourcing|start_to_lead_found", mode: "proactive" } },
-              { legKey: "lead_found_to_conversation", pipe: { id: `${COLD}|lead_found_to_conversation`, mode: "proactive" } },
+              // features-service serves the PLAY id on the play's pipe (prod, 2026-10-13).
+              {
+                legKey: "lead_found_to_conversation",
+                pipe: { id: `${COLD}|lead_found_to_conversation~valid-catch-all`, mode: "proactive" },
+              },
               { legKey: "conversation_to_paid_client", pipe: null },
             ],
           }
@@ -166,7 +172,9 @@ const fc = (id: string, salesFunnelId: string, units: Array<[string, string, str
   units: units.map(([campaignId, featureSlug, legKey]) => ({ campaignId, featureSlug, legKey, status: "ongoing" })),
 });
 
-function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number; newFunnelCampaign?: boolean } = {}): Calls {
+function mockUpstreams(
+  opts: { featuresStatus?: number; runsStatus?: number; newFunnelCampaign?: boolean; playFunnelCampaign?: boolean } = {}
+): Calls {
   const calls: Calls = { costs: [], outcomes: [], runs: [], features: 0, campaigns: 0 };
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
@@ -197,6 +205,15 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number; new
                 ]),
               ]
             : []),
+          // campaign-service stores a play's unit on the BARE leg.
+          ...(opts.playFunnelCampaign
+            ? [
+                fc("fc-catalyze", PLAY_FUNNEL, [
+                  [CAMPAIGN_PLAY_SOURCE, "lead-sourcing", "start_to_lead_found"],
+                  [CAMPAIGN_PLAY_COLD, COLD, "lead_found_to_conversation"],
+                ]),
+              ]
+            : []),
         ],
       });
     }
@@ -223,6 +240,12 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number; new
             ? [
                 campaign(CAMPAIGN_NEW_SOURCE, OFFER, SIGNALS, "start_to_lead_found"),
                 campaign(CAMPAIGN_NEW_COLD, OFFER, COLD, "lead_found_to_conversation"),
+              ]
+            : []),
+          ...(opts.playFunnelCampaign
+            ? [
+                campaign(CAMPAIGN_PLAY_SOURCE, OFFER, "lead-sourcing", "start_to_lead_found"),
+                campaign(CAMPAIGN_PLAY_COLD, OFFER, COLD, "lead_found_to_conversation"),
               ]
             : []),
         ],
@@ -385,6 +408,7 @@ describe("sales funnel caps", () => {
         pipeId: `${COLD}|lead_found_to_conversation`,
         channelSlug: COLD,
         legKey: "lead_found_to_conversation",
+        strategyId: null,
         mode: "proactive",
         campaignIds: [CAMPAIGN_COLD, CAMPAIGN_COLD_LEGACY].sort(),
       },
@@ -392,6 +416,7 @@ describe("sales funnel caps", () => {
         pipeId: `${BOOKING}|conversation_to_meeting_booked`,
         channelSlug: BOOKING,
         legKey: "conversation_to_meeting_booked",
+        strategyId: null,
         mode: "reactive",
         campaignIds: [CAMPAIGN_BOOKING],
       },
@@ -539,6 +564,34 @@ describe("sales funnel caps", () => {
     expect(del.status).toBe(200);
     expect(del.body.stated).toBe(false);
     expect(await db.select().from(salesFunnelCaps)).toHaveLength(0);
+  });
+
+  it("a PLAY's pipe counts its campaign's unit: the cap sees the play's spend (Doc Dinners Catalyze, 2026-10-13)", async () => {
+    // As prod publishes it: Lead Sourcing feeds cold email, so Catalyze buys its leads on its own source pipe.
+    __primeSalesPathTerms([], {
+      ...ORIGINS,
+      origins: [...ORIGINS.origins, { slug: "lead-sourcing" }],
+      originsByChannel: { ...ORIGINS.originsByChannel, [COLD]: [APOLLO, SIGNALS, "lead-sourcing"] },
+    } as never);
+    const calls = mockUpstreams({ playFunnelCampaign: true });
+    await put({ maxBudget: { amountCents: 6000, period: "daily" }, maxVolume: { count: 100, period: "daily" } }, PLAY_FUNNEL);
+    const b = (await readInternal(PLAY_FUNNEL)).body;
+    const cold = b.pipes.find((p: { channelSlug: string }) => p.channelSlug === COLD);
+    expect(cold).toEqual({
+      pipeId: `${COLD}|lead_found_to_conversation~valid-catch-all`,
+      channelSlug: COLD,
+      legKey: "lead_found_to_conversation",
+      strategyId: "valid-catch-all",
+      mode: "proactive",
+      campaignIds: [CAMPAIGN_PLAY_COLD],
+    });
+    // Both units spend under the cap: consumed = 2 x 1000.5.
+    expect(calls.costs.at(-1)!.get("campaignIds")!.split(",").sort()).toEqual([CAMPAIGN_PLAY_SOURCE, CAMPAIGN_PLAY_COLD].sort());
+    expect(b.maxBudget).toMatchObject({ consumedCents: "2001.0000000000", reached: false });
+    // Volume counts the play's cold email first contacts too.
+    expect(calls.outcomes.at(-1)!.get("campaignIds")).toBe(CAMPAIGN_PLAY_COLD);
+    expect(b.maxVolume.consumedUnavailableReason).toBeNull();
+    expect(b.sources).toEqual([]);
   });
 
   it("a funnel features-service does not know is refused (404), an unreadable catalogue is 502; nothing stored", async () => {

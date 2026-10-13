@@ -62,10 +62,37 @@ describe("salesFunnelFromDetail", () => {
           pipeId: "sales-cold-email-outreach|lead_found_to_website_visit",
           channelSlug: "sales-cold-email-outreach",
           legKey: "lead_found_to_website_visit",
+          strategyId: null,
           mode: "proactive",
         },
       ],
     });
+  });
+
+  it("reads a non-default PLAY's pipe on its bare leg, the strategy apart (Doc Dinners Catalyze)", () => {
+    const catalyze = {
+      ...epiphany,
+      id: "start_to_lead_found@lead-sourcing+lead_found_to_conversation@sales-cold-email-outreach~valid-catch-all+conversation_to_paid_client",
+      legs: [
+        { legKey: "start_to_lead_found", pipe: { id: "lead-sourcing|start_to_lead_found", mode: "proactive" } },
+        {
+          legKey: "lead_found_to_conversation",
+          pipe: { id: "sales-cold-email-outreach|lead_found_to_conversation~valid-catch-all", mode: "proactive" },
+        },
+      ],
+    };
+    const pipes = salesFunnelFromDetail(catalyze.id, catalyze).pipes;
+    expect(pipes[0]).toMatchObject({ legKey: "start_to_lead_found", strategyId: null });
+    expect(pipes[1]).toEqual({
+      pipeId: "sales-cold-email-outreach|lead_found_to_conversation~valid-catch-all",
+      channelSlug: "sales-cold-email-outreach",
+      legKey: "lead_found_to_conversation",
+      strategyId: "valid-catch-all",
+      mode: "proactive",
+    });
+    expect(() =>
+      salesFunnelFromDetail("f", { ...epiphany, legs: [{ legKey: "x", pipe: { id: "a|~s", mode: "proactive" } }] })
+    ).toThrow(SalesFunnelCatalogueUnavailableError);
   });
 
   it("relays the served type; anything else is null (never derived from pipe modes)", () => {
@@ -76,7 +103,7 @@ describe("salesFunnelFromDetail", () => {
   });
 
   it("volumeUnitOf: first contacts with a proactive pipe, prospects handled when all reactive", () => {
-    const pipe = (mode: "proactive" | "reactive") => ({ pipeId: "a|b", channelSlug: "a", legKey: "b", mode });
+    const pipe = (mode: "proactive" | "reactive") => ({ pipeId: "a|b", channelSlug: "a", legKey: "b", strategyId: null, mode });
     expect(volumeUnitOf({ pipes: [pipe("reactive"), pipe("proactive")] })).toBe("first_contacts");
     expect(volumeUnitOf({ pipes: [pipe("reactive")] })).toBe("prospects_handled");
   });
