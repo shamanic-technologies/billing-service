@@ -9,6 +9,12 @@
  * a leg nothing of ours performs. The pipe id's `|` split is that route's
  * published contract, the only thing read out of an id.
  *
+ * PLAYS (features-service, owner 2026-10-13): a leg running a non-default play
+ * serves its PLAY id, `<channel>|<leg>~<strategy id>`. The strategy is a property
+ * of the pipe, never part of its leg: campaign-service stores the unit on the bare
+ * leg, so the leg is read up to `~` (else a play's pipe matches no campaign and
+ * its spend escapes the cap, Doc Dinners "Catalyze" 2026-10-13).
+ *
  * Cached per id for a few minutes: a funnel's pipes are a function of its id
  * and the catalogue, and campaign-service asks on every gate tick.
  *
@@ -25,8 +31,10 @@ export interface SalesFunnelPipe {
   pipeId: string;
   /** The acquisition channel (a features-service feature slug). */
   channelSlug: string;
-  /** The leg in its served spelling. Compare through `sameLeg`, never `===`. */
+  /** The leg in its served spelling, WITHOUT any play suffix. Compare through `sameLeg`, never `===`. */
   legKey: string;
+  /** The play's strategy when the funnel names a non-default play on this pipe; null = the default play. */
+  strategyId: string | null;
   mode: PipeMode;
 }
 
@@ -59,6 +67,9 @@ export class SalesFunnelCatalogueUnavailableError extends Error {
     this.name = "SalesFunnelCatalogueUnavailableError";
   }
 }
+
+/** features-service's play separator (`<pipe id>~<strategy id>`, its `PLAY_SEPARATOR`). */
+const PLAY_SEPARATOR = "~";
 
 const CACHE_MS = 5 * 60_000;
 const TIMEOUT_MS = 15_000;
@@ -93,10 +104,19 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
         `features-service sales funnel ${id} pipe ${pipeId} carried no proactive|reactive mode`
       );
     }
+    const legPart = pipeId.slice(bar + 1);
+    const tilde = legPart.indexOf(PLAY_SEPARATOR);
+    const legKey = tilde < 0 ? legPart : legPart.slice(0, tilde);
+    if (!legKey) {
+      throw new SalesFunnelCatalogueUnavailableError(
+        `features-service sales funnel ${id} carried a pipe without a leg: ${JSON.stringify(pipe.id)}`
+      );
+    }
     pipes.push({
       pipeId,
       channelSlug: pipeId.slice(0, bar),
-      legKey: pipeId.slice(bar + 1),
+      legKey,
+      strategyId: tilde < 0 ? null : legPart.slice(tilde + 1) || null,
       mode: pipe.mode,
     });
   }

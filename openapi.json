@@ -5314,13 +5314,20 @@
         "type": "object",
         "properties": {
           "pipeId": {
-            "type": "string"
+            "type": "string",
+            "description": "features-service's pipe id; a non-default play's id `<channel>|<leg>~<strategy>`."
           },
           "channelSlug": {
             "type": "string"
           },
           "legKey": {
-            "type": "string"
+            "type": "string",
+            "description": "The bare leg (no play suffix): what the funnel's campaign units are stored on."
+          },
+          "strategyId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The play's strategy when the funnel names a non-default play; null = default play."
           },
           "mode": {
             "type": "string",
@@ -5340,6 +5347,7 @@
           "pipeId",
           "channelSlug",
           "legKey",
+          "strategyId",
           "mode",
           "campaignIds"
         ]
