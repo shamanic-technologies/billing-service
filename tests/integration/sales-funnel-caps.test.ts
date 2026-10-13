@@ -41,6 +41,17 @@ const CAMPAIGN_SOURCE_APOLLO = "11111111-0000-4000-8000-000000000006";
 const CAMPAIGN_SOURCE_SIGNALS = "11111111-0000-4000-8000-000000000007";
 const CAMPAIGN_SOURCE_CRM = "11111111-0000-4000-8000-000000000008";
 const CAMPAIGN_SOURCE_OTHER_OFFER = "11111111-0000-4000-8000-000000000009";
+// A SIBLING funnel campaign on the same offer, also on cold email, with its own
+// source pipe (the 2026-10-13 Doc Dinners shape): its spend is never Victory's.
+const SIBLING_FUNNEL =
+  "start_to_lead_found@sourcing-apollo-cold-filters+lead_found_to_conversation@sales-cold-email-outreach+conversation_to_paid_client";
+const NEW_FUNNEL =
+  "start_to_lead_found@sourcing-linkedin-engagement-signals+lead_found_to_conversation@sales-cold-email-outreach+conversation_to_paid_client";
+const CAMPAIGN_SIBLING_SOURCE = "11111111-0000-4000-8000-00000000000a";
+const CAMPAIGN_SIBLING_COLD = "11111111-0000-4000-8000-00000000000b";
+const CAMPAIGN_ECHO_BOOKING = "11111111-0000-4000-8000-00000000000c";
+const CAMPAIGN_NEW_SOURCE = "11111111-0000-4000-8000-00000000000d";
+const CAMPAIGN_NEW_COLD = "11111111-0000-4000-8000-00000000000e";
 const ORIGINS = {
   sourceLegKey: "start_to_lead_found",
   origins: [{ slug: APOLLO }, { slug: SIGNALS }, { slug: CRM }],
@@ -77,6 +88,21 @@ const funnelDetail = (id: string) =>
           name: "Mirage",
           legs: [{ legKey: "start_to_website_visit", pipe: { id: "google-ads|start_to_website_visit", mode: "proactive" } }],
         }
+      : id === SIBLING_FUNNEL || id === NEW_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: id === SIBLING_FUNNEL ? "Perky" : "Persevere",
+            type: "proactive",
+            legs: [
+              {
+                legKey: "start_to_lead_found",
+                pipe: { id: `${id === SIBLING_FUNNEL ? APOLLO : SIGNALS}|start_to_lead_found`, mode: "proactive" },
+              },
+              { legKey: "lead_found_to_conversation", pipe: { id: `${COLD}|lead_found_to_conversation`, mode: "proactive" } },
+              { legKey: "conversation_to_paid_client", pipe: null },
+            ],
+          }
       : id === REACTIVE_FUNNEL
         ? {
             object: "sales_funnel",
@@ -115,7 +141,17 @@ interface Calls {
   campaigns: number;
 }
 
-function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = {}): Calls {
+const fc = (id: string, salesFunnelId: string, units: Array<[string, string, string]>) => ({
+  id,
+  orgId,
+  brandId,
+  offerId: OFFER,
+  salesFunnelId,
+  status: "ongoing",
+  units: units.map(([campaignId, featureSlug, legKey]) => ({ campaignId, featureSlug, legKey, status: "ongoing" })),
+});
+
+function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number; newFunnelCampaign?: boolean } = {}): Calls {
   const calls: Calls = { costs: [], outcomes: [], runs: [], features: 0, campaigns: 0 };
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
@@ -124,6 +160,30 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = 
       if (opts.featuresStatus) return new Response("boom", { status: opts.featuresStatus });
       const body = funnelDetail(decodeURIComponent(url.pathname.split("/").pop()!));
       return body ? Response.json(body) : Response.json({ reason: "sales_funnel_not_found" }, { status: 404 });
+    }
+    if (url.pathname === "/sales-funnel-campaigns") {
+      return Response.json({
+        salesFunnelCampaigns: [
+          fc("fc-victory", FUNNEL, [
+            [CAMPAIGN_COLD, COLD, "lead_found_to_conversation"],
+            [CAMPAIGN_COLD_LEGACY, COLD, "start_to_conversation"],
+            [CAMPAIGN_BOOKING, BOOKING, "conversation_to_meeting_booked"],
+          ]),
+          fc("fc-echo", REACTIVE_FUNNEL, [[CAMPAIGN_ECHO_BOOKING, BOOKING, "conversation_to_meeting_booked"]]),
+          fc("fc-perky", SIBLING_FUNNEL, [
+            [CAMPAIGN_SIBLING_SOURCE, APOLLO, "start_to_lead_found"],
+            [CAMPAIGN_SIBLING_COLD, COLD, "lead_found_to_conversation"],
+          ]),
+          ...(opts.newFunnelCampaign
+            ? [
+                fc("fc-persevere", NEW_FUNNEL, [
+                  [CAMPAIGN_NEW_SOURCE, SIGNALS, "start_to_lead_found"],
+                  [CAMPAIGN_NEW_COLD, COLD, "lead_found_to_conversation"],
+                ]),
+              ]
+            : []),
+        ],
+      });
     }
     if (url.pathname === "/internal/campaigns/recurring-status") {
       calls.campaigns += 1;
@@ -140,6 +200,16 @@ function mockUpstreams(opts: { featuresStatus?: number; runsStatus?: number } = 
           // A source feeding a channel the funnel has no pipe on, and another offer's source: not counted.
           campaign(CAMPAIGN_SOURCE_CRM, OFFER, CRM, "start_to_lead_found"),
           campaign(CAMPAIGN_SOURCE_OTHER_OFFER, OTHER_OFFER, APOLLO, "start_to_lead_found"),
+          // Units of other funnel campaigns on this offer: never Victory's.
+          campaign(CAMPAIGN_ECHO_BOOKING, OFFER, BOOKING, "conversation_to_meeting_booked"),
+          campaign(CAMPAIGN_SIBLING_SOURCE, OFFER, APOLLO, "start_to_lead_found"),
+          campaign(CAMPAIGN_SIBLING_COLD, OFFER, COLD, "lead_found_to_conversation"),
+          ...(opts.newFunnelCampaign
+            ? [
+                campaign(CAMPAIGN_NEW_SOURCE, OFFER, SIGNALS, "start_to_lead_found"),
+                campaign(CAMPAIGN_NEW_COLD, OFFER, COLD, "lead_found_to_conversation"),
+              ]
+            : []),
         ],
       });
     }
@@ -257,9 +327,9 @@ describe("sales funnel caps", () => {
     expect(b.salesFunnelTypeUnavailableReason).toBeNull();
     expect(b.volumeUnit).toBe("first_contacts");
 
-    // Spend is ALL-INCLUSIVE: every campaign of the funnel's pipes for this brand x
-    // offer (both spellings of the cold leg + the booking campaign) AND the lead
-    // sources feeding cold email; never another offer, leg or unfed source.
+    // Spend is ALL-INCLUSIVE: the units of this funnel's campaign (both spellings of
+    // the cold leg + the booking unit) AND the non-unit lead sources feeding cold
+    // email; never another offer, leg, unfed source or another funnel's unit.
     const spendIds = calls.costs.at(-1)!.get("campaignIds")!.split(",").sort();
     expect(spendIds).toEqual(
       [CAMPAIGN_COLD, CAMPAIGN_COLD_LEGACY, CAMPAIGN_BOOKING, CAMPAIGN_SOURCE_APOLLO, CAMPAIGN_SOURCE_SIGNALS].sort()
@@ -331,6 +401,35 @@ describe("sales funnel caps", () => {
     const v1 = await request(app).get(`/v1${capsPath()}`).set(auth);
     expect(v1.status).toBe(200);
     expect(v1.body.maxBudget.amountCents).toBe("5000.0000000000");
+  });
+
+  it("every funnel campaign runs independently: a new funnel sharing cold email on the offer reads only its own units (2026-10-13)", async () => {
+    // Persevere is stated before its campaign exists: nothing to count, $0 consumed, never Perky's spend.
+    let calls = mockUpstreams();
+    await put({ maxBudget: { amountCents: 2000, period: "daily" }, maxVolume: null }, NEW_FUNNEL);
+    let b = (await readInternal(NEW_FUNNEL)).body;
+    expect(b.maxBudget).toMatchObject({ consumedCents: "0.0000000000", remainingCents: "2000.0000000000", reached: false });
+    expect(b.pipes.flatMap((p: { campaignIds: string[] }) => p.campaignIds)).toEqual([]);
+    // Its own source pipe buys its leads: no other source feeds it.
+    expect(b.sources).toEqual([]);
+    expect(calls.costs).toHaveLength(0);
+    vi.restoreAllMocks();
+
+    // Its campaign is created: only its two units are counted.
+    calls = mockUpstreams({ newFunnelCampaign: true });
+    b = (await readInternal(NEW_FUNNEL)).body;
+    expect(calls.costs.at(-1)!.get("campaignIds")!.split(",").sort()).toEqual([CAMPAIGN_NEW_SOURCE, CAMPAIGN_NEW_COLD].sort());
+    expect(b.maxBudget).toMatchObject({ consumedCents: "2001.0000000000", reached: true });
+    vi.restoreAllMocks();
+
+    // Perky still reads its own units, never the new funnel's.
+    calls = mockUpstreams({ newFunnelCampaign: true });
+    await put({ maxBudget: { amountCents: 6100, period: "daily" }, maxVolume: null }, SIBLING_FUNNEL);
+    b = (await readInternal(SIBLING_FUNNEL)).body;
+    expect(calls.costs.at(-1)!.get("campaignIds")!.split(",").sort()).toEqual(
+      [CAMPAIGN_SIBLING_SOURCE, CAMPAIGN_SIBLING_COLD].sort()
+    );
+    expect(b.maxBudget).toMatchObject({ consumedCents: "2001.0000000000", reached: false });
   });
 
   it("reached: a cap at or below what was consumed reads reached, nothing remains", async () => {
@@ -512,12 +611,12 @@ describe("sales funnel caps", () => {
       consumedUnavailableReason: null,
     });
     const runsCall = calls.runs.at(-1)!;
-    expect(runsCall.get("campaignIds")).toBe(CAMPAIGN_BOOKING);
+    expect(runsCall.get("campaignIds")).toBe(CAMPAIGN_ECHO_BOOKING);
     expect(runsCall.get("serviceName")).toBe("chat-service");
     expect(runsCall.get("taskName")).toBe("complete");
     expect(runsCall.get("startedAfter")).toBe(read.body.maxVolume.periodStart);
     // The budget is still measured on the reactive pipe's campaign (hard ceiling), and counts 0 per day.
-    expect(calls.costs.at(-1)!.get("campaignIds")).toBe(CAMPAIGN_BOOKING);
+    expect(calls.costs.at(-1)!.get("campaignIds")).toBe(CAMPAIGN_ECHO_BOOKING);
     expect(read.body.maxBudget).toMatchObject({ consumedCents: "1000.5000000000", dailyBudgetCents: "0.0000000000" });
     const [row] = await db.select().from(salesFunnelCaps);
     expect(row.salesFunnelType).toBe("reactive");
