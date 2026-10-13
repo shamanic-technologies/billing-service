@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { periodWindow, volumeUnitOf } from "../../src/lib/sales-funnel-caps.js";
+import {
+  itemTaskOf,
+  ITEM_TASKS,
+  periodWindow,
+  REACTIVE_ITEM_TASKS,
+  volumeUnitOf,
+} from "../../src/lib/sales-funnel-caps.js";
+import { itemTermsFrom, salesPathTermsOf } from "../../src/lib/sales-path-terms.js";
 import {
   salesFunnelFromDetail,
   SalesFunnelCatalogueUnavailableError,
@@ -115,5 +122,52 @@ describe("salesFunnelFromDetail", () => {
     );
     expect(() => salesFunnelFromDetail("f", bad({ id: "a|b" }))).toThrow(SalesFunnelCatalogueUnavailableError);
     expect(() => salesFunnelFromDetail("f", { id: "f" })).toThrow(SalesFunnelCatalogueUnavailableError);
+  });
+});
+
+describe("itemTaskOf: a channel's volume measure, declared by the step its leg produces", () => {
+  // features-service /public/channels, prod shape 2026-10-14.
+  const terms = salesPathTermsOf(
+    itemTermsFrom([
+      {
+        slug: "email-sending",
+        stepTransitions: [{ legKey: "start_to_email_sent", from: null, to: { key: "email_sent" }, reactive: true }],
+      },
+      {
+        slug: "ai-instant-call",
+        stepTransitions: [{ legKey: "form_submitted_to_meeting_booked", from: { key: "form_submitted" }, to: { key: "meeting_booked" }, reactive: true }],
+      },
+      {
+        slug: "sales-cold-email-outreach",
+        stepTransitions: [{ legKey: "lead_found_to_conversation", from: { key: "lead_found" }, to: { key: "conversation" }, reactive: false }],
+      },
+    ])
+  );
+
+  it("reads the published `to` step as the leg's outcome", () => {
+    expect(terms.termsFor("email-sending", "start_to_email_sent")?.outcome).toBe("email_sent");
+  });
+
+  it("a leg ending on email_sent is measured by one instantly email-send-step-1 run, with no channel entry", () => {
+    expect(REACTIVE_ITEM_TASKS["email-sending"]).toBeUndefined();
+    expect(itemTaskOf({ channelSlug: "email-sending", legKey: "start_to_email_sent" }, REACTIVE_ITEM_TASKS, terms)).toEqual({
+      serviceName: "instantly-service",
+      taskName: "email-send-step-1",
+    });
+  });
+
+  it("a channel entry wins over its leg's outcome (cold email's first contact is not its reply)", () => {
+    expect(itemTaskOf({ channelSlug: "sales-cold-email-outreach", legKey: "lead_found_to_conversation" }, ITEM_TASKS, terms)).toBe(
+      ITEM_TASKS["sales-cold-email-outreach"]
+    );
+    expect(itemTaskOf({ channelSlug: "ai-meeting-booking", legKey: "conversation_to_meeting_booked" }, REACTIVE_ITEM_TASKS, null)).toBe(
+      REACTIVE_ITEM_TASKS["ai-meeting-booking"]
+    );
+  });
+
+  it("no measure (null, never a guess): an outcome no run is declared for, a leg the catalogue does not carry, no catalogue", () => {
+    expect(itemTaskOf({ channelSlug: "ai-instant-call", legKey: "form_submitted_to_meeting_booked" }, REACTIVE_ITEM_TASKS, terms)).toBeNull();
+    expect(itemTaskOf({ channelSlug: "google-ads", legKey: "start_to_website_visit" }, ITEM_TASKS, terms)).toBeNull();
+    expect(itemTaskOf({ channelSlug: "email-sending", legKey: "start_to_email_sent" }, REACTIVE_ITEM_TASKS, null)).toBeNull();
   });
 });
