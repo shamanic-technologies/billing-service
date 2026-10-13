@@ -45,6 +45,9 @@ const CAMPAIGN_SOURCE_OTHER_OFFER = "11111111-0000-4000-8000-000000000009";
 // source pipe (the 2026-10-13 Doc Dinners shape): its spend is never Victory's.
 const SIBLING_FUNNEL =
   "start_to_lead_found@sourcing-apollo-cold-filters+lead_found_to_conversation@sales-cold-email-outreach+conversation_to_paid_client";
+// A funnel naming a PLAY (pipe x strategy): `~<strategy id>` after the pipe (2026-10-13).
+const PLAY_FUNNEL =
+  "start_to_lead_found@lead-sourcing+lead_found_to_conversation@sales-cold-email-outreach~valid-catch-all+conversation_to_paid_client";
 const NEW_FUNNEL =
   "start_to_lead_found@sourcing-linkedin-engagement-signals+lead_found_to_conversation@sales-cold-email-outreach+conversation_to_paid_client";
 const CAMPAIGN_SIBLING_SOURCE = "11111111-0000-4000-8000-00000000000a";
@@ -99,6 +102,18 @@ const funnelDetail = (id: string) =>
                 legKey: "start_to_lead_found",
                 pipe: { id: `${id === SIBLING_FUNNEL ? APOLLO : SIGNALS}|start_to_lead_found`, mode: "proactive" },
               },
+              { legKey: "lead_found_to_conversation", pipe: { id: `${COLD}|lead_found_to_conversation`, mode: "proactive" } },
+              { legKey: "conversation_to_paid_client", pipe: null },
+            ],
+          }
+      : id === PLAY_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: "Catalyze",
+            type: "proactive",
+            legs: [
+              { legKey: "start_to_lead_found", pipe: { id: "lead-sourcing|start_to_lead_found", mode: "proactive" } },
               { legKey: "lead_found_to_conversation", pipe: { id: `${COLD}|lead_found_to_conversation`, mode: "proactive" } },
               { legKey: "conversation_to_paid_client", pipe: null },
             ],
@@ -510,6 +525,20 @@ describe("sales funnel caps", () => {
       ["1000.0000000000", "daily", userId],
       [null, null, userId],
     ]);
+  });
+
+  it("a funnel naming a PLAY (`~<strategy>` in its id) is set, read and cleared like any other", async () => {
+    mockUpstreams();
+    const set = await put({ maxBudget: { amountCents: 100, period: "daily" }, maxVolume: null }, PLAY_FUNNEL);
+    expect(set.status).toBe(200);
+    const read = await request(app).get(`/internal${capsPath(PLAY_FUNNEL)}`).set(internal(orgId));
+    expect(read.status).toBe(200);
+    expect(read.body.salesFunnelId).toBe(PLAY_FUNNEL);
+    expect(read.body.maxBudget.amountCents).toBe("100.0000000000");
+    const del = await request(app).delete(`/v1${capsPath(PLAY_FUNNEL)}`).set(auth);
+    expect(del.status).toBe(200);
+    expect(del.body.stated).toBe(false);
+    expect(await db.select().from(salesFunnelCaps)).toHaveLength(0);
   });
 
   it("a funnel features-service does not know is refused (404), an unreadable catalogue is 502; nothing stored", async () => {
