@@ -46,10 +46,14 @@
  *   most of those produce nothing (7 days of cold email, 2026-10-10: 1,792
  *   completed campaign runs vs 720 first emails; one campaign 839 vs 39).
  *
- * A campaign belongs to a pipe when campaign-service states it for this brand,
- * this offer, the pipe's channel and the pipe's leg (`sameLeg`). A pipe shared
- * by two funnels of one offer counts its spend in both, and so does a source
- * feeding two funnels: a cap can only stop EARLIER because of it, never later.
+ * A cap counts ONLY the UNITS of the funnel campaigns held to it (campaign-service
+ * `/sales-funnel-campaigns`): a campaign's own cap its units, the funnel-wide cap
+ * the units of every campaign of this funnel stating no cap of its own. Every
+ * campaign runs INDEPENDENTLY (owner 2026-10-11/12): two funnels sharing cold
+ * email on one offer never read each other's spend (2026-10-13, Doc Dinners: two
+ * new $20/day funnels read Perky's $23 as theirs and were refused every spend).
+ * A non-unit (legacy) campaign belongs to no cap. A feeding SOURCE is a non-unit
+ * source campaign, and only for a funnel with no source pipe of its own.
  *
  * TYPE: `salesFunnelType` is features-service's served `type`, RELAYED (never
  * derived here); null + `salesFunnelTypeUnavailableReason` when not served or
@@ -60,7 +64,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   salesFunnelCapChanges,
@@ -72,7 +76,14 @@ import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { calendarMonthOf } from "./campaign-items.js";
 import { sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
-import { brandFunnelDailyCentsVia, fetchSalesFunnelCampaigns, fundingOf, type FundedBy } from "./funnel-campaigns.js";
+import {
+  brandFunnelDailyCentsVia,
+  fetchSalesFunnelCampaigns,
+  fundingOf,
+  unitIdsOf,
+  type FundedBy,
+  type SalesFunnelCampaign,
+} from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import {
   billingAccounts,
@@ -583,24 +594,25 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   if (!statuses.ok) {
     return { ok: false, reason: statuses.reason, detail: "campaign-service recurring-status unreadable", funnel };
   }
-  const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
-  const sources = await feedingSources(funnel, ofOffer);
-  // ONE funnel campaign's cap counts that campaign's UNITS only (its pipes'
-  // campaigns), never a sibling funnel campaign's on the same pipe.
-  let onPipe: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }> = ofOffer;
+  const fcs = await fetchSalesFunnelCampaigns(k.orgId);
+  if (!fcs.ok) {
+    return { ok: false, reason: fcs.reason, detail: "campaign-service sales-funnel-campaigns unreadable", funnel };
+  }
+  // A cap counts ONLY the units of the funnel campaigns HELD to it (owner
+  // 2026-10-11/12: every campaign runs independently). A campaign's own cap holds
+  // that campaign; the funnel-wide cap holds every campaign of this funnel stating
+  // no cap of its own. Never another funnel's unit sharing a channel on this offer
+  // (2026-10-13, Doc Dinners: two new funnels read Perky's $23 and were blocked).
+  const ofFunnel = fcs.campaigns.filter(
+    (c) =>
+      c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
+      c.offerId.toLowerCase() === k.offerId.toLowerCase() &&
+      c.salesFunnelId === k.salesFunnelId
+  );
+  let held: SalesFunnelCampaign[];
   if (k.salesFunnelCampaignId) {
-    const fcs = await fetchSalesFunnelCampaigns(k.orgId);
-    if (!fcs.ok) {
-      return { ok: false, reason: fcs.reason, detail: "campaign-service sales-funnel-campaigns unreadable", funnel };
-    }
-    const fc = fcs.campaigns.find(
-      (c) =>
-        c.id === k.salesFunnelCampaignId &&
-        c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
-        c.offerId.toLowerCase() === k.offerId.toLowerCase() &&
-        c.salesFunnelId === k.salesFunnelId
-    );
-    if (!fc) {
+    held = ofFunnel.filter((c) => c.id === k.salesFunnelCampaignId);
+    if (held.length === 0) {
       return {
         ok: false,
         reason: "sales_funnel_campaign_not_found",
@@ -608,8 +620,28 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
         funnel,
       };
     }
-    onPipe = fc.units;
+  } else {
+    const ownCaps = new Set(
+      (
+        await db
+          .select({ id: salesFunnelCaps.salesFunnelCampaignId })
+          .from(salesFunnelCaps)
+          .where(
+            and(
+              eq(salesFunnelCaps.orgId, k.orgId),
+              eq(salesFunnelCaps.brandId, k.brandId),
+              eq(salesFunnelCaps.offerId, k.offerId),
+              eq(salesFunnelCaps.salesFunnelId, k.salesFunnelId),
+              isNotNull(salesFunnelCaps.salesFunnelCampaignId)
+            )
+          )
+      ).map((r) => r.id!)
+    );
+    held = ofFunnel.filter((c) => !ownCaps.has(c.id));
   }
+  const onPipe = held.flatMap((c) => c.units);
+  const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
+  const sources = await feedingSources(funnel, ofOffer, unitIdsOf(fcs.campaigns));
   const pipes = funnel.pipes.map((p) => ({
     ...p,
     campaignIds: onPipe
@@ -630,7 +662,8 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
  */
 async function feedingSources(
   funnel: SalesFunnel,
-  ofOffer: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }>
+  ofOffer: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }>,
+  funnelUnitIds: Set<string>
 ): Promise<SourcesAnswer> {
   let terms: SalesPathTerms;
   try {
@@ -639,6 +672,9 @@ async function feedingSources(
     console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
     return { ok: false, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
   }
+  // A funnel with its OWN source pipe buys its leads there (a unit of its campaign,
+  // already counted): no other source feeds it.
+  if (funnel.pipes.some((p) => terms.isSourceItem(p.channelSlug, p.legKey))) return { ok: true, sources: [] };
   const byOrigin = new Map<string, MeasuredSource>();
   for (const p of funnel.pipes) {
     for (const origin of terms.originsFeeding(p.channelSlug)) {
@@ -648,7 +684,13 @@ async function feedingSources(
     }
   }
   for (const src of byOrigin.values()) {
-    const campaigns = ofOffer.filter((c) => c.featureSlug === src.channelSlug && terms.isSourceItem(src.channelSlug, c.legKey));
+    // A unit of a funnel campaign belongs to that campaign alone, never a shared source.
+    const campaigns = ofOffer.filter(
+      (c) =>
+        c.featureSlug === src.channelSlug &&
+        terms.isSourceItem(src.channelSlug, c.legKey) &&
+        !funnelUnitIds.has(c.campaignId)
+    );
     src.campaignIds = campaigns.map((c) => c.campaignId).sort();
     src.legKey = campaigns[0]?.legKey ?? "start_to_lead_found";
   }
@@ -1079,7 +1121,7 @@ export interface SalesFunnelCampaignCapsView extends SalesFunnelCapsView {
   /**
    * `sales_funnel_campaign` = this campaign's own cap, consumption counted on its
    * units only; `sales_funnel` = it states none, so it is held to the funnel-wide
-   * cap (consumption over every campaign on the funnel's pipes, as on the funnel
+   * cap (consumption over the units of every campaign of this funnel stating no cap of its own, as on the funnel
    * read). Nothing stated anywhere = `sales_funnel` with `stated: false`.
    */
   capScope: CapScope;
