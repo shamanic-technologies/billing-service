@@ -49,6 +49,7 @@ import { computeSettleCharge } from "./month-end-sweep.js";
 import { chargeOrgOnDemand, OnDemandChargeError } from "./on-demand-charge.js";
 import { tierFor } from "./topup-tier.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
+import { getCardFacts, type PostpaidCardRefusal } from "./card-facts.js";
 
 export { PAYMENT_MODES, isPaymentMode, asPaymentMode } from "./payment-mode-types.js";
 export type { PaymentMode } from "./payment-mode-types.js";
@@ -68,16 +69,30 @@ export type PaymentModeRefusalCode =
    * is staff's (or starting a subscription); the customer cancels the subscription
    * instead.
    */
-  | "subscription_mode_staff_only";
+  | "subscription_mode_staff_only"
+  /**
+   * POSTPAID asked with a saved card that cannot carry a credit line: a PREPAID
+   * card, or one issued where off-session charges are not allowed (India). The
+   * dashboard asks the customer to switch to prepaid or change card (owner
+   * 2026-10-13, no "continue anyway"). `card_refused_reason` says which.
+   */
+  | "postpaid_card_not_allowed";
 
 export class PaymentModeSwitchRefused extends Error {
   readonly code: PaymentModeRefusalCode;
   readonly owedCents: string;
-  constructor(code: PaymentModeRefusalCode, owedCents: string, message: string) {
+  readonly cardRefusedReason: PostpaidCardRefusal | null;
+  constructor(
+    code: PaymentModeRefusalCode,
+    owedCents: string,
+    message: string,
+    cardRefusedReason: PostpaidCardRefusal | null = null
+  ) {
     super(message);
     this.name = "PaymentModeSwitchRefused";
     this.code = code;
     this.owedCents = owedCents;
+    this.cardRefusedReason = cardRefusedReason;
   }
 }
 
@@ -191,12 +206,46 @@ export async function setPaymentMode(
   if (!account) throw new PaymentModeAccountNotFound(orgId);
 
   const current = asPaymentMode(account.paymentMode);
+
+  // POSTPAID is the Google-Ads credit line (owner 2026-10-13): the card on file is
+  // charged off-session as spend crosses $50 → $200 → $500, and the rest at month
+  // end. A card that cannot carry that line (prepaid, or issued in India) is refused
+  // here, and choosing postpaid WITH a chargeable card arms the ladder (the stored
+  // columns are only the enabled flag; lib/topup-tier derives the line). Asked
+  // again on an org that is already postpaid (the postpaid signup arm: card saved,
+  // nothing charged), it arms the line it does not have yet.
+  let armPostpaidLine = false;
+  if (target === "postpaid" && current !== "subscription") {
+    const facts = await getCardFacts(orgId);
+    if (!facts.postpaidAllowed) {
+      throw new PaymentModeSwitchRefused(
+        "postpaid_card_not_allowed",
+        "0",
+        facts.postpaidRefusedReason === "prepaid_card"
+          ? "This card is a prepaid card, so it cannot be billed after spend. Switch to prepaid, or use a debit or credit card."
+          : "Cards issued in this country cannot be charged automatically, so this card cannot be billed after spend. Switch to prepaid, or use another card.",
+        facts.postpaidRefusedReason
+      );
+    }
+    armPostpaidLine = facts.saved && account.topupAmountCents == null;
+  }
+
   if (current === target) {
+    if (armPostpaidLine) {
+      await db
+        .update(billingAccounts)
+        .set({ topupAmountCents: tierFor("0").amountCents, topupThresholdCents: 0, updatedAt: new Date() })
+        .where(eq(billingAccounts.orgId, orgId));
+      console.log(`[billing-service] payment mode: org ${orgId} postpaid credit line armed`);
+      if (actor === "customer") {
+        notifyOwnerBillingEvent({ orgId, emoji: "💳", text: "Postpaid: card saved, credit line on (charged as spend crosses $50)" });
+      }
+    }
     return {
       orgId,
       paymentMode: current,
       settledCents: "0",
-      autoTopupEnabled: account.topupAmountCents != null,
+      autoTopupEnabled: account.topupAmountCents != null || armPostpaidLine,
     };
   }
 
@@ -267,6 +316,11 @@ export async function setPaymentMode(
       patch.topupAmountCents = match ? MATCH_MIN_TOPUP_CENTS : tierFor("0").amountCents;
       patch.topupThresholdCents = match ? MATCH_MIN_RELOAD_THRESHOLD_CENTS : 0;
     }
+  }
+
+  if (armPostpaidLine) {
+    patch.topupAmountCents = tierFor("0").amountCents;
+    patch.topupThresholdCents = 0;
   }
 
   const [updated] = await db

@@ -539,6 +539,18 @@
               "saved_for": {
                 "type": "string",
                 "nullable": true
+              },
+              "funding": {
+                "type": "string",
+                "nullable": true
+              },
+              "prepaid": {
+                "type": "boolean",
+                "nullable": true
+              },
+              "country": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -549,6 +561,29 @@
           },
           "reason": {
             "type": "string"
+          },
+          "card_prepaid": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "The saved card is prepaid (true/false as the acquirer states it); null = not stated or no card."
+          },
+          "card_country": {
+            "type": "string",
+            "nullable": true,
+            "description": "ISO-3166-1 alpha-2 issuing country of the saved card, both acquirers; null = not stated or no card."
+          },
+          "postpaid_allowed": {
+            "type": "boolean",
+            "description": "May this org be POSTPAID with this card? false for a prepaid card or one issued in India (off-session charges not allowed). true when no card is saved."
+          },
+          "postpaid_refused_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "prepaid_card",
+              "card_issuing_country_unsupported"
+            ],
+            "description": "Why postpaid_allowed is false: the dashboard asks the customer to switch to prepaid or change card."
           }
         },
         "required": [
@@ -556,7 +591,11 @@
           "org_id",
           "acquirer",
           "saved",
-          "method"
+          "method",
+          "card_prepaid",
+          "card_country",
+          "postpaid_allowed",
+          "postpaid_refused_reason"
         ]
       },
       "RemoveSavedPaymentMethodResponse": {
@@ -2031,11 +2070,19 @@
               "outstanding_balance_charge_declined",
               "outstanding_balance_below_minimum_charge",
               "outstanding_balance_monthly_limit",
-              "subscription_mode_staff_only"
+              "subscription_mode_staff_only",
+              "postpaid_card_not_allowed"
             ]
           },
           "owed_cents": {
             "type": "string"
+          },
+          "card_refused_reason": {
+            "type": "string",
+            "enum": [
+              "prepaid_card",
+              "card_issuing_country_unsupported"
+            ]
           }
         },
         "required": [
@@ -5720,6 +5767,122 @@
         "required": [
           "monthly_charge_limit_cents"
         ]
+      },
+      "AbsorbedCostsResponse": {
+        "type": "object",
+        "properties": {
+          "basis": {
+            "type": "object",
+            "properties": {
+              "ruleSince": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ruleSince"
+            ]
+          },
+          "firstMonth": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastMonth": {
+            "type": "string",
+            "nullable": true
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fleet": {
+            "type": "object",
+            "properties": {
+              "absorbedCents": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "absorbedCents"
+            ]
+          },
+          "fleetByMonth": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "month"
+              ]
+            }
+          },
+          "distribution": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "customers": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "label",
+                "customers"
+              ]
+            }
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "orgId": {
+                  "type": "string"
+                },
+                "absorbedCents": {
+                  "type": "string"
+                },
+                "byMonth": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "month": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "month"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "orgId",
+                "absorbedCents",
+                "byMonth"
+              ]
+            }
+          }
+        },
+        "required": [
+          "basis",
+          "firstMonth",
+          "lastMonth",
+          "months",
+          "fleet",
+          "fleetByMonth",
+          "distribution",
+          "customers"
+        ]
       }
     },
     "parameters": {}
@@ -9198,7 +9361,7 @@
       },
       "put": {
         "summary": "Choose how this org pays (prepaid | postpaid)",
-        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). POSTPAID (also when already postpaid, the onboarding postpaid arm) with a saved chargeable card arms the credit line ($50 -> $200 -> $500 ladder), charging nothing; a prepaid or India-issued card is refused 409 postpaid_card_not_allowed with card_refused_reason.",
         "parameters": [
           {
             "schema": {
@@ -9313,7 +9476,7 @@
             }
           },
           "409": {
-            "description": "Switch to prepaid refused: the outstanding balance could not be settled",
+            "description": "Switch refused: the outstanding balance could not be settled (to prepaid), or the saved card cannot be postpaid",
             "content": {
               "application/json": {
                 "schema": {
@@ -9453,7 +9616,7 @@
             }
           },
           "409": {
-            "description": "Switch to prepaid refused: the outstanding balance could not be settled",
+            "description": "Switch refused: the outstanding balance could not be settled (to prepaid), or the saved card cannot be postpaid",
             "content": {
               "application/json": {
                 "schema": {
@@ -16932,6 +17095,52 @@
           },
           "400": {
             "description": "Invalid orgId",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/absorbed-costs": {
+      "get": {
+        "summary": "Cost the platform absorbs (spend with no campaign + card fees), per customer and per month since inception",
+        "description": "Staff Monitoring read. Absorbed = runs-service spend with no campaign (acquiring-fee cost names excluded) + card-acquiring fees from stripe-service (USD; another currency served apart in cardFeesOtherCurrencies, never converted). Before basis.ruleSince the figures are what WOULD have been absorbed under the rule. Serves per-customer totals and months, fleet per month (total, average per customer, since-inception average), a distribution of customers by absorbed cost, and paying vs never-paid (paying null = cash unreadable). Platform orgs are listed with platformOrg: true and kept out of every fleet figure. Cached 5 minutes; ?fresh=true recomputes. x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "fresh",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Absorbed costs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AbsorbedCostsResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "runs-service or stripe-service could not be read",
             "content": {
               "application/json": {
                 "schema": {

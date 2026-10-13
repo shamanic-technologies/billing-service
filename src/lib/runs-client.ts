@@ -321,3 +321,91 @@ export async function fetchRunsBrandTransferMoved(
   }
   return { usageNetCents: body.projectedNetCents, actualNetCents: body.actualNetCents };
 }
+
+/** The part of an org's two platform totals that belongs to NO campaign, from `since` on. */
+export interface RunsOrgNoCampaignTotal {
+  /** No-campaign part of `fetchRunsOrgUsageTotal` (net, actual + provisioned). */
+  usageNetCents: string;
+  /** No-campaign part of `fetchRunsOrgActualUsageTotal` (net, actualized). */
+  actualNetCents: string;
+}
+
+interface RunsOrgNoCampaignTotalResponse {
+  org_id: string;
+  since: string;
+  spent_cents: string;
+  net_spent_cents: string;
+  total_expected_cents: string;
+  net_total_expected_cents: string;
+  as_of: string;
+}
+
+/**
+ * runs-service `GET /internal/org-no-campaign-total?org_id&since`: the org's platform
+ * spend whose run carries NO campaign (a cost row is campaign spend iff its run
+ * carries a campaign_id), cost rows created at or after `since` only. Same
+ * predicates as the two totals it splits, so total − this = the campaign part.
+ * Fail-loud: a missing net field or any non-2xx (runs answers 500 while a row in
+ * the window has an unknown campaign status) throws, never reads as zero.
+ */
+export async function fetchRunsOrgNoCampaignTotal(
+  orgId: string,
+  sinceIso: string,
+  wfHeaders: Record<string, string>
+): Promise<RunsOrgNoCampaignTotal> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
+  const res = await fetchWithRetry(
+    `${config.url}/internal/org-no-campaign-total?org_id=${encodeURIComponent(orgId)}&since=${encodeURIComponent(sinceIso)}`,
+    { headers: { "x-api-key": config.apiKey, ...wfHeaders } }
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`runs-service org-no-campaign-total failed for org ${orgId}: ${res.status} ${body}`);
+  }
+  const body = (await res.json()) as RunsOrgNoCampaignTotalResponse;
+  if (body.net_spent_cents == null || body.net_total_expected_cents == null) {
+    throw new Error(`runs-service org-no-campaign-total missing a net field for org ${orgId}`);
+  }
+  return { usageNetCents: body.net_spent_cents, actualNetCents: body.net_total_expected_cents };
+}
+
+export interface RunsNoCampaignOrgMonth {
+  orgId: string;
+  month: string;
+  noCampaignCostInUsdCents: string;
+  netNoCampaignCostInUsdCents: string;
+  campaignCostInUsdCents: string;
+  netCampaignCostInUsdCents: string;
+  unknownCostInUsdCents: string;
+  netUnknownCostInUsdCents: string;
+  noCampaignByCostName: Array<{ costName: string; noCampaignCostInUsdCents: string; netNoCampaignCostInUsdCents: string }>;
+}
+
+export interface RunsNoCampaignMonthly {
+  months: Array<{ month: string; netNoCampaignCostInUsdCents: string; netCampaignCostInUsdCents: string; netUnknownCostInUsdCents: string }>;
+  orgs: RunsNoCampaignOrgMonth[];
+}
+
+/** runs-service `GET /internal/stats/costs/no-campaign/monthly`: per org per UTC month since the first cost row. */
+export async function fetchRunsNoCampaignMonthly(): Promise<RunsNoCampaignMonthly> {
+  const config = getRunsServiceConfig();
+  if (!config) {
+    throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
+  }
+  const res = await fetchWithRetry(`${config.url}/internal/stats/costs/no-campaign/monthly`, {
+    headers: { "x-api-key": config.apiKey },
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`runs-service no-campaign monthly failed: ${res.status} ${body.slice(0, 300)}`);
+  }
+  const body = (await res.json()) as RunsNoCampaignMonthly;
+  if (!Array.isArray(body.orgs) || !Array.isArray(body.months)) {
+    throw new Error("runs-service no-campaign monthly answered an unusable shape");
+  }
+  return body;
+}

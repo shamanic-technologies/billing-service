@@ -223,6 +223,9 @@ export async function fetchRealizedDailyBurn(
     interval: "day",
     orgId,
     startedAfter: burnWindowStart(now, windowDays),
+    // Campaign spend only: spend with no campaign is the platform's
+    // (lib/platform-absorbed), it never brings a charge closer.
+    hasCampaign: "true",
   });
 
   // The slot is held until the BODY is read, and the timeout clock starts only

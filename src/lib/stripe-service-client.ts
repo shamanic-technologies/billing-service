@@ -1260,3 +1260,49 @@ export async function authorizeRecurringCharges(
   const text = await res.text();
   throw new Error(`stripe-service POST ${path} failed: ${res.status} ${text}`);
 }
+
+/** One org-month of card-acquiring fees in ONE currency (orgId null = no org resolvable). */
+export interface AcquiringFeeMonth {
+  orgId: string | null;
+  month: string;
+  /** Lowercase ISO currency, as stripe-service states it ("usd", "eur"). Never merged. */
+  currency: string;
+  feeCents: string;
+}
+
+interface AcquiringFeeMonthWire {
+  month: string;
+  currency: string;
+  stripe_fee_cents: number | string;
+  revolut_fee_cents: number | string;
+  fee_cents: number | string;
+}
+
+interface AcquiringFeesByMonthResponse {
+  object: "acquiring_fees_by_month";
+  orgs: Array<{ org_id: string; months: AcquiringFeeMonthWire[] }>;
+  unattributed: { months: AcquiringFeeMonthWire[] };
+}
+
+/**
+ * stripe-service `GET /internal/acquiring_fees/monthly` (v0.58.2): card-acquiring fees
+ * (Stripe + Revolut) per org per UTC month the acquirer took them, since inception.
+ * Currencies are NEVER merged (the Stripe account settled in EUR until 2026-08-13).
+ * X-API-Key only. Fail-loud on any non-2xx or an unusable shape.
+ */
+export async function fetchAcquiringFeesByOrgMonth(): Promise<AcquiringFeeMonth[]> {
+  const body = await call<AcquiringFeesByMonthResponse>("GET", "/internal/acquiring_fees/monthly", {});
+  if (body?.object !== "acquiring_fees_by_month" || !Array.isArray(body.orgs) || !Array.isArray(body.unattributed?.months)) {
+    throw new Error("[billing-service] stripe-service acquiring fees answered an unusable shape");
+  }
+  const row = (orgId: string | null, m: AcquiringFeeMonthWire): AcquiringFeeMonth => {
+    if (typeof m.currency !== "string" || m.fee_cents == null) {
+      throw new Error(`[billing-service] stripe-service acquiring fee month without currency/fee for org ${orgId}`);
+    }
+    return { orgId, month: m.month, currency: m.currency.toLowerCase(), feeCents: String(m.fee_cents) };
+  };
+  return [
+    ...body.orgs.flatMap((o) => o.months.map((m) => row(o.org_id, m))),
+    ...body.unattributed.months.map((m) => row(null, m)),
+  ];
+}
