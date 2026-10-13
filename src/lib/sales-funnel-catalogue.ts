@@ -36,6 +36,13 @@ export interface SalesFunnelPipe {
   /** The play's strategy when the funnel names a non-default play on this pipe; null = the default play. */
   strategyId: string | null;
   mode: PipeMode;
+  /**
+   * The step this pipe's leg PRODUCES (the detail's `legs[].toStep`: `email_sent`,
+   * `meeting_booked`); null when not served. The caps measure a volume by it
+   * (lib/sales-funnel-caps `itemTaskOf`). Read off the funnel itself, so a leg the
+   * channel catalogue no longer publishes still carries it.
+   */
+  toStep: string | null;
 }
 
 /**
@@ -52,6 +59,11 @@ export interface SalesFunnel {
   /** features-service's served type; null = not served (never computed here). */
   type: SalesFunnelType | null;
   pipes: SalesFunnelPipe[];
+  /**
+   * The trigger a REACTIVE funnel fires on (the detail's `trigger.slug`:
+   * `email_pushed_via_api`, `positive_reply_received`); null when not served.
+   */
+  triggerSlug: string | null;
 }
 
 export class SalesFunnelNotFoundError extends Error {
@@ -82,14 +94,14 @@ export function __resetSalesFunnelCache(): void {
 
 /** PURE: the funnel out of features-service's detail body. Throws on a malformed one. */
 export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
-  const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown };
+  const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown; trigger?: { slug?: unknown } | null };
   if (!b || typeof b !== "object" || !Array.isArray(b.legs)) {
     throw new SalesFunnelCatalogueUnavailableError(
       `features-service sales funnel ${id} carried no legs array`
     );
   }
   const pipes: SalesFunnelPipe[] = [];
-  for (const leg of b.legs as Array<{ pipe?: unknown }>) {
+  for (const leg of b.legs as Array<{ pipe?: unknown; toStep?: unknown }>) {
     const pipe = leg?.pipe as { id?: unknown; mode?: unknown } | null | undefined;
     if (pipe == null) continue;
     const pipeId = typeof pipe.id === "string" ? pipe.id : null;
@@ -118,10 +130,12 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
       legKey,
       strategyId: tilde < 0 ? null : legPart.slice(tilde + 1) || null,
       mode: pipe.mode,
+      toStep: typeof leg.toStep === "string" && leg.toStep.trim() ? leg.toStep.trim() : null,
     });
   }
   const type = b.type === "proactive" || b.type === "reactive" ? b.type : null;
-  return { id, name: typeof b.name === "string" ? b.name : null, type, pipes };
+  const trigger = typeof b.trigger?.slug === "string" && b.trigger.slug.trim() ? b.trigger.slug.trim() : null;
+  return { id, name: typeof b.name === "string" ? b.name : null, type, pipes, triggerSlug: trigger };
 }
 
 /** One sales funnel and its pipes, from features-service (cached a few minutes). */
