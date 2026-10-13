@@ -15,6 +15,7 @@ import { configuredReloadFor } from "../lib/free-credit-offer.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
+import { isPlatformAbsorbedSpend } from "../lib/platform-absorbed.js";
 import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
@@ -114,6 +115,20 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       console.error("[billing-service] Failed to compute balance:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
       res.status(502).json({ error: "Failed to compute balance" });
+      return;
+    }
+
+    // Spend with no campaign (Copilot chat, onboarding, A/B work) is the
+    // platform's cost (lib/platform-absorbed): always sufficient, never a reload,
+    // never a depletion episode, whatever the balance. It is still declared to
+    // runs-service and stays in the cost records; the balance never subtracts it.
+    if (isPlatformAbsorbedSpend(wf)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "platform_absorbed_no_campaign", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+      res.json({
+        sufficient: true,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
       return;
     }
 

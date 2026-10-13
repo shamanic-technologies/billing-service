@@ -110,7 +110,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(anonOrg, userId))
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -130,7 +130,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(anonOrg, userId))
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send(authorizeBody);
 
     // The normal insufficient-credit outcome — NOT a 502, and no reload: a
@@ -149,7 +149,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(anonOrg, userId))
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -221,7 +221,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(anonOrg, userId))
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(502);

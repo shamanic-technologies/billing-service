@@ -269,9 +269,11 @@ describe("We match your first $100", () => {
         configuredReload: configured,
       })
     ).toEqual({ tier: { thresholdCents: 700, amountCents: 15000 }, thresholdCents: "700" });
+    // POSTPAID is the Google-Ads ladder alone (owner 2026-10-13): a stored prepaid
+    // reload never binds it.
     expect(reloadTierFor("0", "postpaid", configured)).toEqual({
       thresholdCents: -5000,
-      amountCents: 15000,
+      amountCents: 5000,
     });
     // Without a configured reload (every legacy org): byte-identical ladder.
     expect(reloadTierFor("0", "prepaid")).toEqual({ thresholdCents: 0, amountCents: 5000 });

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { getAbsorbedCosts } from "../lib/absorbed-costs.js";
 import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -954,6 +955,19 @@ router.get("/internal/revenue/by-org/:orgId", async (req, res) => {
 // rows shown; unknown rows listed beside, never counted as 0), the 30/90-day
 // projections and the cash flow bucketed by day and by ISO week. Org-less:
 // x-api-key only. The horizon is at least 90 so the 90-day window is complete.
+// GET /internal/absorbed-costs — staff "Monitoring": the cost the platform absorbs
+// (spend with no campaign + card-acquiring fees), per customer and per month since
+// inception, with every statistic the page draws (lib/absorbed-costs). x-api-key
+// only (the gateway gates it to staff). `?fresh=true` skips the 5-minute cache.
+router.get("/internal/absorbed-costs", async (req, res) => {
+  try {
+    res.json(await getAbsorbedCosts(new Date(), req.query.fresh === "true"));
+  } catch (err) {
+    console.error("[billing-service] absorbed costs read failed:", err);
+    res.status(502).json({ error: "Failed to read the absorbed costs" });
+  }
+});
+
 router.get("/internal/revenue/fleet", async (req, res) => {
   const horizon = parseCashHorizon(req.query.cashHorizonDays, 90);
   if (typeof horizon === "string") {

@@ -561,9 +561,28 @@ export const SavedPaymentMethodResponseSchema = z
         id: z.string(),
         type: z.string(),
         saved_for: z.string().nullable(),
+        funding: z.string().nullable().optional(),
+        prepaid: z.boolean().nullable().optional(),
+        country: z.string().nullable().optional(),
       })
+      .passthrough()
       .nullable(),
     reason: z.string().optional(),
+    card_prepaid: z
+      .boolean()
+      .nullable()
+      .describe("The saved card is prepaid (true/false as the acquirer states it); null = not stated or no card."),
+    card_country: z
+      .string()
+      .nullable()
+      .describe("ISO-3166-1 alpha-2 issuing country of the saved card, both acquirers; null = not stated or no card."),
+    postpaid_allowed: z
+      .boolean()
+      .describe("May this org be POSTPAID with this card? false for a prepaid card or one issued in India (off-session charges not allowed). true when no card is saved."),
+    postpaid_refused_reason: z
+      .enum(["prepaid_card", "card_issuing_country_unsupported"])
+      .nullable()
+      .describe("Why postpaid_allowed is false: the dashboard asks the customer to switch to prepaid or change card."),
   })
   .openapi("SavedPaymentMethodResponse");
 
@@ -1440,9 +1459,12 @@ export const PaymentModeRefusalSchema = z
       "outstanding_balance_below_minimum_charge",
       "outstanding_balance_monthly_limit",
       "subscription_mode_staff_only",
+      "postpaid_card_not_allowed",
     ]),
     /** What the org owes, positive cents. */
     owed_cents: z.string(),
+    /** On `postpaid_card_not_allowed`: why this card cannot be billed after spend. */
+    card_refused_reason: z.enum(["prepaid_card", "card_issuing_country_unsupported"]).optional(),
   })
   .openapi("PaymentModeRefusal");
 
@@ -3178,7 +3200,10 @@ registry.registerPath({
     "POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; " +
     "if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and " +
     "409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). " +
-    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required).",
+    "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). " +
+    "POSTPAID (also when already postpaid, the onboarding postpaid arm) with a saved chargeable card arms the " +
+    "credit line ($50 -> $200 -> $500 ladder), charging nothing; a prepaid or India-issued card is refused " +
+    "409 postpaid_card_not_allowed with card_refused_reason.",
   request: {
     headers: protectedHeaders,
     body: { content: { "application/json": { schema: SetPaymentModeRequestSchema } } },
@@ -3190,7 +3215,7 @@ registry.registerPath({
     },
     400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: {
-      description: "Switch to prepaid refused: the outstanding balance could not be settled",
+      description: "Switch refused: the outstanding balance could not be settled (to prepaid), or the saved card cannot be postpaid",
       content: { "application/json": { schema: PaymentModeRefusalSchema } },
     },
     502: { description: "Could not read the balance or reach the card acquirer", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -3240,7 +3265,7 @@ registry.registerPath({
     },
     400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
     409: {
-      description: "Switch to prepaid refused: the outstanding balance could not be settled",
+      description: "Switch refused: the outstanding balance could not be settled (to prepaid), or the saved card cannot be postpaid",
       content: { "application/json": { schema: PaymentModeRefusalSchema } },
     },
     502: { description: "Could not read the balance or reach the card acquirer", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -5789,5 +5814,39 @@ registry.registerPath({
   responses: {
     200: { description: "No limit", content: { "application/json": { schema: MonthlyChargeLimitResponseSchema } } },
     400: { description: "Invalid orgId", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// --- Absorbed costs (staff Monitoring, lib/absorbed-costs) ---
+
+const AbsorbedMonthSchema = z.object({ month: z.string() }).passthrough();
+export const AbsorbedCostsResponseSchema = z
+  .object({
+    basis: z.object({ ruleSince: z.string() }).passthrough(),
+    firstMonth: z.string().nullable(),
+    lastMonth: z.string().nullable(),
+    months: z.array(z.string()),
+    fleet: z.object({ absorbedCents: z.string() }).passthrough(),
+    fleetByMonth: z.array(AbsorbedMonthSchema),
+    distribution: z.array(z.object({ label: z.string(), customers: z.number() }).passthrough()),
+    customers: z.array(z.object({ orgId: z.string(), absorbedCents: z.string(), byMonth: z.array(AbsorbedMonthSchema) }).passthrough()),
+  })
+  .openapi("AbsorbedCostsResponse");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/absorbed-costs",
+  summary: "Cost the platform absorbs (spend with no campaign + card fees), per customer and per month since inception",
+  description:
+    "Staff Monitoring read. Absorbed = runs-service spend with no campaign (acquiring-fee cost names excluded) + " +
+    "card-acquiring fees from stripe-service (USD; another currency served apart in cardFeesOtherCurrencies, never " +
+    "converted). Before basis.ruleSince the figures are what WOULD have been absorbed under the rule. Serves per-customer " +
+    "totals and months, fleet per month (total, average per customer, since-inception average), a distribution of " +
+    "customers by absorbed cost, and paying vs never-paid (paying null = cash unreadable). Platform orgs are listed " +
+    "with platformOrg: true and kept out of every fleet figure. Cached 5 minutes; ?fresh=true recomputes. x-api-key only.",
+  request: { headers: internalHeaders, query: z.object({ fresh: z.string().optional() }) },
+  responses: {
+    200: { description: "Absorbed costs", content: { "application/json": { schema: AbsorbedCostsResponseSchema } } },
+    502: { description: "runs-service or stripe-service could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
