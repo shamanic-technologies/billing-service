@@ -1424,7 +1424,15 @@ export const PaymentModeSchema = z.enum(["prepaid", "postpaid", "subscription"])
 export const CustomerPaymentModeSchema = z.enum(["prepaid", "postpaid"]);
 
 export const SetPaymentModeRequestSchema = z
-  .object({ payment_mode: CustomerPaymentModeSchema })
+  .object({
+    payment_mode: CustomerPaymentModeSchema,
+    /**
+     * The terms the customer accepted on the postpaid signup wall, stored append-only
+     * BEFORE the switch (lib/payment-consents, context `payment_mode_postpaid`).
+     * Optional; absent = byte-identical behaviour. Malformed = 400.
+     */
+    consent: PaymentConsentSchema.optional(),
+  })
   .openapi("SetPaymentModeRequest");
 
 /** Staff/service: any mode, subscription included. */

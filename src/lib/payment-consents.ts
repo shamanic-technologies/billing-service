@@ -23,7 +23,9 @@ export type PaymentConsentContext =
   | "topup_checkout"
   | "subscription_checkout"
   | "subscription_start"
-  | "prepaid_checkout";
+  | "prepaid_checkout"
+  /** PUT /v1/accounts/payment_mode {postpaid}: the postpaid signup arm (card saved, nothing charged). */
+  | "payment_mode_postpaid";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
