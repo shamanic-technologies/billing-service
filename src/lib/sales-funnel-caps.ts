@@ -35,7 +35,10 @@
  *     contacts nobody first): each prospect a reactive pipe takes on once they
  *     reached its start step (a reply, a visit...). Measured per channel from
  *     the run that handles one (`REACTIVE_ITEM_TASKS`: AI meeting booking, AI
- *     Follow-up Email); another channel reads null + `volume_not_measured_on_channel`, never 0.
+ *     Follow-up Email), else by the STEP its leg produces (`STEP_ITEM_TASKS`,
+ *     `email_sent` = one email sent: Email Sending, and any channel declared as
+ *     data whose leg ends there); another channel reads null +
+ *     `volume_not_measured_on_channel`, never 0.
  * - ONE funnel CAMPAIGN may hold its own cap (`salesFunnelCampaignId`, migration
  *   0083): consumption is then counted on that campaign's units only.
  *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
@@ -155,6 +158,41 @@ export const REACTIVE_ITEM_TASKS: Readonly<Record<string, { serviceName: string;
   // ai-follow-up-email workflow).
   "ai-follow-up-email": { serviceName: "instantly-service", taskName: "email-send-step-1" },
 };
+
+type ItemTask = { serviceName: string; taskName: string; distinctParent?: true };
+
+/**
+ * The run that PRODUCES one step, on ANY channel whose leg ends on it (features-service
+ * `/public/channels` `stepTransitions[].to`, read through `getSalesPathTerms`). Keyed on the
+ * shared STEP vocabulary, not on a channel slug: a channel declared as data in
+ * features-service whose leg produces one of these steps is measured with no code here
+ * (2026-10-14, Email Sending `start_to_email_sent` read volume_not_measured_on_channel and
+ * campaign-service held every send, fail-closed).
+ *
+ * `email_sent`: one email to one person = one `instantly-service` `email-send-step-1` run on
+ * the unit campaign. Every send goes through email-gateway's broadcast send, which
+ * instantly-service records as one run per sequence step (`routes/send.ts`); a one-email
+ * send is a one-step sequence. Used for a pipe's FIRST contact (proactive) and for a
+ * prospect taken on (reactive) alike: on a leg whose outcome is an email sent, both are that
+ * email. A channel entry (`ITEM_TASKS` / `REACTIVE_ITEM_TASKS`) wins over its step: its item
+ * is not its leg's outcome (cold email's first contact is the first email, its leg ends on a
+ * reply).
+ */
+export const STEP_ITEM_TASKS: Readonly<Record<string, ItemTask>> = {
+  email_sent: { serviceName: "instantly-service", taskName: "email-send-step-1" },
+};
+
+/** PURE: the run counting one item on a pipe: its channel's own entry, else the run producing its leg's outcome. */
+export function itemTaskOf(
+  pipe: Pick<SalesFunnelPipe, "channelSlug" | "legKey">,
+  channelTasks: Readonly<Record<string, ItemTask>>,
+  terms: Pick<SalesPathTerms, "termsFor"> | null
+): ItemTask | null {
+  const own = channelTasks[pipe.channelSlug];
+  if (own) return own;
+  const outcome = terms?.termsFor(pipe.channelSlug, pipe.legKey)?.outcome ?? null;
+  return outcome ? (STEP_ITEM_TASKS[outcome] ?? null) : null;
+}
 
 export type ConsumedUnavailableReason =
   | "sales_funnel_not_found"
@@ -1030,19 +1068,27 @@ async function measureBudget(
 async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: MeasuredPipe[], now: Date): Promise<Measured<number>> {
   // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
   let proactive = pipes.filter((p) => p.mode === "proactive");
+  // The published catalogue (source legs, each leg's outcome step): read only when a pipe
+  // has no channel entry, so a funnel measured by its channels reads exactly as before.
+  let terms: SalesPathTerms | null = null;
+  const loadTerms = async (): Promise<Measured<number> | null> => {
+    if (terms) return null;
+    try {
+      terms = await getSalesPathTerms();
+      return null;
+    } catch (err) {
+      console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
+      return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
+    }
+  };
   // A SOURCE pipe (Start -> Lead found) finds leads and contacts nobody: it is never a
   // first-contact pipe. Asked only when a proactive pipe has no measure, so a funnel
   // without a source pipe reads exactly as before (2026-10-13: every funnel opening on
   // its own source read volume_not_measured_on_channel, its max volume never reached).
   if (proactive.some((p) => !ITEM_TASKS[p.channelSlug])) {
-    let terms: SalesPathTerms;
-    try {
-      terms = await getSalesPathTerms();
-    } catch (err) {
-      console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
-      return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
-    }
-    proactive = proactive.filter((p) => !terms.isSourceItem(p.channelSlug, p.legKey));
+    const failed = await loadTerms();
+    if (failed) return failed;
+    proactive = proactive.filter((p) => !terms!.isSourceItem(p.channelSlug, p.legKey));
     if (proactive.length === 0) {
       return {
         consumed: null,
@@ -1058,7 +1104,12 @@ async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: Mea
   if (counted.length === 0) {
     return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no pipe` };
   }
-  const unmeasured = counted.filter((p) => !tasks[p.channelSlug]).map((p) => p.channelSlug);
+  if (counted.some((p) => !tasks[p.channelSlug])) {
+    const failed = await loadTerms();
+    if (failed) return failed;
+  }
+  const measures = counted.map((p) => ({ pipe: p, task: itemTaskOf(p, tasks, terms) }));
+  const unmeasured = measures.filter((m) => m.task === null).map((m) => m.pipe.channelSlug);
   if (unmeasured.length > 0) {
     const what = proactive.length > 0 ? "first-contact" : "prospect-handled";
     return {
@@ -1069,9 +1120,9 @@ async function measureVolume(k: FunnelCapKey, row: SalesFunnelCapRow, pipes: Mea
   }
   const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
   // One read per item task: the campaigns of every counted pipe making it.
-  const byTask = new Map<string, { task: { serviceName: string; taskName: string; distinctParent?: true }; ids: Set<string> }>();
-  for (const p of counted) {
-    const task = tasks[p.channelSlug];
+  const byTask = new Map<string, { task: ItemTask; ids: Set<string> }>();
+  for (const { pipe: p, task: measured } of measures) {
+    const task = measured!;
     const key = `${task.serviceName}\u0000${task.taskName}`;
     const entry = byTask.get(key) ?? { task, ids: new Set<string>() };
     p.campaignIds.forEach((id) => entry.ids.add(id));

@@ -5426,7 +5426,9 @@ const VolumeCapViewSchema = z
       "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: " +
       "the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes " +
       "reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called " +
-      "the LLM; AI Follow-up Email: each email sent to one person). A channel with no measure yet answers null + " +
+      "the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a " +
+      "declared run (email_sent: one email sent, e.g. Email Sending) is measured by that run, no per-channel entry. " +
+      "A channel with no measure yet answers null + " +
       "volume_not_measured_on_channel. unit null = the funnel is unreadable.",
   });
 
