@@ -254,7 +254,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(orgId, userId))
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send({ items: [{ costName: "x", quantity: 1 }] });
 
     expect(res.status).toBe(200);

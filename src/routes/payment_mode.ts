@@ -45,7 +45,12 @@ async function applySwitch(
     });
   } catch (err) {
     if (err instanceof PaymentModeSwitchRefused) {
-      res.status(409).json({ error: err.message, code: err.code, owed_cents: err.owedCents });
+      res.status(409).json({
+        error: err.message,
+        code: err.code,
+        owed_cents: err.owedCents,
+        ...(err.cardRefusedReason ? { card_refused_reason: err.cardRefusedReason } : {}),
+      });
       return;
     }
     if (err instanceof PaymentModeAccountNotFound) {

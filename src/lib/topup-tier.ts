@@ -115,19 +115,16 @@ export function reloadTierFor(
     throw new Error("[billing-service] a subscription org has no reload tier");
   }
   const ladder = tierFor(paidTopupsCents);
-  if (configuredReload) {
-    // A match_100 org's own configuration binds (minimums already applied): prepaid
-    // reloads its amount when the balance would fall below its POSITIVE threshold;
-    // postpaid keeps the ladder's credit line but never reloads less than its amount.
-    return paymentMode === "prepaid"
-      ? {
-          thresholdCents: configuredReload.thresholdCents,
-          amountCents: configuredReload.amountCents,
-        }
-      : {
-          thresholdCents: ladder.thresholdCents,
-          amountCents: Math.max(ladder.amountCents, configuredReload.amountCents),
-        };
+  // A match_100 / agent_api org's own configuration binds a PREPAID org only:
+  // it reloads its amount when the balance would fall below its POSITIVE
+  // threshold. POSTPAID is the Google-Ads credit line (owner 2026-10-13: « on peut
+  // s'inspirer de GAds et remettre du post paid »): the ladder alone, $50 → $200 →
+  // $500, whatever amount was stored for a prepaid top-up.
+  if (configuredReload && paymentMode === "prepaid") {
+    return {
+      thresholdCents: configuredReload.thresholdCents,
+      amountCents: configuredReload.amountCents,
+    };
   }
   return paymentMode === "prepaid"
     ? { thresholdCents: 0, amountCents: ladder.amountCents }

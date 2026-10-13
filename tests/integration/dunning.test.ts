@@ -121,7 +121,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(sendEmailSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("3: depleted but NO workflow context → no episode, no email", async () => {
+  it("3: depleted but NO campaign → platform-absorbed: sufficient, no episode, no email", async () => {
     await insertTestAccount({ orgId });
     setBalance("0.0000000000");
 
@@ -131,7 +131,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
-    expect(res.body.sufficient).toBe(false);
+    expect(res.body.sufficient).toBe(true);
     expect(await listEpisodes(orgId)).toHaveLength(0);
     expect(sendEmailSpy).not.toHaveBeenCalled();
   });

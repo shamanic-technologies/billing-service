@@ -124,7 +124,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     await mark();
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(orgId, person))
+      .set({ ...getAuthHeaders(orgId, person), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send({ items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }], description: "agent spend" });
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
@@ -194,7 +194,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     usage.mockResolvedValue({ spent_cents: cents(600) });
     const auth = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set(getAuthHeaders(orgId, person))
+      .set({ ...getAuthHeaders(orgId, person), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
       .send({ items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }], description: "agent spend" });
     expect(auth.status).toBe(200);
     expect(ss.reloadOffSession).toHaveBeenCalledTimes(1);

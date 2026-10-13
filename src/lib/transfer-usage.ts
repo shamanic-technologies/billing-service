@@ -27,14 +27,21 @@
  * not be a `local_promos` row. Both usage figures below therefore include the org's
  * staff debits, and carry them separately as `staff_debits_cents` so a display can
  * show the debit as its own line rather than as campaign usage.
+ *
+ * Spend with NO campaign from `PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO` on is the
+ * platform's cost (lib/platform-absorbed, owner 2026-10-13): both figures subtract
+ * it here, the one choke point every balance path reads, and carry it as
+ * `platform_absorbed_cents`.
  */
 
 import { eq, or, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { brandTransfers } from "../db/schema.js";
-import { addCents, cmpCents } from "./cents.js";
+import { addCents, cmpCents, subCents } from "./cents.js";
+import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "./platform-absorbed.js";
 import {
   fetchRunsOrgActualUsageTotal,
+  fetchRunsOrgNoCampaignTotal,
   fetchRunsOrgUsageTotal,
   type RunsOrgActualUsageTotalResult,
   type RunsOrgUsageTotalResult,
@@ -84,6 +91,12 @@ function adjusted(runsCents: string, adjustmentCents: string): string {
 export interface StaffDebitsPart {
   staff_debits_cents: string;
   subscription_expired_cents: string;
+  /** No-campaign spend the platform absorbed (already OUT of `spent_cents`). */
+  platform_absorbed_cents: string;
+}
+
+function minus(cents: string, absorbed: string): string {
+  return cmpCents(absorbed, "0") === 0 ? cents : subCents(cents, absorbed);
 }
 
 /**
@@ -94,17 +107,22 @@ export async function fetchOrgUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
 ): Promise<RunsOrgUsageTotalResult & StaffDebitsPart> {
-  const [runs, adj, debits, expired] = await Promise.all([
+  const [runs, adj, debits, expired, absorbed] = await Promise.all([
     fetchRunsOrgUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
     sumSubscriptionExpiriesForOrg(orgId),
+    fetchRunsOrgNoCampaignTotal(orgId, PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO, wfHeaders),
   ]);
   return {
     ...runs,
-    spent_cents: adjusted(adjusted(adjusted(runs.spent_cents, adj.usageCents), debits), expired),
+    spent_cents: minus(
+      adjusted(adjusted(adjusted(runs.spent_cents, adj.usageCents), debits), expired),
+      absorbed.usageNetCents
+    ),
     staff_debits_cents: debits,
     subscription_expired_cents: expired,
+    platform_absorbed_cents: absorbed.usageNetCents,
   };
 }
 
@@ -116,15 +134,20 @@ export async function fetchOrgActualUsageTotal(
   orgId: string,
   wfHeaders: Record<string, string>
 ): Promise<RunsOrgActualUsageTotalResult & StaffDebitsPart> {
-  const [runs, adj, debits, expired] = await Promise.all([
+  const [runs, adj, debits, expired, absorbed] = await Promise.all([
     fetchRunsOrgActualUsageTotal(orgId, wfHeaders),
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
     sumSubscriptionExpiriesForOrg(orgId),
+    fetchRunsOrgNoCampaignTotal(orgId, PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO, wfHeaders),
   ]);
   return {
-    spent_cents: adjusted(adjusted(adjusted(runs.spent_cents, adj.actualCents), debits), expired),
+    spent_cents: minus(
+      adjusted(adjusted(adjusted(runs.spent_cents, adj.actualCents), debits), expired),
+      absorbed.actualNetCents
+    ),
     staff_debits_cents: debits,
     subscription_expired_cents: expired,
+    platform_absorbed_cents: absorbed.actualNetCents,
   };
 }

@@ -1,4 +1,5 @@
 import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
+import { cardFactsFrom, cardFactsWire } from "../lib/card-facts.js";
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -521,8 +522,10 @@ router.get("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, r
     }
 
     let answer;
+    let facts;
     try {
       answer = await getSavedPaymentMethod(orgId);
+      facts = await cardFactsFrom(orgId, answer);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[billing-service] saved payment method read failed:", message);
@@ -530,7 +533,9 @@ router.get("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, r
       return;
     }
 
-    res.json(answer);
+    // Additive: the card's prepaid + country facts and whether this org may be
+    // POSTPAID with it (lib/card-facts), beside stripe-service's answer verbatim.
+    res.json({ ...answer, ...cardFactsWire(facts) });
   } catch (err) {
     console.error("[billing-service] Error reading saved payment method:", err);
     res.status(500).json({ error: "Internal server error" });
