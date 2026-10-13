@@ -6,7 +6,7 @@ import { fetchRunsNoCampaignMonthly } from "./runs-client.js";
 import { fetchAcquiringFeesByOrgMonth, fetchOrgCustomerOrNull, listOrgPayments } from "./stripe-service-client.js";
 import { getOrgCash } from "./org-cash.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { fetchOrgNames, fetchOrgUserEmails } from "./client-service-client.js";
+import { RFC_UUID, fetchOrgNames, fetchOrgUserEmails } from "./client-service-client.js";
 import { isStaffEmail } from "./payment-alerts.js";
 import { listAllOffPlatformPayments } from "./off-platform-payments.js";
 
@@ -42,7 +42,7 @@ export interface FeeMonthRow {
   /** null = a fee stripe-service could not tie to an org. */
   orgId: string | null;
   month: string;
-  /** Lowercase ISO currency. Only "usd" enters the USD figures; any other is served apart, never converted. */
+  /** Lowercase ISO currency. "usd" = the fee in USD (converted by stripe-service); any other = a fee it could not convert, served apart. */
   currency: string;
   feeCents: string;
 }
@@ -315,7 +315,7 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       cardFeesCents: fx(fees),
       /** Fees stripe-service could not tie to an org: absorbed too, never dropped, kept out of per-customer figures. */
       unattributedCardFeesCents: fx(unattr),
-      /** Fees in another currency (EUR before 2026-08-14): served apart, never converted, not in absorbedCents. */
+      /** Fees stripe-service could not convert to USD (no recorded rate): served apart, not in absorbedCents. Empty today. */
       cardFeesOtherCurrencies: otherWire(other),
       unattributedCardFeesOtherCurrencies: otherWire(unattributedOther.get(m) ?? new Map()),
       campaignSpendCents: fx(campaign),
@@ -364,7 +364,7 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       amounts:
         "USD cents, net of any usage discount, as priced in the cost records; card fees are what the acquirer took",
       otherCurrencies:
-        "card fees the acquirer took in another currency (the Stripe account settled in EUR until 2026-08-13) are served in cardFeesOtherCurrencies, never converted, and are NOT in any USD figure",
+        "every card fee is in USD: one taken in EUR (the Stripe account settled in EUR until 2026-08-13) is converted by stripe-service with the rate Stripe recorded on that fee; only a fee with no recorded rate would be served in cardFeesOtherCurrencies, outside the USD figures",
       excluded:
         "our own orgs (ownOrg: true): a platform org, or an org whose billing contact is staff and which no non-staff person uses; listed apart, kept out of every fleet figure",
       customerStatus:
@@ -418,6 +418,8 @@ export const ACQUIRING_FEE_COST_NAMES = new Set([
 ]);
 
 const CONCURRENCY = 8;
+
+const isUuid = (id: string) => RFC_UUID.test(id);
 
 async function mapPool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -502,8 +504,9 @@ export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
         }
       ),
       // Who is behind the org decides whether it is OURS: unreadable = the whole read fails (never guessed).
-      platformOrgIds.has(orgId) ? Promise.resolve(null) : fetchOrgCustomerOrNull(orgId),
-      platformOrgIds.has(orgId) ? Promise.resolve([] as string[]) : fetchOrgUserEmails(orgId),
+      // A non-UUID org id (a test fixture in runs-service) has no customer or users to ask about.
+      platformOrgIds.has(orgId) || !isUuid(orgId) ? Promise.resolve(null) : fetchOrgCustomerOrNull(orgId),
+      platformOrgIds.has(orgId) || !isUuid(orgId) ? Promise.resolve([] as string[]) : fetchOrgUserEmails(orgId),
       listOrgPayments(orgId).then(
         (r) => r,
         (err) => {
