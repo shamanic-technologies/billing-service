@@ -2100,6 +2100,9 @@
               "prepaid",
               "postpaid"
             ]
+          },
+          "consent": {
+            "$ref": "#/components/schemas/PaymentConsent"
           }
         },
         "required": [
