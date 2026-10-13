@@ -437,6 +437,8 @@ async function decideOutlook(
       topupAmountCents: billingAccounts.topupAmountCents,
       topupThresholdCents: billingAccounts.topupThresholdCents,
       freeCreditOffer: billingAccounts.freeCreditOffer,
+      topupMinimumCents: billingAccounts.topupMinimumCents,
+      reloadThresholdMinimumCents: billingAccounts.reloadThresholdMinimumCents,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))

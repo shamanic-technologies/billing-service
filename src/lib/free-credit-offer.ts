@@ -32,7 +32,7 @@ import {
  * so the up-front gift can never be paid twice.
  *
  * Top-ups by a match_100 org are at least $100 and its auto-reload threshold at least
- * $5. Its stored auto-topup amount + threshold are BINDING for a prepaid org (reload
+ * $5, unless staff set other minimums for that org (topupMinimumsFor). Its stored auto-topup amount + threshold are BINDING for a prepaid org (reload
  * that amount when the balance would fall below that threshold); every legacy org
  * keeps the derived ladder, byte-unchanged.
  */
@@ -77,27 +77,75 @@ export async function isMatchOfferOrg(orgId: string): Promise<boolean> {
   return (await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER;
 }
 
-/** Refuse a top-up below the minimum for a match_100 org. Legacy orgs: no minimum. */
-export function assertTopupMinimum(offer: FreeCreditOfferKind, amountCents: number): void {
-  if (offer !== MATCH_FREE_CREDIT_OFFER) return;
-  if (amountCents < MATCH_MIN_TOPUP_CENTS) {
-    throw new TopupBelowMinimumError("topup_below_minimum", MATCH_MIN_TOPUP_CENTS);
+/**
+ * The smallest top-up and the smallest auto-reload threshold an org may set. null =
+ * no minimum. Default by OFFER (match_100: $100 / $5, every other offer: none);
+ * STAFF can replace either for one org (owner 2026-10-13: « tu me soules avec tes
+ * limites hardcodées », `PUT /v1/accounts/topup_minimums`, migration 0087). An
+ * account staff never touched reads exactly its offer's default.
+ */
+export interface TopupMinimums {
+  topupMinimumCents: number | null;
+  reloadThresholdMinimumCents: number | null;
+}
+
+/** The account fields the minimums are read from. */
+export interface TopupMinimumsSource {
+  freeCreditOffer: string;
+  topupMinimumCents: number | null;
+  reloadThresholdMinimumCents: number | null;
+}
+
+export function offerDefaultTopupMinimums(offer: FreeCreditOfferKind): TopupMinimums {
+  return offer === MATCH_FREE_CREDIT_OFFER
+    ? { topupMinimumCents: MATCH_MIN_TOPUP_CENTS, reloadThresholdMinimumCents: MATCH_MIN_RELOAD_THRESHOLD_CENTS }
+    : { topupMinimumCents: null, reloadThresholdMinimumCents: null };
+}
+
+export function topupMinimumsFor(account: TopupMinimumsSource): TopupMinimums {
+  const defaults = offerDefaultTopupMinimums(asFreeCreditOffer(account.freeCreditOffer));
+  return {
+    topupMinimumCents: account.topupMinimumCents ?? defaults.topupMinimumCents,
+    reloadThresholdMinimumCents:
+      account.reloadThresholdMinimumCents ?? defaults.reloadThresholdMinimumCents,
+  };
+}
+
+/**
+ * The minimums of an org. An org with NO billing account yet is a NEW org (its
+ * account will be created match_100, with no staff override): the match defaults.
+ */
+export async function getOrgTopupMinimums(orgId: string): Promise<TopupMinimums> {
+  const [row] = await db
+    .select({
+      freeCreditOffer: billingAccounts.freeCreditOffer,
+      topupMinimumCents: billingAccounts.topupMinimumCents,
+      reloadThresholdMinimumCents: billingAccounts.reloadThresholdMinimumCents,
+    })
+    .from(billingAccounts)
+    .where(eq(billingAccounts.orgId, orgId))
+    .limit(1);
+  return row ? topupMinimumsFor(row) : offerDefaultTopupMinimums(MATCH_FREE_CREDIT_OFFER);
+}
+
+/** Refuse a top-up below the org's minimum (none = accepted). */
+export function assertTopupMinimum(minimums: TopupMinimums, amountCents: number): void {
+  const min = minimums.topupMinimumCents;
+  if (min != null && amountCents < min) {
+    throw new TopupBelowMinimumError("topup_below_minimum", min);
   }
 }
 
-/** Refuse an auto-topup configuration below the minimums for a match_100 org. */
+/** Refuse an auto-topup configuration below the org's minimums. */
 export function assertAutoTopupMinimums(
-  offer: FreeCreditOfferKind,
+  minimums: TopupMinimums,
   amountCents: number,
   thresholdCents: number
 ): void {
-  assertTopupMinimum(offer, amountCents);
-  if (offer !== MATCH_FREE_CREDIT_OFFER) return;
-  if (thresholdCents < MATCH_MIN_RELOAD_THRESHOLD_CENTS) {
-    throw new TopupBelowMinimumError(
-      "topup_threshold_below_minimum",
-      MATCH_MIN_RELOAD_THRESHOLD_CENTS
-    );
+  assertTopupMinimum(minimums, amountCents);
+  const min = minimums.reloadThresholdMinimumCents;
+  if (min != null && thresholdCents < min) {
+    throw new TopupBelowMinimumError("topup_threshold_below_minimum", min);
   }
 }
 
@@ -109,11 +157,10 @@ export interface ConfiguredReload {
 
 /**
  * The org's OWN reload configuration when it binds (match_100 with auto-topup on),
- * clamped up to the minimums so a value stored before they existed can never reload
+ * clamped up to its minimums so a value stored before they existed can never reload
  * below them. Null for every legacy org: its reload stays the derived ladder.
  */
-export function configuredReloadFor(account: {
-  freeCreditOffer: string;
+export function configuredReloadFor(account: TopupMinimumsSource & {
   topupAmountCents: number | null;
   topupThresholdCents: number | null;
 }): ConfiguredReload | null {
@@ -126,9 +173,10 @@ export function configuredReloadFor(account: {
     return { amountCents: account.topupAmountCents, thresholdCents: account.topupThresholdCents };
   }
   if (offer !== MATCH_FREE_CREDIT_OFFER) return null;
+  const minimums = topupMinimumsFor(account);
   return {
-    amountCents: Math.max(account.topupAmountCents, MATCH_MIN_TOPUP_CENTS),
-    thresholdCents: Math.max(account.topupThresholdCents, MATCH_MIN_RELOAD_THRESHOLD_CENTS),
+    amountCents: Math.max(account.topupAmountCents, minimums.topupMinimumCents ?? 0),
+    thresholdCents: Math.max(account.topupThresholdCents, minimums.reloadThresholdMinimumCents ?? 0),
   };
 }
 

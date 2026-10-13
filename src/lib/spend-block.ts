@@ -90,6 +90,8 @@ export async function resolveOrgFloor(
       topupAmountCents: billingAccounts.topupAmountCents,
       topupThresholdCents: billingAccounts.topupThresholdCents,
       freeCreditOffer: billingAccounts.freeCreditOffer,
+      topupMinimumCents: billingAccounts.topupMinimumCents,
+      reloadThresholdMinimumCents: billingAccounts.reloadThresholdMinimumCents,
       paymentMode: billingAccounts.paymentMode,
     })
     .from(billingAccounts)

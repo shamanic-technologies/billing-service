@@ -62,6 +62,11 @@ beforeAll(async () => {
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'match_100'`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 10000`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 10000`;
+  // Per-account top-up minimums set by staff (migration 0087). NULL = offer default.
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "topup_minimum_cents" integer`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "reload_threshold_minimum_cents" integer`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "topup_minimums_set_by" text`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "topup_minimums_set_at" timestamp with time zone`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
   // Subscription checkout stamp (migration 0055).
