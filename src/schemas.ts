@@ -5432,9 +5432,10 @@ const VolumeCapViewSchema = z
 
 const MeasuredPipeSchema = z
   .object({
-    pipeId: z.string(),
+    pipeId: z.string().describe("features-service's pipe id; a non-default play's id `<channel>|<leg>~<strategy>`."),
     channelSlug: z.string(),
-    legKey: z.string(),
+    legKey: z.string().describe("The bare leg (no play suffix): what the funnel's campaign units are stored on."),
+    strategyId: z.string().nullable().describe("The play's strategy when the funnel names a non-default play; null = default play."),
     mode: z.enum(["proactive", "reactive"]),
     campaignIds: z.array(z.string()),
   })
