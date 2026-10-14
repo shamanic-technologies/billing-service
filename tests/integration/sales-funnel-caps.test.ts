@@ -7,6 +7,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } 
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { brandSalesBudgets, campaignDailyBudgets, salesFunnelCapChanges, salesFunnelCaps } from "../../src/db/schema.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
@@ -913,10 +914,7 @@ describe("sales funnel caps", () => {
     const history = async () =>
       (await db.select().from(brandDailyBudgetChanges)).map((r) => r.dailyBudgetCents).sort();
     // A legacy ceiling written through the ceiling route (it journals the legacy total).
-    const ceiling = await request(app)
-      .put(`/v1/brands/${brandId}/campaign-budget`)
-      .set(auth)
-      .send({ offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 800 });
+    const ceiling = await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 800 });
     expect(ceiling.status).toBe(200);
     expect(await history()).toEqual(["800.0000000000"]);
 
@@ -930,10 +928,7 @@ describe("sales funnel caps", () => {
     expect(await history()).toEqual(["1800.0000000000", "800.0000000000"]);
 
     // A later ceiling write journals legacy + the funnel caps, never the legacy alone.
-    await request(app)
-      .put(`/v1/brands/${brandId}/campaign-budget`)
-      .set(auth)
-      .send({ offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 900 });
+    await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 900 });
     expect(await history()).toContain("1900.0000000000");
 
     // Clearing the cap returns the figure to the legacy total.

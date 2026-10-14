@@ -7,8 +7,9 @@ import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vites
 import request from "supertest";
 import { readFileSync } from "fs";
 import postgres from "postgres";
-import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
+import { createTestApp } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets } from "../../src/db/schema.js";
 import { splitOf } from "../../src/lib/campaign-sourcing.js";
@@ -24,7 +25,6 @@ const LEG = "lead_found_to_conversation";
 const key = { offerId: OFFER, legKey: LEG, featureSlug: COLD };
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
-const writePath = `/v1/brands/${brandId}/campaign-budget`;
 const readPath = `/internal/brands/${brandId}/campaign-budget`;
 const app = createTestApp();
 
@@ -40,7 +40,7 @@ async function seed(dailyBudgetCents: string, sourcingCeilingCents: string | nul
 }
 
 function put(body: Record<string, unknown>) {
-  return request(app).put(writePath).set(getAuthHeaders(orgId, userId, runId)).send({ ...key, ...body });
+  return writeCampaignCeiling(orgId, brandId, { ...key, ...body }, { userId, runId });
 }
 
 async function read(query: Record<string, string> = {}) {
@@ -121,9 +121,9 @@ describe("campaign sourcing ceiling", () => {
       },
     ]);
     const res = await request(app)
-      .get(`/v1/brands/${brandId}/offers/${OFFER}/campaign-budgets`)
+      .get(`/internal/brands/${brandId}/offers/${OFFER}/campaign-budgets`)
       .query({ campaigns: `${COLD}:lead_found_to_website_visit` })
-      .set(getAuthHeaders(orgId, userId, runId));
+      .set({ "X-API-Key": "test-api-key", "x-org-id": orgId });
     expect(res.status).toBe(200);
     const item = res.body.items.find((i: { legKey: string }) => i.legKey === LEG);
     expect(item).toMatchObject({
@@ -177,10 +177,9 @@ describe("campaign sourcing ceiling", () => {
     expect(res.body).toMatchObject({ sourcingCeilingCents: null, outreachDailyBudgetCents: "2000.0000000000" });
   });
 
-  it("refuses a sourcing ceiling above the total, negative, or an ambiguous body", async () => {
+  it("refuses a sourcing ceiling above the total, negative, or a missing total", async () => {
     expect((await put({ dailyBudgetCents: 2000, sourcingCeilingCents: 2001 })).status).toBe(400);
     expect((await put({ dailyBudgetCents: 2000, sourcingCeilingCents: -1 })).status).toBe(400);
-    expect((await put({ dailyBudgetCents: 2000, outreachDailyBudgetCents: 1100, sourcingCeilingCents: 900 })).status).toBe(400);
     expect((await put({ outreachDailyBudgetCents: 1100 })).status).toBe(400);
     expect((await put({})).status).toBe(400);
   });

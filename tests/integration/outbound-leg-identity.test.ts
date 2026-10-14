@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { removeOfferItemBudget, writeCampaignCeiling, writeOfferItems } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets } from "../../src/db/schema.js";
 import {
@@ -123,10 +124,7 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
 
   it("a ceiling write under the new spelling updates the legacy row in place (one row, new spelling)", async () => {
     await seed(COLD, LEGACY_REPLY, "500.0000000000");
-    const res = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ offerId: OFFER, legKey: NEW_REPLY, featureSlug: COLD, dailyBudgetCents: 700 });
+    const res = await writeCampaignCeiling(orgId, BRAND, { offerId: OFFER, legKey: NEW_REPLY, featureSlug: COLD, dailyBudgetCents: 700 });
     expect(res.status).toBe(200);
     const stored = await rows();
     expect(stored).toHaveLength(1);
@@ -138,36 +136,31 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
   it("item budgets: read, write and delete under the new spelling act on the legacy row", async () => {
     await insertTestAccount({ orgId });
     await seed(COLD, LEGACY_REPLY, "500.0000000000");
-    const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+    const internalItemsHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+  const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
-    const legacyView = await request(app).get(`${itemsPath}?campaigns=${COLD}:${LEGACY_REPLY}`).set(headers);
-    const newView = await request(app).get(`${itemsPath}?campaigns=${COLD}:${NEW_REPLY}`).set(headers);
+    const legacyView = await request(app).get(`${itemsPath}?campaigns=${COLD}:${LEGACY_REPLY}`).set(internalItemsHeaders);
+    const newView = await request(app).get(`${itemsPath}?campaigns=${COLD}:${NEW_REPLY}`).set(internalItemsHeaders);
     expect(newView.status).toBe(200);
     expect(newView.body.items).toEqual(legacyView.body.items);
     expect(newView.body.items).toHaveLength(1);
     expect(newView.body.items[0]).toMatchObject({ legKey: LEGACY_REPLY, budgetCents: 500, minimumCents: 330 });
     // A "not set" pair asked under the legacy spelling is served under the new one.
-    const notSet = await request(app).get(`${itemsPath}?campaigns=${COLD}:${LEGACY_VISIT}`).set(headers);
+    const notSet = await request(app).get(`${itemsPath}?campaigns=${COLD}:${LEGACY_VISIT}`).set(internalItemsHeaders);
     expect(notSet.body.items.map((i: { legKey: string }) => i.legKey)).toEqual([LEGACY_REPLY, NEW_VISIT]);
 
     // Both spellings in one write are one campaign listed twice.
-    const dup = await request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: [{ featureSlug: COLD, legKey: LEGACY_REPLY, budgetCents: 600 }, { featureSlug: COLD, legKey: NEW_REPLY, budgetCents: 600 }] });
+    const dup = await writeOfferItems(orgId, BRAND, OFFER, { items: [{ featureSlug: COLD, legKey: LEGACY_REPLY, budgetCents: 600 }, { featureSlug: COLD, legKey: NEW_REPLY, budgetCents: 600 }] });
     expect(dup.status).toBe(400);
     expect(dup.body.code).toBe("duplicate_item");
 
-    const write = await request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: [{ featureSlug: COLD, legKey: NEW_REPLY, budgetCents: 800 }] });
+    const write = await writeOfferItems(orgId, BRAND, OFFER, { items: [{ featureSlug: COLD, legKey: NEW_REPLY, budgetCents: 800 }] });
     expect(write.status).toBe(200);
     let stored = await rows();
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({ legKey: NEW_REPLY, dailyBudgetCents: "800.0000000000" });
 
-    const del = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${NEW_REPLY}`).set(headers);
+    const del = await removeOfferItemBudget(orgId, BRAND, OFFER, COLD, NEW_REPLY);
     expect(del.status).toBe(200);
     stored = await rows();
     expect(stored).toHaveLength(0);
@@ -179,10 +172,7 @@ describe("outbound leg keys: legacy and new spelling are one identity", () => {
     expect(legacy.body.dailyBudgetCents).toBe("300.0000000000");
     // The legacy-spelled request is answered under the new spelling.
     expect(legacy.body.legKey).toBe(NEW_REPLY);
-    const res = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ offerId: OFFER, legKey: LEGACY_REPLY, featureSlug: COLD, dailyBudgetCents: 400 });
+    const res = await writeCampaignCeiling(orgId, BRAND, { offerId: OFFER, legKey: LEGACY_REPLY, featureSlug: COLD, dailyBudgetCents: 400 });
     expect(res.status).toBe(200);
     const stored = await rows();
     expect(stored).toHaveLength(1);

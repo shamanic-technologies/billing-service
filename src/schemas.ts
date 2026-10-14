@@ -1742,64 +1742,6 @@ export const ReadCampaignDailyBudgetSchema = z
   })
   .openapi("ReadCampaignDailyBudget");
 
-export const SetCampaignDailyBudgetRequestSchema = z
-  .object({
-    /** brand-service offer UUID. */
-    offerId: z.string().uuid(),
-    /** features-service's canonical leg id (legs[].legKey on GET /public/channels). */
-    legKey: z.string().min(1),
-    /** The acquisition channel's features-service feature slug. */
-    featureSlug: z.string().min(1),
-    /**
-     * Non-negative cents: the campaign's MAX daily spend. 0 = not funding this
-     * campaign right now. Omit it to state the two parts instead
-     * (outreachDailyBudgetCents + sourcingCeilingCents, summed here).
-     */
-    dailyBudgetCents: z.union([z.string(), z.number()]).optional(),
-    /** With sourcingCeilingCents and no dailyBudgetCents: what outreach may spend per day. */
-    outreachDailyBudgetCents: z.union([z.string(), z.number()]).optional(),
-    /**
-     * What sourcing may spend per day, on demand, out of the daily budget
-     * (0 <= value <= dailyBudgetCents). null = not split. Omitted = keep the
-     * campaign's current share of its total (a $20 campaign sourcing up to $9
-     * raised to $40 sources up to $18).
-     */
-    sourcingCeilingCents: z.union([z.string(), z.number()]).nullable().optional(),
-  })
-  .superRefine((body, ctx) => {
-    const parts = body.outreachDailyBudgetCents !== undefined;
-    if (body.dailyBudgetCents === undefined && !parts) {
-      ctx.addIssue({ code: "custom", message: "dailyBudgetCents is required (or outreachDailyBudgetCents + sourcingCeilingCents)." });
-    }
-    if (body.dailyBudgetCents !== undefined && parts) {
-      ctx.addIssue({ code: "custom", message: "State dailyBudgetCents OR outreachDailyBudgetCents + sourcingCeilingCents, not both." });
-    }
-    if (parts && (body.sourcingCeilingCents === undefined || body.sourcingCeilingCents === null)) {
-      ctx.addIssue({ code: "custom", message: "outreachDailyBudgetCents needs sourcingCeilingCents beside it." });
-    }
-  })
-  .openapi("SetCampaignDailyBudgetRequest");
-
-export const SetCampaignDailyBudgetResponseSchema = z
-  .object({
-    brandId: z.string().uuid(),
-    orgId: z.string().uuid(),
-    offerId: z.string().uuid(),
-    legKey: z.string(),
-    featureSlug: z.string(),
-    /** This campaign's ceiling after the write (its max daily spend). */
-    dailyBudgetCents: CentsStringSchema,
-    outreachDailyBudgetCents: CentsStringSchema,
-    sourcingCeilingCents: CentsStringSchema.nullable(),
-    split: z.boolean(),
-    updatedAt: z.string(),
-    /** The brand-level daily budget after the write = the sum of every ceiling. */
-    brandDailyBudgetCents: CentsStringSchema,
-    /** Every campaign ceiling of the brand after the write. */
-    campaigns: z.array(CampaignDailyBudgetSchema),
-  })
-  .openapi("SetCampaignDailyBudgetResponse");
-
 // --- Public Stats ---
 
 export const BillingGrowthRowSchema = z
@@ -3702,35 +3644,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/brands/{brandId}/offers/{offerId}/daily-budget",
-  summary: "Read one offer's daily ceiling (user, via the gateway)",
-  description:
-    "Same answer as the internal read, for the user's own org — an offer screen " +
-    "reads the ceiling it paces its spend against. An offer with no ceiling " +
-    "returns dailyBudgetCents: null.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({
-      brandId: z.string().uuid(),
-      offerId: z.string().uuid(),
-    }),
-  },
-  responses: {
-    200: {
-      description: "This offer's ceiling (null when it has none) + its breakdown",
-      content: {
-        "application/json": { schema: ReadBrandOfferDailyBudgetSchema },
-      },
-    },
-    400: {
-      description: "Invalid brandId or offerId, or missing org headers",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
   path: "/internal/brands/{brandId}/legs/{legKey}/daily-budget",
   summary: "Read ONE leg's daily ceiling for a brand",
   description:
@@ -3764,35 +3677,6 @@ registry.registerPath({
     400: {
       description:
         "brandId or x-org-id is not a valid UUID, x-org-id is missing, or legKey is empty",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/v1/brands/{brandId}/legs/{legKey}/daily-budget",
-  summary: "Read one leg's daily ceiling (user, via the gateway)",
-  description:
-    "Same answer as the internal read, for the user's own org — a campaign screen " +
-    "reads the ceiling it paces its spend against. A leg with no ceiling returns " +
-    "dailyBudgetCents: null.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({
-      brandId: z.string().uuid(),
-      legKey: z.string().min(1),
-    }),
-  },
-  responses: {
-    200: {
-      description: "This leg's ceiling (null when it has none) + its breakdown",
-      content: {
-        "application/json": { schema: ReadBrandLegDailyBudgetSchema },
-      },
-    },
-    400: {
-      description: "Invalid brandId, empty legKey, or missing org headers",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -3999,27 +3883,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
-  path: "/v1/brands/{brandId}/campaign-budgets",
-  summary: "Read every campaign daily ceiling of a brand (user, via the gateway)",
-  description: "Same answer as the internal read, for the user's own org.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
-  },
-  responses: {
-    200: {
-      description: "Every campaign ceiling + the brand total",
-      content: { "application/json": { schema: ReadCampaignDailyBudgetsSchema } },
-    },
-    400: {
-      description: "Invalid brandId or missing org headers",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
   path: "/internal/brands/{brandId}/campaign-budget",
   summary: "Read ONE campaign's daily ceiling",
   description:
@@ -4046,82 +3909,6 @@ registry.registerPath({
     },
     502: {
       description: "Today's spend could not be read from runs-service (only when campaignIds is passed)",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/v1/brands/{brandId}/campaign-budget",
-  summary: "Read ONE campaign's daily ceiling (user, via the gateway)",
-  description: "Same answer as the internal read, for the user's own org.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
-    query: campaignReadQuery,
-  },
-  responses: {
-    200: {
-      description: "This campaign's ceiling (null when nothing funds it)",
-      content: { "application/json": { schema: ReadCampaignDailyBudgetSchema } },
-    },
-    400: {
-      description: "Invalid brandId, missing org headers, or an incomplete campaign address",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    502: {
-      description: "Today's spend could not be read from runs-service (only when campaignIds is passed)",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "put",
-  path: "/v1/brands/{brandId}/campaign-budget",
-  summary: "Set ONE campaign's daily ceiling",
-  description:
-    "States the ceiling of one campaign — (offer, leg, acquisition channel) — and " +
-    "leaves every other campaign untouched. Ceilings that were this campaign's money " +
-    "(including a pre-offer or pre-leg one it resolves to) are CONSOLIDATED into one " +
-    "row carrying the new amount; when none exists a ceiling is opened. 0 is legal. A " +
-    "funded channel below its published daily floor is refused (400), judged on the " +
-    "channel's total across the brand; a channel already funded below its floor may " +
-    "be kept or raised. The brand's daily budget is the SUM of every ceiling. " +
-    "Split: sourcingCeilingCents states the part of the daily budget sourcing may spend on demand " +
-    "(null clears it; omitted keeps the current share). Or state outreachDailyBudgetCents + " +
-    "sourcingCeilingCents instead of dailyBudgetCents and billing sums them. A stated split on an " +
-    "outreach campaign whose offer funds a SOURCE campaign feeding it is refused (409 " +
-    "sourcing_has_its_own_campaign): that sourcing is budgeted on the source campaign.",
-  request: {
-    headers: protectedHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
-    body: {
-      content: {
-        "application/json": { schema: SetCampaignDailyBudgetRequestSchema },
-      },
-    },
-  },
-  responses: {
-    200: {
-      description: "This campaign's ceiling + every campaign ceiling + the brand total",
-      content: {
-        "application/json": { schema: SetCampaignDailyBudgetResponseSchema },
-      },
-    },
-    400: {
-      description:
-        "Invalid address or amount, an unknown acquisition channel, or a funded channel below its floor",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    409: {
-      description:
-        "sourcing_has_its_own_campaign: a sourcing ceiling stated on an outreach campaign whose offer funds the source campaign feeding it ({ error, code, sourceFeatureSlugs })",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    502: {
-      description: "The acquisition channels' (or sourcing origins') published terms could not be read",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
@@ -5006,32 +4793,6 @@ registry.registerPath({
 
 // --- Item budgets per campaign (lib/campaign-items, migrations 0062 + 0063) ---
 
-export const SetCampaignItemBudgetsRequestSchema = z
-  .object({
-    /**
-     * One budget per campaign (featureSlug x legKey on this offer); listed campaigns
-     * are upserted, the others untouched. Integer cents; per DAY for prepaid / postpaid,
-     * per MONTH (whole dollars) for a subscriber. A reactive campaign's budget is a MAX.
-     */
-    items: z
-      .array(
-        z.object({
-          featureSlug: z.string().trim().min(1),
-          legKey: z.string().trim().min(1),
-          budgetCents: z.number().int(),
-        })
-      )
-      .min(1),
-    /**
-     * The period the listed budgets are stated in. Absent = the org's default (month
-     * for a subscriber, day for prepaid / postpaid). A prepaid / postpaid org may state
-     * "month" (whole dollars, a spend cap over the UTC calendar month, nothing charged
-     * by the budget itself); a subscriber may not state "day" (400 period_not_allowed).
-     */
-    period: z.enum(["day", "month"]).optional(),
-  })
-  .openapi("SetCampaignItemBudgetsRequest");
-
 const CampaignItemViewSchema = z
   .object({
     featureSlug: z.string(),
@@ -5168,13 +4929,6 @@ export const CampaignItemBudgetsSchema = z
   })
   .openapi("CampaignItemBudgets");
 
-export const SetCampaignItemBudgetsResponseSchema = CampaignItemBudgetsSchema.extend({
-  /** Follow-up (reactive) budget charged on the card now (subscriber, active plan). */
-  reactiveChargedCents: z.number().int(),
-  /** true when this write took the brand out of its global sales budget. */
-  globalBudgetCleared: z.boolean(),
-}).openapi("SetCampaignItemBudgetsResponse");
-
 export const ItemBudgetRefusalSchema = z
   .object({
     error: z.string(),
@@ -5215,73 +4969,6 @@ const campaignsQuerySchema = z.object({
 const itemRefusal = (description: string) => ({
   description,
   content: { "application/json": { schema: ItemBudgetRefusalSchema } },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
-  summary: "Read this offer's budget per campaign (offer x leg x channel)",
-  description:
-    "Every stored campaign budget of the offer, plus a 'not set' row (budgetCents null) for each " +
-    "featureSlug:legKey listed in ?campaigns=. Each row carries its minimum (in its period), its cap " +
-    "(reactive: half the offer's entry budgets) and whether we run the channel. period follows the " +
-    "payment mode (subscription = month, else day). On/off is the campaign's status in campaign-service.",
-  request: { headers: protectedHeaders, params: brandOfferParams, query: campaignsQuerySchema },
-  responses: {
-    200: { description: "Campaign budgets", content: { "application/json": { schema: CampaignItemBudgetsSchema } } },
-    400: itemRefusal("Invalid ids or campaigns query"),
-    502: itemRefusal("minimums_unavailable | campaign_status_unavailable"),
-  },
-});
-
-registry.registerPath({
-  method: "put",
-  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
-  summary: "Set one or several campaign budgets of an offer",
-  description:
-    "Upserts the listed campaigns. Each clears its published minimum (a daily budget: monthly " +
-    "minimum / 30, rounded up); a reactive campaign's MAX is at most 50% of the SUM of the offer's " +
-    "entry (proactive) budgets; customer-team legs carry none. Subscriber: monthly budgets; the " +
-    "offer's plan becomes the SUM of its budgets on channels we run whose campaign is ON (min $99) " +
-    "from the next charge, and ON follow-up budgets not yet collected this period are charged now " +
-    "(unspent follow-up credit carries over). A channel we do not run is recorded and charged " +
-    "nothing until it launches. Nothing is written on any refusal. A SOURCE campaign is set here like " +
-    "any other: featureSlug = a live sourcing origin (sourcing-apollo-cold-filters, " +
-    "sourcing-apollo-buying-signals, sourcing-linkedin-engagement-signals, sourcing-crm-contacts), " +
-    "legKey = start_to_lead_found, budgetCents = its daily (or monthly) sourcing ceiling; no minimum, " +
-    "and it is not the entry budget a follow-up campaign needs.",
-  request: {
-    headers: protectedHeaders,
-    params: brandOfferParams,
-    body: { content: { "application/json": { schema: SetCampaignItemBudgetsRequestSchema } } },
-  },
-  responses: {
-    200: { description: "Set", content: { "application/json": { schema: SetCampaignItemBudgetsResponseSchema } } },
-    400: itemRefusal("below_minimum | entry_item_required | unknown_item | period_not_allowed | ..."),
-    409: itemRefusal("no_plan_for_offer | subscription_not_active | reactive_charge_declined"),
-    502: itemRefusal("minimums_unavailable | campaign_status_unavailable | charge_unavailable"),
-  },
-});
-
-registry.registerPath({
-  method: "delete",
-  path: "/v1/brands/{brandId}/offers/{offerId}/campaign-budgets",
-  summary: "Remove one campaign's budget (back to not set)",
-  description:
-    "Idempotent (removed: false when nothing was stored). Refused (400 entry_item_required) when it " +
-    "would leave a follow-up budget with no lead-finding budget left.",
-  request: {
-    headers: protectedHeaders,
-    params: brandOfferParams,
-    query: z.object({ featureSlug: z.string(), legKey: z.string() }),
-  },
-  responses: {
-    200: {
-      description: "Removed",
-      content: { "application/json": { schema: CampaignItemBudgetsSchema.extend({ removed: z.boolean() }) } },
-    },
-    400: itemRefusal("Invalid ids, missing featureSlug/legKey, or entry_item_required"),
-  },
 });
 
 registry.registerPath({

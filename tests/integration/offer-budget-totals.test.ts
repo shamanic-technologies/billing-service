@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { writeOfferItems } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { salesFunnelCaps } from "../../src/db/schema.js";
 import type { SalesFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
@@ -179,19 +180,17 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     await closeDb();
   });
 
-  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+  const internalItemsHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+  const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
   function put(items: Array<[string, string, number]>) {
-    return request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })) });
+    return writeOfferItems(orgId, BRAND, OFFER, { items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })) });
   }
 
   it("prepaid: ON proactive $X/day and ON reactive capped $Y/day -> totals $X and $Y per day", async () => {
     await insertTestAccount({ orgId });
     expect((await put([[COLD, REPLY, 1000], [MEET, MEET_LEG, 300]])).status).toBe(200);
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.totalsUnavailableReason).toBeNull();
     expect(res.body.totals).toEqual({
@@ -225,7 +224,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     await insertTestAccount({ orgId });
     expect((await put([[COLD, REPLY, 1000]])).status).toBe(200);
     campaignStatusDown = true;
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.totals).toBeNull();
     expect(res.body.totalsUnavailableReason).toBe("campaign_service_unavailable");
@@ -235,7 +234,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
   it("an ON budget on a channel we do not run is named, never added", async () => {
     await insertTestAccount({ orgId });
     expect((await put([[COLD, REPLY, 1000], [META, VISIT, 5000]])).status).toBe(200);
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.body.totals.proactive.budgetCents).toBe(1000);
     expect(res.body.totals.notCounted).toEqual([{ featureSlug: META, legKey: VISIT, reason: "channel_not_run" }]);
   });
@@ -248,7 +247,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
       .send({ brand_id: BRAND, offer_id: OFFER, monthly_amount_cents: 9900 });
     expect(sub.status).toBe(201);
     expect((await put([[COLD, REPLY, 9900], [MEET, MEET_LEG, 3000]])).status).toBe(200);
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.body.period).toBe("month");
     expect(res.body.items.every((i: { period: string }) => i.period === "month")).toBe(true);
     expect(res.body.totals.period).toBe("month");
@@ -301,7 +300,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
       funnel("bbbbbbbb-0067-4000-8000-000000000020", MOTIVATE, "Motivate", [[MEET, MEET_LEG]]),
       funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]]),
     ];
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.totalsUnavailableReason).toBeNull();
     expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
@@ -336,7 +335,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
       funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]]),
       funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]]),
     ];
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
     expect(res.body.totals.salesFunnelsNotCounted).toEqual([
@@ -353,7 +352,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
       funnel("bbbbbbbb-0067-4000-8000-000000000020", MOTIVATE, "Motivate", [[MEET, MEET_LEG]]),
       funnel("bbbbbbbb-0067-4000-8000-000000000030", MOVING, "Moving", [["ai-instant-call", "conversation_to_booking_call"]], "stopped"),
     ];
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.body.totals.proactive.budgetCents).toBe(1000);
     expect(res.body.totals.reactive.maxBudgetCents).toBe(0);
     expect(res.body.totals.salesFunnelsNotCounted.map((f: { reason: string }) => f.reason)).toEqual(["one_off"]);
@@ -364,7 +363,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     expect((await put([[COLD, REPLY, 2000]])).status).toBe(200);
     await cap(BLISS, 1000, "daily", "proactive");
     funnelCampaigns = [funnel("bbbbbbbb-0067-4000-8000-000000000010", BLISS, "Bliss", [[COLD, "lead_found_to_conversation"]])];
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     // start_to_conversation and lead_found_to_conversation are ONE outbound leg.
     expect(res.body.totals.proactive).toEqual({ budgetCents: 1000, sourcingBudgetCents: 0, campaigns: 1 });
   });
@@ -373,7 +372,7 @@ describe("offer budget totals: proactive spend + reactive ceilings, ON only", ()
     await insertTestAccount({ orgId });
     await cap(BLISS, 1000, "daily", "proactive");
     funnelCampaigns = null;
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.totals).toBeNull();
     expect(res.body.totalsUnavailableReason).toBe("campaign_service_unavailable");
