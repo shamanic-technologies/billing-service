@@ -56,3 +56,18 @@ export async function fetchOrgUserEmails(orgId: string): Promise<string[]> {
   if (!Array.isArray(body?.users)) throw new Error(`client-service users of org ${orgId} answered an unusable shape`);
   return body.users.map((u) => u.email ?? "").filter((e) => e !== "");
 }
+
+/** `GET /internal/users?orgId=`: the people whose org it is, id + email (client-service users). */
+export async function fetchOrgUsers(orgId: string): Promise<Array<{ id: string; email: string | null }>> {
+  const { url, apiKey } = config();
+  const res = await fetchWithRetry(`${url}/internal/users?orgId=${encodeURIComponent(orgId)}`, {
+    headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`client-service GET /internal/users?orgId=${orgId} failed: ${res.status} ${await res.text()}`);
+  const body = (await res.json()) as { users?: Array<{ id?: string; email?: string | null }> };
+  if (!Array.isArray(body?.users)) throw new Error(`client-service users of org ${orgId} answered an unusable shape`);
+  return body.users
+    .filter((u): u is { id: string; email?: string | null } => typeof u.id === "string")
+    .map((u) => ({ id: u.id, email: u.email ?? null }));
+}
