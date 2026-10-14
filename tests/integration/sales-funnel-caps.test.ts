@@ -7,9 +7,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } 
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
-import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
-import { brandSalesBudgets, campaignDailyBudgets, salesFunnelCapChanges, salesFunnelCaps } from "../../src/db/schema.js";
+import { brandDailyBudgets, brandSalesBudgets, salesFunnelCapChanges, salesFunnelCaps } from "../../src/db/schema.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 
@@ -881,15 +880,7 @@ describe("sales funnel caps", () => {
 
   it("the brand daily budget adds every RECURRING funnel cap per day; one_off and volume-only caps add nothing", async () => {
     mockUpstreams();
-    await db.insert(campaignDailyBudgets).values({
-      orgId,
-      brandId,
-      featureSlug: COLD,
-      offerId: OFFER,
-      legKey: "lead_found_to_conversation",
-      dailyBudgetCents: "700",
-      updatedAt: new Date(),
-    });
+    await db.insert(brandDailyBudgets).values({ orgId, brandId, dailyBudgetCents: "700" });
     const brandTotal = async () =>
       (await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body;
     const before = await brandTotal();
@@ -900,7 +891,7 @@ describe("sales funnel caps", () => {
     await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
     expect(await brandTotal()).toEqual(before);
 
-    // $70 a week = $10 a day on top of the ceilings.
+    // $70 a week = $10 a day on top of the brand scalar.
     await put({ maxBudget: { amountCents: 7000, period: "weekly" }, maxVolume: null });
     expect((await brandTotal()).dailyBudgetCents).toBe("1700.0000000000");
     // A monthly cap / 30 on another funnel of another offer of the brand.
@@ -913,9 +904,9 @@ describe("sales funnel caps", () => {
     const { brandDailyBudgetChanges } = await import("../../src/db/schema.js");
     const history = async () =>
       (await db.select().from(brandDailyBudgetChanges)).map((r) => r.dailyBudgetCents).sort();
-    // A legacy ceiling written through the ceiling route (it journals the legacy total).
-    const ceiling = await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 800 });
-    expect(ceiling.status).toBe(200);
+    // A brand scalar written through its route (it journals the legacy total).
+    const scalar = await request(app).patch(`/v1/brands/${brandId}/daily-budget`).set(auth).send({ dailyBudgetCents: 800 });
+    expect(scalar.status).toBe(200);
     expect(await history()).toEqual(["800.0000000000"]);
 
     // One_off and volume-only caps do not move the daily figure: nothing journaled.
@@ -927,8 +918,8 @@ describe("sales funnel caps", () => {
     await put({ maxBudget: { amountCents: 7000, period: "weekly" }, maxVolume: null });
     expect(await history()).toEqual(["1800.0000000000", "800.0000000000"]);
 
-    // A later ceiling write journals legacy + the funnel caps, never the legacy alone.
-    await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, featureSlug: COLD, legKey: "lead_found_to_conversation", dailyBudgetCents: 900 });
+    // A later scalar write journals legacy + the funnel caps, never the legacy alone.
+    await request(app).patch(`/v1/brands/${brandId}/daily-budget`).set(auth).send({ dailyBudgetCents: 900 });
     expect(await history()).toContain("1900.0000000000");
 
     // Clearing the cap returns the figure to the legacy total.
@@ -967,146 +958,28 @@ describe("sales funnel caps", () => {
     await put({ maxBudget: { amountCents: 1400, period: "weekly" }, maxVolume: null });
     expect((await brandTotal()).dailyBudgetCents).toBe("200.0000000000");
   });
-  describe("campaign-service writes caps with its service identity, converting pre-funnel ceilings", () => {
+  describe("campaign-service writes caps with its service identity", () => {
     const internalPut = (body: unknown, headers: Record<string, string> = internal(orgId)) =>
       request(app).put(`/internal${capsPath()}`).set(headers).send(body as object);
-    const brandDaily = async () =>
-      (await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal(orgId))).body.dailyBudgetCents;
-    async function ceiling(featureSlug: string, legKey: string | null, cents: string, offerId: string | null = OFFER) {
-      await db.insert(campaignDailyBudgets).values({ orgId, brandId, featureSlug, offerId, legKey, dailyBudgetCents: cents, updatedAt: new Date() });
-    }
 
     it("accepts x-api-key + x-org-id with no user (and records none)", async () => {
       mockUpstreams();
       const res = await internalPut({ maxBudget: { amountCents: 700, period: "daily" }, maxVolume: null });
       expect(res.status).toBe(200);
-      expect(res.body.conversion).toBeNull();
+      expect(res.body).not.toHaveProperty("conversion");
       const [h] = await db.select().from(salesFunnelCapChanges);
       expect(h.changedByUserId).toBeNull();
       expect((await internalPut({ maxBudget: null, maxVolume: null }, { "X-API-Key": "test-api-key" })).status).toBe(400);
     });
 
-    it("a conversion replaces the ceilings with a cap of the same daily money: no figure moves", async () => {
+    it("the retired pre-funnel conversion is refused (400), nothing written", async () => {
       mockUpstreams();
-      // The pre-funnel family: cold email (legacy leg spelling), meeting booking, its lead source;
-      // plus a ceiling the conversion does not name (another offer), which must stay.
-      await ceiling(COLD, "start_to_conversation", "1000");
-      await ceiling(BOOKING, "conversation_to_meeting_booked", "300");
-      await ceiling(APOLLO, "start_to_lead_found", "400");
-      await ceiling(COLD, "lead_found_to_conversation", "900", OTHER_OFFER);
-      const before = await brandDaily();
-      expect(before).toBe("2600.0000000000");
-
       const res = await internalPut({
-        maxBudget: { amountCents: 1700 * 7, period: "weekly" },
-        maxVolume: null,
-        replacesCeilings: [
-          { featureSlug: COLD, legKey: "lead_found_to_conversation" },
-          { featureSlug: BOOKING, legKey: "conversation_to_meeting_booked" },
-          { featureSlug: APOLLO, legKey: "start_to_lead_found" },
-        ],
-      });
-      expect(res.status).toBe(200);
-      expect(res.body.conversion).toMatchObject({
-        replacedDailyCents: "1700.0000000000",
-        capDailyCents: "1700.0000000000",
-        brandDailyBudgetBefore: "2600.0000000000",
-        brandDailyBudgetAfter: "2600.0000000000",
-      });
-      expect(res.body.conversion.replacedCeilings).toHaveLength(3);
-      expect(await brandDaily()).toBe(before);
-      const left = await db.select().from(campaignDailyBudgets);
-      expect(left.map((r) => [r.featureSlug, r.offerId])).toEqual([[COLD, OTHER_OFFER]]);
-      // The by-day history says the same figure.
-      const { brandDailyBudgetChanges } = await import("../../src/db/schema.js");
-      const rows = await db.select().from(brandDailyBudgetChanges);
-      expect(rows.map((r) => r.dailyBudgetCents)).toEqual(["2600.0000000000"]);
-    });
-
-    it("refuses (409, nothing written) a conversion that would move the money, a one_off cap, or a missing ceiling", async () => {
-      mockUpstreams();
-      await ceiling(COLD, "lead_found_to_conversation", "1000");
-      const replaces = [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }];
-      const more = await internalPut({ maxBudget: { amountCents: 1100, period: "daily" }, maxVolume: null, replacesCeilings: replaces });
-      expect(more.status).toBe(409);
-      expect(more.body).toMatchObject({ reason: "conversion_moves_budget", capDailyCents: "1100.0000000000", replacedDailyCents: "1000.0000000000" });
-      const once = await internalPut({ maxBudget: { amountCents: 1000, period: "one_off" }, maxVolume: null, replacesCeilings: replaces });
-      expect(once.body.reason).toBe("conversion_moves_budget");
-      const missing = await internalPut({
         maxBudget: { amountCents: 1000, period: "daily" },
         maxVolume: null,
-        replacesCeilings: [{ featureSlug: BOOKING, legKey: "conversation_to_meeting_booked" }],
-      });
-      expect(missing.body.reason).toBe("ceiling_not_found");
-      // Monthly / 30 within a cent is accepted.
-      const monthly = await internalPut({ maxBudget: { amountCents: 30000, period: "monthly" }, maxVolume: null, replacesCeilings: replaces });
-      expect(monthly.status).toBe(200);
-      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
-    });
-
-    it("converts the prod shape of brand a179bbd9: its only ceiling has no offer (a sourcing split on it)", async () => {
-      mockUpstreams();
-      await db.insert(campaignDailyBudgets).values({
-        orgId, brandId, featureSlug: COLD, offerId: null, legKey: "lead_found_to_conversation",
-        dailyBudgetCents: "800", sourcingCeilingCents: "350", updatedAt: new Date(),
-      });
-      const before = await brandDaily();
-      const res = await internalPut({
-        maxBudget: { amountCents: "800", period: "daily" },
-        maxVolume: null,
         replacesCeilings: [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }],
       });
-      expect(res.status).toBe(200);
-      expect(res.body.conversion).toMatchObject({ replacedDailyCents: "800.0000000000", capDailyCents: "800.0000000000" });
-      expect(res.body.conversion.replacedCeilings).toEqual([
-        { featureSlug: COLD, offerId: null, legKey: "lead_found_to_conversation", dailyBudgetCents: "800.0000000000" },
-      ]);
-      expect(await brandDaily()).toBe(before);
-      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(0);
-    });
-
-    it("attributes an offer-less ceiling to the converting offer when it is the ONLY one of its channel and leg, even if the brand names another offer elsewhere", async () => {
-      mockUpstreams();
-      await ceiling(COLD, "lead_found_to_conversation", "800", null);
-      // Another offer named on ANOTHER channel: the shared read resolver no longer attributes the row.
-      await ceiling(BOOKING, "conversation_to_meeting_booked", "300", OTHER_OFFER);
-      const res = await internalPut({
-        maxBudget: { amountCents: "800", period: "daily" },
-        maxVolume: null,
-        replacesCeilings: [{ featureSlug: COLD, legKey: "start_to_conversation" }],
-      });
-      expect(res.status).toBe(200);
-      const left = await db.select().from(campaignDailyBudgets);
-      expect(left.map((r) => [r.featureSlug, r.offerId])).toEqual([[BOOKING, OTHER_OFFER]]);
-    });
-
-    it("refuses an offer-less ceiling when another ceiling funds the same channel and leg (ambiguous), nothing written", async () => {
-      mockUpstreams();
-      await ceiling(COLD, "lead_found_to_conversation", "800", null);
-      await ceiling(COLD, "lead_found_to_conversation", "900", OTHER_OFFER);
-      const res = await internalPut({
-        maxBudget: { amountCents: "800", period: "daily" },
-        maxVolume: null,
-        replacesCeilings: [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }],
-      });
-      expect(res.status).toBe(409);
-      expect(res.body.reason).toBe("ceiling_ambiguous");
-      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(2);
-      expect(await db.select().from(salesFunnelCaps)).toHaveLength(0);
-    });
-
-    it("refuses a subscriber org and a brand on a global sales budget", async () => {
-      mockUpstreams();
-      await ceiling(COLD, "lead_found_to_conversation", "1000");
-      const replaces = [{ featureSlug: COLD, legKey: "lead_found_to_conversation" }];
-      await db.insert(brandSalesBudgets).values({ orgId, brandId, dailyBudgetCents: "500" });
-      const global = await internalPut({ maxBudget: { amountCents: 1000, period: "daily" }, maxVolume: null, replacesCeilings: replaces });
-      expect(global.body.reason).toBe("brand_in_global_mode");
-      await db.delete(brandSalesBudgets);
-      await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null, paymentMode: "subscription" });
-      const sub = await internalPut({ maxBudget: { amountCents: 1000, period: "daily" }, maxVolume: null, replacesCeilings: replaces });
-      expect(sub.body.reason).toBe("subscription_org");
-      expect(await db.select().from(campaignDailyBudgets)).toHaveLength(1);
+      expect(res.status).toBe(400);
       expect(await db.select().from(salesFunnelCaps)).toHaveLength(0);
     });
   });

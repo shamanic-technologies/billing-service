@@ -15,7 +15,6 @@ import {
   salesFunnelCapChanges,
   salesFunnelCaps,
   brandTransfers,
-  campaignDailyBudgets,
 } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { fetchRunsBrandTransferMoved, runRunsBrandTransfer } from "./runs-client.js";
@@ -90,12 +89,6 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
           and(eq(brandDailyBudgetChanges.orgId, sourceOrgId), eq(brandDailyBudgetChanges.brandId, sourceBrandId))
         )
         .returning({ id: brandDailyBudgetChanges.id });
-
-      const ceilings = await tx
-        .update(campaignDailyBudgets)
-        .set({ orgId: targetOrgId, brandId: newBrandId })
-        .where(and(eq(campaignDailyBudgets.orgId, sourceOrgId), eq(campaignDailyBudgets.brandId, sourceBrandId)))
-        .returning({ brandId: campaignDailyBudgets.brandId });
 
       const salesBudgets = await tx
         .update(brandSalesBudgets)
@@ -173,7 +166,7 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
 
       console.log(
         `[billing-service] transfer-brand: brand=${sourceBrandId}->${newBrandId} org=${sourceOrgId}->${targetOrgId} ` +
-          `brand_daily_budgets=${budgets.length} brand_daily_budget_changes=${changes.length} campaign_daily_budgets=${ceilings.length} ` +
+          `brand_daily_budgets=${budgets.length} brand_daily_budget_changes=${changes.length} ` +
           `moved_usage_net=${row.movedUsageNetCents} moved_actual_net=${row.movedActualNetCents} ledger_written=${ledgerCount}`
       );
 
@@ -181,7 +174,6 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
         updatedTables: [
           { tableName: "brand_daily_budgets", count: budgets.length },
           { tableName: "brand_daily_budget_changes", count: changes.length },
-          { tableName: "campaign_daily_budgets", count: ceilings.length },
           { tableName: "brand_sales_budgets", count: salesBudgets.length },
           { tableName: "brand_sales_budget_changes", count: salesChanges.length },
           { tableName: "sales_funnel_caps", count: funnelCaps.length },
@@ -215,12 +207,10 @@ async function assertNoTargetBudgetConflict(
   const [row] = (await db.execute(sql`
     SELECT
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
-       OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
        OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId})
        OR EXISTS (SELECT 1 FROM sales_funnel_caps WHERE org_id = ${sourceOrgId} AND brand_id = ${sourceBrandId}))
       AS source_has,
       (EXISTS (SELECT 1 FROM brand_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
-       OR EXISTS (SELECT 1 FROM campaign_daily_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
        OR EXISTS (SELECT 1 FROM brand_sales_budgets WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId})
        OR EXISTS (SELECT 1 FROM sales_funnel_caps WHERE org_id = ${targetOrgId} AND brand_id = ${newBrandId}))
       AS target_has

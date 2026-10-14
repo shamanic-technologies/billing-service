@@ -21,10 +21,8 @@ import {
   statedCapsOf,
   SalesFunnelCatalogueUnavailableError,
   SalesFunnelNotFoundError,
-  FunnelConversionRefusedError,
   type CapPeriod,
   type FunnelCapKey,
-  type ReplacedCeilingKey,
 } from "../lib/sales-funnel-caps.js";
 import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 
@@ -103,9 +101,9 @@ router.get(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
 /**
  * State a funnel's caps. The user writes through `/v1` (org headers); campaign-
  * service writes through `/internal` with its service identity (x-api-key +
- * x-org-id, x-user-id optional) and may name `replacesCeilings`: the pre-funnel
- * campaigns whose per-campaign ceilings this cap replaces (a conversion, refused
- * with 409 when it would move the brand's money beyond rounding).
+ * x-org-id, x-user-id optional). The pre-funnel ceiling CONVERSION
+ * (`replacesCeilings`) was retired with the per-campaign ceilings (2026-10-14):
+ * the body is strict, so a caller still naming it gets a 400.
  */
 async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal: boolean) {
   const parsed = (internal ? InternalSetSalesFunnelCapsRequestSchema : SetSalesFunnelCapsRequestSchema).safeParse(req.body);
@@ -114,7 +112,7 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     res.status(400).json({ error: `${issue.path.join(".") || "body"}: ${issue.message}` });
     return;
   }
-  const body = parsed.data as { maxBudget: { amountCents: string | number; period: CapPeriod } | null; maxVolume: { count: number; period: CapPeriod } | null; replacesCeilings?: ReplacedCeilingKey[] };
+  const body = parsed.data as { maxBudget: { amountCents: string | number; period: CapPeriod } | null; maxVolume: { count: number; period: CapPeriod } | null };
   let amountCents: string | null = null;
   if (body.maxBudget) {
     try {
@@ -150,30 +148,20 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     }
     throw err;
   }
-  let conversion = null;
-  try {
-    ({ conversion } = await setSalesFunnelCaps(
-      key,
-      {
-        maxBudget: body.maxBudget ? { amountCents: amountCents!, period: body.maxBudget.period } : null,
-        maxVolume: body.maxVolume,
-        salesFunnelType,
-      },
-      userId ?? null,
-      new Date(),
-      body.replacesCeilings && body.replacesCeilings.length > 0 ? body.replacesCeilings : null
-    ));
-  } catch (err) {
-    if (err instanceof FunnelConversionRefusedError) {
-      res.status(409).json({ error: err.message, reason: err.reason, ...err.detail });
-      return;
-    }
-    throw err;
-  }
+  await setSalesFunnelCaps(
+    key,
+    {
+      maxBudget: body.maxBudget ? { amountCents: amountCents!, period: body.maxBudget.period } : null,
+      maxVolume: body.maxVolume,
+      salesFunnelType,
+    },
+    userId ?? null,
+    new Date()
+  );
   const view = key.salesFunnelCampaignId
     ? await composeSalesFunnelCampaignCapsView({ ...key, salesFunnelCampaignId: key.salesFunnelCampaignId })
     : await composeSalesFunnelCapsView(key);
-  res.json(internal ? { ...view, conversion } : view);
+  res.json(view);
 }
 
 router.put(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
@@ -226,10 +214,6 @@ router.put(`/internal${CAMPAIGN_PATH}`, handle(async (req, res) => {
   if (!orgId) return;
   const key = campaignKeyOf(req, res, orgId);
   if (!key) return;
-  if (req.body?.replacesCeilings?.length) {
-    res.status(400).json({ error: "replacesCeilings: a conversion is written on the funnel-wide cap, not a funnel campaign's" });
-    return;
-  }
   await putCaps(req, res, key, true);
 }));
 

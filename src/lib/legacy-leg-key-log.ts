@@ -9,13 +9,9 @@
  * route and the caller. Nothing else changes: this module only reads.
  *
  * Where a leg key arrives, and how its channel is known:
- *   - a body / query object carrying `featureSlug` + `legKey` (any depth: item
- *     lists, the mission-status notification, the campaign-budget query);
- *   - the `?campaigns=featureSlug:legKey,...` query;
- *   - the per-leg path `/brands/:brandId/legs/:legKey/...`, which names NO
- *     channel. There the key is legacy only if it matched a stored row on an
- *     outbound channel, so the route reports it itself (`logLegacyLegKeyOnLegPath`)
- *     after reading the rows: a google-ads `start_to_conversation` logs nothing.
+ *   - a body / query object carrying `featureSlug` + `legKey` (any depth, e.g.
+ *     the mission-status notification);
+ *   - the `?campaigns=featureSlug:legKey,...` query.
  */
 import type { NextFunction, Request, Response } from "express";
 import { isLegacyOutboundLegKey } from "./leg-identity.js";
@@ -100,18 +96,4 @@ export function legacyOutboundLegKeyLogMiddleware(req: Request, _res: Response, 
     console.error("[billing-service] legacy leg-key scan failed:", err);
   }
   next();
-}
-
-/**
- * The per-leg path names no channel: report its key as legacy only when it is
- * the legacy spelling on a channel of a row it actually matched.
- */
-export function logLegacyLegKeyOnLegPath(
-  req: Request,
-  legKey: string,
-  matchedRows: ReadonlyArray<{ featureSlug: string; legKey: string | null }>
-): void {
-  const hit = matchedRows.find((row) => row.legKey !== null && isLegacyOutboundLegKey(row.featureSlug, legKey));
-  if (!hit) return;
-  logLegacyOutboundLegKeys(req, [{ featureSlug: hit.featureSlug, legKey: legKey.trim(), source: "path" }]);
 }

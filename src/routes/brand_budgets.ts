@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
-import { logLegacyLegKeyOnLegPath } from "../lib/legacy-leg-key-log.js";
 import { requireOrgHeaders } from "../middleware/auth.js";
 import {
   MissionStatusChangedRequestSchema,
@@ -10,7 +9,6 @@ import {
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
   getBrandDailyBudget,
-  getLegacyBrandDailyBudget,
   getBrandDailyBudgetByDay,
   getBrandDailyBudgetHistory,
   upsertBrandDailyBudget,
@@ -23,8 +21,6 @@ import {
   setBrandSalesBudget,
   viewOf,
 } from "../lib/brand-sales-budget.js";
-import { getBrandItemsSpendView } from "../lib/campaign-items.js";
-import { onMissionStatusChanged } from "../lib/subscriber-plan-budgets.js";
 import {
   MAX_DAY_RANGE_DAYS,
   currentUtcDay,
@@ -36,28 +32,7 @@ import {
   notifyMissionStatusChanged,
   statusMoveOf,
 } from "../lib/brand-budget-notification.js";
-import {
-  BrandBudgetManagedByCampaignsError,
-  aggregateLegBudget,
-  legBudgetRows,
-  aggregateOfferBudget,
-  campaignBudgetOf,
-  campaignTotalsOf,
-  getBrandCeilings,
-  parseCampaignKey,
-  sumCeilings,
-  type CampaignBudgetTotal,
-  type CampaignKey,
-  type CeilingSubtotal,
-} from "../lib/campaign-budgets.js";
-import {
-  brandGrainChange,
-} from "../lib/brand-running-budget.js";
-import {
-  fetchCampaignSpendToday,
-  parseCampaignIds,
-  MAX_CAMPAIGN_IDS,
-} from "../lib/campaign-sourcing.js";
+import { brandGrainChange } from "../lib/brand-running-budget.js";
 
 const router = Router();
 
@@ -85,59 +60,6 @@ function requireInternalOrgId(req: Request, res: Response): string | null {
     return null;
   }
   return orgId;
-}
-
-function renderCampaigns(totals: CampaignBudgetTotal[]) {
-  return totals.map((total) => ({
-    offerId: total.offerId,
-    legKey: total.legKey,
-    featureSlug: total.featureSlug,
-    dailyBudgetCents: total.dailyBudgetCents,
-    outreachDailyBudgetCents: total.outreachDailyBudgetCents,
-    sourcingCeilingCents: total.sourcingCeilingCents,
-    updatedAt: total.updatedAt.toISOString(),
-  }));
-}
-
-/** An offer's or a leg's ceiling, or the explicit "nothing funds it" answer. */
-function renderSubtotal(subtotal: CeilingSubtotal | null) {
-  if (!subtotal) {
-    return { dailyBudgetCents: null, updatedAt: null, campaigns: [] };
-  }
-  return {
-    dailyBudgetCents: subtotal.dailyBudgetCents,
-    updatedAt: subtotal.updatedAt.toISOString(),
-    campaigns: renderCampaigns(subtotal.campaigns),
-  };
-}
-
-/**
- * One OFFER's ceiling, for a screen that paces that one proposition: the SUM of
- * the campaign ceilings funding it, plus those ceilings. An offer with no
- * ceiling answers null — nothing stated is not a ceiling of zero.
- */
-async function composeOfferBudgetView(
-  orgId: string,
-  brandId: string,
-  offerId: string
-) {
-  const stored = await getBrandCeilings(orgId, brandId);
-  return { offerId, ...renderSubtotal(aggregateOfferBudget(stored, offerId)) };
-}
-
-/**
- * One LEG's ceiling: the SUM of the campaign ceilings funding it, plus those
- * ceilings. A leg with no ceiling answers null.
- */
-async function composeLegBudgetView(
-  req: Request,
-  orgId: string,
-  brandId: string,
-  legKey: string
-) {
-  const stored = await getBrandCeilings(orgId, brandId);
-  logLegacyLegKeyOnLegPath(req, legKey, legBudgetRows(stored, legKey));
-  return { legKey, ...renderSubtotal(aggregateLegBudget(stored, legKey)) };
 }
 
 // GET /internal/brands/:brandId/daily-budget — read this org's current daily
@@ -357,10 +279,7 @@ router.patch(
         dailyBudgetCents
       ));
     } catch (err) {
-      if (
-        err instanceof BrandBudgetManagedByCampaignsError ||
-        err instanceof BrandBudgetManagedBySalesBudgetError
-      ) {
+      if (err instanceof BrandBudgetManagedBySalesBudgetError) {
         res.status(409).json({ error: err.message });
         return;
       }
@@ -435,265 +354,20 @@ router.post(
         ...body,
         actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
       };
-      // ORDER MATTERS. A subscriber's plan money follows the ON campaigns (the ON
-      // proactive carries the plan minus each ON reactive share, OFF ones are
-      // DELETED; lib/subscriber-plan-budgets), then the usual re-price. The staff
-      // email states the ceilings as they stand after the move, so it composes
-      // only once that reallocation is done: run in parallel, it read the row the
-      // reallocation was deleting and told staff "$3/day kept" for money billing
-      // no longer held (Legistai, 2026-10-06). Both never throw; still fire-and-forget.
-      void (async () => {
-        await onMissionStatusChanged({ orgId, brandId, offerId: body.offerId });
-        await notifyMissionStatusChanged(notification);
-      })();
+      // Never throws; fire-and-forget.
+      void notifyMissionStatusChanged(notification);
     }
     res.status(202).json({ notified: move !== null, move });
   }
 );
 
-// --- One offer's daily ceiling ------------------------------------------
-//
-// An offer-scoped screen shows a fraction: that offer's spend today over the
-// ceiling it is paced against. The numerator is that offer's, so the denominator
-// has to be too — the brand-wide total is about a different thing the moment a
-// brand states a second proposition. It reads correctly today only because every
-// live brand names one offer, which is a property of the data rather than of the
-// design.
-//
-// This is its own answer, not a widening of the brand-wide read: that read's
-// meaning is what several consumers pace and gate real spend on (including this
-// service's own affordability checks), and it is untouched here.
-
-// GET /internal/brands/:brandId/offers/:offerId/daily-budget — service-to-service
-// read of ONE offer's daily ceiling for a brand.
-//
-// Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
-// Resp: { brandId, offerId, dailyBudgetCents, updatedAt, campaigns }.
-// `dailyBudgetCents` is the SUM of the campaign ceilings funding this offer;
-// `campaigns` lists them — so a caller never enumerates the offer's campaigns
-// nor adds anything up.
-// An offer with NO ceiling answers dailyBudgetCents: null (nothing stated), which
-// is a different answer from a ceiling of 0 (funded at nothing). 400 on a
-// non-UUID brandId or offerId.
-router.get(
-  "/internal/brands/:brandId/offers/:offerId/daily-budget",
-  async (req, res) => {
-    const { brandId, offerId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    if (!UUID_RE.test(offerId)) {
-      res.status(400).json({ error: "offerId must be a valid UUID" });
-      return;
-    }
-
-    const orgId = requireInternalOrgId(req, res);
-    if (!orgId) return;
-
-    const view = await composeOfferBudgetView(
-      orgId,
-      brandId,
-      offerId.toLowerCase()
-    );
-    res.json({ brandId, ...view });
-  }
-);
-
-// --- One LEG's daily ceiling ---------------------------------------------
-//
-// A campaign is (offer, leg, acquisition channel) — the leg is the thing the
-// customer buys. So this is the money that paces the campaigns buying one leg,
-// read on the key they are keyed on.
-//
-// `:legKey` is features-service's canonical leg id (it mints the vocabulary and
-// publishes it on GET /public/channels as legs[].legKey; campaign-service
-// carries the same value on the campaign row). It is carried OPAQUE here and
-// never parsed — the two steps a leg connects ride beside it on that catalogue.
-//
-// This is its own answer, not a widening of any existing read: the brand-wide
-// and per-offer figures are what several consumers pace and gate real spend on,
-// and both are untouched.
-
-// GET /internal/brands/:brandId/legs/:legKey/daily-budget — service-to-service
-// read of ONE leg's daily ceiling for a brand.
-//
-// Auth: x-api-key + x-org-id (the same auth as every other ceiling read).
-// Resp: { brandId, legKey, dailyBudgetCents, updatedAt, campaigns }.
-// `dailyBudgetCents` is the SUM of the campaign ceilings funding this leg;
-// `campaigns` lists them, so a caller never enumerates anything nor adds
-// anything up.
-// A leg with NO ceiling answers dailyBudgetCents: null (nothing stated), which
-// is a different answer from a ceiling of 0 (funded at nothing). 400 on a
-// non-UUID brandId or an empty legKey.
-router.get(
-  "/internal/brands/:brandId/legs/:legKey/daily-budget",
-  async (req, res) => {
-    const { brandId, legKey } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    if (!legKey.trim()) {
-      res.status(400).json({ error: "legKey must be a non-empty leg id" });
-      return;
-    }
-
-    const orgId = requireInternalOrgId(req, res);
-    if (!orgId) return;
-
-    const view = await composeLegBudgetView(req, orgId, brandId, legKey.trim());
-    res.json({ brandId, ...view });
-  }
-);
-
-// --- One CAMPAIGN's daily ceiling ---------------------------------------
-//
-// A campaign is (offer x leg x acquisition channel), so these routes address a
-// ceiling by the campaign — see lib/campaign-budgets.ts.
-
-/**
- * Every campaign ceiling of a brand, plus the brand total
- * (null when nothing was ever configured — the same answer as the brand-level
- * read). The entries add up to the total by construction.
- */
-async function composeCampaignBudgetsView(orgId: string, brandId: string) {
-  const all = await getBrandCeilings(orgId, brandId);
-  if (all.length > 0) {
-    return {
-      dailyBudgetCents: sumCeilings(all),
-      campaigns: renderCampaigns(campaignTotalsOf(all)),
-    };
-  }
-  // A campaign's read: the funnel caps are never a per-campaign ceiling.
-  const brandLevel = await getLegacyBrandDailyBudget(orgId, brandId);
-  return {
-    dailyBudgetCents: brandLevel ? brandLevel.dailyBudgetCents : null,
-    campaigns: [],
-  };
-}
-
-async function composeCampaignBudgetView(
-  orgId: string,
-  brandId: string,
-  key: CampaignKey,
-  campaignIds: string[] | null
-) {
-  const found = campaignBudgetOf(await getBrandCeilings(orgId, brandId), key);
-  // Today's spend against each part, only when the caller names the campaign's
-  // ids (campaign-service owns campaign -> ids; billing never guesses them).
-  const today = campaignIds ? await fetchCampaignSpendToday(orgId, campaignIds) : null;
-  return {
-    ...key,
-    dailyBudgetCents: found ? found.dailyBudgetCents : null,
-    outreachDailyBudgetCents: found ? found.outreachDailyBudgetCents : null,
-    sourcingCeilingCents: found ? found.sourcingCeilingCents : null,
-    split: found ? found.split : false,
-    updatedAt: found ? found.updatedAt.toISOString() : null,
-    today,
-  };
-}
-
-/**
- * The optional `campaignIds` query (comma-separated, the campaign FAMILY).
- * Returns undefined after writing the 400 on a malformed list, null when absent.
- */
-function campaignIdsFromQuery(req: Request, res: Response): string[] | null | undefined {
-  const raw = req.query.campaignIds;
-  if (raw === undefined) return null;
-  const ids = parseCampaignIds(raw);
-  if (!ids) {
-    res.status(400).json({
-      error: `campaignIds must be a comma-separated list of 1 to ${MAX_CAMPAIGN_IDS} campaign ids`,
-    });
-    return undefined;
-  }
-  return ids;
-}
-
-/** Compose the one-campaign read; a runs-service failure on today's spend is a 502. */
-async function respondCampaignBudget(
-  res: Response,
-  orgId: string,
-  brandId: string,
-  key: CampaignKey,
-  campaignIds: string[] | null,
-  extra: Record<string, unknown>
-): Promise<void> {
-  let view;
-  try {
-    view = await composeCampaignBudgetView(orgId, brandId, key, campaignIds);
-  } catch (err) {
-    console.error(
-      `[billing-service] campaign budget read failed: brand=${brandId} org=${orgId} campaign=${key.offerId}/${key.legKey}/${key.featureSlug}: ${(err as Error).message}`
-    );
-    res.status(502).json({ error: "Failed to read today's campaign spend" });
-    return;
-  }
-  res.json({ brandId, ...extra, ...view });
-}
-
-/** Parse the campaign address out of the query string; writes the 400 itself. */
-function campaignKeyFromQuery(req: Request, res: Response): CampaignKey | null {
-  try {
-    return parseCampaignKey(req.query as Record<string, unknown>);
-  } catch (err) {
-    res.status(400).json({ error: (err as Error).message });
-    return null;
-  }
-}
-
-// GET /internal/brands/:brandId/campaign-budgets — every campaign ceiling of a
-// brand. Auth: x-api-key + x-org-id.
-router.get("/internal/brands/:brandId/campaign-budgets", async (req, res) => {
-  const { brandId } = req.params;
-  if (!UUID_RE.test(brandId)) {
-    res.status(400).json({ error: "brandId must be a valid UUID" });
-    return;
-  }
-  const orgId = requireInternalOrgId(req, res);
-  if (!orgId) return;
-  res.json({ brandId, ...(await composeCampaignBudgetsView(orgId, brandId)) });
-});
-
-// GET /internal/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug=
-// — ONE campaign's ceiling (campaign-service pacing). All three are required.
-// Nothing funds it -> dailyBudgetCents: null, never 0. Auth: x-api-key + x-org-id.
-router.get("/internal/brands/:brandId/campaign-budget", async (req, res) => {
-  const { brandId } = req.params;
-  if (!UUID_RE.test(brandId)) {
-    res.status(400).json({ error: "brandId must be a valid UUID" });
-    return;
-  }
-  const orgId = requireInternalOrgId(req, res);
-  if (!orgId) return;
-  const key = campaignKeyFromQuery(req, res);
-  if (!key) return;
-  const campaignIds = campaignIdsFromQuery(req, res);
-  if (campaignIds === undefined) return;
-  await respondCampaignBudget(res, orgId, brandId, key, campaignIds, {});
-});
-
 // --- The brand's ONE daily sales budget (global mode) --------------------
 //
-// A brand either paces every campaign on its own ceiling ("campaigns" mode, the
-// default) or states ONE daily budget for sales ("global" mode) that campaign-
-// service allocates to the best-return sales path. See lib/brand-sales-budget.ts.
+// A brand either states ONE daily budget for sales ("global" mode) or does not
+// ("campaigns" mode, the default). See lib/brand-sales-budget.ts.
 // Every answer carries the mode, so a reader never infers it from a null.
 
 async function composeSalesBudgetView(orgId: string, brandId: string) {
-  // ITEMS mode outranks the global pot: the brand budgets each campaign
-  // (offer x leg x channel, lib/campaign-items). Only a brand that wrote an item
-  // ever reads it; every other brand answers exactly as before.
-  const items = await getBrandItemsSpendView(orgId, brandId);
-  if (items) {
-    return {
-      mode: "items" as const,
-      dailyBudgetCents: items.dailyBudgetCents,
-      updatedAt: items.updatedAt.toISOString(),
-      items: items.items,
-    };
-  }
   const view = viewOf(await getBrandSalesBudget(orgId, brandId));
   return {
     mode: view.mode,

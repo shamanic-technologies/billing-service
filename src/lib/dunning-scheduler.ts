@@ -15,7 +15,6 @@ import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 import { runUnpaidDebtScan } from "./unpaid-debt.js";
 import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
 import { runSubscriptionSweep } from "./subscription.js";
-import { reallocateDerivedPlans, restateSubscriberBudgetsFromPlans } from "./subscriber-plan-budgets.js";
 import { notifySubscriptionMonthlyUpdateIfDue } from "./subscription-monthly-update.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
@@ -110,33 +109,6 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] welcome-completion sweep failed:", err);
-      }
-
-      // A subscriber's campaign budgets come from its plan (lib/subscriber-plan-budgets):
-      // legacy daily ceilings are restated as monthly figures derived from the live
-      // plan, never charged. Before the subscription sweep, so a renewal reads them.
-      try {
-        const b = await restateSubscriberBudgetsFromPlans(new Date());
-        if (b.offers > 0) {
-          console.log(
-            `[billing-service] plan budgets: offers=${b.offers} restatedOffers=${b.restatedOffers} ` +
-              `restatedOrgs=${b.restatedOrgs} rowsRestated=${b.rowsRestated} rowsDeleted=${b.rowsDeleted} skipped=${b.skipped}`
-          );
-        }
-      } catch (err) {
-        console.error("[billing-service] plan budgets sweep failed:", err);
-      }
-      // Plan-derived offers follow the CURRENT allocation rule (follow-up = 9% of the
-      // plan, entries the rest): an offer already on it writes nothing.
-      try {
-        const d = await reallocateDerivedPlans(new Date());
-        if (d.reallocatedOffers > 0 || d.skipped > 0) {
-          console.log(
-            `[billing-service] derived plans: offers=${d.offers} reallocatedOffers=${d.reallocatedOffers} skipped=${d.skipped}`
-          );
-        }
-      } catch (err) {
-        console.error("[billing-service] derived plans sweep failed:", err);
       }
 
       // Subscription sweep — starts subscriptions whose card is now on file, expires

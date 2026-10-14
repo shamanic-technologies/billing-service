@@ -70,7 +70,6 @@ import {
   localPromoCodes,
   localPromos,
   PLATFORM_USER_ID,
-  salesPathReactiveCharges,
   SUBSCRIPTION_TRIAL_CODE,
   subscriptionAutoUpgrades,
   subscriptionCharges,
@@ -97,9 +96,6 @@ import { ensureOrgStripeCustomer } from "./account.js";
 import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
 import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
-import { campaignOnPredicateOf, itemsPlanPricing, listOfferItems } from "./campaign-items-store.js";
-import { getSalesPathTerms } from "./sales-path-terms.js";
-import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
@@ -750,16 +746,6 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
     .select({ total: rawSql<string>`COALESCE(SUM(${localPromos.amountCents}), 0)::text` })
     .from(localPromos)
     .where(and(eq(localPromos.orgId, sub.orgId), gte(localPromos.createdAt, boundary)));
-  const [reactivePaidSince] = await db
-    .select({ total: rawSql<string>`COALESCE(SUM(${salesPathReactiveCharges.amountCents}), 0)::text` })
-    .from(salesPathReactiveCharges)
-    .where(
-      and(
-        eq(salesPathReactiveCharges.orgId, sub.orgId),
-        eq(salesPathReactiveCharges.status, "paid"),
-        gte(salesPathReactiveCharges.createdAt, boundary)
-      )
-    );
   const [upgradesPaidSince] = await db
     .select({ total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.chargedCents}), 0)::text` })
     .from(subscriptionAutoUpgrades)
@@ -774,17 +760,12 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
     Number(snapshot.balanceCents) -
     Number(paidSince?.total ?? 0) -
     Number(grantedSince?.total ?? 0) -
-    Number(reactivePaidSince?.total ?? 0) -
     Number(upgradesPaidSince?.total ?? 0);
-  // Reactive item budgets (lib/campaign-items) are paid for the month but only
-  // spent when leads reach their step: what is left of them CARRIES OVER instead
-  // of expiring, up to what the ending period collected for reactive items.
-  const carry = Math.max(0, Math.min(unspent, await reactiveCollectedInPeriod(sub)));
   // Several plans share ONE balance: a plan never expires more than the credit IT
   // brought for the period that is ending, so its boundary cannot eat another
   // plan's month. A lone plan is uncapped, exactly as before plans were per offer.
   const cap = await otherPlansLive(sub) ? await periodCreditCents(sub) : Number.POSITIVE_INFINITY;
-  const amount = Math.max(0, Math.min(unspent - carry, cap));
+  const amount = Math.max(0, Math.min(unspent, cap));
 
   await db
     .insert(subscriptionCreditExpiries)
@@ -793,7 +774,8 @@ async function expireAt(sub: Subscription, boundary: Date): Promise<void> {
       subscriptionId: sub.id,
       boundaryAt: boundary,
       amountCents: amount.toFixed(10),
-      carriedOverCents: carry.toFixed(10),
+      // Reactive item carry-over retired with the per-campaign budgets (2026-10-14).
+      carriedOverCents: "0",
     })
     .onConflictDoNothing({
       target: [subscriptionCreditExpiries.subscriptionId, subscriptionCreditExpiries.boundaryAt],
@@ -821,42 +803,6 @@ async function otherPlansLive(sub: Subscription): Promise<boolean> {
   return !!row;
 }
 
-/** Reactive item budget charged NOW during this plan's current period (lib/campaign-items). */
-export async function reactiveChargedNowInPeriod(sub: Subscription): Promise<number> {
-  const [row] = await db
-    .select({ total: rawSql<string>`COALESCE(SUM(${salesPathReactiveCharges.amountCents}), 0)::text` })
-    .from(salesPathReactiveCharges)
-    .where(
-      and(
-        eq(salesPathReactiveCharges.subscriptionId, sub.id),
-        eq(salesPathReactiveCharges.periodStart, sub.currentPeriodStart),
-        eq(salesPathReactiveCharges.status, "paid")
-      )
-    );
-  return Number(row?.total ?? 0);
-}
-
-/**
- * What the plan's current period collected for REACTIVE items: the reactive part
- * of its paid period charge plus every reactive charge made now during it.
- */
-export async function reactiveCollectedInPeriod(sub: Subscription): Promise<number> {
-  const charge = await getCharge(sub.id, sub.currentPeriodStart);
-  const fromCharge = charge?.status === "paid" ? charge.reactiveCents : 0;
-  return fromCharge + (await reactiveChargedNowInPeriod(sub));
-}
-
-/** Every auto-upgrade step PAID for this plan, all periods (cents/month it added). */
-async function autoUpgradeStepsPaidCents(sub: Subscription): Promise<number> {
-  const [row] = await db
-    .select({
-      total: rawSql<string>`COALESCE(SUM(${subscriptionAutoUpgrades.toAmountCents} - ${subscriptionAutoUpgrades.fromAmountCents}), 0)::text`,
-    })
-    .from(subscriptionAutoUpgrades)
-    .where(and(eq(subscriptionAutoUpgrades.subscriptionId, sub.id), eq(subscriptionAutoUpgrades.status, "paid")));
-  return Number(row?.total ?? 0);
-}
-
 /** Auto-upgrade steps PAID for this plan during its current period (lib/subscription-auto-upgrade). */
 export async function autoUpgradePaidInPeriod(sub: Subscription): Promise<number> {
   const [row] = await db
@@ -874,11 +820,11 @@ export async function autoUpgradePaidInPeriod(sub: Subscription): Promise<number
 
 /**
  * The credit this plan brought for its current period: its paid charge, or the
- * trial grant, plus every reactive charge and auto-upgrade step paid during it.
+ * trial grant, plus every auto-upgrade step paid during it.
  */
 async function periodCreditCents(sub: Subscription): Promise<number> {
   const charge = await getCharge(sub.id, sub.currentPeriodStart);
-  const extra = (await reactiveChargedNowInPeriod(sub)) + (await autoUpgradePaidInPeriod(sub));
+  const extra = await autoUpgradePaidInPeriod(sub);
   if (charge?.status === "paid") return charge.amountCents + extra;
   if (sub.trialStartedAt && sub.trialStartedAt.getTime() === sub.currentPeriodStart.getTime()) {
     return ((await getSubscriptionTrialGrantCents(sub.orgId)) ?? 0) + extra;
@@ -1027,64 +973,12 @@ async function endSubscription(sub: Subscription, at: Date, now: Date): Promise<
   return ended;
 }
 
-/**
- * A plan priced from per-campaign item budgets (lib/campaign-items) follows them:
- * its monthly amount is the SUM of the items on channels we run whose campaign is
- * ON (at least $99), so a channel that launched, or a campaign turned on or off,
- * since the last write is reflected here. A plan whose offer holds no charged item
- * keeps its amount. An unreadable catalogue or campaign status keeps the amount
- * last computed (loudly): a renewal is never blocked by a read about pricing.
- */
-export async function syncPlanPricingFromItems(sub: Subscription, now: Date): Promise<Subscription> {
-  if (!sub.brandId || !sub.offerId) return sub;
-  const rows = await listOfferItems(sub.orgId, sub.brandId, sub.offerId);
-  if (rows.length === 0) return sub;
-  let pricing;
-  try {
-    const statuses = await fetchRecurringCampaignStatuses(sub.orgId);
-    if (!statuses.ok) throw new Error(`campaign status unreadable: ${statuses.reason}`);
-    pricing = itemsPlanPricing(rows, await getSalesPathTerms(), campaignOnPredicateOf(statuses.campaigns));
-  } catch (err) {
-    console.error(
-      `[billing-service] plan ${sub.id}: item pricing inputs unreadable, keeping ${sub.monthlyAmountCents} cents/month`,
-      err
-    );
-    return sub;
-  }
-  if (!pricing) return sub;
-  // Auto-upgrade steps (lib/subscription-auto-upgrade) sit ON TOP of the items:
-  // re-pricing from items must never undo an upgrade the customer already paid for.
-  const steps = await autoUpgradeStepsPaidCents(sub);
-  if (steps > 0) pricing = { ...pricing, monthlyAmountCents: pricing.monthlyAmountCents + steps };
-  if (
-    pricing.monthlyAmountCents === sub.monthlyAmountCents &&
-    pricing.reactiveMonthlyCents === sub.itemReactiveMonthlyCents
-  ) {
-    return sub;
-  }
-  const [updated] = await db
-    .update(subscriptions)
-    .set({
-      monthlyAmountCents: pricing.monthlyAmountCents,
-      itemReactiveMonthlyCents: pricing.reactiveMonthlyCents,
-      updatedAt: now,
-    })
-    .where(eq(subscriptions.id, sub.id))
-    .returning();
-  console.log(
-    `[billing-service] plan ${sub.id}: priced from items at ${pricing.monthlyAmountCents} cents/month ` +
-      `(reactive ${pricing.reactiveMonthlyCents}, deferred ${pricing.deferredMonthlyCents}, off ${pricing.offMonthlyCents})`
-  );
-  return updated;
-}
-
 /** Charge a period and move the subscription onto it (paid → active, refused → past_due). */
 async function billPeriod(sub: Subscription, periodStart: Date, now: Date): Promise<Subscription> {
   const anchor = renewalAnchor(sub);
   const periodEnd = nextPeriodEnd(periodStart, anchor);
   let charge = await getCharge(sub.id, periodStart);
   if (!charge) {
-    sub = await syncPlanPricingFromItems(sub, now);
     await db
       .insert(subscriptionCharges)
       .values({
@@ -1093,7 +987,7 @@ async function billPeriod(sub: Subscription, periodStart: Date, now: Date): Prom
         periodStart,
         periodEnd,
         amountCents: sub.monthlyAmountCents,
-        reactiveCents: Math.min(sub.itemReactiveMonthlyCents, sub.monthlyAmountCents),
+        reactiveCents: 0,
         status: "pending",
       })
       .onConflictDoNothing({

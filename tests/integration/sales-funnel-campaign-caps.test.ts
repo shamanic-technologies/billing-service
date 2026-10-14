@@ -228,7 +228,7 @@ describe("sales funnel campaign caps", () => {
     expect(list.caps.find((c: { salesFunnelCampaignId?: string }) => !c.salesFunnelCampaignId)).not.toHaveProperty("salesFunnelCampaignId");
   });
 
-  it("refuses a bad funnel campaign id and a conversion on a funnel campaign's cap", async () => {
+  it("refuses a bad funnel campaign id and the retired replacesCeilings field", async () => {
     mockUpstreams({});
     expect((await readCampaign("not-a-uuid")).status).toBe(400);
     const conv = await putCampaign(FC_MARIE, { ...ONE_EMAIL, replacesCeilings: [{ featureSlug: FOLLOW, legKey: "signup_to_paid_client" }] });

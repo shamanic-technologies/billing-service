@@ -18,18 +18,6 @@ process.env.NODE_ENV = "test";
 beforeAll(async () => {
   console.log("Test suite starting...");
 
-  // Every funded ceiling is judged against its acquisition channel's PUBLISHED
-  // daily operating cost, read from features-service. Seed that read with the
-  // catalogue production serves, so the suite exercises the real floors without
-  // reaching a sibling service. A test about an unreadable catalogue resets it.
-  const { __primeChannelMinimums } = await import(
-    "../src/lib/channel-terms.js"
-  );
-  const { publishedChannelMinimums } = await import(
-    "./helpers/channel-catalogue.js"
-  );
-  __primeChannelMinimums(publishedChannelMinimums());
-
   const { sql } = await import("../src/db/index.js");
 
   // Fresh-DB path — create billing_accounts (post-#0016 shape: topup config only).
@@ -378,6 +366,9 @@ beforeAll(async () => {
     "0081_subscription_auto_upgrade_and_consents.sql",
     "0082_off_platform_payments.sql",
     "0085_monthly_charge_limit.sql",
+    // Drops the per-campaign ceilings created above (and altered by 0064/0065/0074),
+    // so the suite runs on prod's shape.
+    "0088_drop_per_campaign_ceilings.sql",
   ]) {
     const { readFileSync } = await import("fs");
     const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");

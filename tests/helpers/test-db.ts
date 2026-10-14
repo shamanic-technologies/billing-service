@@ -16,7 +16,6 @@ import {
   salesFunnelCaps,
   salesFunnelCapChanges,
   brandSalesBudgetChanges,
-  campaignDailyBudgets,
   orgUsageDiscounts,
   freeCreditPromises,
   welcomeRecipients,
@@ -26,7 +25,6 @@ import {
   subscriptionCharges,
   subscriptionCreditExpiries,
   platformOrgs,
-  salesPathReactiveCharges,
   subscriptionAutoUpgrades,
   paymentConsents,
   paymentAlerts,
@@ -71,7 +69,6 @@ export const SEEDED_PLATFORM_ORG_ID = "f0420eb5-8f72-4f0a-a150-f473746df1e6";
 export async function cleanTestData() {
   // Keep 0057's seeded row; drop any a test added.
   await db.delete(platformOrgs).where(notInArray(platformOrgs.orgId, [SEEDED_PLATFORM_ORG_ID]));
-  await db.delete(salesPathReactiveCharges);
   await db.delete(subscriptionAutoUpgrades);
   await db.delete(paymentConsents);
   await db.delete(paymentAlerts);
@@ -92,7 +89,6 @@ export async function cleanTestData() {
   await db.delete(brandSalesBudgets);
   await db.delete(salesFunnelCapChanges);
   await db.delete(salesFunnelCaps);
-  await db.delete(campaignDailyBudgets);
   await db.delete(brandDailyBudgets);
   await db.delete(orgUsageDiscounts);
   await db.delete(offPlatformPayments);

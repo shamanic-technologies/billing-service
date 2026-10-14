@@ -617,6 +617,13 @@
       "when": 1795687200000,
       "tag": "0087_account_topup_minimums",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1795773600000,
+      "tag": "0088_drop_per_campaign_ceilings",
+      "breakpoints": true
     }
   ]
 }

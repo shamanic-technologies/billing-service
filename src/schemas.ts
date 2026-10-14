@@ -858,7 +858,6 @@ export const InternalAccountTeardownDeletedRowsSchema = z
     creditDepletionEpisodes: z.number().int(),
     campaignAuthorizeCosts: z.number().int(),
     brandDailyBudgets: z.number().int(),
-    campaignDailyBudgets: z.number().int(),
     salesFunnelCaps: z.number().int(),
     welcomeCreditClaims: z.number().int(),
     freeCreditPromises: z.number().int(),
@@ -1213,57 +1212,22 @@ const BrandBudgetModeSchema = z
   });
 
 const BrandFundingModeSchema = z
-  .enum(["items", "global", "campaigns"])
+  .enum(["global", "campaigns"])
   .openapi("BrandFundingMode", {
     description:
-      "items = the brand budgets each campaign (offer x leg x channel) " +
-      "(outranks the global pot; only a brand that stated an item reads it); " +
       "global = one daily sales budget campaign-service allocates; " +
-      "campaigns = every campaign paced on its own ceiling (the default).",
+      "campaigns = no global amount (the default).",
   });
-
-const ItemPeriodSchema = z.enum(["day", "month"]).openapi("CampaignItemPeriod", {
-  description: "day = a daily budget (prepaid / postpaid default); month = a monthly budget (always for a subscriber; optional for prepaid / postpaid, covering the UTC calendar month).",
-});
-
-export const SpendableCampaignItemSchema = z
-  .object({
-    offerId: z.string().uuid(),
-    legKey: z.string(),
-    featureSlug: z.string(),
-    role: z.enum(["proactive", "reactive"]).nullable(),
-    /** Decimal cents. A reactive monthly item includes last period's carry-over. */
-    budgetCents: CentsStringSchema,
-    /** DAILY: what outreach may spend (the whole daily ceiling when not split). */
-    outreachDailyBudgetCents: CentsStringSchema,
-    /** DAILY: what sourcing may spend, on demand; null = not split. */
-    sourcingCeilingCents: CentsStringSchema.nullable(),
-    split: z.boolean(),
-    /** true for a SOURCE campaign (featureSlug = a sourcing origin, legKey = "start_to_lead_found"); null = catalogue unreadable. */
-    source: z.boolean().nullable(),
-    period: ItemPeriodSchema,
-    /** A monthly item's period (subscriber: the plan's current period; prepaid / postpaid: the UTC calendar month); null for a daily one. */
-    periodStart: z.string().nullable(),
-    periodEnd: z.string().nullable(),
-    /** false = a channel we do not run yet (recorded, never charged); null = catalogue unreadable. */
-    managed: z.boolean().nullable(),
-  })
-  .openapi("SpendableCampaignItem");
 
 export const BrandSalesBudgetSchema = z
   .object({
     brandId: z.string().uuid(),
     orgId: z.string().uuid(),
     mode: BrandFundingModeSchema,
-    /**
-     * global: the stated daily sales budget; items: the daily equivalent of the
-     * proactive items we run (day + month/30); null in campaigns mode.
-     */
+    /** global: the stated daily sales budget; null in campaigns mode. */
     dailyBudgetCents: CentsStringSchema.nullable(),
     /** When it was stated; null in campaigns mode. */
     updatedAt: z.string().nullable(),
-    /** items mode only: one row per campaign (offer, leg, channel) campaign-service spends. */
-    items: z.array(SpendableCampaignItemSchema).optional(),
   })
   .openapi("BrandSalesBudget");
 
@@ -1608,139 +1572,6 @@ export const ChargeScheduleResponseSchema = z
     expectedTotalCents: z.string().nullable(),
   })
   .openapi("ChargeScheduleResponse");
-
-// --- Daily ceilings per campaign (offer x leg x acquisition channel) ---
-
-/** One campaign's ceiling: one stored row per (offer, leg, channel). */
-export const CampaignDailyBudgetSchema = z
-  .object({
-    /**
-     * brand-service offer UUID. `null` only on a ceiling written before offers
-     * existed; a per-campaign write always names one.
-     */
-    offerId: z.string().uuid().nullable(),
-    /**
-     * features-service's canonical leg id, carried OPAQUE. `null` only on a
-     * ceiling written before legs existed.
-     */
-    legKey: z.string().nullable(),
-    /** The acquisition channel (a features-service feature slug) performing the leg. */
-    featureSlug: z.string(),
-    /** This campaign's daily ceiling = its MAX daily spend (outreach + sourcing ceiling). */
-    dailyBudgetCents: CentsStringSchema,
-    /**
-     * What OUTREACH may spend per day: dailyBudgetCents - sourcingCeilingCents.
-     * The whole dailyBudgetCents when the campaign is not split.
-     */
-    outreachDailyBudgetCents: CentsStringSchema,
-    /**
-     * What SOURCING (lead-service lead-serve + apollo-service audience-companies
-     * subtrees) may spend per day, ON DEMAND: a ceiling, not a commitment. null =
-     * not split (the whole chain is paid out of dailyBudgetCents, as before).
-     */
-    sourcingCeilingCents: CentsStringSchema.nullable(),
-    updatedAt: z.string(),
-  })
-  .openapi("CampaignDailyBudget");
-
-export const ReadBrandOfferDailyBudgetSchema = z
-  .object({
-    brandId: z.string().uuid(),
-    /** Present on the user-facing read only. */
-    orgId: z.string().uuid().optional(),
-    offerId: z.string().uuid(),
-    /**
-     * This OFFER's daily ceiling — the SUM of the campaign ceilings funding it.
-     * `null` when this offer has NO ceiling, which is a different answer from a
-     * ceiling of 0 (funded at nothing) and is never derived from it.
-     */
-    dailyBudgetCents: CentsStringSchema.nullable(),
-    /** The latest of the ceilings funding this offer; null when it has none. */
-    updatedAt: z.string().nullable(),
-    /** The campaign ceilings that make up the figure above. */
-    campaigns: z.array(CampaignDailyBudgetSchema),
-  })
-  .openapi("ReadBrandOfferDailyBudget");
-
-export const ReadBrandLegDailyBudgetSchema = z
-  .object({
-    brandId: z.string().uuid(),
-    /** Present on the user-facing read only. */
-    orgId: z.string().uuid().optional(),
-    /** features-service's canonical leg id, echoed back verbatim. */
-    legKey: z.string(),
-    /**
-     * This LEG's daily ceiling - the SUM of the campaign ceilings funding it.
-     * `null` when this leg has NO ceiling, which is a different answer from a
-     * ceiling of 0 (funded at nothing) and is never derived from it.
-     */
-    dailyBudgetCents: CentsStringSchema.nullable(),
-    /** The latest of the ceilings funding this leg; null when it has none. */
-    updatedAt: z.string().nullable(),
-    /** The campaign ceilings that make up the figure above. */
-    campaigns: z.array(CampaignDailyBudgetSchema),
-  })
-  .openapi("ReadBrandLegDailyBudget");
-
-export const ReadCampaignDailyBudgetsSchema = z
-  .object({
-    brandId: z.string().uuid(),
-    /** Present on the user-facing read only. */
-    orgId: z.string().uuid().optional(),
-    /**
-     * The brand-level daily budget — byte-identical to what
-     * GET /internal/brands/{brandId}/daily-budget serves (null when never set).
-     * The campaigns below add up to it.
-     */
-    dailyBudgetCents: CentsStringSchema.nullable(),
-    /** One entry per (offer, leg, channel). Empty when nothing is funded per campaign. */
-    campaigns: z.array(CampaignDailyBudgetSchema),
-  })
-  .openapi("ReadCampaignDailyBudgets");
-
-export const CampaignSpendTodaySchema = z
-  .object({
-    /** The UTC day measured, YYYY-MM-DD. */
-    date: z.string(),
-    /** The campaign ids measured, as requested (deduped). */
-    campaignIds: z.array(z.string()),
-    /** Everything the campaign spent today (actual + provisioned, NET). */
-    spentCents: CentsStringSchema,
-    /** Of which sourcing: the subtrees of lead-service lead-serve + apollo-service audience-companies runs. */
-    sourcingSpentCents: CentsStringSchema,
-    /** Of which outreach: spentCents - sourcingSpentCents. */
-    outreachSpentCents: CentsStringSchema,
-  })
-  .openapi("CampaignSpendToday");
-
-export const ReadCampaignDailyBudgetSchema = z
-  .object({
-    brandId: z.string().uuid(),
-    /** Present on the user-facing read only. */
-    orgId: z.string().uuid().optional(),
-    offerId: z.string().uuid(),
-    legKey: z.string(),
-    featureSlug: z.string(),
-    /**
-     * This campaign's ceiling = its MAX daily spend (outreach + sourcing
-     * ceiling). `null` when nothing funds it — a different answer from 0
-     * (funded at nothing), and never derived from it.
-     */
-    dailyBudgetCents: CentsStringSchema.nullable(),
-    /** What outreach may spend per day (the whole budget when not split); null when nothing funds it. */
-    outreachDailyBudgetCents: CentsStringSchema.nullable(),
-    /** What sourcing may spend per day, on demand; null when not split or nothing funds it. */
-    sourcingCeilingCents: CentsStringSchema.nullable(),
-    /** true when the campaign states a sourcing ceiling (the two parts above are separate budgets). */
-    split: z.boolean(),
-    updatedAt: z.string().nullable(),
-    /**
-     * Today's (UTC) committed NET spend against each part. Present only when
-     * the request names `campaignIds`; null otherwise.
-     */
-    today: CampaignSpendTodaySchema.nullable(),
-  })
-  .openapi("ReadCampaignDailyBudget");
 
 // --- Public Stats ---
 
@@ -3604,85 +3435,6 @@ registry.registerPath({
 });
 
 registry.registerPath({
-  method: "get",
-  path: "/internal/brands/{brandId}/offers/{offerId}/daily-budget",
-  summary: "Read ONE offer's daily ceiling for a brand",
-  description:
-    "Returns what the caller org has funded ONE offer at — the SUM of the campaign " +
-    "ceilings covering it across every leg and acquisition channel it is sold " +
-    "through — plus those campaign ceilings, so a caller never enumerates the " +
-    "offer's campaigns nor adds anything up. " +
-    "An offer-scoped screen paces spend against THIS number: the brand-wide total " +
-    "is about a different thing the moment a brand states a second offer. " +
-    "A ceiling written before offers existed (offerId null) counts towards this " +
-    "offer only while it is the brand's SOLE named one, which is why an offer that " +
-    "is a brand's only one answers exactly the brand-wide total. " +
-    "An offer with NO ceiling returns dailyBudgetCents: null — a different answer " +
-    "from a ceiling of 0, and never derived from it. Service-to-service read with " +
-    "x-api-key plus x-org-id.",
-  request: {
-    headers: internalOrgHeaders,
-    params: z.object({
-      brandId: z.string().uuid(),
-      offerId: z.string().uuid(),
-    }),
-  },
-  responses: {
-    200: {
-      description: "This offer's ceiling (null when it has none) + its breakdown",
-      content: {
-        "application/json": { schema: ReadBrandOfferDailyBudgetSchema },
-      },
-    },
-    400: {
-      description:
-        "brandId, offerId or x-org-id is not a valid UUID, or x-org-id is missing",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/internal/brands/{brandId}/legs/{legKey}/daily-budget",
-  summary: "Read ONE leg's daily ceiling for a brand",
-  description:
-    "Returns what the caller org has funded ONE LEG at — the SUM of the campaign " +
-    "ceilings covering it across every acquisition channel and offer it is sold " +
-    "through — plus those campaign ceilings, so a caller never enumerates anything " +
-    "nor adds anything up. A campaign is (offer, leg, acquisition channel), so " +
-    "this is the money that paces one campaign, read on the same key the campaign " +
-    "is keyed on. `legKey` is features-service's canonical leg id (published on its " +
-    "GET /public/channels as legs[].legKey) and is carried OPAQUE — billing never " +
-    "validates or parses it. A ceiling written before legs existed (legKey null) " +
-    "counts towards this leg only while it is the brand's SOLE named one, which is " +
-    "why a leg that is a brand's only one answers exactly the brand-wide total. " +
-    "A leg with NO ceiling returns dailyBudgetCents: null — a different answer from " +
-    "a ceiling of 0, and never derived from it. Service-to-service read with " +
-    "x-api-key plus x-org-id.",
-  request: {
-    headers: internalOrgHeaders,
-    params: z.object({
-      brandId: z.string().uuid(),
-      legKey: z.string().min(1),
-    }),
-  },
-  responses: {
-    200: {
-      description: "This leg's ceiling (null when it has none) + its breakdown",
-      content: {
-        "application/json": { schema: ReadBrandLegDailyBudgetSchema },
-      },
-    },
-    400: {
-      description:
-        "brandId or x-org-id is not a valid UUID, x-org-id is missing, or legKey is empty",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
   method: "post",
   path: "/internal/transfer-brand",
   summary: "Move a brand's billing history to another org; its money stays",
@@ -3843,77 +3595,6 @@ registry.registerPath({
   },
 });
 
-const campaignQuery = z.object({
-  offerId: z.string().uuid(),
-  legKey: z.string().min(1),
-  featureSlug: z.string().min(1),
-});
-
-const campaignReadQuery = campaignQuery.extend({
-  /**
-   * Comma-separated campaign ids (the campaign FAMILY, at most 500). When
-   * present the answer carries `today`: today's spend against each part.
-   */
-  campaignIds: z.string().optional(),
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/internal/brands/{brandId}/campaign-budgets",
-  summary: "Read every campaign daily ceiling of a brand",
-  description:
-    "One entry per campaign — (offer, leg, acquisition channel). The entries add " +
-    "up to `dailyBudgetCents`, which is byte-identical to the brand-level read. " +
-    "Service-to-service read with x-api-key plus x-org-id.",
-  request: {
-    headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
-  },
-  responses: {
-    200: {
-      description: "Every campaign ceiling + the brand total",
-      content: { "application/json": { schema: ReadCampaignDailyBudgetsSchema } },
-    },
-    400: {
-      description: "Invalid brandId or x-org-id",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/internal/brands/{brandId}/campaign-budget",
-  summary: "Read ONE campaign's daily ceiling",
-  description:
-    "A campaign is (offer x leg x acquisition channel); all three are required. " +
-    "Answers the SUM of the ceilings that are this campaign's money. A ceiling " +
-    "written before offers (or legs) existed counts only while " +
-    "the brand names no other offer (the channel no other leg). Nothing funds it -> " +
-    "dailyBudgetCents: null, never 0. The ceiling is in two parts: dailyBudgetCents (max daily " +
-    "spend) = outreachDailyBudgetCents + sourcingCeilingCents (sourcing on demand, up to; null = not " +
-    "split). Pass campaignIds to also get `today`: today's spend against each part. x-api-key plus x-org-id.",
-  request: {
-    headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
-    query: campaignReadQuery,
-  },
-  responses: {
-    200: {
-      description: "This campaign's ceiling (null when nothing funds it)",
-      content: { "application/json": { schema: ReadCampaignDailyBudgetSchema } },
-    },
-    400: {
-      description: "Invalid brandId / x-org-id, or a missing offerId, legKey or featureSlug",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-    502: {
-      description: "Today's spend could not be read from runs-service (only when campaignIds is passed)",
-      content: { "application/json": { schema: ErrorResponseSchema } },
-    },
-  },
-});
-
 // --- Brand global sales budget -----------------------------------------------
 
 const brandIdParam = z.object({ brandId: z.string().uuid() });
@@ -3924,11 +3605,7 @@ registry.registerPath({
   summary: "Read a brand's funding mode and global sales budget",
   description:
     "Service-to-service read (x-api-key + x-org-id). mode is global when the brand stated ONE " +
-    "daily sales budget (dailyBudgetCents), campaigns when every campaign is paced on its own " +
-    "ceiling (dailyBudgetCents null), items when the brand budgets each campaign (items[]: one row " +
-    "per offer x leg x channel, period day|month, a monthly budget carrying the plan's current " +
-    "period, a reactive one being a MAX; outranks global). billing stores and serves; campaign-service " +
-    "spends, and owns each campaign's on/off.",
+    "daily sales budget (dailyBudgetCents), campaigns otherwise (dailyBudgetCents null).",
   request: { headers: internalOrgHeaders, params: brandIdParam },
   responses: {
     200: { description: "Mode and amount", content: { "application/json": { schema: BrandSalesBudgetSchema } } },
@@ -4791,198 +4468,6 @@ registry.registerPath({
   },
 });
 
-// --- Item budgets per campaign (lib/campaign-items, migrations 0062 + 0063) ---
-
-const CampaignItemViewSchema = z
-  .object({
-    featureSlug: z.string(),
-    legKey: z.string(),
-    /** proactive = finds leads (daily/monthly spend); reactive = fires on a step (a MAX); null = unknown leg. */
-    role: z.enum(["proactive", "reactive"]).nullable(),
-    /** Every figure of the row (budget, minimum, cap) is in it. Subscriber: always month; prepaid / postpaid: the period the budget was stated in (not set = day). */
-    period: ItemPeriodSchema,
-    /**
-     * The period the budget was STATED in; null = not set. Differs from period for a row
-     * not yet restated (a subscriber's legacy daily ceiling, served as its monthly
-     * equivalent x30). Writing the row in the org's period restates it.
-     */
-    statedPeriod: ItemPeriodSchema.nullable(),
-    /** null = not set. In period (may be fractional cents when converted). */
-    budgetCents: z.number().nullable(),
-    /** The daily ceiling campaign-service paces on (monthly / 30 for a subscriber); null = not set. */
-    dailyBudgetCents: CentsStringSchema.nullable(),
-    /** DAILY: what outreach may spend = dailyBudgetCents - sourcingCeilingCents (the whole ceiling when not split); null = not set. */
-    outreachDailyBudgetCents: CentsStringSchema.nullable(),
-    /** DAILY: what sourcing may spend, on demand, out of dailyBudgetCents; null = not split or not set. */
-    sourcingCeilingCents: CentsStringSchema.nullable(),
-    /** true when the campaign states a sourcing ceiling. */
-    split: z.boolean(),
-    /**
-     * true for a SOURCE campaign (owner 2026-10-07): featureSlug is a live sourcing origin
-     * (features-service GET /public/sourcing-origins), legKey "start_to_lead_found". Its whole
-     * budget is sourcing, "up to $X/day", never split; its minimum is 0 (none published). An
-     * outreach campaign fed by a funded source campaign carries no sourcing ceiling of its own.
-     */
-    source: z.boolean(),
-    /** false = a channel we do not run yet: recorded, charged nothing until it launches. */
-    managed: z.boolean().nullable(),
-    /** The minimum in this period (a daily one = monthly minimum / 30, rounded up). */
-    minimumCents: z.number().int().nullable(),
-    /** Always null: no campaign budget has a maximum (removed 2026-10-05). Kept for readers of the old shape. */
-    capCents: z.number().int().nullable(),
-    /** false for a customer-team leg (carries no budget) or an unknown one. */
-    budgetable: z.boolean(),
-    updatedAt: z.string().nullable(),
-  })
-  .openapi("CampaignItemBudget");
-
-const ItemsPlanPricingSchema = z
-  .object({
-    monthlyAmountCents: z.number().int(),
-    reactiveMonthlyCents: z.number().int(),
-    deferredMonthlyCents: z.number().int(),
-    offMonthlyCents: z.number().int(),
-  })
-  .openapi("CampaignItemsPlanPricing");
-
-const OfferBudgetTotalsSchema = z
-  .object({
-    /** The org's period (subscriber: month, else day); every figure is in it. */
-    period: ItemPeriodSchema,
-    proactive: z.object({
-      /** SUM of the budgets of the ON proactive campaigns: what the offer spends. */
-      budgetCents: z.number(),
-      /** The part of it that is sourcing, on demand (source campaigns + split sourcing ceilings). */
-      sourcingBudgetCents: z.number(),
-      campaigns: z.number().int(),
-    }),
-    reactive: z.object({
-      /** SUM of the ceilings of the ON reactive campaigns: a MAX, never counted as spend. */
-      maxBudgetCents: z.number(),
-      campaigns: z.number().int(),
-      /** Per reaction type: the step the campaigns react on (`conversation` = "Positive reply"). */
-      byTrigger: z.array(
-        z.object({
-          triggerKey: z.string().nullable(),
-          triggerLabel: z.string().nullable(),
-          maxBudgetCents: z.number(),
-          campaigns: z.number().int(),
-        })
-      ),
-    }),
-    /** ON campaigns with a budget neither total counts (unknown role, or a channel we do not run yet). */
-    notCounted: z.array(
-      z.object({
-        featureSlug: z.string(),
-        legKey: z.string(),
-        reason: z.enum(["role_unknown", "channel_not_run"]),
-      })
-    ),
-    /**
-     * ON (campaign-service `ongoing`) SALES FUNNEL campaigns counted in the totals above
-     * by their MAX BUDGET cap, in `period`: proactive in `proactive`, reactive ("Up to")
-     * in `reactive`. A cap is all-inclusive, so it adds nothing to sourcingBudgetCents.
-     */
-    salesFunnels: z.array(
-      z.object({
-        salesFunnelCampaignId: z.string(),
-        salesFunnelId: z.string(),
-        salesFunnelName: z.string().nullable(),
-        role: z.enum(["proactive", "reactive"]),
-        budgetCents: z.number(),
-      })
-    ),
-    /**
-     * ON funnel campaigns not counted: `no_budget` (nothing funds it: no cap stated), `volume_only`
-     * (funded by a max volume alone: it spends, but states no $ figure to add), a one-off cap, or an
-     * unrecorded funnel type.
-     */
-    salesFunnelsNotCounted: z.array(
-      z.object({
-        salesFunnelCampaignId: z.string(),
-        salesFunnelId: z.string(),
-        salesFunnelName: z.string().nullable(),
-        reason: z.enum(["no_budget", "volume_only", "one_off", "type_unknown"]),
-      })
-    ),
-  })
-  .openapi("OfferBudgetTotals");
-
-export const CampaignItemBudgetsSchema = z
-  .object({
-    orgId: z.string().uuid(),
-    brandId: z.string().uuid(),
-    offerId: z.string().uuid(),
-    period: ItemPeriodSchema,
-    items: z.array(CampaignItemViewSchema),
-    /** Subscriber: the offer's live plan (null when none, or not a subscriber). */
-    plan: z.object({ subscriptionId: z.string().uuid(), monthlyAmountCents: z.number().int() }).nullable(),
-    /** Subscriber: what the budgets cost; null when nothing is charged (or not a subscriber). */
-    pricing: ItemsPlanPricingSchema.nullable(),
-    /**
-     * What the offer is committed to right now, ON campaigns only (campaign-service's
-     * status): proactive spend + reactive ceilings, in `totals.period`. null when
-     * campaign-service could not say which are on (see totalsUnavailableReason).
-     */
-    totals: OfferBudgetTotalsSchema.nullable(),
-    totalsUnavailableReason: z.enum(["campaign_service_unconfigured", "campaign_service_unavailable"]).nullable(),
-  })
-  .openapi("CampaignItemBudgets");
-
-export const ItemBudgetRefusalSchema = z
-  .object({
-    error: z.string(),
-    code: z.enum([
-      "invalid_ids",
-      "invalid_items",
-      "duplicate_item",
-      "unknown_item",
-      "customer_leg_has_no_budget",
-      "amount_not_whole_cents",
-      "amount_not_whole_dollars",
-      "below_minimum",
-      "entry_item_required",
-      "no_plan_for_offer",
-      "subscription_not_active",
-      "reactive_charge_declined",
-      "monthly_charge_limit_reached",
-      "charge_unavailable",
-      "minimums_unavailable",
-      "campaign_status_unavailable",
-      "period_not_allowed",
-    ]),
-    featureSlug: z.string().optional(),
-    legKey: z.string().optional(),
-    minimumCents: z.number().int().optional(),
-    period: ItemPeriodSchema.optional(),
-    amountCents: z.number().int().optional(),
-  })
-  .openapi("ItemBudgetRefusal");
-
-const brandOfferParams = z.object({ brandId: z.string().uuid(), offerId: z.string().uuid() });
-const campaignsQuerySchema = z.object({
-  campaigns: z
-    .string()
-    .optional()
-    .openapi({ description: "Comma list of featureSlug:legKey to get a row for even when not set." }),
-});
-const itemRefusal = (description: string) => ({
-  description,
-  content: { "application/json": { schema: ItemBudgetRefusalSchema } },
-});
-
-registry.registerPath({
-  method: "get",
-  path: "/internal/brands/{brandId}/offers/{offerId}/campaign-budgets",
-  summary: "Read an offer's budget per campaign (service)",
-  request: { headers: internalOrgHeaders, params: brandOfferParams, query: campaignsQuerySchema },
-  responses: {
-    200: { description: "Campaign budgets", content: { "application/json": { schema: CampaignItemBudgetsSchema } } },
-    400: itemRefusal("Invalid ids, campaigns query or x-org-id"),
-    502: itemRefusal("minimums_unavailable | campaign_status_unavailable"),
-  },
-});
-
 // --- Sales funnel caps: MAX BUDGET + MAX VOLUME per brand x offer x funnel ---
 // (lib/sales-funnel-caps.ts, migration 0078, owner 2026-10-10)
 
@@ -5020,19 +4505,8 @@ export const SetSalesFunnelCapsRequestSchema = z
       "A cap restated in the same period keeps its window start (a one_off cap keeps counting).",
   });
 
-export const InternalSetSalesFunnelCapsRequestSchema = SetSalesFunnelCapsRequestSchema.extend({
-  /**
-   * CONVERSION: the pre-funnel campaigns (this offer, a channel and a leg) whose
-   * per-campaign ceilings this cap replaces. They are deleted in the same
-   * transaction; refused (409) unless the cap per day equals their sum within one cent.
-   */
-  replacesCeilings: z
-    .array(z.object({ featureSlug: z.string().min(1), legKey: z.string().min(1).nullable() }).strict())
-    .max(50)
-    .optional(),
-})
-  .strict()
-  .openapi("InternalSetSalesFunnelCapsRequest");
+/** The service write takes the user's body as is (the pre-funnel conversion was retired 2026-10-14). */
+export const InternalSetSalesFunnelCapsRequestSchema = SetSalesFunnelCapsRequestSchema;
 
 const ConsumedUnavailableReasonSchema = z
   .enum([
@@ -5263,14 +4737,9 @@ registry.registerPath({
 registry.registerPath({
   method: "put",
   path: `/internal${funnelCapsPath}`,
-  summary: "State a sales funnel's caps as a service (campaign-service), optionally CONVERTING pre-funnel ceilings",
+  summary: "State a sales funnel's caps as a service (campaign-service)",
   description:
-    "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT plus replacesCeilings: the " +
-    "pre-funnel campaigns of this offer whose per-campaign ceilings the cap replaces; they are deleted in the same " +
-    "transaction. 409 conversion_moves_budget when the cap per day (weekly / 7, monthly / 30, one_off = 0) differs " +
-    "from their sum by more than one cent; 409 ceiling_not_found | brand_in_global_mode | subscription_org | " +
-    "subscriber_plan_rows. Answers the read's shape plus conversion {replacedCeilings, replacedDailyCents, " +
-    "capDailyCents, brandDailyBudgetBefore, brandDailyBudgetAfter}.",
+    "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT. Answers the read's shape.",
   request: {
     headers: internalOrgHeaders,
     params: funnelCapParams,
@@ -5280,7 +4749,6 @@ registry.registerPath({
     200: { description: "Stated", content: funnelCapsJson },
     400: funnelCapsError("Invalid ids or body"),
     404: funnelCapsError("sales_funnel_not_found"),
-    409: funnelCapsError("conversion refused (nothing written)"),
     502: funnelCapsError("sales_funnel_catalogue_unavailable"),
   },
 });
@@ -5350,7 +4818,7 @@ for (const [prefix, headers, body] of [
     path: `${prefix}${funnelCampaignCapsPath}`,
     summary: "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME",
     description:
-      "Same body as the funnel PUT (no replacesCeilings: a conversion is funnel-wide). The funnel must exist in " +
+      "Same body as the funnel PUT. The funnel must exist in " +
       "features-service's catalogue; the funnel campaign need not exist yet. Charges nothing. Answers the campaign read.",
     request: { headers, params: funnelCampaignCapParams, body: { content: { "application/json": { schema: body } } } },
     responses: {
