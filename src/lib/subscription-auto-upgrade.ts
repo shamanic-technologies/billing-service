@@ -167,10 +167,6 @@ async function chargeClaimed(
         text: `Subscription auto-upgraded (credit ran out): ${usd(row.fromAmountCents)} → ${usd(row.toAmountCents)}/month, ${usd(row.chargedCents)} charged now`,
         dedupKey: `sub-auto-upgrade:${row.id}`,
       });
-      // Plan-derived campaign budgets follow the new amount now (as after "upgrade now").
-      void import("./subscriber-plan-budgets.js")
-        .then((m) => m.reallocateDerivedPlans(new Date()))
-        .catch((err) => console.error("[billing-service] plan budgets after auto-upgrade failed (hourly tick retries):", err));
       return {
         result: "upgraded",
         subscription,

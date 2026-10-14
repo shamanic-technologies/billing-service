@@ -14,7 +14,6 @@ import { db } from "../../src/db/index.js";
 import {
   billingAccounts,
   brandDailyBudgets,
-  campaignDailyBudgets,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
   creditDepletionEpisodes,
@@ -41,7 +40,6 @@ async function orgRowCounts(orgId: string) {
     campaignCostRows,
     sweepAttemptRows,
     brandBudgetRows,
-    campaignBudgetRows,
     promiseRows,
   ] = await Promise.all([
     db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId)),
@@ -59,10 +57,6 @@ async function orgRowCounts(orgId: string) {
       .from(campaignReloadSweepAttempts)
       .where(eq(campaignReloadSweepAttempts.orgId, orgId)),
     db.select().from(brandDailyBudgets).where(eq(brandDailyBudgets.orgId, orgId)),
-    db
-      .select()
-      .from(campaignDailyBudgets)
-      .where(eq(campaignDailyBudgets.orgId, orgId)),
     db.select().from(freeCreditPromises).where(eq(freeCreditPromises.orgId, orgId)),
   ]);
 
@@ -73,7 +67,6 @@ async function orgRowCounts(orgId: string) {
     campaignAuthorizeCosts: campaignCostRows.length,
     campaignReloadSweepAttempts: sweepAttemptRows.length,
     brandDailyBudgets: brandBudgetRows.length,
-    campaignDailyBudgets: campaignBudgetRows.length,
     welcomeCreditClaims: 0,
     freeCreditPromises: promiseRows.length,
   };
@@ -116,12 +109,6 @@ async function seedOrgBillingState(orgId: string, seed: "target" | "other") {
     orgId,
     dailyBudgetCents: "2500.0000000000",
   });
-  await db.insert(campaignDailyBudgets).values({
-    orgId,
-    brandId,
-    featureSlug: "sales-cold-email-outreach",
-    dailyBudgetCents: "100.0000000000",
-  });
 }
 
 describe("DELETE /internal/accounts/by-org/:orgId", () => {
@@ -156,7 +143,6 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignReloadSweepAttempts: 1,
         campaignReloadSweepAttempts: 1,
         brandDailyBudgets: 1,
-        campaignDailyBudgets: 1,
         brandSalesBudgets: 0,
         salesFunnelCaps: 0,
         welcomeCreditClaims: 0,
@@ -173,7 +159,6 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 0,
       campaignReloadSweepAttempts: 0,
       brandDailyBudgets: 0,
-      campaignDailyBudgets: 0,
       welcomeCreditClaims: 0,
       freeCreditPromises: 0,
     });
@@ -184,7 +169,6 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 1,
       campaignReloadSweepAttempts: 1,
       brandDailyBudgets: 1,
-      campaignDailyBudgets: 1,
       welcomeCreditClaims: 0,
       freeCreditPromises: 0,
     });
@@ -203,7 +187,6 @@ describe("DELETE /internal/accounts/by-org/:orgId", () => {
       campaignAuthorizeCosts: 0,
       campaignReloadSweepAttempts: 0,
       brandDailyBudgets: 0,
-      campaignDailyBudgets: 0,
       brandSalesBudgets: 0,
       salesFunnelCaps: 0,
       welcomeCreditClaims: 0,

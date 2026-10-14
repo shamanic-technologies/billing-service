@@ -153,18 +153,12 @@ export interface PaymentOutlook {
 }
 
 /**
- * Every brand of this org that carries a funded ceiling — a campaign ceiling, a
- * brand-level scalar, a brand-level "global" sales budget, or a sales funnel's
- * MAX BUDGET (lib/funnel-campaigns.ts). A brand funded
- * ONLY by the global sales budget carries neither of the first two, and leaving
- * it out made its money read as zero.
+ * Every brand of this org that carries a funded ceiling — a brand-level scalar,
+ * a brand-level "global" sales budget, or a sales funnel's MAX BUDGET
+ * (lib/funnel-campaigns.ts).
  */
 export async function fundedBrandIds(orgId: string): Promise<string[]> {
   const rows = await db.execute<{ brand_id: string }>(sql`
-    SELECT DISTINCT brand_id
-      FROM campaign_daily_budgets
-     WHERE org_id = ${orgId}
-     UNION
     SELECT DISTINCT brand_id
       FROM brand_daily_budgets
      WHERE org_id = ${orgId}

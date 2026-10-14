@@ -10,34 +10,12 @@ import {
   legKeySpellings,
   sameLeg,
 } from "../../src/lib/leg-identity.js";
-import {
-  campaignCeilingRows,
-  legBudgetRows,
-} from "../../src/lib/campaign-budgets.js";
 import { channelCatalogueFrom } from "../../src/lib/budget-change-context.js";
 import { salesPathTermsOf, termsIndexFrom } from "../../src/lib/sales-path-terms.js";
-import type { CeilingRow } from "../../src/db/schema.js";
 
 const COLD = "sales-cold-email-outreach";
 const CALL = "cold-call-outreach";
 const META = "meta-ads";
-const OFFER = "aaaaaaaa-0000-4000-8000-000000000001";
-
-function row(featureSlug: string, legKey: string | null, cents: string): CeilingRow {
-  return {
-    orgId: "o",
-    brandId: "b",
-    featureSlug,
-    offerId: OFFER,
-    legKey,
-    dailyBudgetCents: cents,
-    monthlyBudgetCents: null,
-    sourcingCeilingCents: null,
-    planDerived: false,
-    updatedAt: new Date("2026-10-09T00:00:00Z"),
-  } as CeilingRow;
-}
-
 describe("leg identity", () => {
   it("renames only the two legacy keys, only on outbound channels", () => {
     expect(canonicalLegKey(COLD, "start_to_conversation")).toBe("lead_found_to_conversation");
@@ -64,28 +42,6 @@ describe("leg identity", () => {
     expect(legIdentityKey(META, "start_to_website_visit")).not.toBe(
       legIdentityKey(META, "lead_found_to_website_visit")
     );
-  });
-
-  it("a campaign asked under either spelling finds the one stored ceiling", () => {
-    const rows = [row(COLD, "start_to_conversation", "500"), row(COLD, "start_to_website_visit", "300")];
-    for (const legKey of ["start_to_conversation", "lead_found_to_conversation"]) {
-      const owned = campaignCeilingRows(rows, { offerId: OFFER, legKey, featureSlug: COLD });
-      expect(owned.map((r) => r.dailyBudgetCents)).toEqual(["500"]);
-    }
-    // A non-outbound channel keeps its own key: the new spelling names nothing there.
-    const meta = [row(META, "start_to_website_visit", "900")];
-    expect(campaignCeilingRows(meta, { offerId: OFFER, legKey: "lead_found_to_website_visit", featureSlug: META })).toEqual([]);
-  });
-
-  it("a per-leg read: either spelling counts the outbound rows, never a non-outbound row under the new key", () => {
-    const rows = [
-      row(COLD, "start_to_website_visit", "500"),
-      row(CALL, "lead_found_to_website_visit", "200"),
-      row(META, "start_to_website_visit", "900"),
-    ];
-    const sum = (r: CeilingRow[]) => r.map((x) => x.dailyBudgetCents).sort();
-    expect(sum(legBudgetRows(rows, "start_to_website_visit"))).toEqual(["200", "500", "900"]);
-    expect(sum(legBudgetRows(rows, "lead_found_to_website_visit"))).toEqual(["200", "500"]);
   });
 
   it("the published terms and the email catalogue answer under either spelling", () => {

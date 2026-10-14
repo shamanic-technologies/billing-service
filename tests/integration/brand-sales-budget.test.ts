@@ -7,11 +7,10 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
-import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import {
   brandDailyBudgetChanges,
-  campaignDailyBudgets,
+  brandDailyBudgets,
 } from "../../src/db/schema.js";
 
 const orgId = "00000000-0000-0000-0000-0000000054a1";
@@ -31,16 +30,9 @@ const salesPath = `/v1/brands/${brandId}/sales-budget`;
 const internalSalesPath = `/internal/brands/${brandId}/sales-budget`;
 const brandTotalPath = `/internal/brands/${brandId}/daily-budget`;
 
+/** The brand's scalar daily budget (what the brand is back on once the global one clears). */
 async function seedCeiling(cents: string) {
-  await db.insert(campaignDailyBudgets).values({
-    orgId,
-    brandId,
-    featureSlug: COLD,
-    offerId: OFFER,
-    legKey: LEG_REPLY,
-    dailyBudgetCents: cents,
-    updatedAt: new Date(),
-  });
+  await db.insert(brandDailyBudgets).values({ orgId, brandId, dailyBudgetCents: cents });
 }
 
 async function brandTotal(org = orgId) {
@@ -91,16 +83,16 @@ describe("brand global sales budget", () => {
     expect(svc.body).toMatchObject({ mode: "global", dailyBudgetCents: "2000.0000000000" });
 
     expect(await brandTotal()).toBe("2000.0000000000");
-    // The campaign ceilings are untouched.
-    const ceilings = await db.select().from(campaignDailyBudgets);
-    expect(ceilings.map((c) => c.dailyBudgetCents)).toEqual(["700.0000000000"]);
+    // The brand scalar is untouched.
+    const scalars = await db.select().from(brandDailyBudgets);
+    expect(scalars.map((c) => c.dailyBudgetCents)).toEqual(["700.0000000000"]);
 
     // Another org sharing the brand is unaffected.
     const other = await request(app).get(internalSalesPath).set(internal(otherOrgId));
     expect(other.body.mode).toBe("campaigns");
   });
 
-  it("restating reports the previous amount; clearing returns to the campaign ceilings", async () => {
+  it("restating reports the previous amount; clearing returns to the brand scalar", async () => {
     await seedCeiling("700");
     await request(app).put(salesPath).set(auth).send({ dailyBudgetCents: 2000 });
     const again = await request(app).put(salesPath).set(auth).send({ dailyBudgetCents: "1500" });
@@ -140,18 +132,6 @@ describe("brand global sales budget", () => {
       "1500.0000000000",
       "700.0000000000",
     ]);
-  });
-
-  it("a campaign ceiling written in global mode keeps the brand total on the global amount", async () => {
-    await request(app).put(salesPath).set(auth).send({ dailyBudgetCents: 2000 });
-    const res = await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, legKey: LEG_REPLY, featureSlug: COLD, dailyBudgetCents: 900 });
-    expect(res.status).toBe(200);
-    expect(await brandTotal()).toBe("2000.0000000000");
-    const totals = await db
-      .select()
-      .from(brandDailyBudgetChanges)
-      .where(eq(brandDailyBudgetChanges.brandId, brandId));
-    expect(totals.map((t) => t.dailyBudgetCents)).toEqual(["2000.0000000000"]);
   });
 
   it("refuses a brand-scalar write while the brand is in global mode (409)", async () => {

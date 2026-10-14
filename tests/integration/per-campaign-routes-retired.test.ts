@@ -1,9 +1,9 @@
 /**
- * The customer routes to per-campaign daily ceilings are RETIRED (2026-10-14).
- * A campaign IS a sales funnel campaign: what it may spend is its sales funnel
- * caps. The gateway removed every route to these after runs-service showed no
- * caller, so billing no longer serves them either. The internal reads stay until
- * their last service reader moves off.
+ * The per-campaign daily ceilings are RETIRED (2026-10-14). A campaign IS a sales
+ * funnel campaign: what it may spend is its sales funnel caps. Stage 1 removed
+ * every customer route; stage 2 (migration 0088) removed the internal reads and
+ * dropped the store once campaign-service, lead-service and features-service
+ * were off it in their served builds.
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
@@ -18,7 +18,7 @@ const campaign = "offerId=" + offerId + "&legKey=lead_found_to_conversation&feat
 
 const app = createTestApp();
 
-describe("per-campaign ceiling routes are retired from the customer surface", () => {
+describe("per-campaign ceiling routes are retired", () => {
   afterAll(async () => {
     await closeDb();
   });
@@ -38,5 +38,22 @@ describe("per-campaign ceiling routes are retired from the customer surface", ()
       const res = await request(app)[method](path).set(auth).send({});
       expect(res.status, `${method.toUpperCase()} ${path}`).toBe(404);
     }
+  });
+
+  it("every internal per-campaign, per-offer and per-leg ceiling read answers 404", async () => {
+    const internal = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+    for (const path of [
+      `/internal/brands/${brandId}/campaign-budgets`,
+      `/internal/brands/${brandId}/campaign-budget?${campaign}`,
+      `/internal/brands/${brandId}/offers/${offerId}/campaign-budgets`,
+      `/internal/brands/${brandId}/offers/${offerId}/daily-budget`,
+      `/internal/brands/${brandId}/legs/lead_found_to_conversation/daily-budget`,
+    ]) {
+      const res = await request(app).get(path).set(internal);
+      expect(res.status, `GET ${path}`).toBe(404);
+    }
+    // The brand's own daily budget and sales budget stay served.
+    expect((await request(app).get(`/internal/brands/${brandId}/daily-budget`).set(internal)).status).toBe(200);
+    expect((await request(app).get(`/internal/brands/${brandId}/sales-budget`).set(internal)).status).toBe(200);
   });
 });

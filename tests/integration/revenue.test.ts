@@ -21,7 +21,7 @@ import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import {
   brandSalesBudgets,
-  campaignDailyBudgets,
+  brandDailyBudgets,
   campaignReloadSweepAttempts,
   salesFunnelCaps,
 } from "../../src/db/schema.js";
@@ -36,7 +36,7 @@ const REACTIVE = "00000000-0000-0000-0000-00000000a003"; // postpaid, card, reac
 const NO_CARD = "00000000-0000-0000-0000-00000000a004"; // postpaid, no card
 const CS_DOWN = "00000000-0000-0000-0000-00000000a005"; // campaign-service cannot answer
 const GLOBAL = "00000000-0000-0000-0000-00000000a006"; // global sales budget brand
-const FUNNEL = "00000000-0000-0000-0000-00000000a007"; // a SALES FUNNEL campaign beside a legacy ceiling
+const FUNNEL = "00000000-0000-0000-0000-00000000a007"; // a SALES FUNNEL campaign beside a stopped legacy campaign
 
 const brandOf = (org: string) => org.replace(/a0(\d\d)$/, "b0$1");
 const OFFER = "00000000-0000-0000-0000-0000000000f1";
@@ -135,15 +135,9 @@ async function funnelCap(period: string, cents: string) {
   });
 }
 
-async function ceiling(org: string, legKey: string, cents: string) {
-  await db.insert(campaignDailyBudgets).values({
-    orgId: org,
-    brandId: brandOf(org),
-    featureSlug: CHANNEL,
-    offerId: OFFER,
-    legKey,
-    dailyBudgetCents: cents,
-  });
+/** A brand's scalar daily budget (the per-campaign ceilings were retired 2026-10-14). */
+async function scalar(org: string, cents: string) {
+  await db.insert(brandDailyBudgets).values({ orgId: org, brandId: brandOf(org), dailyBudgetCents: cents });
 }
 
 describe("revenue: recurring, one-off, cash", () => {
@@ -205,14 +199,11 @@ describe("revenue: recurring, one-off, cash", () => {
     await insertTestAccount({ orgId: GLOBAL, topupAmountCents: 5000, topupThresholdCents: 5000 });
     await insertTestAccount({ orgId: FUNNEL, topupAmountCents: 5000, topupThresholdCents: 5000 });
 
-    await ceiling(RECURRING, ENTRY, "5000");
-    await ceiling(RECURRING, REPLY, "3000");
-    await ceiling(ONE_OFF, ENTRY, "1000");
-    await ceiling(REACTIVE, REPLY, "3000");
-    await ceiling(NO_CARD, ENTRY, "2000");
-    await ceiling(CS_DOWN, ENTRY, "4000");
-    // A legacy ceiling on the very pipe the funnel unit runs: it must not be the unit's money.
-    await ceiling(FUNNEL, ENTRY, "5000");
+    await scalar(RECURRING, "5000");
+    await scalar(ONE_OFF, "1000");
+    await scalar(REACTIVE, "3000");
+    await scalar(NO_CARD, "2000");
+    await scalar(CS_DOWN, "4000");
     await db.insert(brandSalesBudgets).values({
       orgId: GLOBAL,
       brandId: brandOf(GLOBAL),
@@ -225,7 +216,7 @@ describe("revenue: recurring, one-off, cash", () => {
     await closeDb();
   });
 
-  it("recurring postpaid org: DRR = its proactive ceilings only, MRR x30, ARR x12", async () => {
+  it("recurring postpaid org: DRR = its brand budget while a proactive campaign recurs, MRR x30, ARR x12", async () => {
     const res = await request(app).get(`/internal/revenue/by-org/${RECURRING}`).set(apiKeyHeaders);
     expect(res.status).toBe(200);
     expect(res.body.revenueClass).toBe("recurring");
@@ -379,18 +370,17 @@ describe("revenue: recurring, one-off, cash", () => {
     expect(res.body.drrCents).toBe("5000.0000000000");
   });
 
-  describe("SALES FUNNEL campaigns count by their MAX BUDGET, never by a per-pipe ceiling", () => {
+  describe("SALES FUNNEL campaigns count by their MAX BUDGET", () => {
     const revenueOf = async () =>
       (await request(app).get(`/internal/revenue/by-org/${FUNNEL}`).set(apiKeyHeaders)).body;
 
-    it("weekly cap / 7 per day; the unit is never resolved onto the legacy ceiling of its pipe", async () => {
+    it("weekly cap / 7 per day; a unit carries no budget of its own", async () => {
       FUNNELS[FUNNEL] = [funnelCampaign()];
       await funnelCap("weekly", "7000");
       const b = await revenueOf();
-      // Not 5000 (the stopped legacy campaign's ceiling, which the running unit would have woken).
       expect(b.drrCents).toBe("1000.0000000000");
       expect(b.mrrCents).toBe("30000.0000000000");
-      expect(b.brands[0].configuredDailyBudgetCents).toBe("6000.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("1000.0000000000");
       expect(b.salesFunnelCampaigns).toEqual([
         {
           salesFunnelCampaignId: "fc-g",
@@ -433,7 +423,7 @@ describe("revenue: recurring, one-off, cash", () => {
       await db.update(salesFunnelCaps).set({ salesFunnelType: "reactive" });
       const b = await revenueOf();
       expect(b.drrCents).toBe("0.0000000000");
-      expect(b.brands[0].configuredDailyBudgetCents).toBe("5000.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("0.0000000000");
       expect(b.salesFunnelCampaigns[0]).toMatchObject({ dailyBudgetCents: "0.0000000000", counted: false });
     });
 
@@ -442,7 +432,7 @@ describe("revenue: recurring, one-off, cash", () => {
       await funnelCap("daily", "2000");
       const b = await revenueOf();
       expect(b.drrCents).toBe("0.0000000000");
-      expect(b.brands[0].configuredDailyBudgetCents).toBe("7000.0000000000");
+      expect(b.brands[0].configuredDailyBudgetCents).toBe("2000.0000000000");
     });
 
     it("an unknown unit verdict, or unreadable funnel campaigns, is NULL with a reason, never 0", async () => {
