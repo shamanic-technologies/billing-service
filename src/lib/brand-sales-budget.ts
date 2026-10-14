@@ -4,14 +4,13 @@
  * A brand is funded one of two ways, and this module is the only place that says
  * which:
  *
- * - `campaigns` (the default, and the only mode that existed before): every
- *   campaign (offer x leg x channel) is paced on its own ceiling
- *   (lib/campaign-budgets.ts). The brand total is their sum.
+ * - `campaigns` (the default): no global amount; the brand total is its scalar
+ *   budget plus its recurring funnel caps (lib/brand-budgets.ts). The per-campaign
+ *   ceilings this mode was named after were retired 2026-10-14.
  * - `global`: the brand stated ONE daily amount for sales. campaign-service decides
  *   where it goes (the best-return sales path, as features-service ranks it) and
- *   runs the reactive legs whenever the customer authorised them. The campaign
- *   ceilings are kept exactly as they were — clearing the global budget puts the
- *   brand straight back on them.
+ *   runs the reactive legs whenever the customer authorised them. Clearing it puts
+ *   the brand straight back on its scalar budget.
  *
  * billing only STORES + SERVES the amount and the mode; allocating it is
  * campaign-service's job. Every state and every clear is journaled
@@ -30,11 +29,9 @@ import {
   brandDailyBudgets,
   brandSalesBudgetChanges,
   brandSalesBudgets,
-  campaignDailyBudgets,
   type BrandSalesBudget,
   type BrandSalesBudgetChange,
 } from "../db/schema.js";
-import { sumCeilings } from "./campaign-budgets.js";
 
 export type BrandBudgetMode = "global" | "campaigns";
 
@@ -75,7 +72,7 @@ export interface SetBrandSalesBudgetResult {
 /**
  * State (or restate) the brand's global sales budget. `dailyBudgetCents` is a
  * canonical non-negative cents string (0 is legal: a brand selling nothing today).
- * The campaign ceilings are NOT touched.
+ * The brand scalar is NOT touched.
  */
 export async function setBrandSalesBudget(
   orgId: string,
@@ -122,13 +119,13 @@ export interface ClearBrandSalesBudgetResult {
   /** false when the brand was already in campaigns mode (nothing written). */
   cleared: boolean;
   previousDailyBudgetCents: string | null;
-  /** The brand total the brand is back on (its campaign ceilings), null when none. */
+  /** The brand total the brand is back on (its brand scalar), null when none. */
   campaignsDailyBudgetCents: string | null;
 }
 
 /**
- * Clear the brand's global sales budget: the brand returns to its campaign
- * ceilings. Idempotent — clearing a brand in campaigns mode writes nothing.
+ * Clear the brand's global sales budget: the brand returns to its scalar
+ * budget. Idempotent — clearing a brand in campaigns mode writes nothing.
  */
 export async function clearBrandSalesBudget(
   orgId: string,
@@ -141,21 +138,12 @@ export async function clearBrandSalesBudget(
       .where(and(eq(brandSalesBudgets.orgId, orgId), eq(brandSalesBudgets.brandId, brandId)))
       .returning();
 
-    const ceilings = await tx
+    const [brandRow] = await tx
       .select()
-      .from(campaignDailyBudgets)
-      .where(and(eq(campaignDailyBudgets.orgId, orgId), eq(campaignDailyBudgets.brandId, brandId)));
-    let campaignsDailyBudgetCents: string | null = null;
-    if (ceilings.length > 0) {
-      campaignsDailyBudgetCents = sumCeilings(ceilings);
-    } else {
-      const [brandRow] = await tx
-        .select()
-        .from(brandDailyBudgets)
-        .where(and(eq(brandDailyBudgets.orgId, orgId), eq(brandDailyBudgets.brandId, brandId)))
-        .limit(1);
-      campaignsDailyBudgetCents = brandRow ? brandRow.dailyBudgetCents : null;
-    }
+      .from(brandDailyBudgets)
+      .where(and(eq(brandDailyBudgets.orgId, orgId), eq(brandDailyBudgets.brandId, brandId)))
+      .limit(1);
+    const campaignsDailyBudgetCents = brandRow ? brandRow.dailyBudgetCents : null;
 
     if (!deleted) {
       return { cleared: false, previousDailyBudgetCents: null, campaignsDailyBudgetCents };

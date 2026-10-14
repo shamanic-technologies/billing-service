@@ -31,15 +31,15 @@
  * WHAT A DAY IS WORTH — `proactiveDailyBudgetCents`, the same rule for every
  * class: the daily budgets of the org's PROACTIVE campaigns (entry legs) that
  * are running and whose audiences are not all exhausted. campaign-service states
- * that verdict per campaign (`recurring`); billing owns the amounts and matches
- * each campaign to its ceiling with the SAME resolver the ceiling read and write
- * use (`campaignCeilingRows`). Reactive legs never count — they fire from a step
+ * that verdict per campaign (`recurring`); billing owns the amounts: a sales
+ * funnel campaign counts its funnel's recurring max budget (per-campaign ceilings
+ * were retired 2026-10-14). Reactive legs never count — they fire from a step
  * and are a bonus. A brand in GLOBAL mode (one stated sales budget) counts that
  * amount whenever at least one of its campaigns is recurring; so does a legacy
  * brand-level scalar.
  *
  * UNKNOWN STAYS UNKNOWN. A campaign-service that cannot be read, or a campaign
- * whose verdict turns on an unknown axis while it holds a positive ceiling,
+ * whose verdict turns on an unknown axis while it holds a positive budget,
  * makes the org's figure NULL with a named reason — never 0, which would read as
  * a customer who stopped spending. Fleet totals sum the KNOWN rows and list the
  * unknown ones beside them, so every total is the sum of the rows shown.
@@ -53,7 +53,6 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { billingAccounts, brandDailyBudgets, type Subscription } from "../db/schema.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
-import { campaignCeilingRows, getBrandCeilings, type CampaignKey } from "./campaign-budgets.js";
 import {
   fetchRecurringCampaignStatuses,
   type RecurringCampaignStatus,
@@ -109,7 +108,7 @@ export type RevenueClassReason =
 
 export type DailyBudgetUnknownReason =
   | RecurringStatusUnavailableReason
-  /** A campaign holding a positive ceiling has no known recurring verdict. */
+  /** A campaign holding a positive budget has no known recurring verdict. */
   | "campaign_recurrence_unknown";
 
 export type RunOutUnknownReason = DailyBudgetUnknownReason | "no_proactive_spend";
@@ -198,7 +197,7 @@ export interface RevenueCampaignLine {
   /** campaign-service's verdict: counts toward recurring spend right now. */
   recurring: boolean | null;
   recurringUnknownReason: string | null;
-  /** The ceiling funding this campaign (billing's resolver), null when none is stated. */
+  /** This campaign's own budget: always null now (a funnel's money is on its funnel line). */
   dailyBudgetCents: string | null;
   /** Whether this campaign's money is in the org's proactive daily budget. */
   counted: boolean;
@@ -207,7 +206,7 @@ export interface RevenueCampaignLine {
 export interface RevenueBrandLine {
   brandId: string;
   mode: BrandFundingMode;
-  /** Everything this brand has configured per day (global amount, ceiling sum or scalar). */
+  /** Everything this brand has configured per day (global amount or scalar, plus recurring funnel caps). */
   configuredDailyBudgetCents: string;
   /** The proactive, running, not-exhausted share. Null when unknown. */
   proactiveDailyBudgetCents: string | null;
@@ -239,7 +238,6 @@ export interface ProactiveBudget {
 interface BrandFunding {
   brandId: string;
   salesCents: string | null;
-  ceilings: Awaited<ReturnType<typeof getBrandCeilings>>;
   scalarCents: string | null;
   /** The brand's sales funnel caps stating a budget (lib/funnel-campaigns.ts). */
   funnelCaps?: SalesFunnelCapRow[];
@@ -274,7 +272,7 @@ export function proactiveBudgetOf(
 
     // One amount for the whole brand (global sales budget, or a legacy scalar):
     // it is spent when at least one campaign is recurring.
-    const wholeBrand = f.salesCents ?? (f.ceilings.length === 0 ? f.scalarCents : null);
+    const wholeBrand = f.salesCents ?? f.scalarCents;
     if (wholeBrand !== null) {
       const amount = new Decimal(wholeBrand);
       const mode: BrandFundingMode = f.salesCents !== null ? "global" : "brand_scalar";
@@ -300,44 +298,18 @@ export function proactiveBudgetOf(
       continue;
     }
 
-    // Per-campaign ceilings: each campaign's money is the ceiling billing's own
-    // resolver attributes to it. A ceiling row two campaigns resolve to is
-    // counted once.
-    const counted = new Set<string>();
-    const unknown = new Set<string>();
-    let total = new Decimal(0);
-    for (const c of own) {
-      const rows = c.featureSlug
-        ? campaignCeilingRows(f.ceilings, {
-            offerId: c.offerId,
-            legKey: c.legKey,
-            featureSlug: c.featureSlug,
-          } as CampaignKey)
-        : [];
-      const amount = rows.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0));
-      const isCounted = c.recurring === true && rows.length > 0;
-      for (const r of rows) {
-        const k = `${r.featureSlug}|${r.offerId ?? ""}|${r.legKey ?? ""}`;
-        if (c.recurring === true && !counted.has(k)) {
-          counted.add(k);
-          total = total.plus(r.dailyBudgetCents);
-        } else if (c.recurring === null && new Decimal(r.dailyBudgetCents).greaterThan(0)) {
-          unknown.add(k);
-        }
-      }
-      lines.push(lineOf(c, rows.length > 0 ? fixed(amount) : null, isCounted));
-    }
-    const stillUnknown = [...unknown].some((k) => !counted.has(k));
+    // No brand-level amount: the brand's money is its funnel caps only (the
+    // per-campaign ceilings were retired 2026-10-14). A non-unit campaign has no
+    // budget of its own.
+    for (const c of own) lines.push(lineOf(c, null, false));
     brands.push(
       withFunnels(
         {
           brandId: f.brandId,
           mode: "campaigns",
-          configuredDailyBudgetCents: fixed(
-            f.ceilings.reduce((s, r) => s.plus(r.dailyBudgetCents), new Decimal(0))
-          ),
-          proactiveDailyBudgetCents: stillUnknown ? null : fixed(total),
-          unknownReason: stillUnknown ? "campaign_recurrence_unknown" : null,
+          configuredDailyBudgetCents: fixed(new Decimal(0)),
+          proactiveDailyBudgetCents: fixed(new Decimal(0)),
+          unknownReason: null,
         },
         f,
         funnelCampaigns,
@@ -451,9 +423,8 @@ async function readFunding(orgId: string): Promise<BrandFunding[]> {
   const brandIds = await fundedBrandIds(orgId);
   return Promise.all(
     brandIds.map(async (brandId) => {
-      const [sales, ceilings, scalarRows, funnelCaps] = await Promise.all([
+      const [sales, scalarRows, funnelCaps] = await Promise.all([
         getBrandSalesBudget(orgId, brandId),
-        getBrandCeilings(orgId, brandId),
         db
           .select({ dailyBudgetCents: brandDailyBudgets.dailyBudgetCents })
           .from(brandDailyBudgets)
@@ -464,7 +435,6 @@ async function readFunding(orgId: string): Promise<BrandFunding[]> {
       return {
         brandId,
         salesCents: sales ? String(sales.dailyBudgetCents) : null,
-        ceilings,
         scalarCents: scalarRows[0] ? String(scalarRows[0].dailyBudgetCents) : null,
         funnelCaps,
       };

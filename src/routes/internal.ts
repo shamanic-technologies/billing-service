@@ -14,7 +14,6 @@ import {
   brandSalesBudgets,
   salesFunnelCaps,
   salesFunnelCapChanges,
-  campaignDailyBudgets,
   campaignAuthorizeCosts,
   campaignReloadSweepAttempts,
   creditDepletionEpisodes,
@@ -24,7 +23,6 @@ import {
   subscriptions,
   subscriptionCreditExpiries,
   localPromos,
-  salesPathReactiveCharges,
   subscriptionAutoUpgrades,
   monthlyChargeLimits,
   monthlyChargeLimitRefusals,
@@ -163,12 +161,6 @@ async function deleteBillingStateByOrg(
       .returning({ brandId: salesFunnelCaps.brandId });
     await tx.delete(salesFunnelCapChanges).where(eq(salesFunnelCapChanges.orgId, orgId));
 
-    // Campaign ceilings are this org's own pacing config for the same brands.
-    const deletedCampaignBudgets = await tx
-      .delete(campaignDailyBudgets)
-      .where(eq(campaignDailyBudgets.orgId, orgId))
-      .returning({ brandId: campaignDailyBudgets.brandId });
-
     // This org's OWN promises. A promise held by ANOTHER org that merely REFERENCES
     // this one (an inviter's promise naming this org as the referral that converted)
     // is deliberately left alone: the inviter genuinely earned it, and it stays
@@ -196,8 +188,6 @@ async function deleteBillingStateByOrg(
       .where(eq(subscriptions.orgId, orgId))
       .returning({ id: subscriptions.id });
 
-    // A subscriber's follow-up charges (migration 0062) go with the org.
-    await tx.delete(salesPathReactiveCharges).where(eq(salesPathReactiveCharges.orgId, orgId));
     // Its auto-upgrade attempts (migration 0081) too. Its payment CONSENTS are kept:
     // they are dispute evidence that outlives the org.
     await tx.delete(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId));
@@ -217,7 +207,6 @@ async function deleteBillingStateByOrg(
       campaignAuthorizeCosts: deletedCampaignCosts.length,
       campaignReloadSweepAttempts: deletedSweepAttempts.length,
       brandDailyBudgets: deletedBrandBudgets.length,
-      campaignDailyBudgets: deletedCampaignBudgets.length,
       brandSalesBudgets: deletedSalesBudgets.length,
       salesFunnelCaps: deletedFunnelCaps.length,
       welcomeCreditClaims: deletedWelcomeClaims,
@@ -267,7 +256,6 @@ router.delete("/internal/accounts/by-org/:orgId", async (req, res) => {
 // Moves, in one transaction, every row billing holds per (org, brand):
 //   - brand_daily_budgets          (the brand's current daily budget)
 //   - brand_daily_budget_changes   (its dated history)
-//   - campaign_daily_budgets       (one ceiling per campaign of the brand)
 // and rewrites the brand id when `targetBrandId` is given.
 //
 // Money stays where it is. Nothing in local_promos and no Stripe customer moves:

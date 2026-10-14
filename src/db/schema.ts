@@ -778,101 +778,10 @@ export const brandDailyBudgetChanges = pgTable(
   ]
 );
 
-// campaign_daily_budgets: ONE daily spend ceiling per CAMPAIGN of an org+brand.
-// A campaign is (offer x leg x acquisition channel), so a ceiling is keyed on
-// exactly that. The brand-level value is DERIVED from these rows (their sum) once
-// any exist - see lib/campaign-budgets.ts. A brand that has never set a ceiling
-// keeps its brand_daily_budgets row as the authoritative value (no backfill).
-//
-// Until migration 0048 this table was `brand_funnel_daily_budgets` and carried a
-// `funnel_key` in its identity. The sales funnel was retired fleet-wide (one leg
-// belongs to several funnels, so the funnel never identified what was bought),
-// and 0048 dropped it after snapshotting the column in production.
-//
-// 0 is a legal value ("not funding this campaign right now"), including a brand
-// whose every ceiling is 0 (a brand in pause). The acquisition channel's daily
-// minimum applies only to a funded (> 0) channel and lives in the service layer,
-// not in a CHECK - the minimums are published figures that move.
-export const campaignDailyBudgets = pgTable(
-  "campaign_daily_budgets",
-  {
-    orgId: uuid("org_id").notNull(),
-    brandId: uuid("brand_id").notNull(),
-    /**
-     * The ACQUISITION CHANNEL this ceiling funds, as a features-service feature
-     * slug. A channel IS a feature slug - there is no separate channel
-     * vocabulary. Deliberately NOT validated against a list of slugs.
-     */
-    featureSlug: text("feature_slug").notNull(),
-    /**
-     * The OFFER this ceiling funds - one distinct thing the brand sells.
-     * brand-service owns the entity and exposes it as a UUID; billing defines
-     * none of its semantics and never validates it against another service.
-     *
-     * NULLABLE, and the NULL is a first-class permanent value: "this ceiling is
-     * not scoped to an offer" (written before offers existed). There is no
-     * backfill - guessing would move real money onto the wrong campaign. That is
-     * why the key below is a UNIQUE ... NULLS NOT DISTINCT constraint rather than
-     * a primary key.
-     */
-    offerId: uuid("offer_id"),
-    /**
-     * The LEG this ceiling funds - features-service's canonical leg id, carried
-     * OPAQUE and never parsed (the two steps a leg connects ride beside it on
-     * features-service's catalogue). NULLABLE with the same meaning as the offer:
-     * "written before legs existed", a permanent value, never backfilled.
-     */
-    legKey: text("leg_key"),
-    dailyBudgetCents: numeric("daily_budget_cents", {
-      precision: FRACTIONAL_PRECISION,
-      scale: FRACTIONAL_SCALE,
-    }).notNull(),
-    /**
-     * A subscriber's MONTHLY budget for this campaign (migration 0064,
-     * lib/campaign-items); the daily ceiling is then monthly / 30. NULL = a
-     * daily-only ceiling (prepaid / postpaid, and every older row).
-     */
-    monthlyBudgetCents: integer("monthly_budget_cents"),
-    /**
-     * true = a subscriber's monthly budget DERIVED FROM ITS PLAN (migration 0065,
-     * lib/subscriber-plan-budgets), not stated by the customer: it never prices
-     * the plan and is never charged on top of it. A customer write clears it.
-     */
-    planDerived: boolean("plan_derived").notNull().default(false),
-    /**
-     * The part of `daily_budget_cents` SOURCING may spend, on demand (migration
-     * 0074, lib/campaign-sourcing). `daily_budget_cents` stays the campaign's max
-     * daily spend; outreach = daily - sourcing, served, never stored. NULL = not
-     * split (the whole chain on one budget). CHECK: 0 <= sourcing <= daily.
-     */
-    sourcingCeilingCents: numeric("sourcing_ceiling_cents", {
-      precision: FRACTIONAL_PRECISION,
-      scale: FRACTIONAL_SCALE,
-    }),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (table) => [
-    unique("campaign_daily_budgets_campaign_key")
-      .on(
-        table.orgId,
-        table.brandId,
-        table.featureSlug,
-        table.offerId,
-        table.legKey
-      )
-      .nullsNotDistinct(),
-    index("campaign_daily_budgets_org_brand_idx").on(
-      table.orgId,
-      table.brandId
-    ),
-  ]
-);
-
-/** One stored campaign ceiling. */
-export type CeilingRow = typeof campaignDailyBudgets.$inferSelect;
-export type NewCeilingRow = typeof campaignDailyBudgets.$inferInsert;
+// campaign_daily_budgets (one daily ceiling per campaign = offer x leg x channel)
+// was DROPPED by migration 0088 (2026-10-14): a campaign is a sales funnel
+// campaign and its money is its sales funnel caps. Its last 36 rows are kept in
+// `campaign_daily_budgets_snapshot_20261014`.
 
 // brand_sales_budgets: ONE daily budget for SALES stated at the BRAND grain
 // (migration 0054). A brand that states one runs in "global" mode: campaign-
@@ -1373,27 +1282,8 @@ export const platformOrgs = pgTable("platform_orgs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// A subscriber's reactive budget charged NOW for the current period (migration 0062).
-export const salesPathReactiveCharges = pgTable("sales_path_reactive_charges", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  orgId: uuid("org_id").notNull(),
-  subscriptionId: uuid("subscription_id").notNull(),
-  periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
-  /** Reactive total collected for the period once this charge is paid. */
-  cumulativeCents: integer("cumulative_cents").notNull(),
-  amountCents: integer("amount_cents").notNull(),
-  /** pending (claimed, charge in flight) | paid | failed */
-  status: text("status").notNull(),
-  reference: text("reference"),
-  failureCode: text("failure_code"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  uniqueIndex("idx_sales_path_reactive_charges_claim").on(
-    table.subscriptionId,
-    table.periodStart,
-    table.cumulativeCents
-  ),
-]);
+// sales_path_reactive_charges (migration 0062) was DROPPED by migration 0088 with
+// the per-campaign item budgets it charged (it never held a row).
 
 // Owner Telegram alert per succeeded payment (migration 0072, lib/payment-alerts).
 // The primary key is the exactly-once guarantee: claimed before any send.

@@ -54,7 +54,6 @@ import {
   type MissionCeiling,
   type MissionStatusMove,
 } from "./budget-change-email.js";
-import { getBrandCeilings } from "./campaign-budgets.js";
 import { getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import {
   brandFunnelCaps,
@@ -295,9 +294,8 @@ async function readCeilingsAfter(
   brandId: string
 ): Promise<MissionCeiling[] | null> {
   try {
-    const rows = await getBrandCeilings(orgId, brandId);
-    if (rows.length > 0) return rows;
-    // The legacy brand-grain pot only: a funnel cap is not a mission here.
+    // The brand-grain pot only (per-campaign ceilings were retired 2026-10-14;
+    // a funnel's money is listed apart, from its caps).
     const brandPot = await getLegacyBrandDailyBudget(orgId, brandId);
     return brandPot
       ? [{ featureSlug: null, offerId: null, legKey: null, dailyBudgetCents: brandPot.dailyBudgetCents }]

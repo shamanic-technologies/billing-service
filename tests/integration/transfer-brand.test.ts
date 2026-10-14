@@ -7,7 +7,6 @@ import {
   brandDailyBudgets,
   brandTransfers,
   campaignAuthorizeCosts,
-  campaignDailyBudgets,
   localPromoCodes,
   localPromos,
 } from "../../src/db/schema.js";
@@ -99,10 +98,6 @@ describe("POST /internal/transfer-brand", () => {
       { orgId, brandId, dailyBudgetCents: "5000" },
       { orgId, brandId, dailyBudgetCents: "11900" },
     ]);
-    await db.insert(campaignDailyBudgets).values([
-      { orgId, brandId, featureSlug: "sales-cold-email-outreach", offerId: "00000000-0000-0000-0000-0000000000f1", legKey: "start_to_conversation", dailyBudgetCents: "10700" },
-      { orgId, brandId, featureSlug: "ai-meeting-booking", offerId: null, legKey: null, dailyBudgetCents: "200" },
-    ]);
   }
 
   it("keeps BOTH orgs' balances unchanged to the cent, whichever order runs-service moves in", async () => {
@@ -162,7 +157,6 @@ describe("POST /internal/transfer-brand", () => {
     expect(res.body.updatedTables).toEqual([
       { tableName: "brand_daily_budgets", count: 1 },
       { tableName: "brand_daily_budget_changes", count: 2 },
-      { tableName: "campaign_daily_budgets", count: 2 },
       { tableName: "brand_sales_budgets", count: 0 },
       { tableName: "brand_sales_budget_changes", count: 0 },
       { tableName: "sales_funnel_caps", count: 0 },
@@ -175,11 +169,6 @@ describe("POST /internal/transfer-brand", () => {
     expect(budgets.filter((b) => b.brandId === otherBrandId).map((b) => b.orgId)).toEqual([sourceOrgId]);
     const changes = await db.select().from(brandDailyBudgetChanges).where(eq(brandDailyBudgetChanges.brandId, sourceBrandId));
     expect(changes.map((c) => c.orgId)).toEqual([targetOrgId, targetOrgId]);
-    const ceilings = await db.select().from(campaignDailyBudgets).where(eq(campaignDailyBudgets.brandId, sourceBrandId));
-    expect(ceilings.map((c) => c.orgId)).toEqual([targetOrgId, targetOrgId]);
-    // Nothing of the brand is left under the source org.
-    const leftover = await db.select().from(campaignDailyBudgets).where(eq(campaignDailyBudgets.orgId, sourceOrgId));
-    expect(leftover.every((c) => c.brandId === otherBrandId)).toBe(true);
   });
 
   it("rewrites the brand id when targetBrandId is given", async () => {
@@ -191,8 +180,6 @@ describe("POST /internal/transfer-brand", () => {
 
     const [budget] = await db.select().from(brandDailyBudgets);
     expect(budget).toMatchObject({ orgId: targetOrgId, brandId: targetBrandId });
-    const ceilings = await db.select().from(campaignDailyBudgets);
-    expect(ceilings.every((c) => c.orgId === targetOrgId && c.brandId === targetBrandId)).toBe(true);
     const changes = await db.select().from(brandDailyBudgetChanges);
     expect(changes.every((c) => c.orgId === targetOrgId && c.brandId === targetBrandId)).toBe(true);
   });
@@ -210,7 +197,6 @@ describe("POST /internal/transfer-brand", () => {
     expect(res.body.updatedTables).toEqual([
       { tableName: "brand_daily_budgets", count: 0 },
       { tableName: "brand_daily_budget_changes", count: 0 },
-      { tableName: "campaign_daily_budgets", count: 0 },
       { tableName: "brand_sales_budgets", count: 0 },
       { tableName: "brand_sales_budget_changes", count: 0 },
       { tableName: "sales_funnel_caps", count: 0 },
@@ -286,8 +272,8 @@ describe("POST /internal/transfer-brand", () => {
     // Refused before runs-service was asked to move any cost row.
     expect(runsTransferSpy).not.toHaveBeenCalled();
     expect(await db.select().from(brandTransfers)).toHaveLength(0);
-    const ceilings = await db.select().from(campaignDailyBudgets);
-    expect(ceilings.every((c) => c.orgId === sourceOrgId)).toBe(true);
+    const budgets = await db.select().from(brandDailyBudgets).where(eq(brandDailyBudgets.brandId, sourceBrandId));
+    expect(budgets.every((c) => c.orgId === sourceOrgId)).toBe(true);
   });
 
   it("400 on a malformed body and on source == target", async () => {

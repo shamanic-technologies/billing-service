@@ -16,14 +16,9 @@ import {
   brandDailyBudgets,
   brandDailyBudgetChanges,
   brandSalesBudgets,
-  campaignDailyBudgets,
   type BrandDailyBudget,
   type BrandDailyBudgetChange,
 } from "../db/schema.js";
-import {
-  BrandBudgetManagedByCampaignsError,
-  sumCeilings,
-} from "./campaign-budgets.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { brandFunnelDailyCents, funnelBudgetCaps } from "./funnel-campaigns.js";
 import { Decimal } from "decimal.js";
@@ -70,10 +65,6 @@ export async function upsertBrandDailyBudget(
   return db.transaction(async (tx) => {
     const changedAt = new Date();
 
-    // A brand funded per campaign derives this value from its campaign
-    // ceilings (lib/campaign-budgets.ts). Accepting a brand-level write would
-    // leave two numbers claiming to be the same thing, so refuse it — the caller
-    // surfaces a 409 pointing at the per-campaign routes.
     // A brand in GLOBAL mode is funded by its one stated sales budget
     // (lib/brand-sales-budget.ts). A brand-scalar write would claim to be the
     // brand's daily budget while it is not, so refuse it (409).
@@ -90,22 +81,6 @@ export async function upsertBrandDailyBudget(
     if (salesRow) {
       throw new BrandBudgetManagedBySalesBudgetError(
         "This brand's daily budget is its global sales budget. Change or clear the sales budget instead."
-      );
-    }
-
-    const ceilingRows = await tx
-      .select({ featureSlug: campaignDailyBudgets.featureSlug })
-      .from(campaignDailyBudgets)
-      .where(
-        and(
-          eq(campaignDailyBudgets.orgId, orgId),
-          eq(campaignDailyBudgets.brandId, brandId)
-        )
-      )
-      .limit(1);
-    if (ceilingRows.length > 0) {
-      throw new BrandBudgetManagedByCampaignsError(
-        "This brand's daily budget is set per campaign. Change the campaign ceilings instead — the brand's daily budget is their total."
       );
     }
 
@@ -179,18 +154,12 @@ export async function getBrandDailyBudgetHistory(
 /**
  * Read one org's current daily budget for a brand, or null if none set.
  *
- * Once the brand carries campaign ceilings, this answers their SUM — the one
- * number the launch gate, the runway warnings, the credit alerts, the Overview
- * tile and campaign-service all read. No consumer re-composes that sum itself.
+ * The one number the launch gate, the runway warnings, the credit alerts, the
+ * Overview tile and campaign-service all read. No consumer re-composes it.
  *
- * A brand that has never set a campaign ceiling reads its own brand-level row
- * (no backfill). The two states are mutually exclusive: the first ceiling write
- * drops the brand-level row, and a brand-level write against a ceiling-funded
- * brand is refused.
- *
- * A brand in GLOBAL mode (it stated one daily sales budget) answers THAT amount:
- * it is the money the brand allows to be spent per day, whatever its stored
- * campaign ceilings say. A brand that never stated one reads exactly as before.
+ * A brand in GLOBAL mode (it stated one daily sales budget) answers THAT amount;
+ * otherwise its brand-level row. (The per-campaign ceilings that used to sum
+ * here were retired 2026-10-14: a campaign's money is its funnel caps.)
  *
  * SALES FUNNEL campaigns (owner 2026-10-10): their money is the funnel's MAX
  * BUDGET, so every RECURRING cap of the brand is ADDED, normalised to a day
@@ -221,9 +190,8 @@ export async function getBrandDailyBudget(
 }
 
 /**
- * The brand's daily budget from its ceilings / global amount / scalar only (no
- * funnel caps): what a NON-funnel campaign may be paced on, and what a brand-grain
- * mission is. Never hand a funnel's money to a per-campaign read.
+ * The brand's daily budget from its global amount / scalar only (no funnel
+ * caps): what a brand-grain mission is. Never hand a funnel's money to it.
  */
 export async function getLegacyBrandDailyBudget(
   orgId: string,
@@ -242,28 +210,6 @@ export async function getLegacyBrandDailyBudget(
       orgId,
       dailyBudgetCents: sales.dailyBudgetCents,
       updatedAt: sales.updatedAt,
-    };
-  }
-
-  const ceilingRows = await ex
-    .select()
-    .from(campaignDailyBudgets)
-    .where(
-      and(
-        eq(campaignDailyBudgets.orgId, orgId),
-        eq(campaignDailyBudgets.brandId, brandId)
-      )
-    );
-  if (ceilingRows.length > 0) {
-    const updatedAt = ceilingRows.reduce(
-      (latest, row) => (row.updatedAt > latest ? row.updatedAt : latest),
-      ceilingRows[0].updatedAt
-    );
-    return {
-      brandId,
-      orgId,
-      dailyBudgetCents: sumCeilings(ceilingRows),
-      updatedAt,
     };
   }
 
@@ -320,10 +266,7 @@ export interface BrandDailyBudgetByDay {
  *
  * GRAIN: the BRAND total, which is the finest grain billing genuinely records
  * over time. `brand_daily_budget_changes` carries the brand-level figure on
- * EVERY write, per-campaign writes included (see setCampaignDailyBudget), so
- * the replay is complete for the brand. The campaign ceilings are upserted in
- * place with NO change log of their own, so
- * a past-day answer at that grain would be invented — we do not offer one.
+ * EVERY write, so the replay is complete for the brand.
  *
  * The amount in force for a day is the LAST change strictly before the next
  * day's 00:00:00Z, i.e. the value the day finished on. A day that precedes the
