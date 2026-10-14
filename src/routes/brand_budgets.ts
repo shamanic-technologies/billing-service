@@ -6,7 +6,6 @@ import {
   MissionStatusChangedRequestSchema,
   SetBrandDailyBudgetRequestSchema,
   SetBrandSalesBudgetRequestSchema,
-  SetCampaignDailyBudgetRequestSchema,
 } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
@@ -39,11 +38,6 @@ import {
 } from "../lib/brand-budget-notification.js";
 import {
   BrandBudgetManagedByCampaignsError,
-  CeilingBelowMinimumError,
-  SourcingHasItsOwnCampaignError,
-  ChannelTermsUnavailableError,
-  InvalidCeilingError,
-  UnknownAcquisitionChannelError,
   aggregateLegBudget,
   legBudgetRows,
   aggregateOfferBudget,
@@ -51,7 +45,6 @@ import {
   campaignTotalsOf,
   getBrandCeilings,
   parseCampaignKey,
-  setCampaignDailyBudget,
   sumCeilings,
   type CampaignBudgetTotal,
   type CampaignKey,
@@ -59,16 +52,12 @@ import {
 } from "../lib/campaign-budgets.js";
 import {
   brandGrainChange,
-  ceilingChangesBetween,
 } from "../lib/brand-running-budget.js";
 import {
-  InvalidSourcingCeilingError,
   fetchCampaignSpendToday,
   parseCampaignIds,
   MAX_CAMPAIGN_IDS,
 } from "../lib/campaign-sourcing.js";
-import { addCents } from "../lib/cents.js";
-import { SalesPathTermsUnavailableError } from "../lib/sales-path-terms.js";
 
 const router = Router();
 
@@ -149,36 +138,6 @@ async function composeLegBudgetView(
   const stored = await getBrandCeilings(orgId, brandId);
   logLegacyLegKeyOnLegPath(req, legKey, legBudgetRows(stored, legKey));
   return { legKey, ...renderSubtotal(aggregateLegBudget(stored, legKey)) };
-}
-
-/** Map a ceiling-write validation failure onto its status. Rethrows anything else. */
-function respondToCeilingWriteError(err: unknown, res: Response): void {
-  if (
-    err instanceof CeilingBelowMinimumError ||
-    err instanceof UnknownAcquisitionChannelError ||
-    err instanceof InvalidCeilingError ||
-    err instanceof InvalidSourcingCeilingError
-  ) {
-    res.status(400).json({ error: err.message });
-    return;
-  }
-  // The acquisition channels' published terms could not be read, so no daily
-  // minimum is known. A gate that cannot be evaluated REFUSES — never lets the
-  // write through — and it is the producer that is unavailable, not the request
-  // that is wrong.
-  if (err instanceof ChannelTermsUnavailableError || err instanceof SalesPathTermsUnavailableError) {
-    res.status(502).json({ error: err.message });
-    return;
-  }
-  if (err instanceof SourcingHasItsOwnCampaignError) {
-    res.status(409).json({
-      error: err.message,
-      code: "sourcing_has_its_own_campaign",
-      sourceFeatureSlugs: err.sourceFeatureSlugs,
-    });
-    return;
-  }
-  throw err;
 }
 
 // GET /internal/brands/:brandId/daily-budget — read this org's current daily
@@ -541,32 +500,6 @@ router.get(
   }
 );
 
-// GET /v1/brands/:brandId/offers/:offerId/daily-budget — the same answer for the
-// user, via the gateway (an offer screen reads its own ceiling). Auth: org headers.
-router.get(
-  "/v1/brands/:brandId/offers/:offerId/daily-budget",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId, offerId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    if (!UUID_RE.test(offerId)) {
-      res.status(400).json({ error: "offerId must be a valid UUID" });
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    const view = await composeOfferBudgetView(
-      orgId,
-      brandId,
-      offerId.toLowerCase()
-    );
-    res.json({ brandId, orgId, ...view });
-  }
-);
-
 // --- One LEG's daily ceiling ---------------------------------------------
 //
 // A campaign is (offer, leg, acquisition channel) — the leg is the thing the
@@ -611,29 +544,6 @@ router.get(
 
     const view = await composeLegBudgetView(req, orgId, brandId, legKey.trim());
     res.json({ brandId, ...view });
-  }
-);
-
-// GET /v1/brands/:brandId/legs/:legKey/daily-budget — the same answer for the
-// user, via the gateway (a campaign screen reads its own ceiling). Auth: org
-// headers.
-router.get(
-  "/v1/brands/:brandId/legs/:legKey/daily-budget",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId, legKey } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    if (!legKey.trim()) {
-      res.status(400).json({ error: "legKey must be a non-empty leg id" });
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    const view = await composeLegBudgetView(req, orgId, brandId, legKey.trim());
-    res.json({ brandId, orgId, ...view });
   }
 );
 
@@ -746,26 +656,6 @@ router.get("/internal/brands/:brandId/campaign-budgets", async (req, res) => {
   res.json({ brandId, ...(await composeCampaignBudgetsView(orgId, brandId)) });
 });
 
-// GET /v1/brands/:brandId/campaign-budgets — the same list for the user, via
-// the gateway. Auth: org headers.
-router.get(
-  "/v1/brands/:brandId/campaign-budgets",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    const orgId = req.headers["x-org-id"] as string;
-    res.json({
-      brandId,
-      orgId,
-      ...(await composeCampaignBudgetsView(orgId, brandId)),
-    });
-  }
-);
-
 // GET /internal/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug=
 // — ONE campaign's ceiling (campaign-service pacing). All three are required.
 // Nothing funds it -> dailyBudgetCents: null, never 0. Auth: x-api-key + x-org-id.
@@ -783,122 +673,6 @@ router.get("/internal/brands/:brandId/campaign-budget", async (req, res) => {
   if (campaignIds === undefined) return;
   await respondCampaignBudget(res, orgId, brandId, key, campaignIds, {});
 });
-
-// GET /v1/brands/:brandId/campaign-budget?offerId=&legKey=&featureSlug= — the
-// same answer for the user, via the gateway. Auth: org headers.
-router.get(
-  "/v1/brands/:brandId/campaign-budget",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    const key = campaignKeyFromQuery(req, res);
-    if (!key) return;
-    const campaignIds = campaignIdsFromQuery(req, res);
-    if (campaignIds === undefined) return;
-    const orgId = req.headers["x-org-id"] as string;
-    await respondCampaignBudget(res, orgId, brandId, key, campaignIds, { orgId });
-  }
-);
-
-// PUT /v1/brands/:brandId/campaign-budget — state ONE campaign's ceiling (the
-// dashboard's budget controls). Body: { offerId, legKey, featureSlug,
-// dailyBudgetCents }. Other campaigns untouched. 0 is legal; a funded channel
-// below its published floor is a 400 (a channel already below it may be kept or
-// raised). Auth: org headers.
-router.put(
-  "/v1/brands/:brandId/campaign-budget",
-  requireOrgHeaders,
-  async (req, res) => {
-    const { brandId } = req.params;
-    if (!UUID_RE.test(brandId)) {
-      res.status(400).json({ error: "brandId must be a valid UUID" });
-      return;
-    }
-    const parsedBody = SetCampaignDailyBudgetRequestSchema.safeParse(req.body);
-    if (!parsedBody.success) {
-      res.status(400).json({ error: parsedBody.error.issues[0].message });
-      return;
-    }
-
-    let key: CampaignKey;
-    try {
-      key = parseCampaignKey(parsedBody.data);
-    } catch (err) {
-      respondToCeilingWriteError(err, res);
-      return;
-    }
-
-    const orgId = req.headers["x-org-id"] as string;
-    const body = parsedBody.data;
-    let written;
-    try {
-      // The total is either stated, or the sum of the two parts (summed here,
-      // never in a browser). Omitting sourcingCeilingCents keeps the row's share.
-      let dailyBudgetCents = body.dailyBudgetCents;
-      if (dailyBudgetCents === undefined) {
-        try {
-          dailyBudgetCents = addCents(
-            parseNonNegativeCents(body.outreachDailyBudgetCents),
-            parseNonNegativeCents(body.sourcingCeilingCents)
-          );
-        } catch (err) {
-          throw new InvalidCeilingError((err as Error).message);
-        }
-      }
-      written = await setCampaignDailyBudget(orgId, brandId, key, dailyBudgetCents, {
-        sourcingCeilingCents: body.sourcingCeilingCents,
-      });
-    } catch (err) {
-      respondToCeilingWriteError(err, res);
-      return;
-    }
-
-    console.log(
-      `[billing-service] campaign budget set: brand=${brandId} org=${orgId} campaign=${key.offerId}/${key.legKey}/${key.featureSlug} value=${written.campaign.dailyBudgetCents} total=${written.brandDailyBudgetCents}`
-    );
-
-    const changes = ceilingChangesBetween(
-      written.previousCeilings,
-      written.ceilings
-    );
-    if (
-      written.previousCeilings.length === 0 &&
-      written.previousBrandDailyBudgetCents !== null
-    ) {
-      changes.push(
-        ...brandGrainChange(written.previousBrandDailyBudgetCents, "0")
-      );
-    }
-    void notifyBrandDailyBudgetChanged({
-      orgId,
-      userId: req.headers["x-user-id"] as string,
-      runId: req.headers["x-run-id"] as string,
-      brandId,
-      previousDailyBudgetCents: written.previousBrandDailyBudgetCents,
-      newDailyBudgetCents: written.brandDailyBudgetCents,
-      changes,
-      ceilings: written.ceilings,
-      actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
-    });
-
-    res.json({
-      brandId,
-      orgId,
-      ...key,
-      dailyBudgetCents: written.campaign.dailyBudgetCents,
-      outreachDailyBudgetCents: written.campaign.outreachDailyBudgetCents,
-      sourcingCeilingCents: written.campaign.sourcingCeilingCents,
-      split: written.campaign.split,
-      updatedAt: written.campaign.updatedAt.toISOString(),
-      brandDailyBudgetCents: written.brandDailyBudgetCents,
-      campaigns: renderCampaigns(campaignTotalsOf(written.ceilings)),
-    });
-  }
-);
 
 // --- The brand's ONE daily sales budget (global mode) --------------------
 //

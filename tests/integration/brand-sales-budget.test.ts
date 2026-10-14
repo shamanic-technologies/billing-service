@@ -7,6 +7,7 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import {
   brandDailyBudgetChanges,
@@ -143,10 +144,7 @@ describe("brand global sales budget", () => {
 
   it("a campaign ceiling written in global mode keeps the brand total on the global amount", async () => {
     await request(app).put(salesPath).set(auth).send({ dailyBudgetCents: 2000 });
-    const res = await request(app)
-      .put(`/v1/brands/${brandId}/campaign-budget`)
-      .set(auth)
-      .send({ offerId: OFFER, legKey: LEG_REPLY, featureSlug: COLD, dailyBudgetCents: 900 });
+    const res = await writeCampaignCeiling(orgId, brandId, { offerId: OFFER, legKey: LEG_REPLY, featureSlug: COLD, dailyBudgetCents: 900 });
     expect(res.status).toBe(200);
     expect(await brandTotal()).toBe("2000.0000000000");
     const totals = await db

@@ -7,16 +7,10 @@
  */
 import type { Request, Response } from "express";
 import { Router } from "express";
-import { requireOrgHeaders } from "../middleware/auth.js";
-import { SetCampaignItemBudgetsRequestSchema } from "../schemas.js";
 import {
   ItemBudgetRefused,
   getOfferItemsView,
-  removeOfferItem,
-  setOfferItems,
 } from "../lib/campaign-items.js";
-import { notifyBrandDailyBudgetChanged } from "../lib/brand-budget-notification.js";
-import { ceilingChangesBetween } from "../lib/brand-running-budget.js";
 
 const router = Router();
 
@@ -81,81 +75,6 @@ async function read(req: Request, res: Response, orgId: string) {
     throw err;
   }
 }
-
-// GET /v1/brands/:brandId/offers/:offerId/campaign-budgets[?campaigns=slug:leg,...]
-router.get(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
-  await read(req, res, req.headers["x-org-id"] as string);
-});
-
-// PUT /v1/brands/:brandId/offers/:offerId/campaign-budgets
-// Body: { items: [{ featureSlug, legKey, budgetCents }], period? } — upserts the listed
-// campaigns. `period` absent = the org's default (month for a subscriber, else day).
-router.put(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
-  const p = ids(req, res);
-  if (!p) return;
-  const parsed = SetCampaignItemBudgetsRequestSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid request", code: "invalid_items", details: parsed.error.flatten() });
-    return;
-  }
-  const orgId = req.headers["x-org-id"] as string;
-  try {
-    const result = await setOfferItems({
-      orgId,
-      brandId: p.brandId,
-      offerId: p.offerId,
-      items: parsed.data.items,
-      period: parsed.data.period,
-    });
-    // The same staff email as every other budget change (one composition).
-    void notifyBrandDailyBudgetChanged({
-      orgId,
-      userId: req.headers["x-user-id"] as string,
-      runId: req.headers["x-run-id"] as string,
-      brandId: p.brandId,
-      previousDailyBudgetCents: result.previousBrandDailyBudgetCents,
-      newDailyBudgetCents: result.brandDailyBudgetCents,
-      changes: ceilingChangesBetween(result.previousCeilings, result.ceilings),
-      ceilings: result.ceilings,
-      actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
-    });
-    res.json({
-      ...(await view(orgId, p.brandId, p.offerId)),
-      reactiveChargedCents: result.reactiveChargedCents,
-      globalBudgetCleared: result.globalBudgetCleared,
-    });
-  } catch (err) {
-    if (refuse(res, err)) return;
-    throw err;
-  }
-});
-
-// DELETE /v1/brands/:brandId/offers/:offerId/campaign-budgets?featureSlug=&legKey=
-// Back to "not set". Idempotent.
-router.delete(`/v1${BASE}`, requireOrgHeaders, async (req, res) => {
-  const p = ids(req, res);
-  if (!p) return;
-  const featureSlug = typeof req.query.featureSlug === "string" ? req.query.featureSlug.trim() : "";
-  const legKey = typeof req.query.legKey === "string" ? req.query.legKey.trim() : "";
-  if (!featureSlug || !legKey) {
-    res.status(400).json({ error: "featureSlug and legKey query parameters are required", code: "invalid_items" });
-    return;
-  }
-  const orgId = req.headers["x-org-id"] as string;
-  try {
-    const removed = await removeOfferItem({
-      orgId,
-      brandId: p.brandId,
-      offerId: p.offerId,
-      featureSlug,
-      legKey,
-    });
-    res.json({ ...(await view(orgId, p.brandId, p.offerId)), removed });
-  } catch (err) {
-    if (refuse(res, err)) return;
-    throw err;
-  }
-});
 
 // GET /internal/brands/:brandId/offers/:offerId/campaign-budgets — same read for a
 // service (x-api-key + x-org-id).

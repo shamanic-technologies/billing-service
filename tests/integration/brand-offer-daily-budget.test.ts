@@ -34,8 +34,6 @@ const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
 const brandReadPath = `/internal/brands/${brandId}/daily-budget`;
 const offerReadPath = (offerId: string) =>
   `/internal/brands/${brandId}/offers/${offerId}/daily-budget`;
-const userOfferReadPath = (offerId: string) =>
-  `/v1/brands/${brandId}/offers/${offerId}/daily-budget`;
 
 const app = createTestApp();
 
@@ -231,21 +229,6 @@ describe("one offer's daily ceiling", () => {
     expect(res.body.dailyBudgetCents).toBeNull();
   });
 
-  it("serves the same answer to the user via the gateway", async () => {
-    await seedCeiling(LEG_REPLY, COLD, OFFER_A, "4000.0000000000");
-    await seedCeiling(LEG_REPLY, FEEDBACK, null, "1000.0000000000");
-
-    const res = await request(app)
-      .get(userOfferReadPath(OFFER_A))
-      .set(authHeaders);
-
-    expect(res.status).toBe(200);
-    expect(res.body.orgId).toBe(orgId);
-    expect(res.body.brandId).toBe(brandId);
-    expect(res.body.offerId).toBe(OFFER_A);
-    expect(res.body.dailyBudgetCents).toBe("5000.0000000000");
-  });
-
   it("reads an offer id case-insensitively, as it is stored lower-cased", async () => {
     await seedCeiling(LEG_REPLY, COLD, OFFER_A, "4000.0000000000");
 
@@ -301,12 +284,6 @@ describe("one offer's daily ceiling", () => {
       updatedAt: null,
       campaigns: [],
     });
-
-    const user = await request(app)
-      .get(`/v1/brands/${brandId}/legs/${LEG_REPLY}/daily-budget`)
-      .set(authHeaders);
-    expect(user.body.orgId).toBe(orgId);
-    expect(user.body.dailyBudgetCents).toBe("5000.0000000000");
   });
 
   // --- No funnel survives ---
