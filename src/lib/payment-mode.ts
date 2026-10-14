@@ -239,7 +239,7 @@ export async function setPaymentMode(
         .where(eq(billingAccounts.orgId, orgId));
       console.log(`[billing-service] payment mode: org ${orgId} postpaid credit line armed`);
       if (actor === "customer") {
-        notifyOwnerBillingEvent({ orgId, emoji: "💳", text: "Postpaid: card saved, credit line on (charged as spend crosses $50)" });
+        notifyOwnerBillingEvent({ orgId, emoji: "💳", text: postpaidLineArmedAlertText() });
       }
     }
     return {
@@ -345,10 +345,12 @@ export async function setPaymentMode(
     notifyOwnerBillingEvent({
       orgId,
       emoji: "🔁",
-      text:
-        `Payment mode: ${current} → ${target}` +
-        (settledCents !== "0" ? ` (${usd(settledCents)} owed collected first)` : "") +
-        (updated.topupAmountCents != null && account.topupAmountCents == null ? ", automatic reload turned on" : ""),
+      text: paymentModeAlertText({
+        from: current,
+        to: target,
+        settledCents,
+        reloadTurnedOn: updated.topupAmountCents != null && account.topupAmountCents == null,
+      }),
     });
   }
 
@@ -358,4 +360,36 @@ export async function setPaymentMode(
     settledCents,
     autoTopupEnabled: updated.topupAmountCents != null,
   };
+}
+
+/**
+ * The owner's Telegram line for a CLIENT switching how they pay, readable in two
+ * seconds by a non-technical reader: no "prepaid / postpaid" jargon, no arrows,
+ * no dashes (owner 2026-10-14: "postpaid → prepaid" meant nothing to him).
+ */
+const MODE_NOW: Record<PaymentMode, string> = {
+  prepaid: "pays upfront",
+  postpaid: "pays after use",
+  subscription: "pays a monthly plan",
+};
+const MODE_BEFORE: Record<PaymentMode, string> = {
+  prepaid: "paid upfront",
+  postpaid: "paid after use",
+  subscription: "paid a monthly plan",
+};
+
+export function paymentModeAlertText(input: {
+  from: PaymentMode;
+  to: PaymentMode;
+  settledCents: string;
+  reloadTurnedOn: boolean;
+}): string {
+  const lines = [`Now ${MODE_NOW[input.to]} (before: ${MODE_BEFORE[input.from]}). Changed by the client.`];
+  if (input.settledCents !== "0") lines.push(`The ${usd(input.settledCents)} they owed was charged first.`);
+  if (input.reloadTurnedOn) lines.push("Automatic reload is now on: their card is charged when the balance runs low.");
+  return lines.join("\n");
+}
+
+export function postpaidLineArmedAlertText(): string {
+  return "Now pays after use: card saved, first charge when spend reaches $50. Changed by the client.";
 }

@@ -11,3 +11,11 @@ vi.mock("../src/lib/runs-client.js", async (importOriginal) => {
     fetchRunsOrgNoCampaignTotal: async () => ({ usageNetCents: "0", actualNetCents: "0" }),
   };
 });
+
+// Owner alerts ask client-service who is behind an org (lib/staff-alert-guard).
+// Default: no users known, so every suite alerts exactly as before. A suite that
+// needs staff users spies on it.
+vi.mock("../src/lib/client-service-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/client-service-client.js")>();
+  return { ...actual, fetchOrgUsers: async () => [] };
+});
