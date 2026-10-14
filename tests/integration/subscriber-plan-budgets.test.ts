@@ -16,6 +16,7 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { writeOfferItems } from "../helpers/ceiling-writes.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets, subscriptionCharges } from "../../src/db/schema.js";
@@ -146,7 +147,8 @@ describe("subscriber campaign budgets from the plan", () => {
     await closeDb();
   });
 
-  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+  const internalItemsHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+  const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
   const campaignsQuery = `?campaigns=${COLD}:${REPLY},${MEET}:${MEET_LEG},${COLD}:${VISIT}`;
 
   function item(body: { items: Array<{ featureSlug: string; legKey: string }> }, slug: string, leg: string) {
@@ -183,13 +185,13 @@ describe("subscriber campaign budgets from the plan", () => {
 
   it("the reference shape: AI meeting booking Max $9, entry ON = the rest ($90), OFF = not set; nothing charged", async () => {
     const plan = await legacySubscriber();
-    let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ statedPeriod: "day", budgetCents: 150000 });
 
     const sweep = await restateSubscriberBudgetsFromPlans();
     expect(sweep).toMatchObject({ offers: 1, restatedOffers: 1, restatedOrgs: 1, rowsRestated: 2, rowsDeleted: 1, skipped: 0 });
 
-    res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.period).toBe("month");
     expect(item(res.body, COLD, REPLY)).toMatchObject({
@@ -233,10 +235,7 @@ describe("subscriber campaign budgets from the plan", () => {
   it("a customer restating a budget makes it theirs: priced as before, the derived follow-up still not charged", async () => {
     await legacySubscriber();
     await restateSubscriberBudgetsFromPlans();
-    const res = await request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: [{ featureSlug: COLD, legKey: REPLY, budgetCents: 19900 }] });
+    const res = await writeOfferItems(orgId, BRAND, OFFER, { items: [{ featureSlug: COLD, legKey: REPLY, budgetCents: 19900 }] });
     expect(res.status).toBe(200);
     expect(res.body.reactiveChargedCents).toBe(0);
     expect(res.body.plan.monthlyAmountCents).toBe(19900);
@@ -251,7 +250,7 @@ describe("subscriber campaign budgets from the plan", () => {
     await legacySubscriber();
     const sweep = await restateSubscriberBudgetsFromPlans();
     expect(sweep).toMatchObject({ rowsRestated: 3, rowsDeleted: 0 });
-    const res = await request(app).get(itemsPath).set(headers);
+    const res = await request(app).get(itemsPath).set(internalItemsHeaders);
     // $99 - $9 = $90 over two.
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 4500 });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 4500 });
@@ -298,7 +297,7 @@ describe("subscriber campaign budgets from the plan", () => {
   it("a switch of the ON proactive campaign moves the plan; the follow-up keeps its 9%; nothing charged", async () => {
     const plan = await subscriber();
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
-    let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    let res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ period: "month", budgetCents: 9000, dailyBudgetCents: "300.0000000000" });
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: null });
@@ -306,7 +305,7 @@ describe("subscriber campaign budgets from the plan", () => {
     // The person stops "reply" and starts "visit": campaign-service notifies us.
     onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
-    res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 9000 });
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
@@ -327,17 +326,14 @@ describe("subscriber campaign budgets from the plan", () => {
 
   it("customer-stated budgets: the switch moves the plan amount, the plan and its charge never move", async () => {
     await subscriber();
-    const put = await request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: [{ featureSlug: COLD, legKey: REPLY, budgetCents: 19900 }] });
+    const put = await writeOfferItems(orgId, BRAND, OFFER, { items: [{ featureSlug: COLD, legKey: REPLY, budgetCents: 19900 }] });
     expect(put.status).toBe(200);
     expect(put.body.plan.monthlyAmountCents).toBe(19900);
     ssMocks.reloadOffSession.mockClear();
 
     onCampaigns = new Set([`${COLD}:${VISIT}`, `${MEET}:${MEET_LEG}`]);
     await onMissionStatusChanged({ orgId, brandId: BRAND, offerId: OFFER });
-    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     // $199 plan: follow-up 9% = $17.91, rounded up to $18; the entry the rest.
     expect(item(res.body, COLD, VISIT)).toMatchObject({ budgetCents: 18100 });
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null });
@@ -414,7 +410,7 @@ describe("subscriber campaign budgets from the plan", () => {
       }))
     );
     expect(await reallocateDerivedPlans()).toMatchObject({ offers: 1, reallocatedOffers: 1, skipped: 0 });
-    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(headers);
+    const res = await request(app).get(`${itemsPath}${campaignsQuery}`).set(internalItemsHeaders);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 9000, dailyBudgetCents: "300.0000000000" });
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 900 });
     expect(res.body.pricing).toBeNull();

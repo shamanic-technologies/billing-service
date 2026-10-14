@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import {
   brandDailyBudgetChanges,
@@ -27,7 +28,6 @@ const LEG_REPLY = "lead_found_to_conversation";
 const LEG_VISIT = "lead_found_to_website_visit";
 
 const internalHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
-const campaignPath = `/v1/brands/${brandId}/campaign-budget`;
 const campaignsPath = `/internal/brands/${brandId}/campaign-budgets`;
 const internalCampaignPath = `/internal/brands/${brandId}/campaign-budget`;
 const brandTotalPath = `/internal/brands/${brandId}/daily-budget`;
@@ -52,10 +52,7 @@ async function seed(
 }
 
 function put(body: Record<string, unknown>) {
-  return request(app)
-    .put(campaignPath)
-    .set(getAuthHeaders(orgId, userId, runId))
-    .send(body);
+  return writeCampaignCeiling(orgId, brandId, body, { userId, runId });
 }
 
 async function readOne(offerId: string, legKey: string, featureSlug: string) {

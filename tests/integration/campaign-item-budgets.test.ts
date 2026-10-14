@@ -19,6 +19,7 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { removeOfferItemBudget, writeCampaignCeiling, writeOfferItems } from "../helpers/ceiling-writes.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import {
@@ -184,13 +185,11 @@ describe("item budgets per campaign", () => {
     await closeDb();
   });
 
-  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+  const internalItemsHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+  const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
   function put(items: Array<[string, string, number]>) {
-    return request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({ items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })) });
+    return writeOfferItems(orgId, BRAND, OFFER, { items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })) });
   }
 
   function item(body: { items: Array<{ featureSlug: string; legKey: string }> }, slug: string, leg: string) {
@@ -228,7 +227,7 @@ describe("item budgets per campaign", () => {
     await insertTestAccount({ orgId });
     let res = await request(app)
       .get(`${itemsPath}?campaigns=${COLD}:${REPLY},${MEET}:${MEET_LEG},${TEAM}:${MEET_LEG}`)
-      .set(headers);
+      .set(internalItemsHeaders);
     expect(res.status).toBe(200);
     expect(res.body.period).toBe("day");
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: null, role: "proactive", minimumCents: 330, managed: true, budgetable: true });
@@ -286,27 +285,24 @@ describe("item budgets per campaign", () => {
     expect(total.body.dailyBudgetCents).toBe("2100.0000000000");
 
     // An entry can go while another remains, whatever the follow-up holds; DELETE is idempotent.
-    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
+    res = await removeOfferItemBudget(orgId, BRAND, OFFER, COLD, VISIT);
     expect(res.status).toBe(200);
     expect(res.body.removed).toBe(true);
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 700 });
-    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${VISIT}`).set(headers);
+    res = await removeOfferItemBudget(orgId, BRAND, OFFER, COLD, VISIT);
     expect(res.body.removed).toBe(false);
 
     // The last entry cannot go while a follow-up still holds a budget.
-    res = await request(app).delete(`${itemsPath}?featureSlug=${COLD}&legKey=${REPLY}`).set(headers);
+    res = await removeOfferItemBudget(orgId, BRAND, OFFER, COLD, REPLY);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("entry_item_required");
   });
 
   it("one row per campaign: the old ceiling route and the new one write the same row", async () => {
     await insertTestAccount({ orgId });
-    const old = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ offerId: OFFER, legKey: REPLY, featureSlug: COLD, dailyBudgetCents: 800 });
+    const old = await writeCampaignCeiling(orgId, BRAND, { offerId: OFFER, legKey: REPLY, featureSlug: COLD, dailyBudgetCents: 800 });
     expect(old.status).toBe(200);
-    let res = await request(app).get(itemsPath).set(headers);
+    let res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.body.items).toHaveLength(1);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 800, period: "day" });
 
@@ -384,7 +380,7 @@ describe("item budgets per campaign", () => {
       { orgId, brandId: BRAND, offerId: OFFER, featureSlug: COLD, legKey: REPLY, dailyBudgetCents: "5000", updatedAt: new Date() },
       { orgId, brandId: BRAND, offerId: OFFER, featureSlug: MEET, legKey: MEET_LEG, dailyBudgetCents: "5000", updatedAt: new Date() },
     ]);
-    let res = await request(app).get(itemsPath).set(headers);
+    let res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(res.body.period).toBe("month");
     expect(item(res.body, COLD, REPLY)).toMatchObject({
       period: "month",
@@ -433,7 +429,7 @@ describe("item budgets per campaign", () => {
       const rows = await db.select().from(campaignDailyBudgets);
       expect(rows.every((r) => r.planDerived)).toBe(true);
     });
-    res = await request(app).get(itemsPath).set(headers);
+    res = await request(app).get(itemsPath).set(internalItemsHeaders);
     expect(item(res.body, COLD, REPLY)).toMatchObject({ budgetCents: 18200 });
     expect(item(res.body, MEET, MEET_LEG)).toMatchObject({ budgetCents: 1800 });
     // A second trigger for the same move (concurrent or retried) changes nothing.

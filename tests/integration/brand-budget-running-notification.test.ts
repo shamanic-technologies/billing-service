@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
+import { writeCampaignCeiling } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets } from "../../src/db/schema.js";
 
@@ -118,10 +119,7 @@ describe("brand budget notification → running headline", () => {
   }
 
   function putCampaign(featureSlug: string, dailyBudgetCents: number) {
-    return request(app)
-      .put(`/v1/brands/${brandId}/campaign-budget`)
-      .set(authHeaders)
-      .send({ offerId: OFFER, legKey: LEG, featureSlug, dailyBudgetCents });
+    return writeCampaignCeiling(orgId, brandId, { offerId: OFFER, legKey: LEG, featureSlug, dailyBudgetCents });
   }
 
   async function seedBoth() {

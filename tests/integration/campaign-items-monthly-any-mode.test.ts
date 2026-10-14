@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { writeOfferItems } from "../helpers/ceiling-writes.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets, subscriptions } from "../../src/db/schema.js";
@@ -123,13 +124,10 @@ describe("monthly campaign budgets in any payment mode", () => {
     await closeDb();
   });
 
-  const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+  const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
   function put(items: Array<[string, string, number]>, period?: "day" | "month") {
-    return request(app)
-      .put(itemsPath)
-      .set(headers)
-      .send({
+    return writeOfferItems(orgId, BRAND, OFFER, {
         items: items.map(([featureSlug, legKey, budgetCents]) => ({ featureSlug, legKey, budgetCents })),
         ...(period ? { period } : {}),
       });

@@ -11,6 +11,7 @@ import { readFileSync } from "fs";
 import postgres from "postgres";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, insertTestAccount } from "../helpers/test-db.js";
+import { removeOfferItemBudget, writeCampaignCeiling, writeOfferItems } from "../helpers/ceiling-writes.js";
 import { db } from "../../src/db/index.js";
 import { campaignDailyBudgets } from "../../src/db/schema.js";
 import {
@@ -76,10 +77,11 @@ const ORIGINS: PublishedSourcingOrigins = {
 };
 
 const app = createTestApp();
-const itemsPath = `/v1/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
+const internalItemsHeaders = { "X-API-Key": "test-api-key", "x-org-id": orgId };
+const itemsPath = `/internal/brands/${BRAND}/offers/${OFFER}/campaign-budgets`;
 
 function putItems(items: Array<{ featureSlug: string; legKey: string; budgetCents: number }>) {
-  return request(app).put(itemsPath).set(headers).send({ items });
+  return writeOfferItems(orgId, BRAND, OFFER, { items });
 }
 
 async function seed(featureSlug: string, legKey: string | null, daily: string, sourcing: string | null, offerId: string | null = OFFER) {
@@ -139,16 +141,13 @@ describe("source campaign budgets", () => {
     expect(brand.body.dailyBudgetCents).toBe("10700.0000000000");
 
     // A "not set" source row is served on request, and DELETE puts it back there.
-    const del = await request(app)
-      .delete(itemsPath)
-      .query({ featureSlug: APOLLO, legKey: SOURCE_LEG })
-      .set(headers);
+    const del = await removeOfferItemBudget(orgId, BRAND, OFFER, APOLLO, SOURCE_LEG);
     expect(del.status).toBe(200);
     expect(del.body.removed).toBe(true);
     const read = await request(app)
       .get(itemsPath)
       .query({ campaigns: `${APOLLO}:${SOURCE_LEG}` })
-      .set(headers);
+      .set(internalItemsHeaders);
     expect(read.body.items.find((i: { featureSlug: string }) => i.featureSlug === APOLLO)).toMatchObject({
       budgetCents: null,
       source: true,
@@ -185,16 +184,10 @@ describe("source campaign budgets", () => {
     await seed(COLD, REPLY, "6500", null);
     await seed(APOLLO, SOURCE_LEG, "4200", null);
     const key = { offerId: OFFER, legKey: REPLY, featureSlug: COLD };
-    const split = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ ...key, dailyBudgetCents: 10000, sourcingCeilingCents: 3000 });
+    const split = await writeCampaignCeiling(orgId, BRAND, { ...key, dailyBudgetCents: 10000, sourcingCeilingCents: 3000 });
     expect(split.status).toBe(409);
     expect(split.body).toMatchObject({ code: "sourcing_has_its_own_campaign", sourceFeatureSlugs: [APOLLO] });
-    const plain = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ ...key, dailyBudgetCents: 7000 });
+    const plain = await writeCampaignCeiling(orgId, BRAND, { ...key, dailyBudgetCents: 7000 });
     expect(plain.status).toBe(200);
     expect(plain.body).toMatchObject({ dailyBudgetCents: "7000.0000000000", sourcingCeilingCents: null });
   });
@@ -202,10 +195,7 @@ describe("source campaign budgets", () => {
   it("a source campaign that does not feed the channel does not block its split", async () => {
     await seed(COLD, REPLY, "6500", null);
     await seed(CRM_SOURCE, SOURCE_LEG, "1000", null);
-    const res = await request(app)
-      .put(`/v1/brands/${BRAND}/campaign-budget`)
-      .set(headers)
-      .send({ offerId: OFFER, legKey: REPLY, featureSlug: COLD, dailyBudgetCents: 6500, sourcingCeilingCents: 1000 });
+    const res = await writeCampaignCeiling(orgId, BRAND, { offerId: OFFER, legKey: REPLY, featureSlug: COLD, dailyBudgetCents: 6500, sourcingCeilingCents: 1000 });
     expect(res.status).toBe(200);
     expect(res.body.sourcingCeilingCents).toBe("1000.0000000000");
   });
