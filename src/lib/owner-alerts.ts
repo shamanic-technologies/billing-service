@@ -5,9 +5,11 @@
  * subscription, anything like that"). Payments themselves are lib/payment-alerts.
  *
  * Rules, the same as the payment alert:
- *  - NEVER the owner's own actions: the acting person is read from the request's
- *    `x-email` (carried through async work by `ownerAlertActorMiddleware`); a staff
- *    address (`isStaffEmail`) sends nothing. Our own platform orgs send nothing.
+ *  - NEVER the owner's own actions, NEVER a test: decided on WHO acted and WHOSE
+ *    org it is, never on the route (lib/staff-alert-guard). The acting person is the
+ *    request's `x-email`, else its `x-user-id` (both carried through async work by
+ *    `ownerAlertActorMiddleware`); a staff person, or an org only staff use (a staff
+ *    test org), sends nothing. Our own platform orgs send nothing.
  *  - Fire-and-forget: `notifyOwnerBillingEvent` returns at once and never throws,
  *    so a failed send can never fail or delay the billing write it reports. The
  *    caller fires it only AFTER its write committed.
@@ -22,20 +24,32 @@ import { db } from "../db/index.js";
 import { ownerAlerts } from "../db/schema.js";
 import { isPlatformOrg } from "./platform-org.js";
 import { resolveOrgDisplayIdentity } from "./brand-service-client.js";
-import { isStaffEmail } from "./payment-alerts.js";
+import { staffAlertSkipReason } from "./staff-alert-guard.js";
 import { escapeTelegramHtml, getTelegramConfig, sendOwnerTelegram } from "./telegram-client.js";
 
-const actorStore = new AsyncLocalStorage<{ email: string | null }>();
+export interface AlertActor {
+  email: string | null;
+  userId: string | null;
+}
+
+const actorStore = new AsyncLocalStorage<AlertActor>();
+
+function header(req: Request, name: string): string | null {
+  const raw = req.headers[name];
+  return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+}
 
 /** Remember who is acting for the rest of this request (and the work it starts). */
 export function ownerAlertActorMiddleware(req: Request, _res: Response, next: NextFunction): void {
-  const raw = req.headers["x-email"];
-  const email = typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
-  actorStore.run({ email }, next);
+  actorStore.run({ email: header(req, "x-email"), userId: header(req, "x-user-id") }, next);
 }
 
 export function currentActorEmail(): string | null {
   return actorStore.getStore()?.email ?? null;
+}
+
+export function currentActor(): AlertActor {
+  return actorStore.getStore() ?? { email: null, userId: null };
 }
 
 export interface OwnerBillingEvent {
@@ -64,17 +78,28 @@ export function composeOwnerEvent(input: {
 
 /** Never throws, never awaited by the billing write. */
 export function notifyOwnerBillingEvent(event: OwnerBillingEvent): void {
-  const actor = currentActorEmail();
+  const actor = currentActor();
   void deliver(event, actor).catch((err) => {
     console.error(`[billing-service] owner alert failed for org ${event.orgId} (${event.text}):`, err);
   });
 }
 
 /** Exported for tests: the whole delivery, awaited. */
-export async function deliver(event: OwnerBillingEvent, actorEmail: string | null): Promise<"sent" | "skipped" | "failed"> {
+export async function deliver(
+  event: OwnerBillingEvent,
+  actor: AlertActor | null
+): Promise<"sent" | "skipped" | "failed"> {
   if (!getTelegramConfig()) return "skipped"; // warned loudly at boot
-  if (isStaffEmail(actorEmail)) return "skipped";
   if (await isPlatformOrg(event.orgId)) return "skipped";
+  const staff = await staffAlertSkipReason({
+    orgId: event.orgId,
+    actorEmail: actor?.email ?? null,
+    actorUserId: actor?.userId ?? null,
+  });
+  if (staff) {
+    console.log(`[billing-service] owner alert skipped (${staff}) for org ${event.orgId}: ${event.text}`);
+    return "skipped";
+  }
 
   if (event.dedupKey) {
     const claimed = await db

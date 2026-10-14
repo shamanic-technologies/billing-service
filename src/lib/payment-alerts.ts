@@ -32,6 +32,7 @@ import { billingAccounts, paymentAlerts, paymentAlertSignals } from "../db/schem
 import { listOrgPayments, type OrgPayment } from "./stripe-service-client.js";
 import { isPlatformOrg } from "./platform-org.js";
 import { resolveOrgDisplayIdentity } from "./brand-service-client.js";
+import { staffAlertSkipReason } from "./staff-alert-guard.js";
 import {
   escapeTelegramHtml,
   getTelegramConfig,
@@ -246,6 +247,8 @@ export async function scanOrgPayments(orgId: string, now: Date = new Date()): Pr
     )
     .orderBy(desc(paymentAlertSignals.createdAt));
   const platformOrg = await isPlatformOrg(orgId);
+  // An org only staff use (a staff test org) is ours: its payments are tests.
+  const staffOrg = platformOrg ? null : await staffAlertSkipReason({ orgId });
   let identity: Awaited<ReturnType<typeof resolveOrgDisplayIdentity>> | undefined;
 
   for (const p of fresh) {
@@ -265,6 +268,8 @@ export async function scanOrgPayments(orgId: string, now: Date = new Date()): Pr
     let skipReason: string | null = null;
     if (platformOrg) {
       skipReason = "platform_org";
+    } else if (staffOrg) {
+      skipReason = staffOrg;
     } else if (!charge) {
       // Whoever opened the checkout this payment came through: the latest one opened
       // before it (5 min clock tolerance) within the hot window.
