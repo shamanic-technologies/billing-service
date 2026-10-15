@@ -25,9 +25,11 @@
  *   one synchronous step (no await between them; billing runs one process), and every
  *   spend authorized since the measurement started (minus RESERVATION_LAG_MS for
  *   provisions to land in runs-service) is added to the consumption.
- * - A refusal is RECORDED on the cap row (`recordMaxBudgetRefusal`): the caps read
+ * - A refusal is RECORDED on the cap row (`recordMaxBudgetRefusal`) only when the
+ *   cap's real consumption plus the refused spend passes the amount: the caps read
  *   then serves `reached: true` for the rest of the window at that amount, so
- *   campaign-service stops dispatching runs this would refuse anyway.
+ *   campaign-service stops dispatching runs this would refuse anyway. A refusal
+ *   only in-flight reservations caused holds that spend alone, never the window.
  * - Our OWN platform org is held too: a cap is the customer's statement, not a
  *   balance question (the platform-org early return comes AFTER this check).
  * - Consumption unreadable on a cap that binds = refused
@@ -37,7 +39,7 @@
 import { Decimal } from "decimal.js";
 import type { SalesFunnelCapRow } from "../db/schema.js";
 import { capOfFunnelCampaign, orgFunnelCaps, fetchSalesFunnelCampaigns, type SalesFunnelCampaignsAnswer } from "./funnel-campaigns.js";
-import { heldRefusalOf, measureMaxBudget, periodWindow, recordMaxBudgetRefusal, type BudgetMeasure, type CapPeriod } from "./sales-funnel-caps.js";
+import { heldRefusalOf, measureMaxBudget, periodWindow, recordMaxBudgetRefusal, refusalOverflows, type BudgetMeasure, type CapPeriod } from "./sales-funnel-caps.js";
 
 export const SALES_FUNNEL_MAX_BUDGET_REACHED = "sales_funnel_max_budget_reached" as const;
 export const SALES_FUNNEL_MAX_BUDGET_UNREADABLE = "sales_funnel_max_budget_unreadable" as const;
@@ -221,7 +223,7 @@ export async function checkFunnelCapsForSpend(input: {
       consumedCents: m.consumedCents,
       reservedCents: reserved.toFixed(10),
     };
-    if (heldRefusalOf(row, m.windowStart)) {
+    if (heldRefusalOf(row, m.windowStart, m.consumedCents)) {
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_REACHED, cap };
     }
     if (m.consumedCents === null) {
@@ -233,8 +235,14 @@ export async function checkFunnelCapsForSpend(input: {
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_UNREADABLE, cap };
     }
     if (new Decimal(m.consumedCents).plus(reserved).plus(required).greaterThan(row.maxBudgetCents!)) {
+      // Recorded (held for the window) only when the cap's REAL consumption plus this
+      // spend passes it. A refusal only in-flight reservations caused is for this
+      // spend alone: they clear within seconds, and holding the cap on it served
+      // "4.6 of 200 cents, reached" forever on a one-off (2026-10-15).
       // Fire-and-forget would lose the record on a crash: awaited AFTER the decision.
-      await recordMaxBudgetRefusal(row, m.windowStart, requiredCents, now);
+      if (refusalOverflows(m.consumedCents, required, row.maxBudgetCents!)) {
+        await recordMaxBudgetRefusal(row, m.windowStart, requiredCents, now);
+      }
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_REACHED, cap };
     }
   }
