@@ -297,6 +297,45 @@ describe("a sales funnel max budget binds every spend at authorize", () => {
     expect(own.body.reason).toBeUndefined();
   });
 
+  it("a refusal only IN-FLIGHT spends caused holds that spend alone, never the window (2026-10-15)", async () => {
+    // One-off $2 cap, 4.6c really consumed. The same run's earlier spends reserved
+    // 120c seconds before: a 79c spend does not fit NOW, but 4.6 + 79 < 200.
+    mockUpstreams({ spent: { [SOURCE_UNIT]: "4.6" }, campaignReads: 0, costReads: 0 });
+    await stateCap({ budgetCents: "200" });
+    expect((await authorize(SOURCE_UNIT, "120.0000000000")).body.sufficient).toBe(true);
+
+    const refused = await authorize(TEAM_UNIT, "79.4421000000");
+    expect(refused.body.sufficient).toBe(false);
+    expect(refused.body.reason).toBe("sales_funnel_max_budget_reached");
+    expect(refused.body.sales_funnel_cap.reservedCents).toBe("120.0000000000");
+
+    // Not held: the figure and the verdict agree (4.6 of 200, not reached).
+    const [row] = await db.select().from(salesFunnelCaps);
+    expect(row.maxBudgetRefusedAt).toBeNull();
+    const cap = await readCap();
+    expect(cap.body.maxBudget.consumedCents).toBe("4.6000000000");
+    expect(cap.body.maxBudget.reached).toBe(false);
+    expect(cap.body.maxBudget.refusedSpend).toBeNull();
+  });
+
+  it("a recorded refusal the real consumption leaves room for no longer holds the cap", async () => {
+    // A latch written before the fix: 79c refused on a 200c one-off with 4.6c consumed.
+    mockUpstreams({ spent: { [SOURCE_UNIT]: "4.6" }, campaignReads: 0, costReads: 0 });
+    await stateCap({ budgetCents: "200" });
+    const [row] = await db.select().from(salesFunnelCaps);
+    await db.update(salesFunnelCaps).set({
+      maxBudgetRefusedAt: new Date(),
+      maxBudgetRefusedCents: "79.4421000000",
+      maxBudgetRefusedWindowStart: row.maxBudgetSince,
+      maxBudgetRefusedCapCents: "200",
+    });
+
+    const cap = await readCap();
+    expect(cap.body.maxBudget.reached).toBe(false);
+    expect(cap.body.maxBudget.refusedSpend).toBeNull();
+    expect((await authorize(SOURCE_UNIT, "79.4421000000")).body.sufficient).toBe(true);
+  });
+
   it("consumption unreadable on a binding cap = refused, named (fail-closed)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     mockUpstreams({ spent: {}, costsStatus: 503, campaignReads: 0, costReads: 0 });

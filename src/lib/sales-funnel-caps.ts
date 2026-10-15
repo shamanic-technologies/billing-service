@@ -777,15 +777,22 @@ const fixed = (v: Decimal) => v.toFixed(10);
 
 /**
  * PURE: the spend authorize REFUSED on this max budget (lib/funnel-cap-authorize.ts)
- * while it still holds: same window, same cap amount. A new period or a changed
- * cap frees it. null = nothing refused in this window.
+ * while it still holds: same window, same cap amount, AND what the cap has really
+ * consumed plus that spend still passes the amount. A new period or a changed cap
+ * frees it, and so does a consumption that leaves room for it: a refusal that only
+ * spends IN FLIGHT caused (their reservations) never holds a cap whose figure says
+ * there is room (2026-10-15: "4.6 of 200 cents, reached" after a 79c refusal
+ * caused by the same run's in-flight reservations, held forever on a one-off).
+ * `consumedCents` unknown (null/omitted) keeps the refusal: fail-closed.
+ * null = nothing refused that still holds.
  */
 export function heldRefusalOf(
   row: Pick<
     SalesFunnelCapRow,
     "maxBudgetCents" | "maxBudgetRefusedAt" | "maxBudgetRefusedCents" | "maxBudgetRefusedWindowStart" | "maxBudgetRefusedCapCents"
   >,
-  windowStart: Date
+  windowStart: Date,
+  consumedCents?: string | Decimal | null
 ): { at: Date; requiredCents: string } | null {
   if (
     row.maxBudgetCents == null ||
@@ -798,7 +805,13 @@ export function heldRefusalOf(
   }
   if (row.maxBudgetRefusedWindowStart.getTime() !== windowStart.getTime()) return null;
   if (!new Decimal(row.maxBudgetRefusedCapCents).equals(row.maxBudgetCents)) return null;
+  if (consumedCents != null && !refusalOverflows(consumedCents, row.maxBudgetRefusedCents, row.maxBudgetCents)) return null;
   return { at: row.maxBudgetRefusedAt, requiredCents: new Decimal(row.maxBudgetRefusedCents).toFixed(10) };
+}
+
+/** PURE: does what the cap really consumed plus this spend pass the cap's amount? */
+export function refusalOverflows(consumedCents: string | Decimal, requiredCents: string | Decimal, capCents: string | Decimal): boolean {
+  return new Decimal(consumedCents).plus(requiredCents).greaterThan(capCents);
 }
 
 /**
@@ -872,7 +885,7 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
   const w = periodWindow(period, row.maxBudgetSince, now);
   const cap = new Decimal(row.maxBudgetCents);
   const consumed = m.consumed === null ? null : new Decimal(m.consumed);
-  const refused = heldRefusalOf(row, w.start);
+  const refused = heldRefusalOf(row, w.start, consumed);
   return {
     amountCents: row.maxBudgetCents,
     period,
