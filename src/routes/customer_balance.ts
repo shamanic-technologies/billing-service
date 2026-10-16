@@ -138,7 +138,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     // email: a cap is the customer's statement, not a shortage.
     let funnelCap;
     try {
-      funnelCap = await checkFunnelCapsForSpend({ orgId, campaignId: wf.campaignId, requiredCents });
+      funnelCap = await checkFunnelCapsForSpend({ orgId, campaignId: wf.campaignId, requiredCents, runId, items });
     } catch (err) {
       console.error("[billing-service] sales funnel max budget check failed:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.funnel-cap-failed", level: "error", detail: String(err) }, req.headers);
