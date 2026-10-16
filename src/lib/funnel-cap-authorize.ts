@@ -18,9 +18,16 @@
  *   byte-identical to before.
  * - REFUSED when consumed + reserved + this spend > the cap's amount, with
  *   `reason: sales_funnel_max_budget_reached`. `consumed` is the caps read's own
- *   figure (committed NET, actual + provisioned). A caller that PROVISIONS before
- *   authorizing is therefore counted twice for this one spend: the cap stops at most
- *   one spend early, never late.
+ *   figure (committed NET, actual + provisioned), MINUS the caller's OWN hold for
+ *   this very spend: the fleet provisions BEFORE it authorizes (chat-service
+ *   /complete: provision 65.88c on its run, then authorize), so the hold is already
+ *   in `consumed` and is also `requiredCents`. Counting it twice refused every LLM
+ *   spend of a funnel with room, forever (FUNNEL-CAP-OWN-HOLD-1016: 226 + 66 <= 350
+ *   refused as 292 + 66). The own hold = the `provisioned` cost rows of the
+ *   request's `x-run-id` (run on this campaign and org) matching the authorized
+ *   items one to one (cost name + quantity), created before the measurement
+ *   started (so they are in it), never excluded before. Read only when the spend
+ *   would otherwise be refused; unreadable = not excluded (stops early, never late).
  * - CONCURRENT spends cannot both slip under: the decision and the reservation are
  *   one synchronous step (no await between them; billing runs one process), and every
  *   spend authorized since the measurement started (minus RESERVATION_LAG_MS for
@@ -39,6 +46,7 @@
 import { Decimal } from "decimal.js";
 import type { SalesFunnelCapRow } from "../db/schema.js";
 import { capOfFunnelCampaign, orgFunnelCaps, fetchSalesFunnelCampaigns, type SalesFunnelCampaignsAnswer } from "./funnel-campaigns.js";
+import { readJson } from "./runs-org-read.js";
 import { heldRefusalOf, measureMaxBudget, periodWindow, recordMaxBudgetRefusal, refusalOverflows, type BudgetMeasure, type CapPeriod } from "./sales-funnel-caps.js";
 
 export const SALES_FUNNEL_MAX_BUDGET_REACHED = "sales_funnel_max_budget_reached" as const;
@@ -71,6 +79,10 @@ const measures = new Map<string, { at: number; p: Promise<TimedMeasure> }>();
 const funnelCampaigns = new Map<string, { at: number; p: Promise<SalesFunnelCampaignsAnswer> }>();
 const reservations = new Map<string, Array<{ at: number; cents: Decimal }>>();
 const lastErrorLog = new Map<string, number>();
+/** Cost ids already excluded as a granted spend's own hold: never excluded twice. */
+const excludedHolds = new Map<string, number>();
+/** A caller's own hold is provisioned right before it authorizes; older rows are someone else's spend. */
+export const OWN_HOLD_MAX_AGE_MS = 5 * 60_000;
 
 /** Test hook: forget every cached measurement, reservation and log latch. */
 export function __resetFunnelCapAuthorize(): void {
@@ -78,6 +90,93 @@ export function __resetFunnelCapAuthorize(): void {
   funnelCampaigns.clear();
   reservations.clear();
   lastErrorLog.clear();
+  excludedHolds.clear();
+}
+
+export interface AuthorizeItem {
+  costName: string;
+  quantity: number;
+}
+
+interface OwnHold {
+  costIds: string[];
+  cents: Decimal;
+  /** Latest creation instant of the matched rows (ms). */
+  createdAt: number;
+}
+
+interface RunRead {
+  organizationId?: string | null;
+  campaignId?: string | null;
+  costs?: Array<{
+    id: string;
+    costName: string;
+    quantity: string | number;
+    status: string;
+    netCostInUsdCents?: string | null;
+    totalCostInUsdCents: string;
+    createdAt: string;
+  }>;
+}
+
+/**
+ * PURE: the caller's OWN provisioned hold for this spend, from its run's cost rows:
+ * each authorized item matched to at most one `provisioned` row of the same cost name
+ * and quantity, recent, not excluded before. null when the run is not this campaign's
+ * (its costs are not in the measurement) or nothing matches.
+ */
+export function ownHoldOf(
+  run: RunRead,
+  input: { orgId: string; campaignId: string; items: AuthorizeItem[] },
+  nowMs: number,
+  alreadyExcluded: (costId: string) => boolean = () => false
+): OwnHold | null {
+  if (!run.campaignId || !sameId(run.campaignId, input.campaignId)) return null;
+  if (!run.organizationId || !sameId(run.organizationId, input.orgId)) return null;
+  const free = (run.costs ?? []).filter(
+    (c) =>
+      c.status === "provisioned" &&
+      !alreadyExcluded(c.id) &&
+      new Date(c.createdAt).getTime() > nowMs - OWN_HOLD_MAX_AGE_MS
+  );
+  const picked: typeof free = [];
+  for (const item of input.items) {
+    const row = free.find(
+      (c) => !picked.includes(c) && c.costName === item.costName && new Decimal(c.quantity).equals(item.quantity)
+    );
+    if (row) picked.push(row);
+  }
+  if (picked.length === 0) return null;
+  return {
+    costIds: picked.map((c) => c.id),
+    cents: picked.reduce((s, c) => s.plus(c.netCostInUsdCents ?? c.totalCostInUsdCents), new Decimal(0)),
+    createdAt: Math.max(...picked.map((c) => new Date(c.createdAt).getTime())),
+  };
+}
+
+async function readOwnHold(
+  input: { orgId: string; campaignId: string; runId: string; items: AuthorizeItem[] },
+  nowMs: number
+): Promise<OwnHold | null> {
+  for (const [id, at] of excludedHolds) if (at < nowMs - OWN_HOLD_MAX_AGE_MS * 2) excludedHolds.delete(id);
+  try {
+    const run = await readJson<RunRead>(`/v1/runs/${encodeURIComponent(input.runId)}`, input.orgId, new URLSearchParams());
+    return ownHoldOf(run, input, nowMs, (id) => excludedHolds.has(id));
+  } catch (err) {
+    loudOnce(
+      `hold|${input.orgId}`,
+      `[billing-service] sales funnel max budget: run ${input.runId} unreadable (${(err as Error).message}); ` +
+        `the caller's own provisioned hold is not excluded from the consumption`
+    );
+    return null;
+  }
+}
+
+/** The consumption this spend is measured against: the measurement minus its own hold, when the hold is in it. */
+function consumedForSpend(m: TimedMeasure, hold: OwnHold | null): string | null {
+  if (m.consumedCents === null) return null;
+  if (!hold || hold.createdAt >= m.startedAt) return m.consumedCents;
+  return Decimal.max(new Decimal(m.consumedCents).minus(hold.cents), 0).toFixed(10);
 }
 
 const capId = (r: SalesFunnelCapRow) =>
@@ -160,6 +259,10 @@ export async function checkFunnelCapsForSpend(input: {
   orgId: string;
   campaignId: string | undefined;
   requiredCents: string;
+  /** The request's x-run-id: the run whose provisioned rows may be this spend's own hold. */
+  runId?: string;
+  /** The authorized items (cost name + quantity), matched to the own hold one to one. */
+  items?: AuthorizeItem[];
   now?: Date;
 }): Promise<FunnelCapVerdict> {
   const { orgId, campaignId, requiredCents } = input;
@@ -206,6 +309,21 @@ export async function checkFunnelCapsForSpend(input: {
     measured = held.caps.map((r) => measured[budgetCaps.indexOf(r)]);
   }
 
+  // The caller's own hold: read only when, without excluding it, this spend would be
+  // refused (the common path costs no extra read). Awaited BEFORE the decision.
+  let hold: OwnHold | null = null;
+  if (input.runId && input.items?.length) {
+    const wouldOverflow = held.caps.some((row, i) => {
+      const m = measured[i];
+      if (m.consumedCents === null) return false;
+      const reserved = reservedSince(capId(row), m.startedAt - RESERVATION_LAG_MS, Date.now());
+      return new Decimal(m.consumedCents).plus(reserved).plus(requiredCents).greaterThan(row.maxBudgetCents!);
+    });
+    if (wouldOverflow) {
+      hold = await readOwnHold({ orgId, campaignId, runId: input.runId, items: input.items }, Date.now());
+    }
+  }
+
   // ── From here to the reservation: NO await. One synchronous decision per spend,
   // so two concurrent spends of one funnel campaign cannot both pass on one reading.
   const nowMs = Date.now();
@@ -215,18 +333,19 @@ export async function checkFunnelCapsForSpend(input: {
     const m = measured[i];
     const id = capId(row);
     const reserved = reservedSince(id, m.startedAt - RESERVATION_LAG_MS, nowMs);
+    const consumed = consumedForSpend(m, hold);
     const cap = {
       salesFunnelId: row.salesFunnelId,
       salesFunnelCampaignId: row.salesFunnelCampaignId ?? null,
       amountCents: new Decimal(row.maxBudgetCents!).toFixed(10),
       period: row.maxBudgetPeriod!,
-      consumedCents: m.consumedCents,
+      consumedCents: consumed,
       reservedCents: reserved.toFixed(10),
     };
-    if (heldRefusalOf(row, m.windowStart, m.consumedCents)) {
+    if (heldRefusalOf(row, m.windowStart, consumed)) {
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_REACHED, cap };
     }
-    if (m.consumedCents === null) {
+    if (consumed === null) {
       loudOnce(
         `consumed|${id}`,
         `[billing-service] sales funnel max budget ${row.salesFunnelId} (org ${orgId}, funnel campaign ` +
@@ -234,13 +353,13 @@ export async function checkFunnelCapsForSpend(input: {
       );
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_UNREADABLE, cap };
     }
-    if (new Decimal(m.consumedCents).plus(reserved).plus(required).greaterThan(row.maxBudgetCents!)) {
+    if (new Decimal(consumed).plus(reserved).plus(required).greaterThan(row.maxBudgetCents!)) {
       // Recorded (held for the window) only when the cap's REAL consumption plus this
       // spend passes it. A refusal only in-flight reservations caused is for this
       // spend alone: they clear within seconds, and holding the cap on it served
       // "4.6 of 200 cents, reached" forever on a one-off (2026-10-15).
       // Fire-and-forget would lose the record on a crash: awaited AFTER the decision.
-      if (refusalOverflows(m.consumedCents, required, row.maxBudgetCents!)) {
+      if (refusalOverflows(consumed, required, row.maxBudgetCents!)) {
         await recordMaxBudgetRefusal(row, m.windowStart, requiredCents, now);
       }
       return { allowed: false, reason: SALES_FUNNEL_MAX_BUDGET_REACHED, cap };
@@ -250,5 +369,6 @@ export async function checkFunnelCapsForSpend(input: {
     const id = capId(row);
     reservations.set(id, [...(reservations.get(id) ?? []), { at: nowMs, cents: required }]);
   }
+  for (const costId of hold?.costIds ?? []) excludedHolds.set(costId, nowMs);
   return { allowed: true };
 }
