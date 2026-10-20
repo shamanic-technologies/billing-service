@@ -101,7 +101,7 @@ describe("owner Telegram per customer billing event", () => {
   });
 
   it("a failed Telegram send never fails the billing write", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     send.mockResolvedValue({ ok: false, error: "telegram 502" });
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await request(app)

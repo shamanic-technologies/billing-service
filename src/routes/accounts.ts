@@ -8,7 +8,9 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
 import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
-import { autoTopupArmed, POSTPAID_RELOAD_STEP_MIN_CENTS, reloadTierFor } from "../lib/topup-tier.js";
+import { autoTopupArmed, reloadTierFor } from "../lib/topup-tier.js";
+import { PayBalanceRefused, payOutstandingBalance } from "../lib/pay-balance.js";
+import { OnDemandChargeError } from "../lib/on-demand-charge.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
 import {
   asFreeCreditOffer,
@@ -253,6 +255,10 @@ function buildAccountResponse(
     enabled && paymentMode !== "subscription"
       ? reloadTierFor(funds.paidTopupsCents, paymentMode, configuredReloadFor(account))
       : null;
+  const postpaidLine =
+    paymentMode === "postpaid" && funds.hasPaymentMethod && funds.autoReloadSupported
+      ? reloadTierFor(funds.paidTopupsCents, "postpaid")
+      : null;
   const freeCredit = computeFreeCreditStatus({
     offer: asFreeCreditOffer(account.freeCreditOffer),
     entitlementCents: account.freeCreditEntitlementCents,
@@ -349,6 +355,19 @@ function buildAccountResponse(
     card_last4: funds.cardLast4,
     card_exp_month: funds.cardExpMonth,
     card_exp_year: funds.cardExpYear,
+    // POSTPAID (owner 2026-10-21): no auto top-up, no "Add credit". Its credit line
+    // (how far below $0 it may go before the card is charged), the step it is
+    // charged by, and what it owes right now (the whole amount POST
+    // /v1/accounts/pay_balance takes). null when not postpaid; the line is null
+    // when no chargeable card can carry it.
+    credit_line_cents: postpaidLine ? Math.abs(postpaidLine.thresholdCents) : null,
+    credit_line_step_cents: postpaidLine ? postpaidLine.amountCents : null,
+    amount_owed_cents:
+      paymentMode === "postpaid"
+        ? cmpCents(funds.actualBalanceCents, "0") < 0
+          ? subCents("0", funds.actualBalanceCents)
+          : "0.0000000000"
+        : null,
     has_auto_topup:
       autoTopupArmed(account) &&
       funds.hasPaymentMethod &&
@@ -636,6 +655,12 @@ function notifyAutoTopupChange(
   });
 }
 
+const POSTPAID_NO_AUTO_TOPUP = {
+  error:
+    "This account pays after use: it is charged as it spends ($50, then $200, then $500 steps, and at month end), so it has no automatic top-up.",
+  code: "postpaid_no_auto_topup",
+} as const;
+
 router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -673,17 +698,15 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
 
     // "We match your first $100" orgs reload at least $100, and never let the
     // threshold sit below $5 (lib/free-credit-offer). Legacy orgs: unchanged.
-    // A POSTPAID org's reload is the credit-line ladder whatever amount is stored
-    // (lib/topup-tier reloadTierFor), so the stored step is normalized to the
-    // ladder's first rung, the same $50 / $0 the postpaid arming writes, and the
-    // prepaid minimums do not apply. Applying the match_100 $100 / $5 prepaid
-    // minimums here refused the dashboard's own $50 on a postpaid org (prod
-    // 2026-10-21, LBVisible).
-    const postpaid = account.paymentMode === "postpaid";
-    const topup_amount_cents = postpaid ? POSTPAID_RELOAD_STEP_MIN_CENTS : parsed.data.topup_amount_cents;
-    const topup_threshold_cents = postpaid ? 0 : parsed.data.topup_threshold_cents;
+    // A POSTPAID org has NO auto top-up (owner 2026-10-21: « l'autotopup n'a aucun
+    // sens en post paid »): it is charged at the credit-line steps and at month end.
+    if (account.paymentMode === "postpaid") {
+      res.status(409).json(POSTPAID_NO_AUTO_TOPUP);
+      return;
+    }
+    const { topup_amount_cents, topup_threshold_cents } = parsed.data;
     try {
-      if (!postpaid) assertAutoTopupMinimums(
+      assertAutoTopupMinimums(
         topupMinimumsFor(account),
         topup_amount_cents,
         topup_threshold_cents
@@ -844,17 +867,10 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
       return;
     }
 
-    // A POSTPAID org never loses its credit line to a toggle (owner 2026-10-21:
-    // « LE CONCEPT DU POST PAID C'EST QUE LE USER PART DE 0, VA EN NEGATIF, ET ON LE
-    // CHARGE TOUS LES $50, $200, ETC »). Refused rather than silently ignored, so a
-    // caller never believes it stopped automatic charges when it did not. Its brakes
-    // are the monthly charge limit, removing the card, or switching to prepaid.
+    // A POSTPAID org has no auto top-up to switch off: it is charged as it spends.
+    // Its brakes are the monthly limit, removing the card, or switching to prepaid.
     if (account.paymentMode === "postpaid") {
-      res.status(409).json({
-        error:
-          "This organization pays after use: it is charged as it spends, so automatic charges cannot be switched off. Set a monthly charge limit, remove the card, or switch to prepaid instead.",
-        code: "postpaid_credit_line_required",
-      });
+      res.status(409).json(POSTPAID_NO_AUTO_TOPUP);
       return;
     }
 
@@ -883,6 +899,55 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
     res.json(buildAccountResponse(updated, funds));
   } catch (err) {
     console.error("[billing-service] Error disabling auto-topup:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// POSTPAID: pay the WHOLE amount owed now, on the saved card (lib/pay-balance).
+// The one money action a postpaid client has (owner 2026-10-21).
+router.post("/v1/accounts/pay_balance", requireOrgHeaders, async (req, res) => {
+  try {
+    const orgId = req.headers["x-org-id"] as string;
+    const userId = req.headers["x-user-id"] as string;
+    const runId = req.headers["x-run-id"] as string;
+    const wfHeaders = forwardWorkflowHeaders(getWorkflowHeaders(req));
+    const identity = buildIdentity(orgId, userId, runId, wfHeaders);
+
+    const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId)).limit(1);
+    if (!account) {
+      res.status(404).json({ error: "Billing account not found" });
+      return;
+    }
+
+    let charged;
+    try {
+      charged = await payOutstandingBalance(orgId, account.paymentMode);
+    } catch (err) {
+      if (err instanceof PayBalanceRefused) {
+        res.status(409).json({ error: err.message, code: err.code, owed_cents: err.owedCents });
+        return;
+      }
+      if (err instanceof OnDemandChargeError) {
+        const status =
+          err.code === "charge_declined" ? 402 : err.code === "charge_backoff" ? 429 : err.code === "upstream_error" ? 502 : 409;
+        console.error(`[billing-service] pay_balance for org ${orgId} failed: [${err.code}] ${err.message}`);
+        res.status(status).json({ error: err.message, code: err.code, owed_cents: err.amountCents });
+        return;
+      }
+      throw err;
+    }
+
+    let funds;
+    try {
+      funds = await composeAccountFunds(orgId, identity);
+    } catch (err) {
+      console.error("[billing-service] Failed to compose account funds:", err);
+      res.status(502).json({ error: "Failed to compose account funds" });
+      return;
+    }
+    res.json({ charged_cents: charged.chargedCents, account: buildAccountResponse(account, funds) });
+  } catch (err) {
+    console.error("[billing-service] Error paying the balance:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

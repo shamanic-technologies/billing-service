@@ -123,6 +123,17 @@ export const BillingAccountSchema = z
     }),
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
+    credit_line_cents: z.number().int().nullable().openapi({
+      description:
+        "POSTPAID only: how far below $0 the balance may go before the card is charged ($50, then $200, then $500 as the org pays). null when not postpaid or when no chargeable card can carry it. Postpaid has no auto top-up and no Add credit.",
+    }),
+    credit_line_step_cents: z.number().int().nullable().openapi({
+      description: "POSTPAID only: what the card is charged each time the line is crossed. null like credit_line_cents.",
+    }),
+    amount_owed_cents: CentsStringSchema.nullable().openapi({
+      description:
+        "POSTPAID only: what the org owes right now (actual spend, holds excluded), the amount POST /v1/accounts/pay_balance takes. \"0.0000000000\" when nothing is owed, null when not postpaid.",
+    }),
     has_payment_method: z.boolean(),
     has_auto_topup: z.boolean(),
     /**
@@ -1879,13 +1890,37 @@ registry.registerPath({
     },
     400: {
       description:
-        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). A POSTPAID org has no minimum: its reload follows the credit-line ladder ($50, $200, $500), so the stored step is normalized to $50 / $0, the same values the postpaid arming writes. Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). A POSTPAID org has no auto top-up: 409 `postpaid_no_auto_topup`. Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
       description: "Billing account not found",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/pay_balance",
+  summary: "POSTPAID: pay the whole amount owed now, on the saved card",
+  description:
+    "The one money action a postpaid org has (no auto top-up, no Add credit). Charges exactly what is owed (actual spend, holds excluded, rounded up to the cent), the month-end settle's amount. Nothing owed = 200 with charged_cents 0.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: {
+      description: "Charged (or nothing owed); the account after",
+      content: { "application/json": { schema: z.object({ charged_cents: z.number().int(), account: BillingAccountSchema }) } },
+    },
+    402: { description: "`charge_declined`: the card refused", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: { description: "Billing account not found", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: {
+      description:
+        "`not_postpaid` | `balance_below_minimum_charge` (collected with the next charge) | `no_chargeable_payment_method` | `card_not_chargeable_off_session`; `owed_cents` beside.",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    429: { description: "`charge_backoff`: a recent decline; retry later", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "`upstream_error`", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
@@ -1903,7 +1938,7 @@ registry.registerPath({
     },
     409: {
       description:
-        "Refused, nothing changed. `postpaid_credit_line_required`: a POSTPAID org is charged as it spends ($50, then $200, then $500 steps); its credit line cannot be switched off. Its brakes are the monthly charge limit, removing the card, or switching to prepaid. `auto_topup_required`: an agent/API prepaid org's auto top-up is mandatory.",
+        "Refused, nothing changed. `postpaid_no_auto_topup`: a POSTPAID org has no auto top-up; it is charged as it spends ($50, then $200, then $500 steps, and at month end). Its brakes are the monthly limit, removing the card, or switching to prepaid. `auto_topup_required`: an agent/API prepaid org's auto top-up is mandatory.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -2059,7 +2094,8 @@ registry.registerPath({
     "WELCOME GIFT (onboarding): send the FULL daily budget as topup_amount_cents with apply_welcome_gift=true and billing takes the welcome gift the org holds off it as a standard discount line (e.g. $68 budget, -$30 gift, $38 due). The credit that lands is what is actually paid; the gift was granted at signup, so spendable = budget. Without apply_welcome_gift the charge is exactly topup_amount_cents and carries no discount. 409 `welcome_discount_not_first_payment` when the org has already paid; 409 `welcome_gift_covers_budget` when budget <= gift (use mode='setup'); 502 `welcome_discount_not_applied` when the acquirer did not charge exactly budget - gift. " +
     "MATCH-cohort orgs whose free credit is not yet fully granted see a notice that the rest is coming. " +
     "A match_100 org (free_credit_offer) is refused below a $100 top-up: 400 `topup_below_minimum` (+ `minimum_cents`); its $30 is credit, never a coupon: apply_welcome_gift=true is 409 `welcome_discount_not_offered`. " +
-    "User-entered promotion codes are NOT offered (allow_promotion_codes is never set).",
+    "User-entered promotion codes are NOT offered (allow_promotion_codes is never set). " +
+    "A POSTPAID org with a chargeable card has no Add credit: payment mode is 409 `postpaid_no_add_credit` (pay what is owed with POST /v1/accounts/pay_balance); card capture (mode='setup') still works.",
   request: {
     headers: protectedHeaders,
     body: {

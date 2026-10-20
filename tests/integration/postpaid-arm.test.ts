@@ -79,7 +79,8 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
 
     const [acct] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
     expect(acct.freeCreditOffer).toBe("match_100");
-    expect(acct.topupAmountCents).toBe(5000);
+    // Postpaid stores no auto top-up (owner 2026-10-21): its line exists with the card.
+    expect(acct.topupAmountCents).toBeNull();
 
     // Spend runs on credit down to the $50 line: -$45 with a $1 run is still sufficient.
     usage = "4500.0000000000"; // no $30 advance on postpaid: $0 - $45 spend = -$45

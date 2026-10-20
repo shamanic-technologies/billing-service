@@ -19,3 +19,18 @@ vi.mock("../src/lib/client-service-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/client-service-client.js")>();
   return { ...actual, fetchOrgUsers: async () => [] };
 });
+
+// POSTPAID refuses "Add credit" only where its credit line is real (lib/pay-balance).
+// Every suite opens its orgs on the DB-default postpaid mode with a mocked card, so
+// the default here is "no credit line" and checkout suites run as they always did.
+// A suite exercising the refusal sets `globalThis.__realPostpaidCreditLine = true`.
+vi.mock("../src/lib/pay-balance.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/pay-balance.js")>();
+  return {
+    ...actual,
+    hasPostpaidCreditLine: async (orgId: string) =>
+      (globalThis as { __realPostpaidCreditLine?: boolean }).__realPostpaidCreditLine
+        ? actual.hasPostpaidCreditLine(orgId)
+        : false,
+  };
+});
