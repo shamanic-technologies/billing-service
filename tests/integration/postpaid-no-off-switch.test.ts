@@ -29,6 +29,7 @@ describe("postpaid: no off switch on the credit line", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     _resetCoalescer();
+    (globalThis as { __realPostpaidCreditLine?: boolean }).__realPostpaidCreditLine = true;
     await cleanTestData();
     usage = "0.0000000000";
 
@@ -54,6 +55,7 @@ describe("postpaid: no off switch on the credit line", () => {
   });
 
   afterAll(async () => {
+    (globalThis as { __realPostpaidCreditLine?: boolean }).__realPostpaidCreditLine = false;
     await closeDb();
   });
 
@@ -111,29 +113,77 @@ describe("postpaid: no off switch on the credit line", () => {
     await insertTestAccount({ orgId, paymentMode: "postpaid", topupAmountCents: 5000, topupThresholdCents: 0 });
     const res = await request(app).delete("/v1/accounts/auto_topup").set(getAuthHeaders(orgId));
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("postpaid_credit_line_required");
+    expect(res.body.code).toBe("postpaid_no_auto_topup");
     const [acct] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
     expect(acct.topupAmountCents).toBe(5000);
     expect(acct.topupThresholdCents).toBe(0);
   });
 
-  it("PATCH auto_topup on a postpaid match_100 org stores the $50 step the arming writes, never refuses it", async () => {
+  it("postpaid has no auto top-up and no Add credit: PATCH 409, payment checkout 409, card capture allowed", async () => {
     await db
       .insert(billingAccounts)
       .values({ orgId, paymentMode: "postpaid", freeCreditOffer: "match_100", topupAmountCents: null, topupThresholdCents: null });
     ssMocks.getCustomerByOrgOrNull.mockResolvedValue(customerWithEmail("client@lbv.test"));
-    for (const body of [
-      { topup_amount_cents: 5000, topup_threshold_cents: 0 },
-      { topup_amount_cents: 10000, topup_threshold_cents: 500 },
-      { topup_amount_cents: 2000, topup_threshold_cents: 0 },
-    ]) {
-      const res = await request(app).patch("/v1/accounts/auto_topup").set(getAuthHeaders(orgId)).send(body);
-      expect(res.status).toBe(200);
-      expect(res.body.topup_amount_cents).toBe(5000);
-      expect(res.body.topup_threshold_cents).toBe(-5000);
-      const [acct] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
-      expect([acct.topupAmountCents, acct.topupThresholdCents]).toEqual([5000, 0]);
-    }
+    const patch = await request(app)
+      .patch("/v1/accounts/auto_topup")
+      .set(getAuthHeaders(orgId))
+      .send({ topup_amount_cents: 5000, topup_threshold_cents: 0 });
+    expect(patch.status).toBe(409);
+    expect(patch.body.code).toBe("postpaid_no_auto_topup");
+    const [acct] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect([acct.topupAmountCents, acct.topupThresholdCents]).toEqual([null, null]);
+
+    const pay = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ topup_amount_cents: 10000, success_url: "https://x.test/ok", cancel_url: "https://x.test/no" });
+    expect(pay.status).toBe(409);
+    expect(pay.body.code).toBe("postpaid_no_add_credit");
+
+    const setup = await request(app)
+      .post("/v1/checkout-sessions")
+      .set(getAuthHeaders(orgId))
+      .send({ mode: "setup", success_url: "https://x.test/ok", cancel_url: "https://x.test/no" });
+    expect(setup.status).not.toBe(409);
+  });
+
+  it("pay_balance charges exactly what is owed, once; nothing owed charges nothing", async () => {
+    await insertSwitchedOff();
+    usage = "1217.4300000000"; // owes $12.1743 → $12.18 charged (rounded up to a whole cent)
+    const res = await request(app).post("/v1/accounts/pay_balance").set(getAuthHeaders(orgId));
+    expect(res.status).toBe(200);
+    expect(res.body.charged_cents).toBe(1218);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(1218);
+
+    usage = "0.0000000000";
+    const none = await request(app).post("/v1/accounts/pay_balance").set(getAuthHeaders(orgId));
+    expect(none.status).toBe(200);
+    expect(none.body.charged_cents).toBe(0);
+    expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("pay_balance: no card is named, prepaid is refused", async () => {
+    await insertSwitchedOff();
+    usage = "1217.0000000000";
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
+    const noCard = await request(app).post("/v1/accounts/pay_balance").set(getAuthHeaders(orgId));
+    expect(noCard.status).toBe(409);
+    expect(noCard.body.code).toBe("no_chargeable_payment_method");
+
+    await db.update(billingAccounts).set({ paymentMode: "prepaid" }).where(eq(billingAccounts.orgId, orgId));
+    const prepaid = await request(app).post("/v1/accounts/pay_balance").set(getAuthHeaders(orgId));
+    expect(prepaid.status).toBe(409);
+    expect(prepaid.body.code).toBe("not_postpaid");
+  });
+
+  it("the read states the credit line, its step and what is owed", async () => {
+    await insertSwitchedOff();
+    usage = "1217.0000000000";
+    const acct = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(acct.body.credit_line_cents).toBe(5000);
+    expect(acct.body.credit_line_step_cents).toBe(5000);
+    expect(acct.body.amount_owed_cents).toBe("1217.0000000000");
   });
 
   it("PREPAID is unchanged: toggle off stops at $0, DELETE works, the $100 minimum holds", async () => {

@@ -7,6 +7,7 @@ import { flagUncollectableDebt } from "../../src/lib/unpaid-debt.js";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
 import {
+  billingAccounts,
   localPromoCodes,
   WELCOME_PROMO_CODE,
 } from "../../src/db/schema.js";
@@ -188,6 +189,8 @@ describe("an org with credit and no Stripe customer", () => {
 
   it("refuses auto-topup with a 400 naming the missing card, never a 502", async () => {
     await seed();
+    // PREPAID: a postpaid org has no auto top-up at all (409, postpaid-no-off-switch.test.ts).
+    await db.update(billingAccounts).set({ paymentMode: "prepaid" }).where(eq(billingAccounts.orgId, anonOrg));
 
     const res = await request(app)
       .patch("/v1/accounts/auto_topup")
