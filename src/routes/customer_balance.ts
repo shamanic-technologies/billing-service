@@ -9,7 +9,7 @@ import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { applyUsageDiscount, getUsageDiscountPct } from "../lib/usage-discount.js";
 import { computeBalance } from "../lib/balance.js";
-import { reloadTierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
+import { autoTopupArmed, reloadTierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { configuredReloadFor } from "../lib/free-credit-offer.js";
 import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
@@ -191,7 +191,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     // card, or a blocked issuing country) have no credit line → floor "0"
     // (strictly prepaid), so the sufficiency + dunning gates behave as before.
     const { tier, thresholdCents } = resolvePostpaidTier({
-      topupEnabled: account.topupAmountCents != null,
+      topupEnabled: autoTopupArmed(account),
       hasCardPm: snapshot.hasCardPm,
       autoReloadSupported: snapshot.autoReloadSupported,
       paidTopupsCents: snapshot.paidTopupsCents,
@@ -212,7 +212,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    if (!account.topupAmountCents) {
+    if (!autoTopupArmed(account)) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: snapshot.balanceCents,
@@ -443,9 +443,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     const account = await findOrCreateAccount(orgId, userId);
 
     if (
-      !account.topupAmountCents ||
-      account.topupThresholdCents == null ||
-      account.paymentMode === "subscription" ||
+      !autoTopupArmed(account) ||
       (await isPlatformOrg(orgId))
     ) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup-config" }, req.headers);

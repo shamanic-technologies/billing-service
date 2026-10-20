@@ -32,7 +32,7 @@ import { db } from "../db/index.js";
 import { configuredReloadFor } from "./free-credit-offer.js";
 import { billingAccounts } from "../db/schema.js";
 import { isDepleted, subCents, gte as gteCents } from "./cents.js";
-import { resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
+import { autoTopupArmed, resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
 import type { BalanceSnapshot } from "./balance.js";
 import { asPaymentMode } from "./payment-mode-types.js";
 import { isPlatformOrg } from "./platform-org.js";
@@ -98,7 +98,7 @@ export async function resolveOrgFloor(
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
   const { tier, thresholdCents } = resolvePostpaidTier({
-    topupEnabled: account?.topupAmountCents != null,
+    topupEnabled: account ? autoTopupArmed(account) : false,
     hasCardPm: snapshot.hasCardPm,
     autoReloadSupported: snapshot.autoReloadSupported,
     paidTopupsCents: snapshot.paidTopupsCents,

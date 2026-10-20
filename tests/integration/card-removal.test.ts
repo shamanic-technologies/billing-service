@@ -160,7 +160,7 @@ describe("a customer can stop us holding their card", () => {
   // --- 5. auto-topup is not left armed against an org with no card ---
 
   it("AC5: disarms auto-topup, so no threshold is left that can never fire", async () => {
-    await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 2000 });
+    await insertTestAccount({ paymentMode: "prepaid", orgId, topupAmountCents: 5000, topupThresholdCents: 2000 });
 
     const res = await request(app).delete(REMOVE).set(getAuthHeaders(orgId));
 
