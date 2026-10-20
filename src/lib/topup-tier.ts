@@ -47,7 +47,37 @@ export function tierFor(cumulativePaidCents: string): TopupTier {
   if (paid.greaterThanOrEqualTo(TIER_MID_MIN)) {
     return { thresholdCents: -20000, amountCents: 20000 };
   }
-  return { thresholdCents: -5000, amountCents: 5000 };
+  return { thresholdCents: -POSTPAID_RELOAD_STEP_MIN_CENTS, amountCents: POSTPAID_RELOAD_STEP_MIN_CENTS };
+}
+
+/**
+ * The smallest reload step a POSTPAID org can be set to: the ladder's first rung
+ * ($50). The postpaid arming writes it, and PATCH /v1/accounts/auto_topup accepts
+ * it on a postpaid org, so the two paths can never disagree about one org (prod
+ * 2026-10-21, LBVisible: arming set $50, the configure path refused $50 under the
+ * match_100 prepaid $100 minimum).
+ */
+export const POSTPAID_RELOAD_STEP_MIN_CENTS = 5000;
+
+/**
+ * Whether an org's automatic charge is ARMED (it still needs a chargeable card to
+ * fire). A POSTPAID org is always armed: its credit line is what postpaid IS (owner
+ * 2026-10-21: « LE CONCEPT DU POST PAID C'EST QUE LE USER PART DE 0, VA EN NEGATIF,
+ * ET ON LE CHARGE TOUS LES $50, $200, ETC »), so no stored toggle can turn it into
+ * "stops at $0". Its client-side brakes are the monthly charge limit and removing
+ * the card. A SUBSCRIPTION org never is. A PREPAID org is armed iff its stored
+ * auto top-up columns are set (they are its enabled flag).
+ *
+ * Every reader of "is auto top-up on" goes through this, never the bare columns.
+ */
+export function autoTopupArmed(account: {
+  paymentMode: string;
+  topupAmountCents: number | null;
+  topupThresholdCents: number | null;
+}): boolean {
+  if (account.paymentMode === "postpaid") return true;
+  if (account.paymentMode === "subscription") return false;
+  return account.topupAmountCents != null && account.topupThresholdCents != null;
 }
 
 /**

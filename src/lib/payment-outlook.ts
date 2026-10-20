@@ -47,6 +47,7 @@
  * wearing a running label. Everything else propagates.
  */
 
+import { autoTopupArmed } from "./topup-tier.js";
 import { Decimal } from "decimal.js";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -459,7 +460,7 @@ async function decideOutlook(
     configuredReload: configuredReloadFor(account),
     hasCardPm: snapshot.hasCardPm,
     autoReloadSupported: snapshot.autoReloadSupported,
-    autoTopupEnabled: account.topupAmountCents != null,
+    autoTopupEnabled: autoTopupArmed(account),
     cardUnusable: streak?.cardUnusableAt != null,
     chargeRetriesExhausted:
       streak != null &&

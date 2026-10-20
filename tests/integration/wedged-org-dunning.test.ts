@@ -140,7 +140,7 @@ describe("a wedged org is owned by the dunning engine", () => {
     // No auto-topup config ⇒ floor "0". 92 of 112 prod accounts look like this,
     // so they attempt no reload, produce no failed streak, and were invisible on
     // every surface. Balance +5 cents against a 92.28-cent run.
-    await insertTestAccount({ orgId: orgB });
+    await insertTestAccount({ orgId: orgB, paymentMode: "prepaid" });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("5.0000000000");
     setUsage(orgB, "0.0000000000");
     await upsertCampaignAuthorizeCost(

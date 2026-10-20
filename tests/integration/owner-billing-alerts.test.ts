@@ -75,7 +75,7 @@ describe("owner Telegram per customer billing event", () => {
   });
 
   it("auto top-up: turned on, a re-save sends nothing, changed, turned off", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     const h = { ...getAuthHeaders(orgId, userId), "x-email": "client@acme.com" };
 
     expect((await request(app).patch("/v1/accounts/auto_topup").set(h).send({ topup_amount_cents: 10000, topup_threshold_cents: 500 })).status).toBe(200);

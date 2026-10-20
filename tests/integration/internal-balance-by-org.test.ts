@@ -63,7 +63,7 @@ describe("GET /internal/accounts/by-org/:orgId/balance (user-less balance read)"
   });
 
   it("200 with same shape as /v1/accounts/balance (credited − usage)", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100.0000000000");
     setUsage("40.0000000000"); // balance = 100 − 40 = 60
     setActualUsage("30.0000000000"); // actual balance = 100 − 30 = 70

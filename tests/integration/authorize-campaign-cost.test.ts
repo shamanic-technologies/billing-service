@@ -73,7 +73,7 @@ describe("authorize upserts campaign_authorize_costs when x-campaign-id present"
   });
 
   it("insufficient outcome (no topup config) → still upserts the required_cents", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)

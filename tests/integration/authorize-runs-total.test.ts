@@ -74,7 +74,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
   });
 
   it("insufficient + no topup config → returns sufficient:false without reload", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
 
     const res = await request(app)

@@ -1880,7 +1880,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). A POSTPAID org has no minimum: its reload follows the credit-line ladder ($50, $200, $500), so the stored step is normalized to $50 / $0, the same values the postpaid arming writes. Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -1901,6 +1901,11 @@ registry.registerPath({
     200: {
       description: "Updated account with auto-topup disabled",
       content: { "application/json": { schema: BillingAccountSchema } },
+    },
+    409: {
+      description:
+        "Refused, nothing changed. `postpaid_credit_line_required`: a POSTPAID org is charged as it spends ($50, then $200, then $500 steps); its credit line cannot be switched off. Its brakes are the monthly charge limit, removing the card, or switching to prepaid. `auto_topup_required`: an agent/API prepaid org's auto top-up is mandatory.",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
       description: "Billing account not found",

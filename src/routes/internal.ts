@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { autoTopupArmed } from "../lib/topup-tier.js";
 import { getAbsorbedCosts } from "../lib/absorbed-costs.js";
 import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
 import { eq, sql } from "drizzle-orm";
@@ -530,6 +531,7 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
   const [account] = await db
     .select({
       id: billingAccounts.id,
+      paymentMode: billingAccounts.paymentMode,
       topupAmountCents: billingAccounts.topupAmountCents,
       topupThresholdCents: billingAccounts.topupThresholdCents,
     })
@@ -567,8 +569,7 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
   // momentary spendable balance is low. Additive field — the
   // balance/actual_balance/depleted shape above is unchanged.
   const hasAutoTopup =
-    account.topupAmountCents != null &&
-    account.topupThresholdCents != null &&
+    autoTopupArmed(account) &&
     snapshot.hasCardPm &&
     snapshot.autoReloadSupported;
 

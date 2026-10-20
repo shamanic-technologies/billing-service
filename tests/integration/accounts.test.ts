@@ -253,7 +253,8 @@ describe("Accounts endpoints", () => {
     });
 
     it("disabled account (no topup config) → topup amount/threshold null", async () => {
-      await insertTestAccount({ orgId }); // topupAmountCents null
+      // PREPAID: a postpaid org is always armed (postpaid-no-off-switch.test.ts).
+      await insertTestAccount({ orgId, paymentMode: "prepaid" }); // topupAmountCents null
       ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
 
       const res = await request(app)
@@ -548,7 +549,8 @@ describe("Accounts endpoints", () => {
 
   describe("DELETE /v1/accounts/auto_topup", () => {
     it("disables auto-topup", async () => {
-      await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
+      // PREPAID: a postpaid org's DELETE is refused 409 (postpaid-no-off-switch.test.ts).
+      await insertTestAccount({ orgId, paymentMode: "prepaid", topupAmountCents: 5000, topupThresholdCents: 1000 });
 
       const res = await request(app)
         .delete("/v1/accounts/auto_topup")
