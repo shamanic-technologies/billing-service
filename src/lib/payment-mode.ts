@@ -33,7 +33,7 @@
  * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
-import { topupMinimumsFor } from "./free-credit-offer.js";
+import { topupMinimumsFor, withdrawOnboardingAdvanceForPostpaid } from "./free-credit-offer.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -229,6 +229,9 @@ export async function setPaymentMode(
       );
     }
     armPostpaidLine = facts.saved && account.topupAmountCents == null;
+    // Postpaid gets no $30 onboarding advance: its signup credit is the $100 match
+    // (owner 2026-10-20). Before any other write, so a client never reads $30 here.
+    await withdrawOnboardingAdvanceForPostpaid(orgId);
   }
 
   if (current === target) {
