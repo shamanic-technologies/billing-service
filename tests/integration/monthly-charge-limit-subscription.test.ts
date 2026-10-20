@@ -1,10 +1,10 @@
 /**
- * The MONTHLY CHARGE LIMIT on a subscription (lib/monthly-charge-limit), owner's
- * worked example: plan $99, limit $299. Credit out inside the trial → $100 step
- * (total $100); trial end → $199 (total $299); credit out again → the $100 step
- * would make $399, so it is NOT charged: no claim kept, the ONE limit email instead
- * of the out-of-credits email. Raising the limit lets the next check step again.
- * Plus the coalescer: a limit refusal arms no card backoff.
+ * The MONTHLY LIMIT on a subscription (lib/monthly-charge-limit), inverted by the
+ * owner 2026-10-21: it caps SPEND at authorize and NEVER refuses a charge. So a
+ * plan step or a renewal is charged even when this month's card charges already
+ * passed the limit; once the limit has refused a spend this month, a credit
+ * shortfall does NOT buy a plan step (credit the org could not spend this month),
+ * and the customer gets the ONE limit email, never the out-of-credits one.
  *
  * Own file (one describe per file — see CLAUDE.md).
  */
@@ -18,8 +18,7 @@ import * as ssClient from "../../src/lib/stripe-service-client.js";
 import * as reload from "../../src/lib/reload.js";
 import { advanceSubscription, getLiveSubscription, startSubscription } from "../../src/lib/subscription.js";
 import { notifySubscriptionOutOfCreditsIfDue } from "../../src/lib/subscription-out-of-credits.js";
-import { setMonthlyChargeLimit, MONTHLY_CHARGE_LIMIT_REACHED_EVENT } from "../../src/lib/monthly-charge-limit.js";
-import { coalesceReload, consecutiveReloadFailures, _resetCoalescer } from "../../src/lib/reload-coalescer.js";
+import { setMonthlyChargeLimit, recordMonthlyLimitRefusal, MONTHLY_CHARGE_LIMIT_REACHED_EVENT } from "../../src/lib/monthly-charge-limit.js";
 import type { SalesFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
 
 const orgId = "00000000-0000-0000-0000-0000000009c1";
@@ -155,10 +154,10 @@ describe("monthly charge limit on a subscription (auto-upgrade + renewal)", () =
     return startSubscription({ orgId, userId, monthlyAmountCents: 9900, now });
   }
 
-  it("plan $99, limit $299: $100 + $199 charged, the next $100 is refused, one limit email; raising the limit steps again", async () => {
+  it("charges are never refused by the limit: step and renewal go through past it", async () => {
     const start = new Date(Date.now() - DAY * 1.5);
     const sub = await startTrial(start);
-    await setMonthlyChargeLimit(orgId, 29900, userId);
+    await setMonthlyChargeLimit(orgId, 5000, userId);
 
     usage = "9900.0000000000";
     expect(await notifySubscriptionOutOfCreditsIfDue(orgId)).toBe("upgraded");
@@ -167,43 +166,23 @@ describe("monthly charge limit on a subscription (auto-upgrade + renewal)", () =
     const afterTrial = await advanceSubscription(upgraded, new Date(sub.trialEndsAt!.getTime() + 1000));
     expect(afterTrial.status).toBe("active");
     expect(charges.map((c) => c.amount)).toEqual([10000, 19900]);
+  });
 
-    // Out of credit again: $299 + $100 > $299.
-    usage = "29900.0000000000";
+  it("once the limit refused a spend this month, no plan step is bought; raising the limit re-opens it", async () => {
+    const start = new Date(Date.now() - DAY * 1.5);
+    await startTrial(start);
+    await setMonthlyChargeLimit(orgId, 3000, userId);
+    await recordMonthlyLimitRefusal({ orgId, amountCents: 20, limitCents: 3000, chargedCents: 2990 });
+
+    usage = "9900.0000000000";
     expect(await notifySubscriptionOutOfCreditsIfDue(orgId)).toBe("monthly_limit_reached");
-    expect(charges.map((c) => c.amount)).toEqual([10000, 19900]);
-    expect(await db.select().from(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId))).toHaveLength(1); // only the paid step
-    expect((await getLiveSubscription(orgId))!.monthlyAmountCents).toBe(19900);
+    expect(charges).toEqual([]);
+    expect(await db.select().from(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId))).toHaveLength(0);
     await vi.waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(1));
     expect(sendSpy.mock.calls[0][0].eventType).toBe(MONTHLY_CHARGE_LIMIT_REACHED_EVENT);
 
-    // Next check, same month: still refused, still one email.
-    expect(await notifySubscriptionOutOfCreditsIfDue(orgId)).toBe("monthly_limit_reached");
-    await new Promise((r) => setTimeout(r, 50));
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-
-    // The customer raises the limit: the step goes through.
     await setMonthlyChargeLimit(orgId, 39900, userId);
     expect(await notifySubscriptionOutOfCreditsIfDue(orgId)).toBe("upgraded");
-    expect(charges.map((c) => c.amount)).toEqual([10000, 19900, 10000]);
-    expect((await getLiveSubscription(orgId))!.monthlyAmountCents).toBe(29900);
-  });
-
-  it("a renewal the limit refuses consumes no rung and moves nothing (retried next tick)", async () => {
-    const start = new Date(Date.now() - 10 * DAY);
-    const sub = await startTrial(start);
-    await setMonthlyChargeLimit(orgId, 5000, userId);
-    const same = await advanceSubscription(sub, new Date(sub.trialEndsAt!.getTime() + 1000));
-    expect(charges).toEqual([]);
-    expect(same.status).toBe("trialing");
-    expect(same.currentPeriodStart.getTime()).toBe(sub.currentPeriodStart.getTime());
-  });
-
-  it("a limit refusal arms no card backoff", async () => {
-    _resetCoalescer();
-    const out = await coalesceReload(orgId, async () => ({ status: "failed" as const, limitReached: true }));
-    expect(out.limitReached).toBe(true);
-    expect(consecutiveReloadFailures(orgId)).toBe(0);
-    _resetCoalescer();
+    expect(charges.map((c) => c.amount)).toEqual([10000]);
   });
 });

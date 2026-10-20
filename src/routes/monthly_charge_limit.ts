@@ -23,7 +23,7 @@ async function read(orgId: string, res: Response): Promise<void> {
     res.json(await readMonthlyChargeLimitState(orgId));
   } catch (err) {
     console.error(`[billing-service] monthly charge limit read failed for org ${orgId}:`, err);
-    res.status(502).json({ error: "Failed to read this month's card charges" });
+    res.status(502).json({ error: "Failed to read this month's spend or card charges" });
   }
 }
 

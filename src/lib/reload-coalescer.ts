@@ -57,13 +57,6 @@ export interface ReloadOutcome {
    * other reaction to a failed reload is unchanged. Absent on a real outcome.
    */
   backoffSkipped?: boolean;
-  /**
-   * True ONLY when the org's monthly charge limit refused the charge before any
-   * acquirer was asked (lib/monthly-charge-limit). Nothing was learned about the
-   * card: no card-refused email, no retry rung, no backoff, no out-of-credit
-   * dunning (the limit email replaces it). Absent on every other outcome.
-   */
-  limitReached?: boolean;
 }
 
 /**
@@ -174,7 +167,7 @@ export async function coalesceReload(
   const promise = fn()
     .then((outcome) => {
       if (outcome.status === "succeeded") recordSuccess(orgId);
-      else if (!outcome.limitReached) recordFailure(orgId, Date.now());
+      else recordFailure(orgId, Date.now());
       return outcome;
     })
     .catch((err) => {

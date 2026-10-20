@@ -1,41 +1,31 @@
 /**
- * MONTHLY CHARGE LIMIT (owner 2026-10-12, migration 0085).
+ * MONTHLY LIMIT: a SPEND cap (owner 2026-10-12, inverted 2026-10-21, migration 0085).
  *
- * Owner, verbatim: « je me demande si ca ne serait pas plus rassurant pour un user
- * de mettre un max budget [...] de sorte à savoir que whatever happens il ne
- * depensera jamais plus que tant ». Agreed design: ONE limit per org, everything
- * included, monthly only.
+ * Owner 2026-10-12: « savoir que whatever happens il ne depensera jamais plus que
+ * tant ». Owner 2026-10-21: « LE BILLING EST LE BILLING!! ON PREND TOUT CE QU'IL Y A
+ * À PRENDRE EN FIN DE MOIS, À $50, QUAND IL RETIRE SA CARTE ETC. LE $30 C'EST BILLING
+ * SERVICE QUI DOIT BLOQUER LES RUNS POUR S'ASSURER QU'ON NE DÉPENSE JAMAIS PLUS QUE
+ * $30 PAR MOIS ».
  *
- * Worked example: plan $99, limit $299. Trial end charges $99 (month total $99).
- * Credit runs out, auto-upgrade charges $100 (total $199), again $100 (total $299).
- * Credit runs out again: the next $100 would make $399 > $299, so it is NOT made.
- * Spending stops exactly as when credit is gone, the customer gets ONE email with
- * ONE button to raise the limit, and the owner one Telegram line. On the 1st of the
- * next month (UTC) the total restarts at $0.
+ * Worked example: limit $30. The org spends $29.90 this month; a run needing $0.20
+ * is refused at authorize (spending stops, ONE email "Raise my monthly limit", one
+ * owner Telegram line). Its card is still charged what it owes, at the $50 step
+ * and/or at month end: NO charge is ever refused by the limit (lib/reload). On the
+ * 1st of the next month (UTC) the spend restarts at $0.
  *
- *  - WHAT COUNTS: every card payment of the org in the UTC calendar month, from
- *    stripe-service's acquirer-neutral payments list (`succeeded` AND `pending`:
- *    money in flight is money asked for). Checkout top-ups the customer makes by
- *    hand count toward the total, because the question is "how much was my card
- *    charged". Hand-recorded staff payments (`direct`) are not card charges.
- *    Gross: a later refund does not reopen room this month.
- *  - WHAT IS REFUSED: every AUTOMATIC (off-session) charge. They all go through ONE
- *    primitive, `reloadOffSession` (lib/reload): authorize / usage_apply reloads,
- *    the blocked-campaign sweep, the month-end settle, card-change and payment-mode
- *    settles, the on-demand charge, subscription renewals and first charges, the
- *    auto-upgrade step and the follow-up budget charge. A checkout page the customer
- *    fills in by hand is never refused: they are paying on purpose.
- *  - A charge that would pass the limit is refused WHOLE (never cut down to the
- *    room left), before any acquirer is asked. Its outcome carries `limitReached`,
- *    which every caller treats as "no charge was attempted": no card-refused email,
- *    no retry rung consumed, no out-of-credit dunning (this email replaces it).
- *  - NO LIMIT = NO CHANGE: an org without a row reads one primary-key row and
- *    nothing else; no payments read, no lock, byte-identical behaviour.
- *  - Concurrency: the check and the charge run under a per-org in-process lock
- *    (billing runs one instance, same assumption as lib/reload-coalescer), so two
- *    charges racing cannot both fit under the same room.
- *  - Fail loud: a payments list that cannot be read THROWS out of the primitive,
- *    which every caller already handles as "could not ask" (retried).
+ *  - WHAT COUNTS: the org's CAMPAIGN spend this UTC calendar month, committed NET
+ *    (runs-service `/v1/stats/costs`, runs started since the 1st, grouped by
+ *    campaign; a run with no campaign is the platform's cost and never counts, the
+ *    same rule as lib/platform-absorbed). That is the money the org is billed for.
+ *  - WHAT IS REFUSED: a campaign spend at authorize (`checkMonthlySpendLimit`)
+ *    whose estimate would take the month's spend past the limit. Never a charge.
+ *  - CONCURRENCY: the month's spend is measured at most every 10 s per org; spends
+ *    granted since that measurement are added, so a burst cannot all fit under the
+ *    same room (billing runs one instance, same assumption as lib/reload-coalescer).
+ *  - NO LIMIT = NO CHANGE: an org without a row reads one primary-key row.
+ *  - Fail loud: a spend that cannot be read THROWS (authorize answers 502).
+ *  - `charged_this_period_cents` (card charges this month) is still served, for
+ *    information only.
  */
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -46,7 +36,9 @@ import {
   subscriptions,
   type MonthlyChargeLimit,
 } from "../db/schema.js";
+import { Decimal } from "decimal.js";
 import { fetchOrgCustomerOrNull, listOrgPayments } from "./stripe-service-client.js";
+import { readJson } from "./runs-org-read.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
@@ -146,52 +138,71 @@ export async function chargedThisMonthCents(orgId: string, now: Date = new Date(
   return total;
 }
 
-export type LimitCheck =
-  | { limited: false }
-  | { limited: true; allowed: boolean; limitCents: number; chargedCents: number; remainingCents: number };
-
-/** May `amountCents` be charged now without passing the org's limit? */
-export async function checkMonthlyChargeLimit(
-  orgId: string,
-  amountCents: number,
-  now: Date = new Date(),
-  limit?: MonthlyChargeLimit | null
-): Promise<LimitCheck> {
-  const row = limit === undefined ? await getMonthlyChargeLimit(orgId) : limit;
-  if (!row) return { limited: false };
-  const chargedCents = await chargedThisMonthCents(orgId, now);
-  const remainingCents = Math.max(0, row.limitCents - chargedCents);
-  return {
-    limited: true,
-    allowed: chargedCents + amountCents <= row.limitCents,
-    limitCents: row.limitCents,
-    chargedCents,
-    remainingCents,
-  };
+/** The org's campaign spend this UTC month, committed NET, decimal cents. */
+export async function spentThisMonthCents(orgId: string, now: Date = new Date()): Promise<string> {
+  const { start } = calendarMonthUtc(now);
+  const body = await readJson<{ groups?: Array<{ dimensions?: { campaignId?: string | null }; netTotalCostInUsdCents?: string }> }>(
+    "/v1/stats/costs",
+    orgId,
+    new URLSearchParams({ groupBy: "campaignId", startedAfter: start.toISOString() })
+  );
+  if (!Array.isArray(body.groups)) throw new Error("runs-service /v1/stats/costs returned no groups array");
+  let total = new Decimal(0);
+  for (const g of body.groups) {
+    if (!g.dimensions || !("campaignId" in g.dimensions)) {
+      throw new Error("runs-service /v1/stats/costs group has no campaignId dimension");
+    }
+    if (!g.dimensions.campaignId) continue; // no campaign = the platform's cost
+    if (g.netTotalCostInUsdCents == null) {
+      throw new Error("runs-service /v1/stats/costs stated no netTotalCostInUsdCents");
+    }
+    total = total.plus(g.netTotalCostInUsdCents);
+  }
+  return total.toFixed(10);
 }
 
-// --- per-org lock around check + charge -------------------------------------
+const SPEND_CACHE_MS = 10_000;
+const spendCache = new Map<string, { measuredAt: number; monthStart: number; spentCents: string; grantedCents: Decimal }>();
 
-const locks = new Map<string, Promise<unknown>>();
+/** Test hook: forget every cached measurement. */
+export function _resetMonthlySpendCache(): void {
+  spendCache.clear();
+}
 
-/** Run `fn` after every earlier call for this org has settled. */
-export async function withOrgChargeLock<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
-  const previous = locks.get(orgId) ?? Promise.resolve();
-  const run = previous.catch(() => undefined).then(fn);
-  const tail = run.catch(() => undefined);
-  locks.set(orgId, tail);
-  try {
-    return await run;
-  } finally {
-    if (locks.get(orgId) === tail) locks.delete(orgId);
+export type SpendLimitCheck =
+  | { limited: false }
+  | { limited: true; allowed: boolean; limitCents: number; spentCents: string };
+
+/**
+ * May a campaign spend of `requiredCents` go ahead without this month's spend
+ * passing the org's limit? An allowed spend is counted until the next measurement.
+ */
+export async function checkMonthlySpendLimit(
+  orgId: string,
+  requiredCents: string,
+  now: Date = new Date()
+): Promise<SpendLimitCheck> {
+  const row = await getMonthlyChargeLimit(orgId);
+  if (!row) return { limited: false };
+  const monthStart = calendarMonthUtc(now).start.getTime();
+  let entry = spendCache.get(orgId);
+  if (!entry || entry.monthStart !== monthStart || now.getTime() - entry.measuredAt > SPEND_CACHE_MS) {
+    const spentCents = await spentThisMonthCents(orgId, now);
+    entry = { measuredAt: now.getTime(), monthStart, spentCents, grantedCents: new Decimal(0) };
+    spendCache.set(orgId, entry);
   }
+  const spent = new Decimal(entry.spentCents).plus(entry.grantedCents);
+  const allowed = spent.plus(requiredCents).lte(row.limitCents);
+  if (allowed) entry.grantedCents = entry.grantedCents.plus(requiredCents);
+  return { limited: true, allowed, limitCents: row.limitCents, spentCents: spent.toFixed(10) };
 }
 
 // --- the refusal: record, tell once ----------------------------------------
 
 /**
- * Record that the limit refused a charge this month (positive evidence for the
+ * Record that the limit refused a spend this month (positive evidence for the
  * read), then tell the customer and the owner once. Never throws on the telling.
+ * `chargedCents` here is the month's SPEND (whole cents, the column keeps its name).
  */
 export async function recordMonthlyLimitRefusal(params: {
   orgId: string;
@@ -223,18 +234,33 @@ export async function recordMonthlyLimitRefusal(params: {
       },
     });
   console.warn(
-    `[billing-service] monthly charge limit: refused ${params.amountCents} cents for org ${params.orgId} ` +
-      `(charged ${params.chargedCents} of ${params.limitCents} this month)`
+    `[billing-service] monthly limit: refused a ${params.amountCents}-cent spend for org ${params.orgId} ` +
+      `(spent ${params.chargedCents} of ${params.limitCents} this month)`
   );
   notifyOwnerBillingEvent({
     orgId: params.orgId,
     emoji: "🧱",
-    text: `Monthly limit reached: ${usd(params.chargedCents)} charged of ${usd(params.limitCents)}, ${usd(params.amountCents)} not charged`,
+    text: `Monthly limit reached: ${usd(params.chargedCents)} spent of ${usd(params.limitCents)}, campaigns stopped until the 1st`,
     dedupKey: `monthly-limit:${params.orgId}:${start.toISOString().slice(0, 7)}`,
   });
   void notifyMonthlyChargeLimitReached(params.orgId, now).catch((err) =>
     console.error(`[billing-service] monthly limit email for org ${params.orgId} failed:`, err)
   );
+}
+
+/** True once the limit refused a spend this month (deleted when the limit changes). */
+export async function monthlyLimitReachedThisMonth(orgId: string, now: Date = new Date()): Promise<boolean> {
+  const [row] = await db
+    .select({ orgId: monthlyChargeLimitRefusals.orgId })
+    .from(monthlyChargeLimitRefusals)
+    .where(
+      and(
+        eq(monthlyChargeLimitRefusals.orgId, orgId),
+        eq(monthlyChargeLimitRefusals.periodStart, calendarMonthUtc(now).start)
+      )
+    )
+    .limit(1);
+  return !!row;
 }
 
 export interface MonthlyChargeLimitEmail {
@@ -260,9 +286,9 @@ export function composeMonthlyChargeLimitEmail(params: {
 }): MonthlyChargeLimitEmail {
   const heading = "You reached your monthly limit";
   const lines = [
-    `Your monthly limit is ${usd(params.limitCents)}. Your card was charged ${usd(params.chargedCents)} this month.`,
-    `The next charge would be ${usd(params.refusedAmountCents)}. That would go over your limit, so we did not make it.`,
-    `Your campaigns have stopped. They start again on ${longDate(params.resetsAt)}, or right away if you raise your limit.`,
+    `Your monthly limit is ${usd(params.limitCents)}. Your campaigns spent ${usd(params.chargedCents)} this month.`,
+    `We paused them so this month stays within your limit.`,
+    `Your campaigns start again on ${longDate(params.resetsAt)}, or right away if you raise your limit.`,
   ];
   const html = [
     `<h1 style="color:#0a0a14;font-size:24px;font-weight:700;letter-spacing:-0.02em;line-height:1.25;margin:0 0 20px;">${escapeHtml(heading)}</h1>`,
@@ -394,7 +420,9 @@ export interface MonthlyChargeLimitState {
   /** Card charges this month (null when no limit is set: not read). */
   charged_this_period_cents: number | null;
   remaining_cents: number | null;
-  /** True once the limit refused an automatic charge this month: why spending stopped. */
+  /** Campaign spend this month, committed net, decimal cents (null when no limit is set). */
+  spent_this_period_cents: string | null;
+  /** True once the limit refused a spend this month: why spending stopped. */
   limit_reached: boolean;
   limit_reached_at: string | null;
   refused_amount_cents: number | null;
@@ -418,6 +446,7 @@ export async function readMonthlyChargeLimitState(
       ...base,
       monthly_charge_limit_cents: null,
       charged_this_period_cents: null,
+      spent_this_period_cents: null,
       remaining_cents: null,
       limit_reached: false,
       limit_reached_at: null,
@@ -425,7 +454,7 @@ export async function readMonthlyChargeLimitState(
       updated_at: null,
     };
   }
-  const charged = await chargedThisMonthCents(orgId, now);
+  const [charged, spent] = await Promise.all([chargedThisMonthCents(orgId, now), spentThisMonthCents(orgId, now)]);
   const [refusal] = await db
     .select()
     .from(monthlyChargeLimitRefusals)
@@ -435,7 +464,8 @@ export async function readMonthlyChargeLimitState(
     ...base,
     monthly_charge_limit_cents: limit.limitCents,
     charged_this_period_cents: charged,
-    remaining_cents: Math.max(0, limit.limitCents - charged),
+    spent_this_period_cents: spent,
+    remaining_cents: Math.max(0, Math.floor(new Decimal(limit.limitCents).minus(spent).toNumber())),
     limit_reached: !!refusal,
     limit_reached_at: refusal ? refusal.firstRefusedAt.toISOString() : null,
     refused_amount_cents: refusal ? refusal.refusedAmountCents : null,

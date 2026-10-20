@@ -80,7 +80,6 @@ import {
 } from "../db/schema.js";
 import { GrantPromoCodeMissingError, sumLocalPromoCreditsForOrg } from "./promos.js";
 import { computeBalance } from "./balance.js";
-import { MONTHLY_CHARGE_LIMIT_REACHED } from "./monthly-charge-limit.js";
 import { reloadOffSession } from "./reload.js";
 import { isPermanentDecline } from "./card-usability.js";
 import { nextRetryDueAt, MAX_ATTEMPTS_PER_STREAK } from "./campaign-reload-sweep.js";
@@ -152,8 +151,7 @@ export type SubscriptionRefusalCode =
   | "subscription_paused"
   | "subscription_not_paused"
   | "subscription_ended"
-  | "prepaid_card_trial_refused"
-  | "monthly_charge_limit_reached";
+  | "prepaid_card_trial_refused";
 
 export class SubscriptionRefused extends Error {
   readonly code: SubscriptionRefusalCode;
@@ -559,7 +557,6 @@ export async function startSubscription(params: {
       .update(subscriptions)
       .set({ status: "canceled", endedAt: now, canceledAt: now, updatedAt: now })
       .where(eq(subscriptions.id, sub.id));
-    if (result === "limit_reached") throw limitRefused("the subscription did not start");
     throw new SubscriptionRefused(
       "first_charge_declined",
       "The card was not charged, so the subscription did not start. Try another card."
@@ -685,7 +682,6 @@ export async function startPlanForOffer(params: {
         502
       );
     }
-    if (result === "limit_reached") throw limitRefused("the plan did not start");
     throw new SubscriptionRefused(
       "first_charge_declined",
       "The card was not charged, so the plan did not start. Try another card."
@@ -832,15 +828,7 @@ async function periodCreditCents(sub: Subscription): Promise<number> {
   return extra;
 }
 
-type AttemptResult = "paid" | "declined" | "permanent" | "error" | "limit_reached";
-
-/** The org's monthly charge limit refused a plan charge (lib/monthly-charge-limit). */
-function limitRefused(what: string): SubscriptionRefused {
-  return new SubscriptionRefused(
-    "monthly_charge_limit_reached",
-    `This charge would go over your monthly limit, so ${what}. Raise your limit, then try again.`
-  );
-}
+type AttemptResult = "paid" | "declined" | "permanent" | "error";
 
 function upstreamStatus(err: unknown): number | null {
   const msg = err instanceof Error ? err.message : String(err);
@@ -877,12 +865,6 @@ async function attemptCharge(
   const attempt = charge.attemptCount + 1;
   let declinedCode: string | null = null;
   let reference: string | null = null;
-  // The same key re-issued after an attempt that got NO answer: that charge may have
-  // landed and already sit in this month's total, so the monthly limit (which judged
-  // it the first time) must not judge it again. A limit refusal marks the row, so a
-  // charge that was never sent is always judged.
-  const reissue =
-    charge.lastAttemptAt != null && charge.failureCode == null && charge.status === "pending";
   try {
     const outcome = await withTimeout(
       CHARGE_TIMEOUT_MS,
@@ -894,19 +876,9 @@ async function attemptCharge(
           reason: "subscription",
           subscription_id: sub.id,
           period_start: charge.periodStart.toISOString(),
-        },
-        { skipMonthlyLimit: reissue }
+        }
       )
     );
-    if (outcome.limitReached) {
-      // Not sent to any acquirer: no rung consumed, retried like an outage. The
-      // customer was told by the limit email; next month (or a raised limit) charges.
-      await db
-        .update(subscriptionCharges)
-        .set({ lastAttemptAt: now, failureCode: MONTHLY_CHARGE_LIMIT_REACHED })
-        .where(eq(subscriptionCharges.id, charge.id));
-      return "limit_reached";
-    }
     if (outcome.status === "succeeded") {
       await db
         .update(subscriptionCharges)
@@ -998,8 +970,8 @@ async function billPeriod(sub: Subscription, periodStart: Date, now: Date): Prom
   if (!charge) throw new Error(`[billing-service] no charge row for subscription ${sub.id}`);
 
   const result = charge.status === "paid" ? "paid" : await attemptCharge(sub, charge, now);
-  // nothing moves; the next tick retries (a limit refusal too: next month, or a raised limit)
-  if (result === "error" || result === "limit_reached") return sub;
+  // nothing moves; the next tick retries
+  if (result === "error") return sub;
   if (result === "permanent") return endSubscription(sub, periodStart, now);
   const [updated] = await db
     .update(subscriptions)
@@ -1355,9 +1327,6 @@ export async function startSubscriptionNow(
       "The card could not be charged right now, so the plan was not started. Try again in a moment.",
       502
     );
-  }
-  if (result === "limit_reached") {
-    throw limitRefused(upgrading ? "the plan is unchanged" : "the plan is still in its free trial");
   }
   if (result !== "paid") {
     throw new SubscriptionRefused(
