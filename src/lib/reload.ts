@@ -34,13 +34,6 @@ import { notifyOwnerBillingEvent, usd, utcDay } from "./owner-alerts.js";
 import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
 import { chargeReasonLabel, recordChargeSignal } from "./payment-alerts.js";
-import {
-  MONTHLY_CHARGE_LIMIT_REACHED,
-  checkMonthlyChargeLimit,
-  getMonthlyChargeLimit,
-  recordMonthlyLimitRefusal,
-  withOrgChargeLock,
-} from "./monthly-charge-limit.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -62,47 +55,20 @@ const RELOAD_DESCRIPTION = "Distribute credit top-up";
  * stripe-service errors (fail-loud). Caller's try/catch surfaces this as
  * topup_triggered=false / a 502.
  *
- * MONTHLY CHARGE LIMIT (lib/monthly-charge-limit): every automatic charge passes
- * here, so this is where the customer's "never more than $X a month" holds. A
- * charge that would pass it is NOT sent to any acquirer: the outcome is a failure
- * carrying `limitReached`, which callers treat as "nothing was attempted". An org
- * without a limit reads one row and is otherwise unchanged. `skipMonthlyLimit` is
- * ONLY for re-issuing a charge already checked at its claim with the same key (its
- * money may already be in this month's total).
+ * The MONTHLY LIMIT never refuses a charge here (owner 2026-10-21: « LE BILLING EST
+ * LE BILLING!! ON PREND TOUT CE QU'IL Y A À PRENDRE »): it caps SPEND at authorize
+ * (lib/monthly-charge-limit), so every charge is for money already spent.
  */
 export async function reloadOffSession(
   orgId: string,
   amountCents: number,
   idempotencyKey: string,
-  metadata?: Record<string, string>,
-  opts?: { skipMonthlyLimit?: boolean }
+  metadata?: Record<string, string>
 ): Promise<ReloadOutcome> {
   if (!orgId) {
     throw new Error("reloadOffSession: orgId is required");
   }
-  const limit = opts?.skipMonthlyLimit ? null : await getMonthlyChargeLimit(orgId);
-  if (!limit) return chargeNow(orgId, amountCents, idempotencyKey, metadata);
-  return withOrgChargeLock(orgId, async () => {
-    const check = await checkMonthlyChargeLimit(orgId, amountCents, new Date(), limit);
-    if (check.limited && !check.allowed) {
-      await recordMonthlyLimitRefusal({
-        orgId,
-        amountCents,
-        limitCents: check.limitCents,
-        chargedCents: check.chargedCents,
-      });
-      return {
-        status: "failed",
-        limitReached: true,
-        failure_reason:
-          `${MONTHLY_CHARGE_LIMIT_REACHED}: ${amountCents} cents would pass the ` +
-          `${check.limitCents}-cent monthly limit (${check.chargedCents} charged this month)`,
-        failure_code: MONTHLY_CHARGE_LIMIT_REACHED,
-        failure_message: null,
-      };
-    }
-    return chargeNow(orgId, amountCents, idempotencyKey, metadata);
-  });
+  return chargeNow(orgId, amountCents, idempotencyKey, metadata);
 }
 
 async function chargeNow(

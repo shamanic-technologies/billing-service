@@ -39,6 +39,7 @@
  * fire-and-forget from the refused-authorize / blocked-campaign paths in
  * lib/dunning. Fail-soft: never throws; the only money it moves is the step charge.
  */
+import { monthlyLimitReachedThisMonth } from "./monthly-charge-limit.js";
 import { and, eq, isNull, lt, ne, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { PLATFORM_USER_ID, subscriptions } from "../db/schema.js";
@@ -132,14 +133,15 @@ export async function notifySubscriptionOutOfCreditsIfDue(orgId: string): Promis
     if (!block.blocked) return "has_credit";
 
     let cardDeclined = false;
+    // The monthly limit stopped spending: a plan step would buy credit the org may
+    // not spend this month. The customer gets the ONE limit email
+    // (lib/monthly-charge-limit), never this one beside it.
+    if (await monthlyLimitReachedThisMonth(orgId)) return "monthly_limit_reached";
     if (sub.autoUpgrade) {
       const up = await tryAutoUpgrade(sub);
       if (up.result === "upgraded") return "upgraded";
       if (up.result === "no_longer_blocked") return "has_credit";
       if (up.result === "in_flight" || up.result === "unavailable") return "unresolved";
-      // The monthly charge limit refused the step: the customer gets the ONE limit
-      // email (lib/monthly-charge-limit), never this one beside it.
-      if (up.result === "limit_reached") return "monthly_limit_reached";
       cardDeclined = up.result === "declined" || up.result === "declined_this_period";
     }
     if (alreadyNotified) return "already_notified";

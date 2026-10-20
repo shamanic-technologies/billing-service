@@ -2065,7 +2065,6 @@
               "outstanding_balance_no_card",
               "outstanding_balance_charge_declined",
               "outstanding_balance_below_minimum_charge",
-              "outstanding_balance_monthly_limit",
               "subscription_mode_staff_only",
               "postpaid_card_not_allowed"
             ]
@@ -3835,7 +3834,6 @@
               "plan_exists_for_offer",
               "offer_not_found",
               "charge_unavailable",
-              "monthly_charge_limit_reached",
               "subscription_paused",
               "subscription_not_paused",
               "subscription_ended",
@@ -4876,6 +4874,10 @@
             "type": "integer",
             "nullable": true
           },
+          "spent_this_period_cents": {
+            "type": "string",
+            "nullable": true
+          },
           "remaining_cents": {
             "type": "integer",
             "nullable": true
@@ -4903,6 +4905,7 @@
           "period_start",
           "period_end",
           "charged_this_period_cents",
+          "spent_this_period_cents",
           "remaining_cents",
           "limit_reached",
           "limit_reached_at",
@@ -14490,7 +14493,7 @@
     "/v1/accounts/monthly_charge_limit": {
       "get": {
         "summary": "Read this org's monthly charge limit and this month's card charges",
-        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all.",
+        "description": "ONE limit per org on what its CAMPAIGNS SPEND in a UTC calendar month (committed, net of any discount; work with no campaign is ours and never counts). A campaign spend that would take the month's spend past it is refused at authorize: campaigns stop, and the customer gets one email with one button to raise the limit. The limit NEVER refuses a charge: money already spent is always collected (the $50 / $200 / $500 steps, the month-end settle, the settle on card removal or mode change). Resets on the 1st (UTC). No limit set = no change at all.",
         "parameters": [
           {
             "schema": {
@@ -14586,7 +14589,7 @@
             }
           },
           "502": {
-            "description": "This month's card charges could not be read",
+            "description": "This month's spend or card charges could not be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -14599,7 +14602,7 @@
       },
       "put": {
         "summary": "State or change this org's monthly charge limit",
-        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all. Settable before the first payment. Changing the limit re-opens this month: spending resumes on the next charge that fits, and a later refusal at the new figure is emailed again.",
+        "description": "ONE limit per org on what its CAMPAIGNS SPEND in a UTC calendar month (committed, net of any discount; work with no campaign is ours and never counts). A campaign spend that would take the month's spend past it is refused at authorize: campaigns stop, and the customer gets one email with one button to raise the limit. The limit NEVER refuses a charge: money already spent is always collected (the $50 / $200 / $500 steps, the month-end settle, the settle on card removal or mode change). Resets on the 1st (UTC). No limit set = no change at all. Settable before the first payment. Changing the limit re-opens this month: spending resumes on the next campaign spend that fits, and a later refusal at the new figure is emailed again.",
         "parameters": [
           {
             "schema": {
@@ -14714,7 +14717,7 @@
             }
           },
           "502": {
-            "description": "This month's card charges could not be read",
+            "description": "This month's spend or card charges could not be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -14827,7 +14830,7 @@
     "/internal/accounts/by-org/{orgId}/monthly-charge-limit": {
       "get": {
         "summary": "Staff/service read of an org's monthly charge limit",
-        "description": "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, on-demand charges) that would push the month's card charges above it is NOT made: spending that needs it stops exactly like an empty balance, and the customer gets one email with one button to raise the limit. Card charges = every succeeded or pending card payment of the month, checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). No limit set = no change at all.",
+        "description": "ONE limit per org on what its CAMPAIGNS SPEND in a UTC calendar month (committed, net of any discount; work with no campaign is ours and never counts). A campaign spend that would take the month's spend past it is refused at authorize: campaigns stop, and the customer gets one email with one button to raise the limit. The limit NEVER refuses a charge: money already spent is always collected (the $50 / $200 / $500 steps, the month-end settle, the settle on card removal or mode change). Resets on the 1st (UTC). No limit set = no change at all.",
         "parameters": [
           {
             "schema": {
@@ -14869,7 +14872,7 @@
             }
           },
           "502": {
-            "description": "This month's card charges could not be read",
+            "description": "This month's spend or card charges could not be read",
             "content": {
               "application/json": {
                 "schema": {
@@ -14932,7 +14935,7 @@
             }
           },
           "502": {
-            "description": "This month's card charges could not be read",
+            "description": "This month's spend or card charges could not be read",
             "content": {
               "application/json": {
                 "schema": {

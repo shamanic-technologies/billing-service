@@ -59,8 +59,6 @@ export type AutoUpgradeResult =
   | { result: "upgraded"; subscription: Subscription; chargedCents: number; fromAmountCents: number; toAmountCents: number }
   | { result: "not_eligible"; reason: "grandfathered" | "not_live" | "sending_stopped" | "nothing_running" }
   | { result: "declined"; failureCode: string }
-  /** The org's monthly charge limit refused the step (lib/monthly-charge-limit): nothing charged, no claim kept. */
-  | { result: "limit_reached" }
   | { result: "declined_this_period" }
   | { result: "in_flight" }
   | { result: "no_longer_blocked" }
@@ -112,8 +110,7 @@ async function hasOngoingCampaign(orgId: string): Promise<boolean | null> {
  */
 async function chargeClaimed(
   row: SubscriptionAutoUpgrade,
-  now: Date,
-  reissue = false
+  now: Date
 ): Promise<AutoUpgradeResult> {
   let failureCode: string;
   let reference: string | null = null;
@@ -129,18 +126,9 @@ async function chargeClaimed(
           subscription_id: row.subscriptionId,
           from_amount_cents: String(row.fromAmountCents),
           to_amount_cents: String(row.toAmountCents),
-        },
-        // A re-issue replays a charge the limit already allowed at its claim; its
-        // money may already be in this month's total, so it must not be re-judged.
-        { skipMonthlyLimit: reissue }
+        }
       )
     );
-    if (outcome.limitReached) {
-      // Never sent to an acquirer: drop the claim so a raised limit (or next
-      // month) can step again. The limit email tells the customer.
-      await db.delete(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.id, row.id));
-      return { result: "limit_reached" };
-    }
     if (outcome.status === "succeeded") {
       const subscription = await db.transaction(async (tx) => {
         await tx
@@ -218,7 +206,7 @@ export async function tryAutoUpgrade(sub: Subscription, now: Date = new Date()):
   const pending = await pendingFor(sub.id);
   if (pending) {
     if (now.getTime() - pending.createdAt.getTime() < STALE_PENDING_MS) return { result: "in_flight" };
-    return chargeClaimed(pending, now, true);
+    return chargeClaimed(pending, now);
   }
 
   const [refused] = await db
@@ -283,7 +271,7 @@ export async function resumeStaleAutoUpgrades(now: Date = new Date()): Promise<n
   let settled = 0;
   for (const row of stale) {
     try {
-      if ((await chargeClaimed(row, now, true)).result !== "unavailable") settled += 1;
+      if ((await chargeClaimed(row, now)).result !== "unavailable") settled += 1;
     } catch (err) {
       console.error(`[billing-service] stale auto-upgrade ${row.id} for org ${row.orgId} failed:`, err);
     }

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { MONTHLY_CHARGE_LIMIT_REACHED, checkMonthlySpendLimit, recordMonthlyLimitRefusal } from "../lib/monthly-charge-limit.js";
 import crypto from "crypto";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { AuthorizeRequestSchema, UsageApplyRequestSchema } from "../schemas.js";
@@ -153,6 +154,37 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         required_cents: requiredCents,
         reason: funnelCap.reason,
         sales_funnel_cap: funnelCap.cap,
+      });
+      return;
+    }
+
+    // The customer's MONTHLY LIMIT caps SPEND, never a charge (owner 2026-10-21,
+    // lib/monthly-charge-limit): a campaign spend that would take this month's spend
+    // past it is refused here, whatever the balance or the credit line. No reload,
+    // no depletion episode: the customer gets the one limit email. The answer carries
+    // no `reason` (several callers parse it as a closed enum), exactly like the
+    // limit refusal before 2026-10-21.
+    let spendLimit;
+    try {
+      spendLimit = await checkMonthlySpendLimit(orgId, requiredCents);
+    } catch (err) {
+      console.error("[billing-service] monthly limit check failed:", err);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.monthly-limit-failed", level: "error", detail: String(err) }, req.headers);
+      res.status(502).json({ error: "Failed to check the monthly limit" });
+      return;
+    }
+    if (spendLimit.limited && !spendLimit.allowed) {
+      await recordMonthlyLimitRefusal({
+        orgId,
+        amountCents: Math.ceil(Number(requiredCents)),
+        limitCents: spendLimit.limitCents,
+        chargedCents: Math.floor(Number(spendLimit.spentCents)),
+      });
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: MONTHLY_CHARGE_LIMIT_REACHED, spent_cents: spendLimit.spentCents, limit_cents: spendLimit.limitCents, required_cents: requiredCents } }, req.headers);
+      res.json({
+        sufficient: false,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
       });
       return;
     }
@@ -331,20 +363,6 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
       }
       res.status(502).json({ error: "Reload via stripe-service failed" });
-      return;
-    }
-
-    if (reloadResult.limitReached) {
-      // The org's monthly charge limit refused the reload before any acquirer was
-      // asked (lib/monthly-charge-limit). Spend is refused like an empty balance.
-      // No card-refused email and no out-of-credit dunning: the customer gets the
-      // one limit email, with one button to raise it.
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "monthly_charge_limit_reached", charge_cents: chargeAmount } }, req.headers);
-      res.json({
-        sufficient: false,
-        balance_cents: snapshot.balanceCents,
-        required_cents: requiredCents,
-      });
       return;
     }
 

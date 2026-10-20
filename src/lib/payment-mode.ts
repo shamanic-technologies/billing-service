@@ -63,8 +63,6 @@ export type PaymentModeRefusalCode =
   | "outstanding_balance_charge_declined"
   /** The org owes less than the smallest amount a card can be charged. */
   | "outstanding_balance_below_minimum_charge"
-  /** Charging what is owed would pass the org's monthly charge limit. */
-  | "outstanding_balance_monthly_limit"
   /**
    * A CUSTOMER tried to move an org out of SUBSCRIPTION. Entering and leaving it
    * is staff's (or starting a subscription); the customer cancels the subscription
@@ -166,14 +164,6 @@ async function settleBeforePrepaid(
           owed,
           "This account has an outstanding balance and no card we can charge for it. " +
             "Pay what is owed (add a card or add credit), then switch to prepaid."
-        );
-      }
-      if (err.code === "monthly_charge_limit_reached") {
-        throw new PaymentModeSwitchRefused(
-          "outstanding_balance_monthly_limit",
-          owed,
-          "Charging the outstanding balance would go over your monthly limit, so the " +
-            "switch to prepaid did not happen. Raise your limit, then try again."
         );
       }
       if (err.code === "charge_declined" || err.code === "charge_backoff") {
