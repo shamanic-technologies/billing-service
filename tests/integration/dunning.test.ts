@@ -84,7 +84,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   }
 
   it("1: authorize fails depleted with campaign → opens episode + sends T0 once", async () => {
-    await insertTestAccount({ orgId }); // no topup config
+    await insertTestAccount({ paymentMode: "prepaid", orgId }); // no topup config
     setBalance("0.0000000000");
 
     const res = await request(app)
@@ -110,7 +110,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   });
 
   it("2: two depleted authorizes → still one episode, T0 sent once (idempotent)", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     setBalance("0.0000000000");
 
     await request(app).post("/v1/customer_balance/authorize").set(campaignHeaders()).send(authorizeBody);
@@ -143,7 +143,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     // gate is now the SAME predicate the affordability pre-flight refuses on
     // (lib/spend-block) — the gap between them was a state an org could not
     // climb out of. See tests/integration/wedged-org-dunning.test.ts.
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
     setBalance("5.0000000000");
 
     const res = await request(app)
@@ -238,7 +238,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   });
 
   it("9: recovery then new depletion re-arms a fresh episode", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ paymentMode: "prepaid", orgId });
 
     // depletion #1 → episode opens
     setBalance("0.0000000000");
@@ -265,7 +265,7 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
   });
 
   it("11: balance flutters positive via usage drop (no recharge) → NOT recovered, no 2nd T0", async () => {
-    await insertTestAccount({ orgId }); // no topup config
+    await insertTestAccount({ paymentMode: "prepaid", orgId }); // no topup config
     // credited 50, usage 60 → balance -10 depleted. Opens episode, baseline credited 50.
     setBalance("50.0000000000");
     setUsage("60.0000000000");

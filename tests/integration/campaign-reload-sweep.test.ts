@@ -181,7 +181,7 @@ describe("blocked-campaign reload sweep", () => {
     // No auto-topup config → strictly prepaid, floor "0". This is the shape of
     // the five other orgs blocked in prod, each already carrying an OPEN
     // depletion episode with its T0 sent.
-    await insertTestAccount({ orgId: orgB });
+    await insertTestAccount({ paymentMode: "prepaid", orgId: orgB });
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage(orgB, "0.0000000000"); // balance 0, estimate 92.28 → blocked at floor 0
     await upsertCampaignAuthorizeCost(campaignB, orgB, "92.2800000000");

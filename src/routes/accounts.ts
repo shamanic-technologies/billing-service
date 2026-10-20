@@ -8,7 +8,7 @@ import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from ".
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
 import { addCents, cmpCents, isDepleted, subCents, ZERO_CENTS } from "../lib/cents.js";
-import { reloadTierFor } from "../lib/topup-tier.js";
+import { autoTopupArmed, POSTPAID_RELOAD_STEP_MIN_CENTS, reloadTierFor } from "../lib/topup-tier.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
 import {
   asFreeCreditOffer,
@@ -245,8 +245,7 @@ function buildAccountResponse(
   // DERIVED postpaid tier (a function of cumulative paid topups) — the negative
   // threshold is the credit-line floor the dashboard renders. When disabled,
   // both fields are null (no top-up). See lib/topup-tier.
-  const enabled =
-    account.topupAmountCents != null && account.topupThresholdCents != null;
+  const enabled = autoTopupArmed(account);
   const paymentMode = asPaymentMode(account.paymentMode);
   // A subscription org never reloads (lib/subscription): no tier, whatever a stale
   // stored flag says.
@@ -351,8 +350,7 @@ function buildAccountResponse(
     card_exp_month: funds.cardExpMonth,
     card_exp_year: funds.cardExpYear,
     has_auto_topup:
-      account.topupAmountCents != null &&
-      account.topupThresholdCents != null &&
+      autoTopupArmed(account) &&
       funds.hasPaymentMethod &&
       funds.autoReloadSupported,
     created_at: account.createdAt.toISOString(),
@@ -651,7 +649,6 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
-    const { topup_amount_cents, topup_threshold_cents } = parsed.data;
 
     const [account] = await db
       .select()
@@ -676,8 +673,17 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
 
     // "We match your first $100" orgs reload at least $100, and never let the
     // threshold sit below $5 (lib/free-credit-offer). Legacy orgs: unchanged.
+    // A POSTPAID org's reload is the credit-line ladder whatever amount is stored
+    // (lib/topup-tier reloadTierFor), so the stored step is normalized to the
+    // ladder's first rung, the same $50 / $0 the postpaid arming writes, and the
+    // prepaid minimums do not apply. Applying the match_100 $100 / $5 prepaid
+    // minimums here refused the dashboard's own $50 on a postpaid org (prod
+    // 2026-10-21, LBVisible).
+    const postpaid = account.paymentMode === "postpaid";
+    const topup_amount_cents = postpaid ? POSTPAID_RELOAD_STEP_MIN_CENTS : parsed.data.topup_amount_cents;
+    const topup_threshold_cents = postpaid ? 0 : parsed.data.topup_threshold_cents;
     try {
-      assertAutoTopupMinimums(
+      if (!postpaid) assertAutoTopupMinimums(
         topupMinimumsFor(account),
         topup_amount_cents,
         topup_threshold_cents
@@ -834,6 +840,20 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
       res.status(409).json({
         error: "Automatic top-up is required for this prepaid organization; change its amounts instead.",
         code: "auto_topup_required",
+      });
+      return;
+    }
+
+    // A POSTPAID org never loses its credit line to a toggle (owner 2026-10-21:
+    // « LE CONCEPT DU POST PAID C'EST QUE LE USER PART DE 0, VA EN NEGATIF, ET ON LE
+    // CHARGE TOUS LES $50, $200, ETC »). Refused rather than silently ignored, so a
+    // caller never believes it stopped automatic charges when it did not. Its brakes
+    // are the monthly charge limit, removing the card, or switching to prepaid.
+    if (account.paymentMode === "postpaid") {
+      res.status(409).json({
+        error:
+          "This organization pays after use: it is charged as it spends, so automatic charges cannot be switched off. Set a monthly charge limit, remove the card, or switch to prepaid instead.",
+        code: "postpaid_credit_line_required",
       });
       return;
     }

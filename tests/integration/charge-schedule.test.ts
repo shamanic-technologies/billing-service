@@ -5,6 +5,9 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import request from "supertest";
+import { eq } from "drizzle-orm";
+import { db } from "../../src/db/index.js";
+import { billingAccounts } from "../../src/db/schema.js";
 import { createTestApp } from "../helpers/test-app.js";
 import {
   cleanTestData,
@@ -117,18 +120,20 @@ describe("GET /internal/accounts/by-org/:orgId/charge-schedule", () => {
     expect(res.body.horizonDays).toBe(90);
   });
 
-  it("no auto-topup, POSTPAID with a card: the month-end sweep settles what it owes, once", async () => {
+  it("POSTPAID with the auto top-up toggle off is scheduled exactly like one with it on (no off switch)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
     await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
     setUsage("30000.0000000000"); // owes $50
+    const off = await request(app).get(schedulePath(orgId)).set(apiKeyHeaders);
+    expect(off.status).toBe(200);
+    expect(off.body.state).toBe("will_charge");
+    expect(off.body.events.length).toBeGreaterThan(0);
 
-    const res = await request(app).get(schedulePath(orgId)).set(apiKeyHeaders);
-
-    expect(res.status).toBe(200);
-    expect(res.body.state).toBe("will_charge");
-    expect(res.body.events).toHaveLength(1);
-    expect(res.body.events[0].trigger).toBe("month_end");
-    expect(res.body.events[0].expectedAmountCents).toBe("5000");
-    expect(res.body.expectedTotalCents).toBe("5000");
+    await db.update(billingAccounts).set({ topupAmountCents: 5000, topupThresholdCents: 0 }).where(eq(billingAccounts.orgId, orgId));
+    const on = await request(app).get(schedulePath(orgId)).set(apiKeyHeaders);
+    expect(on.body.events).toEqual(off.body.events);
+    expect(on.body.expectedTotalCents).toBe(off.body.expectedTotalCents);
   });
 
   it("an org that owes: month-end settles what is owed then, and the schedule agrees with the outlook", async () => {

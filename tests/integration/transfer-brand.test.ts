@@ -3,6 +3,7 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { db } from "../../src/db/index.js";
 import {
+  billingAccounts,
   brandDailyBudgetChanges,
   brandDailyBudgets,
   brandTransfers,
@@ -295,6 +296,8 @@ describe("POST /internal/transfer-brand", () => {
     });
     // Source is funded, target holds nothing: the verdict must be the target's.
     runsUsage[sourceOrgId] = { projected: "0", actual: "0" };
+    // Target PREPAID: a postpaid org with a card spends on its credit line.
+    await db.update(billingAccounts).set({ paymentMode: "prepaid" }).where(eq(billingAccounts.orgId, targetOrgId));
 
     const res = await request(app)
       .get(`/internal/campaigns/${campaignId}/affordability`)

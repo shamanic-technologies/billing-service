@@ -119,7 +119,7 @@ describe("GET /internal/accounts/by-org/:orgId/payment-outlook", () => {
   it("no auto-topup carries NO date — half the spending orgs are in this state", async () => {
     // The org is burning real money and holds a card; what it does not hold is
     // a configuration that would ever charge it. It will run out and stop.
-    await insertTestAccount({ orgId, topupAmountCents: null, topupThresholdCents: null });
+    await insertTestAccount({ paymentMode: "prepaid", orgId, topupAmountCents: null, topupThresholdCents: null });
     setUsage("0.0000000000");
 
     const res = await request(app).get(outlookPath(orgId)).set(apiKeyHeaders);
