@@ -574,20 +574,6 @@ export async function runCampaignReloadSweep(
         return synthetic;
       });
 
-      if (outcome.limitReached) {
-        // The org's monthly charge limit refused the reload before any acquirer
-        // was asked (lib/monthly-charge-limit). Nothing was learned about the card:
-        // no rung consumed, no card-refused mail, and no out-of-credit episode
-        // (the limit email is the one message). Spend stays refused; raising the
-        // limit or the next month lets the next tick charge.
-        console.log(
-          `[billing-service] campaign reload sweep: org ${orgId} blocked by its monthly ` +
-            `charge limit (${chargeAmount} cents not charged)`
-        );
-        wedgedSnapshot = null;
-        continue;
-      }
-
       const succeeded = outcome.status === "succeeded";
       const permanent =
         !succeeded && !outcome.backoffSkipped && isPermanentDecline(outcome.failure_code);

@@ -1429,7 +1429,6 @@ export const PaymentModeRefusalSchema = z
       "outstanding_balance_no_card",
       "outstanding_balance_charge_declined",
       "outstanding_balance_below_minimum_charge",
-      "outstanding_balance_monthly_limit",
       "subscription_mode_staff_only",
       "postpaid_card_not_allowed",
     ]),
@@ -4111,7 +4110,6 @@ export const SubscriptionRefusalSchema = z
       "plan_exists_for_offer",
       "offer_not_found",
       "charge_unavailable",
-      "monthly_charge_limit_reached",
       "subscription_paused",
       "subscription_not_paused",
       "subscription_ended",
@@ -4965,7 +4963,7 @@ registry.registerPath({
 
 export const SetMonthlyChargeLimitRequestSchema = z
   .object({
-    /** The most the org's card may be charged in one UTC calendar month, whole cents, >= 0. */
+    /** The most the org's campaigns may spend in one UTC calendar month, whole cents, >= 0. */
     monthly_charge_limit_cents: z.number().int().min(0),
   })
   .openapi("SetMonthlyChargeLimitRequest");
@@ -4978,28 +4976,28 @@ export const MonthlyChargeLimitResponseSchema = z
     period: z.literal("calendar_month_utc"),
     period_start: z.string(),
     period_end: z.string(),
-    /** Card charges this month, every acquirer, checkout top-ups included. null when no limit is set. */
+    /** Card charges this month, every acquirer, checkout top-ups included (information only). null when no limit is set. */
     charged_this_period_cents: z.number().int().nullable(),
-    /** limit − charged, never negative. null when no limit is set. */
+    /** Campaign spend this month, committed net, decimal cents: what the limit caps. null when no limit is set. */
+    spent_this_period_cents: z.string().nullable(),
+    /** limit − spent, whole cents, never negative. null when no limit is set. */
     remaining_cents: z.number().int().nullable(),
-    /** True once the limit refused an automatic charge this month: the reason spending stopped. */
+    /** True once the limit refused a campaign spend this month: the reason spending stopped. */
     limit_reached: z.boolean(),
     limit_reached_at: z.string().nullable(),
-    /** The charge the limit refused (the last one this month). */
+    /** The spend estimate the limit refused (the last one this month), whole cents. */
     refused_amount_cents: z.number().int().nullable(),
     updated_at: z.string().nullable(),
   })
   .openapi("MonthlyChargeLimitResponse");
 
 const monthlyLimitDescription =
-  "ONE limit per org, everything included (campaigns, brand setup, onboarding, AI chat, " +
-  "A/B tests, fees), per UTC calendar month. Every AUTOMATIC charge (auto top-up / reloads, " +
-  "month-end settle, subscription renewals and auto-upgrade steps, follow-up budget charges, " +
-  "on-demand charges) that would push the month's card charges above it is NOT made: spending " +
-  "that needs it stops exactly like an empty balance, and the customer gets one email with one " +
-  "button to raise the limit. Card charges = every succeeded or pending card payment of the month, " +
-  "checkout top-ups included (a checkout itself is never refused). Resets on the 1st (UTC). " +
-  "No limit set = no change at all.";
+  "ONE limit per org on what its CAMPAIGNS SPEND in a UTC calendar month (committed, net of any " +
+  "discount; work with no campaign is ours and never counts). A campaign spend that would take the " +
+  "month's spend past it is refused at authorize: campaigns stop, and the customer gets one email " +
+  "with one button to raise the limit. The limit NEVER refuses a charge: money already spent is " +
+  "always collected (the $50 / $200 / $500 steps, the month-end settle, the settle on card removal " +
+  "or mode change). Resets on the 1st (UTC). No limit set = no change at all.";
 
 registry.registerPath({
   method: "get",
@@ -5009,7 +5007,7 @@ registry.registerPath({
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "The limit and this month", content: { "application/json": { schema: MonthlyChargeLimitResponseSchema } } },
-    502: { description: "This month's card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "This month's spend or card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
@@ -5020,7 +5018,7 @@ registry.registerPath({
   description:
     monthlyLimitDescription +
     " Settable before the first payment. Changing the limit re-opens this month: spending resumes " +
-    "on the next charge that fits, and a later refusal at the new figure is emailed again.",
+    "on the next campaign spend that fits, and a later refusal at the new figure is emailed again.",
   request: {
     headers: protectedHeaders,
     body: { content: { "application/json": { schema: SetMonthlyChargeLimitRequestSchema } } },
@@ -5028,7 +5026,7 @@ registry.registerPath({
   responses: {
     200: { description: "The limit after the change", content: { "application/json": { schema: MonthlyChargeLimitResponseSchema } } },
     400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
-    502: { description: "This month's card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "This month's spend or card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
@@ -5053,7 +5051,7 @@ registry.registerPath({
   responses: {
     200: { description: "The limit and this month", content: { "application/json": { schema: MonthlyChargeLimitResponseSchema } } },
     400: { description: "Invalid orgId", content: { "application/json": { schema: ErrorResponseSchema } } },
-    502: { description: "This month's card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "This month's spend or card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
@@ -5069,7 +5067,7 @@ registry.registerPath({
   responses: {
     200: { description: "The limit after the change", content: { "application/json": { schema: MonthlyChargeLimitResponseSchema } } },
     400: { description: "Invalid request", content: { "application/json": { schema: ErrorResponseSchema } } },
-    502: { description: "This month's card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "This month's spend or card charges could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

@@ -390,17 +390,6 @@ export async function runMonthEndSweep(
         { ignoreBackoff: true }
       );
 
-      if (outcome.limitReached) {
-        // The org's monthly charge limit refused the settle (lib/monthly-charge-
-        // limit). What is owed stays owed and rolls into next month's sweep.
-        result.skipped += 1;
-        console.log(
-          `[billing-service] month-end sweep: org ${account.orgId} owes ${chargeAmount} cents, ` +
-            `refused by its monthly charge limit (${bucket})`
-        );
-        continue;
-      }
-
       if (isPermanentDecline(outcome.failure_code)) {
         result.cardUnusable += 1;
         result.failed += 1;
