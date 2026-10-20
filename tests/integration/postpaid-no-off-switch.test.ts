@@ -81,9 +81,10 @@ describe("postpaid: no off switch on the credit line", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
 
     const acct = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
-    expect(acct.body.has_auto_topup).toBe(true);
-    expect(acct.body.topup_threshold_cents).toBe(-5000);
-    expect(acct.body.topup_amount_cents).toBe(5000);
+    expect(acct.body.credit_line_cents).toBe(5000);
+    expect(acct.body.has_auto_topup).toBe(false); // postpaid has no auto top-up
+    expect(acct.body.topup_threshold_cents).toBeNull();
+    expect(acct.body.topup_amount_cents).toBeNull();
 
     const internal = await request(app)
       .get(`/internal/accounts/by-org/${orgId}/balance`)
