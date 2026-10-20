@@ -242,7 +242,7 @@ export async function setPaymentMode(
       orgId,
       paymentMode: current,
       settledCents: "0",
-      autoTopupEnabled: target === "postpaid" ? armPostpaidLine : account.topupAmountCents != null,
+      autoTopupEnabled: target === "postpaid" ? false : account.topupAmountCents != null,
     };
   }
 
@@ -355,7 +355,7 @@ export async function setPaymentMode(
     orgId,
     paymentMode: asPaymentMode(updated.paymentMode),
     settledCents,
-    autoTopupEnabled: target === "postpaid" ? armPostpaidLine : updated.topupAmountCents != null,
+    autoTopupEnabled: target === "postpaid" ? false : updated.topupAmountCents != null,
   };
 }
 

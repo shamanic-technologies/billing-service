@@ -248,8 +248,12 @@ describe("Accounts endpoints", () => {
         .set(getAuthHeaders(orgId));
 
       expect(res.status).toBe(200);
-      expect(res.body.topup_amount_cents).toBe(50000);
-      expect(res.body.topup_threshold_cents).toBe(-50000);
+      // POSTPAID: the line is credit_line_*, never topup_* (owner 2026-10-21).
+      expect(res.body.credit_line_cents).toBe(50000);
+      expect(res.body.credit_line_step_cents).toBe(50000);
+      expect(res.body.topup_amount_cents).toBeNull();
+      expect(res.body.topup_threshold_cents).toBeNull();
+      expect(res.body.has_auto_topup).toBe(false);
     });
 
     it("disabled account (no topup config) → topup amount/threshold null", async () => {

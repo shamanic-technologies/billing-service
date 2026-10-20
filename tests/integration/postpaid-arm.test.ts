@@ -74,7 +74,7 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     expect(res.status).toBe(200);
     expect(res.body.payment_mode).toBe("postpaid");
     expect(res.body.settled_cents).toBe("0");
-    expect(res.body.auto_topup_enabled).toBe(true);
+    expect(res.body.auto_topup_enabled).toBe(false); // postpaid has no auto top-up; its line is credit_line_*
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
 
     const [acct] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));

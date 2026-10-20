@@ -251,8 +251,10 @@ function buildAccountResponse(
   const paymentMode = asPaymentMode(account.paymentMode);
   // A subscription org never reloads (lib/subscription): no tier, whatever a stale
   // stored flag says.
+  // POSTPAID has no auto top-up (owner 2026-10-21): its line is served on
+  // credit_line_* below, never as topup_* / has_auto_topup.
   const tier =
-    enabled && paymentMode !== "subscription"
+    enabled && paymentMode === "prepaid"
       ? reloadTierFor(funds.paidTopupsCents, paymentMode, configuredReloadFor(account))
       : null;
   const postpaidLine =
@@ -369,6 +371,7 @@ function buildAccountResponse(
           : "0.0000000000"
         : null,
     has_auto_topup:
+      paymentMode === "prepaid" &&
       autoTopupArmed(account) &&
       funds.hasPaymentMethod &&
       funds.autoReloadSupported,

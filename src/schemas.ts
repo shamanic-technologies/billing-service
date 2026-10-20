@@ -121,6 +121,7 @@ export const BillingAccountSchema = z
     free_credit_remaining_to_pay_cents: CentsStringSchema.openapi({
       description: "What the org still has to pay to unlock the pending credit; 0 when nothing is pending.",
     }),
+    /** PREPAID auto top-up only; null on postpaid (its line is credit_line_*). */
     topup_amount_cents: z.number().int().nullable(),
     topup_threshold_cents: z.number().int().nullable(),
     credit_line_cents: z.number().int().nullable().openapi({
