@@ -12,6 +12,7 @@ import {
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
+  PLATFORM_USER_ID,
   SUBSCRIPTION_TRIAL_CODE,
   type FreeCreditOfferKind,
 } from "../db/schema.js";
@@ -363,3 +364,57 @@ export function composeCreditedFromParts(
     trialRepaidCents: trialRepaid.toFixed(10),
   };
 }
+
+/**
+ * A match_100 org that CHOOSES POSTPAID (card saved, charged after spend) gets no
+ * $30 advance: the $100 match is its only signup credit (owner 2026-10-20: « on ne
+ * lui donne pas de $30, il a déjà la promotion sur le $100 »). Prod 2026-10-20,
+ * LBVisible: postpaid, paid $0, served balance $30, and our assistant told the client
+ * "Your $30 balance is ready".
+ *
+ * The (org, org_creation_bonus) row is set to 0 rather than deleted, and written at 0
+ * when absent: that one-shot unique row is what keeps every later grant path (the
+ * signup "if missing", the trial seed, the creation-bonus call) from handing the $30
+ * back. An advance already repaid ($30+ paid) moves nothing (credited = paid either
+ * way). A non-match org (legacy gift, agent API) is untouched. Returns true when an
+ * advance was actually withdrawn.
+ */
+export async function withdrawOnboardingAdvanceForPostpaid(orgId: string): Promise<boolean> {
+  if ((await getOrgFreeCreditOffer(orgId)) !== MATCH_FREE_CREDIT_OFFER) return false;
+  const [code] = await db
+    .select({ id: localPromoCodes.id })
+    .from(localPromoCodes)
+    .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
+    .limit(1);
+  if (!code) throw new Error(`Promo code seed missing: ${ORG_CREATION_BONUS_CODE}`);
+
+  const [before] = await db
+    .select({ amountCents: localPromos.amountCents })
+    .from(localPromos)
+    .where(and(eq(localPromos.orgId, orgId), eq(localPromos.promoCodeId, code.id)))
+    .limit(1);
+  await db
+    .insert(localPromos)
+    .values({
+      orgId,
+      userId: PLATFORM_USER_ID,
+      amountCents: "0",
+      promoCodeId: code.id,
+      description: POSTPAID_NO_ADVANCE_DESCRIPTION,
+    })
+    .onConflictDoUpdate({
+      target: [localPromos.orgId, localPromos.promoCodeId],
+      targetWhere: sql`idempotency_key IS NULL`,
+      set: { amountCents: "0", description: POSTPAID_NO_ADVANCE_DESCRIPTION },
+    });
+  const withdrawn = before != null && new Decimal(before.amountCents).gt(0);
+  if (withdrawn) {
+    console.log(
+      `[billing-service] org ${orgId} chose postpaid: $${new Decimal(before.amountCents).div(100).toFixed(2)} onboarding advance withdrawn (the $100 match is its signup credit)`
+    );
+  }
+  return withdrawn;
+}
+
+export const POSTPAID_NO_ADVANCE_DESCRIPTION =
+  "Onboarding credit advance: none on postpaid (the $100 match applies)";

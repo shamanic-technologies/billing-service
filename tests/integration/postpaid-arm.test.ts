@@ -8,12 +8,18 @@
 
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
-import { billingAccounts, localPromos, paymentConsents } from "../../src/db/schema.js";
+import {
+  billingAccounts,
+  localPromoCodes,
+  localPromos,
+  ORG_CREATION_BONUS_CODE,
+  paymentConsents,
+} from "../../src/db/schema.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { reloadTierFor } from "../../src/lib/topup-tier.js";
 
@@ -76,7 +82,7 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     expect(acct.topupAmountCents).toBe(5000);
 
     // Spend runs on credit down to the $50 line: -$45 with a $1 run is still sufficient.
-    usage = "7500.0000000000"; // $30 advance - $75 spend = -$45
+    usage = "4500.0000000000"; // no $30 advance on postpaid: $0 - $45 spend = -$45
     const ok = await request(app)
       .post("/v1/customer_balance/authorize")
       .set({ ...getAuthHeaders(orgId), "x-campaign-id": campaignId })
@@ -84,6 +90,62 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     expect(ok.status).toBe(200);
     expect(ok.body.sufficient).toBe(true);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+  });
+
+  const advanceRows = async () =>
+    db
+      .select({ amountCents: localPromos.amountCents })
+      .from(localPromos)
+      .innerJoin(localPromoCodes, eq(localPromoCodes.id, localPromos.promoCodeId))
+      .where(and(eq(localPromos.orgId, orgId), eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE)));
+
+  it("a postpaid signup ends at balance $0 with no $30 advance, and nothing hands it back", async () => {
+    // Org created by its first read: the match_100 $30 advance lands at creation.
+    const before = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(before.status).toBe(200);
+    expect(before.body.balance_cents).toBe("3000.0000000000");
+
+    const res = await choosePostpaid();
+    expect(res.status).toBe(200);
+
+    const after = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(after.body.balance_cents).toBe("0.0000000000");
+    expect(after.body.credited_cents).toBe("0.0000000000");
+    expect(after.body.credited_advance_cents).toBe("0.0000000000");
+    expect((await advanceRows()).map((r) => Number(r.amountCents))).toEqual([0]);
+
+    // Every later grant path stays a no-op: signup, the creation-bonus call, the seed.
+    await request(app)
+      .post(`/internal/accounts/by-org/${orgId}/signup`)
+      .set({ "X-API-Key": "test-api-key" });
+    await request(app)
+      .post(`/internal/accounts/by-org/${orgId}/org-creation-bonus`)
+      .set({ "X-API-Key": "test-api-key" });
+    expect((await advanceRows()).map((r) => Number(r.amountCents))).toEqual([0]);
+    const final = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(final.body.balance_cents).toBe("0.0000000000");
+
+    // The customer's own ledger lists no "$0 advance" line.
+    const grants = await request(app).get("/v1/credits/grants").set(getAuthHeaders(orgId));
+    expect(grants.status).toBe(200);
+    expect(JSON.stringify(grants.body)).not.toContain("org_creation_bonus");
+
+    // Once it has paid $100, the $100 match is its signup credit.
+    ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("10000.0000000000");
+    const paid = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(paid.body.credited_cents).toBe("20000.0000000000");
+  });
+
+  it("the prepaid arm keeps its $30 advance", async () => {
+    await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    const res = await request(app)
+      .put("/v1/accounts/payment_mode")
+      .set(getAuthHeaders(orgId))
+      .send({ payment_mode: "prepaid" });
+    expect(res.status).toBe(200);
+    expect((await advanceRows()).map((r) => Number(r.amountCents))).toEqual([3000]);
+    const acct = await request(app).get("/v1/accounts").set(getAuthHeaders(orgId));
+    expect(acct.body.balance_cents).toBe("3000.0000000000");
   });
 
   it("the consent ticked on the postpaid wall is stored before the switch; malformed is 400", async () => {

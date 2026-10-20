@@ -1,4 +1,5 @@
 import { and, desc, eq, sql as rawSql } from "drizzle-orm";
+import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import { isMatchOfferOrg } from "./free-credit-offer.js";
 import { assertFreeCreditAllowed } from "./agent-api-org.js";
@@ -622,7 +623,9 @@ export async function listGrantsForOrg(orgId: string): Promise<GrantListItem[]> 
     .leftJoin(offPlatformPayments, eq(offPlatformPayments.localPromoId, localPromos.id))
     .where(eq(localPromos.orgId, orgId))
     .orderBy(desc(localPromos.createdAt));
-  return rows.map(toGrantItem);
+  // A $0 row (the advance a postpaid org never gets) is bookkeeping, not a grant the
+  // customer received: kept on the staff ledger, never listed to the org.
+  return rows.filter((r) => new Decimal(r.amountCents).gt(0)).map(toGrantItem);
 }
 
 /**
