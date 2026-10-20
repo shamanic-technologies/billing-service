@@ -624,6 +624,13 @@
       "when": 1795773600000,
       "tag": "0088_drop_per_campaign_ceilings",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1795860000000,
+      "tag": "0089_postpaid_no_auto_topup",
+      "breakpoints": true
     }
   ]
 }

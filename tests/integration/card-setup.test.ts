@@ -249,7 +249,7 @@ describe("card setup + saved-card confirmation", () => {
   const armBody = { topup_amount_cents: 5000, topup_threshold_cents: 1000 };
 
   it("refuses to arm on the second acquirer when the acquirer holds no card", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     ssMocks.getSavedPaymentMethod.mockResolvedValue(onSecondAcquirer());
     ssMocks.authorizeRecurringCharges.mockResolvedValue({
       authorized: false,
@@ -267,7 +267,7 @@ describe("card setup + saved-card confirmation", () => {
   });
 
   it("refuses to arm on the second acquirer when the answer is UNKNOWN", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     ssMocks.getSavedPaymentMethod.mockResolvedValue(onSecondAcquirer());
     ssMocks.authorizeRecurringCharges.mockRejectedValue(new Error("acquirer unreachable"));
 
@@ -281,7 +281,7 @@ describe("card setup + saved-card confirmation", () => {
   });
 
   it("arms on the second acquirer only once the acquirer authorises it", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     ssMocks.getSavedPaymentMethod.mockResolvedValue({
       ...onSecondAcquirer(),
       saved: true,
@@ -302,7 +302,7 @@ describe("card setup + saved-card confirmation", () => {
   // --- 4. the first acquirer is untouched ---
 
   it("arms a first-acquirer org on the legacy gate alone, never the new one", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     // Deliberately hostile: the acquirer reports NO saved method, and the
     // recurring-charge authorisation would refuse. Neither may be consulted for
     // an org on the acquirer the legacy gate was written against — a link-only
@@ -329,7 +329,7 @@ describe("card setup + saved-card confirmation", () => {
   });
 
   it("keeps the first acquirer's own refusals exactly as they are", async () => {
-    await insertTestAccount({ orgId });
+    await insertTestAccount({ orgId, paymentMode: "prepaid" });
     ssMocks.hasAttachedCardPm.mockResolvedValue(false);
 
     const noCard = await request(app)

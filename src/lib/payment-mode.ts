@@ -201,10 +201,10 @@ export async function setPaymentMode(
   // POSTPAID is the Google-Ads credit line (owner 2026-10-13): the card on file is
   // charged off-session as spend crosses $50 → $200 → $500, and the rest at month
   // end. A card that cannot carry that line (prepaid, or issued in India) is refused
-  // here, and choosing postpaid WITH a chargeable card arms the ladder (the stored
-  // columns are only the enabled flag; lib/topup-tier derives the line). Asked
-  // again on an org that is already postpaid (the postpaid signup arm: card saved,
-  // nothing charged), it arms the line it does not have yet.
+  // here. A postpaid org has NO auto top-up and nothing is stored for it (owner
+  // 2026-10-21): its line exists whenever a chargeable card does (lib/topup-tier
+  // autoTopupArmed). Asked again on an org already postpaid (the postpaid signup
+  // arm: card saved, nothing charged), it answers whether that line is armed.
   let armPostpaidLine = false;
   if (target === "postpaid" && current !== "subscription") {
     const facts = await getCardFacts(orgId);
@@ -218,20 +218,23 @@ export async function setPaymentMode(
         facts.postpaidRefusedReason
       );
     }
-    armPostpaidLine = facts.saved && account.topupAmountCents == null;
+    armPostpaidLine = facts.saved;
     // Postpaid gets no $30 onboarding advance: its signup credit is the $100 match
     // (owner 2026-10-20). Before any other write, so a client never reads $30 here.
     await withdrawOnboardingAdvanceForPostpaid(orgId);
   }
 
   if (current === target) {
-    if (armPostpaidLine) {
-      await db
-        .update(billingAccounts)
-        .set({ topupAmountCents: tierFor("0").amountCents, topupThresholdCents: 0, updatedAt: new Date() })
-        .where(eq(billingAccounts.orgId, orgId));
-      console.log(`[billing-service] payment mode: org ${orgId} postpaid credit line armed`);
-      if (actor === "customer") {
+    if (target === "postpaid") {
+      // Nothing is stored for a postpaid org: a prepaid configuration left on it
+      // goes, so no reader can take it for an auto top-up.
+      if (account.topupAmountCents != null || account.topupThresholdCents != null) {
+        await db
+          .update(billingAccounts)
+          .set({ topupAmountCents: null, topupThresholdCents: null, updatedAt: new Date() })
+          .where(eq(billingAccounts.orgId, orgId));
+      }
+      if (armPostpaidLine && actor === "customer") {
         notifyOwnerBillingEvent({ orgId, emoji: "💳", text: postpaidLineArmedAlertText() });
       }
     }
@@ -239,7 +242,7 @@ export async function setPaymentMode(
       orgId,
       paymentMode: current,
       settledCents: "0",
-      autoTopupEnabled: account.topupAmountCents != null || armPostpaidLine,
+      autoTopupEnabled: target === "postpaid" ? armPostpaidLine : account.topupAmountCents != null,
     };
   }
 
@@ -318,9 +321,10 @@ export async function setPaymentMode(
     }
   }
 
-  if (armPostpaidLine) {
-    patch.topupAmountCents = tierFor("0").amountCents;
-    patch.topupThresholdCents = 0;
+  if (target === "postpaid") {
+    // Postpaid has no auto top-up: nothing is stored (lib/topup-tier autoTopupArmed).
+    patch.topupAmountCents = null;
+    patch.topupThresholdCents = null;
   }
 
   const [updated] = await db
@@ -351,7 +355,7 @@ export async function setPaymentMode(
     orgId,
     paymentMode: asPaymentMode(updated.paymentMode),
     settledCents,
-    autoTopupEnabled: updated.topupAmountCents != null,
+    autoTopupEnabled: target === "postpaid" ? armPostpaidLine : updated.topupAmountCents != null,
   };
 }
 

@@ -450,7 +450,7 @@ describe("Accounts endpoints", () => {
 
   describe("PATCH /v1/accounts/auto_topup", () => {
     it("enables auto-topup; response returns the DERIVED tier, not the posted daily amount", async () => {
-      await insertTestAccount({ orgId });
+      await insertTestAccount({ orgId, paymentMode: "prepaid" });
       ssMocks.getCustomerByOrg.mockResolvedValue(customerWithDefaultPM());
       // Posted daily amount/threshold are now only the enabled flag. Cumulative
       // paid = 0 → start tier {amount 5000, threshold -5000} (negative floor).
@@ -463,12 +463,12 @@ describe("Accounts endpoints", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.topup_amount_cents).toBe(5000);
-      expect(res.body.topup_threshold_cents).toBe(-5000);
+      expect(res.body.topup_threshold_cents).toBe(0); // prepaid: the ladder amount at a $0 floor
       expect(res.body.has_auto_topup).toBe(true);
     });
 
     it("rejects when SS reports no payment method", async () => {
-      await insertTestAccount({ orgId });
+      await insertTestAccount({ orgId, paymentMode: "prepaid" });
       ssMocks.hasAttachedCardPm.mockResolvedValue(false);
 
       const res = await request(app)
@@ -481,7 +481,7 @@ describe("Accounts endpoints", () => {
     });
 
     it("rejects enabling auto-topup for an India-issued card (off_session mandate unsupported)", async () => {
-      await insertTestAccount({ orgId });
+      await insertTestAccount({ orgId, paymentMode: "prepaid" });
       ssMocks.hasAttachedCardPm.mockResolvedValue(true);
       ssMocks.getOrgCardCountry.mockResolvedValue("IN");
 

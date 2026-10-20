@@ -1,4 +1,5 @@
 import { recordCheckoutOpened } from "../lib/payment-alerts.js";
+import { hasPostpaidCreditLine } from "../lib/pay-balance.js";
 import { recordPaymentConsent } from "../lib/payment-consents.js";
 import { Router } from "express";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
@@ -67,7 +68,20 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
 
     traceEvent(runId, { service: "billing-service", event: "checkout.start", data: { mode: isSetup ? "setup" : "payment", ui_mode: isEmbedded ? "embedded" : "hosted", topup_amount_cents } }, req.headers);
 
-    await findOrCreateAccount(orgId, userId);
+    const account = await findOrCreateAccount(orgId, userId);
+    // POSTPAID has no "Add credit" (owner 2026-10-21): it is charged as it spends,
+    // and its one money action is paying the whole amount owed
+    // (POST /v1/accounts/pay_balance). Only where the credit line is REAL (a
+    // chargeable card): postpaid is also the default of every org that never chose,
+    // and one with no card can only pay by adding credit. A card capture is allowed.
+    if (!isSetup && account.paymentMode === "postpaid" && (await hasPostpaidCreditLine(orgId))) {
+      res.status(409).json({
+        error:
+          "This account pays after use: it is charged as it spends, so credit cannot be added. Pay what is owed instead.",
+        code: "postpaid_no_add_credit",
+      });
+      return;
+    }
     // Consent boxes ticked on the page: on file BEFORE anything is charged.
     if (parsed.data.consent) {
       await recordPaymentConsent({ orgId, req, context: "topup_checkout", consent: parsed.data.consent });

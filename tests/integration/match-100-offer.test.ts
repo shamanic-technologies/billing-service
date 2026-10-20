@@ -322,7 +322,7 @@ describe("We match your first $100", () => {
   });
 
   it("an org created before this ship is unchanged: no minimums, no bonus on touch, ladder reload", async () => {
-    await insertTestAccount({ orgId: legacyOrgId, freeCreditEntitlementCents: 3000, freeCreditPaidTriggerCents: 3000 });
+    await insertTestAccount({ orgId: legacyOrgId, paymentMode: "prepaid", freeCreditEntitlementCents: 3000, freeCreditPaidTriggerCents: 3000 });
     await insertTestPromoGrant({ orgId: legacyOrgId, userId: person, amountCents: 3000, promoCode: WELCOME_PROMO_CODE });
     const res = await account(legacyOrgId);
     expect(res.body.free_credit_offer).toBe("legacy");
@@ -343,6 +343,6 @@ describe("We match your first $100", () => {
       .send({ topup_amount_cents: 1234, topup_threshold_cents: 0 });
     expect(patch.status).toBe(200);
     expect(patch.body.topup_amount_cents).toBe(5000);
-    expect(patch.body.topup_threshold_cents).toBe(-5000);
+    expect(patch.body.topup_threshold_cents).toBe(0); // prepaid: the ladder amount at a $0 floor
   });
 });
