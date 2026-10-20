@@ -262,7 +262,12 @@ async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcom
           cardChangeSettleIdempotencyKey(orgId, dayBucket(now), chargeAmount),
           { reason: "card_change_settlement" }
         )
-      )
+      ),
+      // Touching the card (change or removal) ALWAYS presents the whole amount owed
+      // (owner 2026-10-21: « si tentative de retrait ou de modif de la carte ça lance
+      // aussi le prélèvement du total »), even right after a decline elsewhere. A
+      // double-click cannot charge twice: both carry the same (org, day, amount) key.
+      { ignoreBackoff: true }
     );
   } catch (err) {
     // A declined off_session charge arrives as a THROW (stripe-service answers
