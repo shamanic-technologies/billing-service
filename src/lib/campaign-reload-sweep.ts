@@ -94,6 +94,7 @@ import {
   clearCardUnusable,
 } from "./card-usability.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
+import { pgDriverError } from "./pg-error.js";
 
 const RELOAD_TIMEOUT_MS = 30_000;
 
@@ -570,7 +571,7 @@ export async function runCampaignReloadSweep(
           `[billing-service] campaign reload sweep: reload threw for org ${orgId}:`,
           err
         );
-        const synthetic: ReloadOutcome = { status: "failed", failure_reason: String(err) };
+        const synthetic: ReloadOutcome = { status: "failed", failure_reason: String(pgDriverError(err)) };
         return synthetic;
       });
 

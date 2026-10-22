@@ -10,6 +10,7 @@ import {
   settlementWireFields,
 } from "../lib/card-change-settlement.js";
 import { ensureOrgStripeCustomer } from "../lib/account.js";
+import { errorReason } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -75,7 +76,7 @@ router.post("/v1/portal-sessions", requireOrgHeaders, async (req, res) => {
     );
     res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorReason(err);
     console.error("[billing-service] card setup failed:", message);
     res.status(502).json({ error: "Failed to start card setup" });
   }

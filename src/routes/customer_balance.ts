@@ -21,6 +21,7 @@ import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
+import { pgDriverError, errorReason } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -114,7 +115,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       snapshot = await computeBalance(orgId);
     } catch (err) {
       console.error("[billing-service] Failed to compute balance:", err);
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(err) }, req.headers);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(pgDriverError(err)) }, req.headers);
       res.status(502).json({ error: "Failed to compute balance" });
       return;
     }
@@ -142,7 +143,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       funnelCap = await checkFunnelCapsForSpend({ orgId, campaignId: wf.campaignId, requiredCents, runId, items });
     } catch (err) {
       console.error("[billing-service] sales funnel max budget check failed:", err);
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.funnel-cap-failed", level: "error", detail: String(err) }, req.headers);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.funnel-cap-failed", level: "error", detail: String(pgDriverError(err)) }, req.headers);
       res.status(502).json({ error: "Failed to check the sales funnel max budget" });
       return;
     }
@@ -169,7 +170,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       spendLimit = await checkMonthlySpendLimit(orgId, requiredCents);
     } catch (err) {
       console.error("[billing-service] monthly limit check failed:", err);
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.monthly-limit-failed", level: "error", detail: String(err) }, req.headers);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.monthly-limit-failed", level: "error", detail: String(pgDriverError(err)) }, req.headers);
       res.status(502).json({ error: "Failed to check the monthly limit" });
       return;
     }
@@ -345,7 +346,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       );
     } catch (err) {
       console.error("[billing-service] off-session reload failed:", err);
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(err) }, req.headers);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(pgDriverError(err)) }, req.headers);
       // Tell the customer on the FIRST failure of a streak only. A declined
       // off_session charge arrives here as a THROW (stripe-service answers 402),
       // so there is no outcome object to read `backoffSkipped` from — the streak
@@ -452,7 +453,7 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     try {
       spentTotalCents = parseNonNegativeCents(parsed.data.spent_total_cents);
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : "invalid spent_total_cents" });
+      res.status(400).json({ error: err instanceof Error ? errorReason(err) : "invalid spent_total_cents" });
       return;
     }
 

@@ -99,6 +99,7 @@ import {
   type SalesFunnel,
   type SalesFunnelPipe,
 } from "./sales-funnel-catalogue.js";
+import { errorReason } from "./pg-error.js";
 
 export const CAP_PERIODS = ["one_off", "daily", "weekly", "monthly"] as const;
 export type CapPeriod = (typeof CAP_PERIODS)[number];
@@ -414,7 +415,7 @@ export async function reconcileFunnelCapHistory(): Promise<void> {
           .where(keyWhere(row));
         console.log(`[billing-service] funnel cap type: ${row.salesFunnelId} org=${row.orgId} -> ${funnel.type}`);
       } catch (err) {
-        console.error(`[billing-service] funnel cap type of ${row.salesFunnelId} unreadable, retried next boot: ${(err as Error).message}`);
+        console.error(`[billing-service] funnel cap type of ${row.salesFunnelId} unreadable, retried next boot: ${errorReason(err)}`);
       }
     }
     const brands = await db
@@ -484,11 +485,11 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
     if (err instanceof SalesFunnelNotFoundError) {
       return { ok: false, reason: "sales_funnel_not_found", detail: err.message, funnel: null };
     }
-    console.error(`[billing-service] sales funnel caps: ${(err as Error).message}`);
+    console.error(`[billing-service] sales funnel caps: ${errorReason(err)}`);
     return {
       ok: false,
       reason: "sales_funnel_catalogue_unavailable",
-      detail: (err as Error).message,
+      detail: errorReason(err),
       funnel: null,
     };
   }
@@ -571,8 +572,8 @@ async function feedingSources(
   try {
     terms = await getSalesPathTerms();
   } catch (err) {
-    console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
-    return { ok: false, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
+    console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${errorReason(err)}`);
+    return { ok: false, reason: "sourcing_catalogue_unavailable", detail: errorReason(err) };
   }
   // A funnel with its OWN source pipe buys its leads there (a unit of its campaign,
   // already counted): no other source feeds it.
@@ -937,8 +938,8 @@ async function measureBudget(
   try {
     return { consumed: await spendSince(k.orgId, ids, w.start), reason: null, detail: null };
   } catch (err) {
-    console.error(`[billing-service] sales funnel caps: spend of ${k.salesFunnelId} unreadable: ${(err as Error).message}`);
-    return { consumed: null, reason: "runs_service_unavailable", detail: (err as Error).message };
+    console.error(`[billing-service] sales funnel caps: spend of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
+    return { consumed: null, reason: "runs_service_unavailable", detail: errorReason(err) };
   }
 }
 
@@ -960,8 +961,8 @@ async function measureVolume(
     try {
       terms = await getSalesPathTerms();
     } catch (err) {
-      console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${(err as Error).message}`);
-      return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: (err as Error).message };
+      console.error(`[billing-service] sales funnel caps: sourcing origins unreadable: ${errorReason(err)}`);
+      return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: errorReason(err) };
     }
     proactive = proactive.filter((p) => !terms.isSourceItem(p.channelSlug, p.legKey));
     if (proactive.length === 0) {
@@ -1005,8 +1006,8 @@ async function measureVolume(
     for (const { task, ids } of byTask.values()) n += await itemsSince(k.orgId, [...ids], task, w.start);
     return { consumed: n, reason: null, detail: null };
   } catch (err) {
-    console.error(`[billing-service] sales funnel caps: volume of ${k.salesFunnelId} unreadable: ${(err as Error).message}`);
-    return { consumed: null, reason: "runs_service_unavailable", detail: (err as Error).message };
+    console.error(`[billing-service] sales funnel caps: volume of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
+    return { consumed: null, reason: "runs_service_unavailable", detail: errorReason(err) };
   }
 }
 
@@ -1099,7 +1100,7 @@ async function readFunnelSoft(
     return { funnel: await getSalesFunnel(id), reason: null };
   } catch (err) {
     if (err instanceof SalesFunnelNotFoundError) return { funnel: null, reason: "sales_funnel_not_found" };
-    console.error(`[billing-service] sales funnel caps: ${(err as Error).message}`);
+    console.error(`[billing-service] sales funnel caps: ${errorReason(err)}`);
     return { funnel: null, reason: "sales_funnel_catalogue_unavailable" };
   }
 }

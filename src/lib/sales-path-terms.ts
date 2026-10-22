@@ -39,6 +39,7 @@
 
 import { fetchWithRetry } from "./fetch-retry.js";
 import { legIdentityKey } from "./leg-identity.js";
+import { errorReason } from "./pg-error.js";
 
 const CATALOGUE_TIMEOUT_MS = 10_000;
 const CATALOGUE_TTL_MS = 60_000;
@@ -282,7 +283,7 @@ export async function getSalesPathTerms(): Promise<SalesPathTerms> {
     throw err instanceof SalesPathTermsUnavailableError
       ? err
       : new SalesPathTermsUnavailableError(
-          `The sales-path item terms could not be read: ${err instanceof Error ? err.message : String(err)}`
+          `The sales-path item terms could not be read: ${errorReason(err)}`
         );
   }
 }

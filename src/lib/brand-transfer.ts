@@ -18,7 +18,7 @@ import {
 } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { fetchRunsBrandTransferMoved, runRunsBrandTransfer } from "./runs-client.js";
-import { pgErrorCode } from "./pg-error.js";
+import { pgErrorCode, errorReason } from "./pg-error.js";
 
 export interface BrandTransferRequest {
   sourceBrandId: string;
@@ -71,7 +71,7 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
     moved = await fetchRunsBrandTransferMoved({ sourceOrgId, sourceBrandId, targetOrgId, targetBrandId });
   } catch (err) {
     throw new BrandTransferUpstreamError(
-      `Failed to read the spend runs-service moved with the brand: ${(err as Error).message}`
+      `Failed to read the spend runs-service moved with the brand: ${errorReason(err)}`
     );
   }
 

@@ -36,6 +36,7 @@ import { computeBalance } from "./balance.js";
 import { STRIPE_MIN_CHARGE_CENTS } from "./month-end-sweep.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload } from "./reload-coalescer.js";
+import { errorReason } from "./pg-error.js";
 
 /** A hung stripe-service call must not hold the gateway call forever. */
 const CHARGE_TIMEOUT_MS = 30_000;
@@ -95,7 +96,7 @@ export function onDemandChargeIdempotencyKey(
 }
 
 function statusFromUpstreamError(err: unknown): number | null {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorReason(err);
   // `call` throws `stripe-service <METHOD> <path> failed: <status> <text>`.
   const m = msg.match(/stripe-service .* failed: (\d{3})/);
   return m ? Number(m[1]) : null;
@@ -208,7 +209,7 @@ export async function chargeOrgOnDemand(
       code: "upstream_error",
       amountCents,
       message: `Failed to charge the saved card: ${
-        err instanceof Error ? err.message : String(err)
+        errorReason(err)
       }`,
     });
   }

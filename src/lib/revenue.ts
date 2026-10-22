@@ -74,6 +74,7 @@ import {
 } from "./funnel-campaigns.js";
 import type { SalesFunnelCapRow } from "../db/schema.js";
 import type { PaymentMode } from "./payment-mode-types.js";
+import { errorReason } from "./pg-error.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -942,7 +943,7 @@ export async function getFleetRevenue(
       return r;
     } catch (err) {
       console.error(`[billing-service] fleet revenue read failed for org ${orgId}:`, err);
-      unreadable.push({ orgId, error: err instanceof Error ? err.message : String(err) });
+      unreadable.push({ orgId, error: errorReason(err) });
       return null;
     }
   });
