@@ -131,6 +131,13 @@ export const BillingAccountSchema = z
     credit_line_step_cents: z.number().int().nullable().openapi({
       description: "POSTPAID only: what the card is charged each time the line is crossed. null like credit_line_cents.",
     }),
+    postpaid_card_check: z.enum(["required", "passed", "refused", "grandfathered"]).openapi({
+      description:
+        "Whether the saved card proved it holds the first credit-line step: a $50 authorization hold (funds blocked, nothing charged) placed when the org goes postpaid. 'required' = not checked yet (no credit line), 'passed' = the bank accepted it (credit line open), 'refused' = the bank refused it (no credit line, add another card), 'grandfathered' = postpaid before the check existed.",
+    }),
+    postpaid_card_check_message: z.string().nullable().openapi({
+      description: "The bank's own sentence when the hold was refused (customer-showable); null otherwise.",
+    }),
     amount_owed_cents: CentsStringSchema.nullable().openapi({
       description:
         "POSTPAID only: what the org owes right now (actual spend, holds excluded), the amount POST /v1/accounts/pay_balance takes. \"0.0000000000\" when nothing is owed, null when not postpaid.",
@@ -1443,11 +1450,16 @@ export const PaymentModeRefusalSchema = z
       "outstanding_balance_below_minimum_charge",
       "subscription_mode_staff_only",
       "postpaid_card_not_allowed",
+      "postpaid_card_hold_refused",
     ]),
     /** What the org owes, positive cents. */
     owed_cents: z.string(),
-    /** On `postpaid_card_not_allowed`: why this card cannot be billed after spend. */
-    card_refused_reason: z.enum(["prepaid_card", "card_issuing_country_unsupported"]).optional(),
+    /**
+     * On `postpaid_card_not_allowed`: why this card cannot be billed after spend. On
+     * `postpaid_card_hold_refused`: `card_hold_refused` (the bank refused the $50 check
+     * hold; `error` carries its sentence). No credit line opens; use another card or prepay.
+     */
+    card_refused_reason: z.enum(["prepaid_card", "card_issuing_country_unsupported", "card_hold_refused"]).optional(),
   })
   .openapi("PaymentModeRefusal");
 
@@ -3728,6 +3740,7 @@ const RevenueClassReasonSchema = z.enum([
   "prepaid_no_chargeable_card",
   "postpaid_no_chargeable_card",
   "postpaid_charge_retries_exhausted",
+  "postpaid_card_not_checked",
   "postpaid_idle",
   "prepaid_auto_topup_idle",
   "prepaid_balance_spent",

@@ -428,6 +428,7 @@ async function decideOutlook(
     .select({
       orgId: billingAccounts.orgId,
       paymentMode: billingAccounts.paymentMode,
+      postpaidCardCheck: billingAccounts.postpaidCardCheck,
       createdAt: billingAccounts.createdAt,
       topupAmountCents: billingAccounts.topupAmountCents,
       topupThresholdCents: billingAccounts.topupThresholdCents,

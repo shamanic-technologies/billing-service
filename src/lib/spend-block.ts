@@ -93,6 +93,7 @@ export async function resolveOrgFloor(
       topupMinimumCents: billingAccounts.topupMinimumCents,
       reloadThresholdMinimumCents: billingAccounts.reloadThresholdMinimumCents,
       paymentMode: billingAccounts.paymentMode,
+      postpaidCardCheck: billingAccounts.postpaidCardCheck,
     })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))

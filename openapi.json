@@ -235,6 +235,21 @@
             "nullable": true,
             "description": "POSTPAID only: what the card is charged each time the line is crossed. null like credit_line_cents."
           },
+          "postpaid_card_check": {
+            "type": "string",
+            "enum": [
+              "required",
+              "passed",
+              "refused",
+              "grandfathered"
+            ],
+            "description": "Whether the saved card proved it holds the first credit-line step: a $50 authorization hold (funds blocked, nothing charged) placed when the org goes postpaid. 'required' = not checked yet (no credit line), 'passed' = the bank accepted it (credit line open), 'refused' = the bank refused it (no credit line, add another card), 'grandfathered' = postpaid before the check existed."
+          },
+          "postpaid_card_check_message": {
+            "type": "string",
+            "nullable": true,
+            "description": "The bank's own sentence when the hold was refused (customer-showable); null otherwise."
+          },
           "amount_owed_cents": {
             "type": "string",
             "nullable": true,
@@ -291,6 +306,8 @@
           "topup_threshold_cents",
           "credit_line_cents",
           "credit_line_step_cents",
+          "postpaid_card_check",
+          "postpaid_card_check_message",
           "amount_owed_cents",
           "has_payment_method",
           "has_auto_topup",
@@ -2084,7 +2101,8 @@
               "outstanding_balance_charge_declined",
               "outstanding_balance_below_minimum_charge",
               "subscription_mode_staff_only",
-              "postpaid_card_not_allowed"
+              "postpaid_card_not_allowed",
+              "postpaid_card_hold_refused"
             ]
           },
           "owed_cents": {
@@ -2094,7 +2112,8 @@
             "type": "string",
             "enum": [
               "prepaid_card",
-              "card_issuing_country_unsupported"
+              "card_issuing_country_unsupported",
+              "card_hold_refused"
             ]
           }
         },
@@ -3311,6 +3330,7 @@
               "prepaid_no_chargeable_card",
               "postpaid_no_chargeable_card",
               "postpaid_charge_retries_exhausted",
+              "postpaid_card_not_checked",
               "postpaid_idle",
               "prepaid_auto_topup_idle",
               "prepaid_balance_spent",
@@ -3638,6 +3658,7 @@
                     "prepaid_no_chargeable_card",
                     "postpaid_no_chargeable_card",
                     "postpaid_charge_retries_exhausted",
+                    "postpaid_card_not_checked",
                     "postpaid_idle",
                     "prepaid_auto_topup_idle",
                     "prepaid_balance_spent",

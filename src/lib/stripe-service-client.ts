@@ -1320,3 +1320,121 @@ export async function fetchAcquiringFeesByOrgMonth(): Promise<AcquiringFeeMonth[
     ...body.unattributed.months.flatMap((m) => rows(null, m)),
   ];
 }
+
+// --- Card holds (stripe-service [CARD-HOLD-50-1022]) ---
+
+/**
+ * An authorization hold on the org's saved card: funds blocked, nothing charged,
+ * on whichever acquirer holds the card (stripe-service resolves it; `acquirer`
+ * is diagnostic only). `held` = the bank accepted it; it can be captured until
+ * `expires_at` (the acquirer's own window, ~7 days) and is never renewed.
+ */
+export interface CardHold {
+  object: "card_hold";
+  id: string;
+  org_id: string;
+  acquirer: string;
+  status: "pending" | "requires_action" | "held" | "refused" | "captured" | "released" | "expired";
+  amount: number;
+  currency: string;
+  amount_captured: number | null;
+  session: "on_session" | "off_session";
+  expires_at: string | null;
+  created_at: string;
+  captured_at: string | null;
+  ended_at: string | null;
+  reference: string | null;
+  failure?: { type: string; code: string | null; message: string | null };
+  metadata: Record<string, string> | null;
+}
+
+/** Why a hold could not even be asked for (the bank was never reached). */
+export class CardHoldUnavailableError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string | null,
+    message: string
+  ) {
+    super(message);
+    this.name = "CardHoldUnavailableError";
+  }
+}
+
+async function holdCall(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+  extraHeaders?: Record<string, string>
+): Promise<{ status: number; json: unknown; text: string }> {
+  const { url, apiKey } = getConfig();
+  const res = await fetchWithRetry(`${url}${path}`, {
+    method,
+    headers: buildHeaders({}, apiKey, extraHeaders),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json: unknown = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = null;
+  }
+  return { status: res.status, json, text };
+}
+
+function errorCode(json: unknown): string | null {
+  const code = (json as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * `POST /internal/card_holds/by-org/{orgId}`. Answers the hold (held or refused,
+ * both a 200). Anything that means "we could not ask the bank" THROWS
+ * `CardHoldUnavailableError` (no saved card 409, no customer 404, acquirer down
+ * 502, Revolut still authorising 503 `hold_pending`) so no caller can read it as
+ * a refusal or an acceptance.
+ */
+export async function placeCardHold(
+  orgId: string,
+  body: { amount: number; currency: string; session: "on_session" | "off_session"; description?: string; metadata?: Record<string, string> },
+  idempotencyKey: string
+): Promise<CardHold> {
+  const path = `/internal/card_holds/by-org/${encodeURIComponent(orgId)}`;
+  const res = await holdCall("POST", path, body, { "Idempotency-Key": idempotencyKey });
+  if (res.status === 200 || res.status === 201) return res.json as CardHold;
+  throw new CardHoldUnavailableError(
+    res.status,
+    errorCode(res.json),
+    `stripe-service POST ${path} failed: ${res.status} ${res.text}`
+  );
+}
+
+/** `GET /internal/card_holds/by-org/{orgId}`: the live hold (held, not expired), or null. */
+export async function getLiveCardHold(orgId: string): Promise<CardHold | null> {
+  const path = `/internal/card_holds/by-org/${encodeURIComponent(orgId)}`;
+  const res = await holdCall("GET", path);
+  if (res.status !== 200) {
+    throw new Error(`stripe-service GET ${path} failed: ${res.status} ${res.text}`);
+  }
+  const live = (res.json as { live_hold?: CardHold | null } | null)?.live_hold;
+  if (live === undefined) throw new Error(`stripe-service GET ${path} has no live_hold field`);
+  return live;
+}
+
+/**
+ * `POST /internal/card_holds/by-org/{orgId}/{holdId}/capture`. Returns the hold
+ * as stripe-service answered it: `status: "captured"` = the money moved (it is
+ * an ordinary succeeded payment in the payment totals). `hold_not_live` (409) =
+ * null: the hold is gone, charge as usual. Any other failure throws.
+ */
+export async function captureCardHold(
+  orgId: string,
+  holdId: string,
+  amount: number
+): Promise<CardHold | null> {
+  const path = `/internal/card_holds/by-org/${encodeURIComponent(orgId)}/${encodeURIComponent(holdId)}/capture`;
+  const res = await holdCall("POST", path, { amount });
+  if (res.status === 200) return res.json as CardHold;
+  if (res.status === 409 && errorCode(res.json) === "hold_not_live") return null;
+  throw new Error(`stripe-service POST ${path} failed: ${res.status} ${res.text}`);
+}

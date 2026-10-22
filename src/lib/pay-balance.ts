@@ -10,6 +10,7 @@
  * usage), never restated, so a provisioned hold is never charged.
  */
 import { cmpCents } from "./cents.js";
+import { postpaidCardCheckOpensLine } from "./topup-tier.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
 import { chargeOrgOnDemand } from "./on-demand-charge.js";
@@ -19,8 +20,13 @@ import {
   isAutoReloadBlockedCountry,
 } from "./stripe-service-client.js";
 
-/** A postpaid org's credit line is real: a chargeable card in an off-session country. */
-export async function hasPostpaidCreditLine(orgId: string): Promise<boolean> {
+/**
+ * A postpaid org's credit line is real: its card passed the hold check (or the org
+ * is grandfathered, lib/postpaid-card-check) AND a chargeable card in an
+ * off-session country is on file.
+ */
+export async function hasPostpaidCreditLine(orgId: string, postpaidCardCheck: string): Promise<boolean> {
+  if (!postpaidCardCheckOpensLine(postpaidCardCheck)) return false;
   const [hasCard, country] = await Promise.all([hasChargeablePmForOrg(orgId), getOrgCardCountryByOrg(orgId)]);
   return hasCard && !isAutoReloadBlockedCountry(country);
 }
