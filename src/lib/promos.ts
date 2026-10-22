@@ -17,6 +17,7 @@ import {
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
+import { pgDriverError } from "./pg-error.js";
 
 export class PromoNotFoundError extends Error {
   constructor(code: string) {
@@ -109,7 +110,8 @@ export async function redeemPromoCode(
       localPromoId: inserted.id,
     };
   } catch (err) {
-    if (err instanceof Error && err.message.includes("idx_local_promos_org_promo")) {
+    const cause = pgDriverError(err);
+    if (cause instanceof Error && cause.message.includes("idx_local_promos_org_promo")) {
       throw new PromoAlreadyRedeemedError(code);
     }
     throw err;
