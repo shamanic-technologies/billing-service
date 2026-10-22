@@ -28,9 +28,9 @@ vi.mock("../src/lib/pay-balance.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/pay-balance.js")>();
   return {
     ...actual,
-    hasPostpaidCreditLine: async (orgId: string) =>
+    hasPostpaidCreditLine: async (orgId: string, postpaidCardCheck: string) =>
       (globalThis as { __realPostpaidCreditLine?: boolean }).__realPostpaidCreditLine
-        ? actual.hasPostpaidCreditLine(orgId)
+        ? actual.hasPostpaidCreditLine(orgId, postpaidCardCheck)
         : false,
   };
 });

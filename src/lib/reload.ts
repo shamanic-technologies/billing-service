@@ -34,6 +34,7 @@ import { notifyOwnerBillingEvent, usd, utcDay } from "./owner-alerts.js";
 import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
 import { chargeReasonLabel, recordChargeSignal } from "./payment-alerts.js";
+import { payByCapturingHold } from "./postpaid-card-check.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -68,6 +69,10 @@ export async function reloadOffSession(
   if (!orgId) {
     throw new Error("reloadOffSession: orgId is required");
   }
+  // A POSTPAID org whose card holds a live credit-line hold pays the step by
+  // capturing it, never by a second charge (lib/postpaid-card-check).
+  const fromHold = await payByCapturingHold(orgId, amountCents, metadata);
+  if (fromHold) return fromHold;
   return chargeNow(orgId, amountCents, idempotencyKey, metadata);
 }
 

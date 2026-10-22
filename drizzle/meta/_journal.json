@@ -631,6 +631,13 @@
       "when": 1795860000000,
       "tag": "0089_postpaid_no_auto_topup",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1795946400000,
+      "tag": "0090_postpaid_card_check",
+      "breakpoints": true
     }
   ]
 }

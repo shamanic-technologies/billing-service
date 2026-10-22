@@ -23,7 +23,7 @@ import {
  * a signup; the off-session charge itself still fails loud if it cannot go through).
  */
 
-export type PostpaidCardRefusal = "prepaid_card" | "card_issuing_country_unsupported";
+export type PostpaidCardRefusal = "prepaid_card" | "card_issuing_country_unsupported" | "card_hold_refused";
 
 export interface CardFacts {
   /** A chargeable card is saved (stripe-service's verdict). */

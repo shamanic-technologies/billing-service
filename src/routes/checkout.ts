@@ -74,7 +74,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     // (POST /v1/accounts/pay_balance). Only where the credit line is REAL (a
     // chargeable card): postpaid is also the default of every org that never chose,
     // and one with no card can only pay by adding credit. A card capture is allowed.
-    if (!isSetup && account.paymentMode === "postpaid" && (await hasPostpaidCreditLine(orgId))) {
+    if (!isSetup && account.paymentMode === "postpaid" && (await hasPostpaidCreditLine(orgId, account.postpaidCardCheck))) {
       res.status(409).json({
         error:
           "This account pays after use: it is charged as it spends, so credit cannot be added. Pay what is owed instead.",

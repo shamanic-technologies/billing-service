@@ -566,6 +566,24 @@ Owner: « Un client choisit un montant pour chaque campagne, et on lui prélève
 - **A prepaid or Indian card cannot be postpaid** (owner: dashboard asks "switch to prepaid or change card", no "continue anyway"): `PUT … {postpaid}` → 409 `postpaid_card_not_allowed` + `card_refused_reason` (`prepaid_card` | `card_issuing_country_unsupported`), nothing armed. Unknown funding/country (`null`) does not refuse.
 - **`GET /v1/accounts/saved_payment_method`** adds `card_prepaid`, `card_country` (stripe-service `method.country` when stated, else the org's card country on whichever acquirer), `postpaid_allowed`, `postpaid_refused_reason` beside stripe-service's answer verbatim.
 
+### A postpaid card must HOLD the first step before any credit (`src/lib/postpaid-card-check.ts`, migration 0090)
+
+Owner 2026-10-22 (CARD-HOLD-50-1022): Jarygo Studios went postpaid with a US debit card, ran $36.93 on the $50 line, both $50 charges declined "insufficient funds". Saving a card proves nothing about funds.
+
+    Card saved on the postpaid wall -> PUT payment_mode {postpaid}
+      -> $50 authorization HOLD (funds blocked, nothing charged; stripe-service, both acquirers)
+         refused -> 409 postpaid_card_hold_refused (+ bank sentence), no credit line, no spend
+         held    -> credit line open
+    Spend reaches the $50 step while the hold is alive (~7 days)
+      -> paid by CAPTURING the hold (only what is owed if less), no second charge
+      -> ONE hold for the next step ($200 once $200 paid), same rule
+    Hold expired first -> nothing happens, the step charges as today. NEVER renewed.
+
+- **State = `billing_accounts.postpaid_card_check`**: `required` (DEFAULT, every new account) | `passed` | `refused` | `grandfathered` (every postpaid account created before the deploy, 2026-10-22: no retroactive hold; the literal 12:00Z only bounds a re-apply). Only `passed`/`grandfathered` open a line, through ONE reader: `autoTopupArmed` (lib/topup-tier) → resolvePostpaidTier, the account read's `credit_line_*`, revenue (`postpaid_card_not_checked`), `hasPostpaidCreditLine`. Account read serves `postpaid_card_check` + `postpaid_card_check_message`.
+- **The check runs in `setPaymentMode(postpaid)`** when a card is saved and the check has not passed (staff or customer). Key = (org, saved method id, UTC day): a re-click replays, a new card or tomorrow asks again. `off_session` (no 3DS step on the wall). Could not ask (no card, acquirer down, Revolut still pending after ~4 tries) = 502, check unchanged.
+- **Capture lives in `reloadOffSession`** (the one charge path), postpaid only: a live hold with metadata `billing_purpose = postpaid_credit_line_step` (never the Revolut card-setup verification hold) covering the amount is captured; anything else (none, smaller, gone at capture, read failed) falls through to the ordinary charge, logged. The capture is an ordinary succeeded payment in stripe-service's totals: nothing is credited here. The next-step hold is fire-and-forget, keyed on the captured hold (one capture = at most one next hold).
+- billing stores NO hold: stripe-service's `/internal/card_holds/by-org/:orgId` (+ `/:holdId/capture`) is the truth, read live when charging. Tests: `tests/integration/postpaid-card-hold.test.ts`; `setupStripeMocks` accepts every hold and serves no live hold by default; `insertTestAccount` defaults to `grandfathered`.
+
 ## PREPAID or POSTPAID — the customer's explicit choice (`src/lib/payment-mode.ts`, migration 0050)
 
 `billing_accounts.payment_mode` ∈ `prepaid | postpaid`, **default `postpaid` for every existing and new org** — nothing changes until someone chooses. It is a CHOICE (onboarding, Billing page, staff), **never inferred from whether a card is on file**.
