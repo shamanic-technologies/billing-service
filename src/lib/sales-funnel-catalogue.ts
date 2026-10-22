@@ -23,6 +23,7 @@
  */
 
 import { fetchWithRetry } from "./fetch-retry.js";
+import { errorReason } from "./pg-error.js";
 
 export type PipeMode = "proactive" | "reactive";
 
@@ -158,7 +159,7 @@ export async function getSalesFunnel(id: string, now: number = Date.now()): Prom
     );
   } catch (err) {
     throw new SalesFunnelCatalogueUnavailableError(
-      `features-service sales funnel ${id} unreachable: ${(err as Error).message}`
+      `features-service sales funnel ${id} unreachable: ${errorReason(err)}`
     );
   }
   if (res.status === 404) throw new SalesFunnelNotFoundError(id);

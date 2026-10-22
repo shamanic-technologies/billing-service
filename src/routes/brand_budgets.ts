@@ -33,6 +33,7 @@ import {
   statusMoveOf,
 } from "../lib/brand-budget-notification.js";
 import { brandGrainChange } from "../lib/brand-running-budget.js";
+import { errorReason } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -264,7 +265,7 @@ router.patch(
       dailyBudgetCents = parseNonNegativeCents(parsed.data.dailyBudgetCents);
     } catch (err) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : "invalid dailyBudgetCents",
+        error: err instanceof Error ? errorReason(err) : "invalid dailyBudgetCents",
       });
       return;
     }
@@ -474,7 +475,7 @@ router.put(
       dailyBudgetCents = parseNonNegativeCents(parsed.data.dailyBudgetCents);
     } catch (err) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : "invalid dailyBudgetCents",
+        error: err instanceof Error ? errorReason(err) : "invalid dailyBudgetCents",
       });
       return;
     }

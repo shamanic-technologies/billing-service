@@ -1,3 +1,4 @@
+import { errorReason } from "./pg-error.js";
 /**
  * Owner Telegram messages: a plain `sendMessage` to the Bot API, HTML parse mode.
  * Same bot and chat the dashboard's visit recap uses (`TELEGRAM_BOT_TOKEN`,
@@ -59,7 +60,7 @@ export async function sendOwnerTelegram(html: string): Promise<TelegramSendResul
     }
     return { ok: true, messageId: body.result?.message_id ?? null };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: errorReason(err) };
   }
 }
 

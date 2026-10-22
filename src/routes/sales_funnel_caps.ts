@@ -25,6 +25,7 @@ import {
   type FunnelCapKey,
 } from "../lib/sales-funnel-caps.js";
 import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
+import { errorReason } from "../lib/pg-error.js";
 
 const router = Router();
 
@@ -122,7 +123,7 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
         throw new Error(`must be below ${"1" + "0".repeat(MAX_BUDGET_INT_DIGITS)} cents`);
       }
     } catch (err) {
-      res.status(400).json({ error: `maxBudget.amountCents: ${(err as Error).message}` });
+      res.status(400).json({ error: `maxBudget.amountCents: ${errorReason(err)}` });
       return;
     }
   }
