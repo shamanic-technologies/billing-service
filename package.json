@@ -21,7 +21,7 @@
     "@asteasolutions/zod-to-openapi": "^7.0.0",
     "cors": "^2.8.5",
     "decimal.js": "^10.6.0",
-    "drizzle-orm": "^0.36.0",
+    "drizzle-orm": "^0.45.4",
     "express": "^4.22.3",
     "postgres": "^3.4.0",
     "zod": "^3.24.0"
@@ -31,7 +31,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
     "@types/supertest": "^6.0.3",
-    "drizzle-kit": "^0.28.0",
+    "drizzle-kit": "^0.31.11",
     "supertest": "^7.2.2",
     "tsx": "^4.0.0",
     "typescript": "^5.3.0",
