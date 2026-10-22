@@ -51,6 +51,7 @@ import { cmpCents } from "./cents.js";
 import { computeSettleCharge, STRIPE_MIN_CHARGE_CENTS } from "./month-end-sweep.js";
 import { coalesceReload } from "./reload-coalescer.js";
 import { reloadOffSession } from "./reload.js";
+import { errorReason } from "./pg-error.js";
 
 /** A hung stripe-service call must not hold the customer's browser forever. */
 const SETTLE_TIMEOUT_MS = 30_000;
@@ -177,7 +178,7 @@ export async function settleOutstandingBeforeCardChange(
     console.error(
       `[billing-service] card change: could not attempt a settle for org ${orgId} — ` +
         `opening the session anyway:`,
-      err instanceof Error ? err.message : String(err)
+      errorReason(err)
     );
     return {
       result: "not_attempted",
@@ -275,7 +276,7 @@ async function attemptSettle(orgId: string, now: Date): Promise<SettlementOutcom
     console.warn(
       `[billing-service] card change: settle of ${chargeAmount} cents DECLINED for org ` +
         `${orgId} (owed ${balanceCents} cents) — opening the session anyway:`,
-      err instanceof Error ? err.message : String(err)
+      errorReason(err)
     );
     // No acquirer answer reached us, so we cannot claim the CARD was refused —
     // and the thrown text is not customer-readable, so it is never surfaced.

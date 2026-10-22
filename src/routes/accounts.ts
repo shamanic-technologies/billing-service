@@ -47,6 +47,7 @@ import {
   authorizeRecurringCharges,
   LEGACY_PM_GATE_ACQUIRER,
 } from "../lib/stripe-service-client.js";
+import { errorReason } from "../lib/pg-error.js";
 
 /**
  * Free credit this org can still spend: the smaller of what it was gifted and what it
@@ -513,7 +514,7 @@ router.post("/v1/accounts/card_setup", requireOrgHeaders, async (req, res) => {
     );
     res.json({ ...setup, ...settlementWireFields(settlement) });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorReason(err);
     console.error("[billing-service] card setup failed:", message);
     res.status(502).json({ error: "Failed to start card setup" });
   }
@@ -552,7 +553,7 @@ router.get("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req, r
       answer = await getSavedPaymentMethod(orgId);
       facts = await cardFactsFrom(orgId, answer);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorReason(err);
       console.error("[billing-service] saved payment method read failed:", message);
       res.status(502).json({ error: "Could not confirm whether a card is saved" });
       return;
@@ -610,7 +611,7 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
     try {
       outcome = await removeCardForOrg(orgId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorReason(err);
       console.error("[billing-service] card removal failed:", message);
       res.status(502).json({ error: "Could not remove the saved card" });
       return;

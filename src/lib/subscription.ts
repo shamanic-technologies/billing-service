@@ -96,7 +96,7 @@ import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
 import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
 import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
-import { pgErrorCode } from "./pg-error.js";
+import { pgErrorCode, errorReason } from "./pg-error.js";
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
@@ -832,7 +832,7 @@ async function periodCreditCents(sub: Subscription): Promise<number> {
 type AttemptResult = "paid" | "declined" | "permanent" | "error";
 
 function upstreamStatus(err: unknown): number | null {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorReason(err);
   const m = msg.match(/stripe-service .* failed: (\d{3})/);
   return m ? Number(m[1]) : null;
 }

@@ -48,6 +48,7 @@ import type { SalesFunnelCapRow } from "../db/schema.js";
 import { capOfFunnelCampaign, orgFunnelCaps, fetchSalesFunnelCampaigns, type SalesFunnelCampaignsAnswer } from "./funnel-campaigns.js";
 import { readJson } from "./runs-org-read.js";
 import { heldRefusalOf, measureMaxBudget, periodWindow, recordMaxBudgetRefusal, refusalOverflows, type BudgetMeasure, type CapPeriod } from "./sales-funnel-caps.js";
+import { errorReason } from "./pg-error.js";
 
 export const SALES_FUNNEL_MAX_BUDGET_REACHED = "sales_funnel_max_budget_reached" as const;
 export const SALES_FUNNEL_MAX_BUDGET_UNREADABLE = "sales_funnel_max_budget_unreadable" as const;
@@ -165,7 +166,7 @@ async function readOwnHold(
   } catch (err) {
     loudOnce(
       `hold|${input.orgId}`,
-      `[billing-service] sales funnel max budget: run ${input.runId} unreadable (${(err as Error).message}); ` +
+      `[billing-service] sales funnel max budget: run ${input.runId} unreadable (${errorReason(err)}); ` +
         `the caller's own provisioned hold is not excluded from the consumption`
     );
     return null;
@@ -213,7 +214,7 @@ function cachedMeasure(row: SalesFunnelCapRow, now: Date): Promise<TimedMeasure>
       sourceCampaignIds: null,
       consumedCents: null,
       reason: "runs_service_unavailable",
-      detail: (err as Error).message,
+      detail: errorReason(err),
       startedAt,
     }));
   measures.set(key, { at: startedAt, p });

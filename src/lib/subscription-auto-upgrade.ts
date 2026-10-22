@@ -48,7 +48,7 @@ import { reloadOffSession } from "./reload.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { SUBSCRIPTION_STEP_CENTS } from "./subscription.js";
-import { pgErrorCode } from "./pg-error.js";
+import { pgErrorCode, errorReason } from "./pg-error.js";
 
 /** The charge reason (lib/payment-alerts labels it "Subscription charge"). */
 export const AUTO_UPGRADE_CHARGE_REASON = "subscription_auto_upgrade";
@@ -78,7 +78,7 @@ export function autoUpgradeIdempotencyKey(row: Pick<SubscriptionAutoUpgrade, "su
 }
 
 function upstreamStatus(err: unknown): number | null {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorReason(err);
   const m = msg.match(/stripe-service .* failed: (\d{3})/);
   return m ? Number(m[1]) : null;
 }
