@@ -1451,6 +1451,7 @@ export const PaymentModeRefusalSchema = z
       "subscription_mode_staff_only",
       "postpaid_card_not_allowed",
       "postpaid_card_hold_refused",
+      "postpaid_card_hold_requires_action",
     ]),
     /** What the org owes, positive cents. */
     owed_cents: z.string(),
@@ -1460,6 +1461,13 @@ export const PaymentModeRefusalSchema = z
      * hold; `error` carries its sentence). No credit line opens; use another card or prepay.
      */
     card_refused_reason: z.enum(["prepaid_card", "card_issuing_country_unsupported", "card_hold_refused"]).optional(),
+    /**
+     * On `postpaid_card_hold_requires_action`: the bank wants 3-D Secure on the $50 card
+     * check. Run Stripe.js `handleNextAction({ clientSecret })`, then PUT payment_mode
+     * postpaid again: billing re-reads the same hold and answers 200 (held) or 409
+     * `postpaid_card_hold_refused`.
+     */
+    client_secret: z.string().optional(),
   })
   .openapi("PaymentModeRefusal");
 

@@ -84,10 +84,10 @@ describe("postpaid card check: $50 hold before credit, captured at the step", ()
     expect(body).toMatchObject({
       amount: 5000,
       currency: "usd",
-      session: "off_session",
+      session: "on_session", // the customer is on the wall: 3-D Secure is a challenge, not a refusal
       metadata: { billing_purpose: CREDIT_LINE_HOLD_PURPOSE },
     });
-    expect(key).toMatch(new RegExp(`^postpaid-card-check:${orgId}:pm_mock:\\d{4}-\\d{2}-\\d{2}$`));
+    expect(key).toMatch(new RegExp(`^postpaid-card-check:${orgId}:pm_mock:\\d{4}-\\d{2}-\\d{2}:on_session$`));
     expect((await account()).postpaidCardCheck).toBe("passed");
     expect(chargeSpy).not.toHaveBeenCalled();
 
@@ -134,6 +134,33 @@ describe("postpaid card check: $50 hold before credit, captured at the step", ()
     const res = await authorize();
     expect(res.body.sufficient).toBe(false);
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
+  });
+
+  it("a bank that wants 3-D Secure: 409 with the client secret, then the same hold re-read opens the line", async () => {
+    const pending = mockCardHold({ status: "requires_action", client_secret: "pi_hold_secret_abc", expires_at: null });
+    ssMocks.placeCardHold.mockResolvedValueOnce(pending);
+    const first = await choosePostpaid();
+    expect(first.status).toBe(409);
+    expect(first.body.code).toBe("postpaid_card_hold_requires_action");
+    expect(first.body.client_secret).toBe("pi_hold_secret_abc");
+    expect((await account()).postpaidCardCheck).toBe("required");
+
+    // The page ran handleNextAction; the second call replays the SAME key and reads held.
+    ssMocks.placeCardHold.mockResolvedValueOnce(mockCardHold({ status: "held" }));
+    const second = await choosePostpaid();
+    expect(second.status).toBe(200);
+    expect(ssMocks.placeCardHold.mock.calls[1][2]).toBe(ssMocks.placeCardHold.mock.calls[0][2]);
+    expect((await account()).postpaidCardCheck).toBe("passed");
+  });
+
+  it("staff switching an org to postpaid checks the card off-session (nobody to answer a challenge)", async () => {
+    await request(app).get("/v1/accounts").set(getAuthHeaders(orgId)); // creates the account
+    const res = await request(app)
+      .put(`/internal/accounts/by-org/${orgId}/payment-mode`)
+      .set(getAuthHeaders(orgId))
+      .send({ payment_mode: "postpaid" });
+    expect(res.status).toBe(200);
+    expect(ssMocks.placeCardHold.mock.calls[0][1]).toMatchObject({ session: "off_session" });
   });
 
   it("the bank could not be asked: 502, the check stays required", async () => {

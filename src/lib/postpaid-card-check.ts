@@ -51,7 +51,18 @@ const HOLD_PENDING_MAX_WAIT_MS = 3000;
 
 export type PostpaidCardCheckResult =
   | { result: "passed"; hold: CardHold }
-  | { result: "refused"; message: string; code: string | null; hold: CardHold };
+  | { result: "refused"; message: string; code: string | null; hold: CardHold }
+  /** The bank wants 3-D Secure: the page runs it with `clientSecret`, then asks again. */
+  | { result: "requires_action"; clientSecret: string; hold: CardHold };
+
+/**
+ * ON-session when the customer is on the wall: a bank that wants 3-D Secure then
+ * answers `requires_action` (the page challenges the customer) instead of refusing a
+ * card that has the funds (stripe-service, Stripe test mode: an off_session hold on a
+ * 3DS card is refused `authentication_required`). OFF-session when staff switches an
+ * org (nobody is there to answer a challenge).
+ */
+export type CardCheckSession = "on_session" | "off_session";
 
 function utcDay(now = new Date()): string {
   return now.toISOString().slice(0, 10);
@@ -65,7 +76,8 @@ async function placeHoldRetryingPending(
   orgId: string,
   amountCents: number,
   idempotencyKey: string,
-  metadata: Record<string, string>
+  metadata: Record<string, string>,
+  session: CardCheckSession = "off_session"
 ): Promise<CardHold> {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -74,7 +86,7 @@ async function placeHoldRetryingPending(
         {
           amount: amountCents,
           currency: HOLD_CURRENCY,
-          session: "off_session",
+          session,
           description: "Distribute card check (nothing is charged)",
           metadata,
         },
@@ -101,7 +113,10 @@ export function refusedHoldMessage(hold: CardHold): string {
  * Throws when the bank could not be asked (no card, acquirer down): the check
  * stays as it was, nothing opens.
  */
-export async function runPostpaidCardCheck(orgId: string): Promise<PostpaidCardCheckResult> {
+export async function runPostpaidCardCheck(
+  orgId: string,
+  session: CardCheckSession = "off_session"
+): Promise<PostpaidCardCheckResult> {
   const [saved, paidTopupsCents] = await Promise.all([
     getSavedPaymentMethod(orgId),
     sumSucceededTopupsForOrg(orgId),
@@ -110,13 +125,27 @@ export async function runPostpaidCardCheck(orgId: string): Promise<PostpaidCardC
     throw new CardHoldUnavailableError(409, "no_saved_payment_method", `org ${orgId} has no saved card to check`);
   }
   const amountCents = tierFor(paidTopupsCents).amountCents;
-  // One attempt per card per UTC day: a re-click replays the same answer, a new
-  // card (or tomorrow, once funds arrived) is asked afresh.
-  const key = `postpaid-card-check:${orgId}:${saved.method.id}:${utcDay()}`;
-  const hold = await placeHoldRetryingPending(orgId, amountCents, key, {
-    billing_purpose: CREDIT_LINE_HOLD_PURPOSE,
-    reason: "postpaid_card_check",
-  });
+  // One attempt per card per UTC day (and per session): a re-click replays the same
+  // hold, and stripe-service re-reads it live, so the call after a 3-D Secure
+  // challenge answers held / refused. A new card (or tomorrow) is asked afresh.
+  const key = `postpaid-card-check:${orgId}:${saved.method.id}:${utcDay()}:${session}`;
+  const hold = await placeHoldRetryingPending(
+    orgId,
+    amountCents,
+    key,
+    { billing_purpose: CREDIT_LINE_HOLD_PURPOSE, reason: "postpaid_card_check" },
+    session
+  );
+
+  if (hold.status === "requires_action") {
+    const clientSecret = hold.client_secret;
+    if (!clientSecret) {
+      throw new Error(`stripe-service hold ${hold.id} for org ${orgId} requires action but carries no client_secret`);
+    }
+    // Nothing recorded: the check stays as it was until the bank answers.
+    console.log(`[billing-service] postpaid card check: org ${orgId} hold ${hold.id} needs 3-D Secure`);
+    return { result: "requires_action", clientSecret, hold };
+  }
 
   if (hold.status === "held") {
     await db

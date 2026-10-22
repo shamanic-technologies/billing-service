@@ -57,6 +57,7 @@ async function applySwitch(
         code: err.code,
         owed_cents: err.owedCents,
         ...(err.cardRefusedReason ? { card_refused_reason: err.cardRefusedReason } : {}),
+        ...(err.clientSecret ? { client_secret: err.clientSecret } : {}),
       });
       return;
     }
