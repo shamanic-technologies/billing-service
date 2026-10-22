@@ -36,6 +36,7 @@ import { cannotSpend, resolveSpendBlock } from "./spend-block.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { sendEmail } from "./email-client.js";
 import type { WorkflowHeaders } from "../middleware/auth.js";
+import { pgErrorCode } from "./pg-error.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const FOLLOWUP_3D_MS = 3 * DAY_MS;
@@ -176,7 +177,7 @@ export async function openDepletionEpisodeIfDepleted(
       t0SentAt: new Date(),
     });
   } catch (err) {
-    if ((err as { code?: string }).code === "23505") return { opened: false };
+    if (pgErrorCode(err) === "23505") return { opened: false };
     throw err;
   }
 
@@ -228,7 +229,7 @@ export async function ensureOpenEpisode(
       .returning();
     return { episode: row, opened: true };
   } catch (err) {
-    if ((err as { code?: string }).code !== "23505") throw err;
+    if (pgErrorCode(err) !== "23505") throw err;
     const raced = await selectOpenEpisode(orgId);
     if (!raced) throw err;
     return { episode: raced, opened: false };

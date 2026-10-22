@@ -18,6 +18,7 @@ import {
 } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { fetchRunsBrandTransferMoved, runRunsBrandTransfer } from "./runs-client.js";
+import { pgErrorCode } from "./pg-error.js";
 
 export interface BrandTransferRequest {
   sourceBrandId: string;
@@ -189,7 +190,7 @@ export async function transferBrand(req: BrandTransferRequest): Promise<BrandTra
       };
     });
   } catch (err) {
-    if ((err as { code?: string }).code === "23505") {
+    if (pgErrorCode(err) === "23505") {
       throw new BrandTransferConflictError(
         `The target org already holds a daily budget or ceiling for brand ${newBrandId}; nothing was moved`
       );

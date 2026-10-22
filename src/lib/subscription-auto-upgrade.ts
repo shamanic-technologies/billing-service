@@ -48,6 +48,7 @@ import { reloadOffSession } from "./reload.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
 import { SUBSCRIPTION_STEP_CENTS } from "./subscription.js";
+import { pgErrorCode } from "./pg-error.js";
 
 /** The charge reason (lib/payment-alerts labels it "Subscription charge"). */
 export const AUTO_UPGRADE_CHARGE_REASON = "subscription_auto_upgrade";
@@ -242,7 +243,7 @@ export async function tryAutoUpgrade(sub: Subscription, now: Date = new Date()):
       })
       .returning();
   } catch (err) {
-    if ((err as { code?: string }).code === "23505") return { result: "in_flight" };
+    if (pgErrorCode(err) === "23505") return { result: "in_flight" };
     throw err;
   }
 

@@ -96,6 +96,7 @@ import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
 import { nextPeriodEnd, pausedPeriodEnd, renewalAnchor } from "./subscription-schedule.js";
 import { attributeUnassignedPlan, isOrgOfferOnBrand } from "./subscription-plans.js";
 import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
+import { pgErrorCode } from "./pg-error.js";
 
 export { nextPeriodEnd, pausedPeriodEnd } from "./subscription-schedule.js";
 
@@ -655,7 +656,7 @@ export async function startPlanForOffer(params: {
       })
       .returning();
   } catch (err) {
-    if ((err as { code?: string }).code === "23505") throw taken();
+    if (pgErrorCode(err) === "23505") throw taken();
     throw err;
   }
   const [charge] = await db

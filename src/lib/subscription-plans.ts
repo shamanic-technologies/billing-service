@@ -21,6 +21,7 @@ import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { subscriptions } from "../db/schema.js";
 import { fetchWithRetry } from "./fetch-retry.js";
+import { pgErrorCode } from "./pg-error.js";
 
 const READ_TIMEOUT_MS = 10_000;
 
@@ -140,7 +141,7 @@ export async function attributeUnassignedPlan(orgId: string): Promise<void> {
       `[billing-service] plan ${plan.id} of org ${orgId} attributed to brand ${first.brandId} x offer ${first.offerId}`
     );
   } catch (err) {
-    if ((err as { code?: string }).code !== "23505") throw err;
+    if (pgErrorCode(err) !== "23505") throw err;
     console.error(
       `[billing-service] plan ${plan.id} of org ${orgId}: brand ${first.brandId} x offer ${first.offerId} already has a live plan; left unattributed`
     );
