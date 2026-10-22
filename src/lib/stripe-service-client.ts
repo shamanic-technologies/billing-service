@@ -1346,6 +1346,8 @@ export interface CardHold {
   reference: string | null;
   failure?: { type: string; code: string | null; message: string | null };
   metadata: Record<string, string> | null;
+  /** `requires_action` only (Stripe on-session 3-D Secure): for Stripe.js `handleNextAction`. */
+  client_secret?: string;
 }
 
 /** Why a hold could not even be asked for (the bank was never reached). */

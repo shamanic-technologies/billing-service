@@ -62,6 +62,8 @@ export type PaymentModeRefusalCode =
   | "outstanding_balance_no_card"
   /** Postpaid asked, the bank refused the $50 card check hold: no credit line. */
   | "postpaid_card_hold_refused"
+  /** The bank wants 3-D Secure on the card check: run it with `clientSecret`, then ask again. */
+  | "postpaid_card_hold_requires_action"
   /** The org owes money and the card was refused (or is in retry backoff). */
   | "outstanding_balance_charge_declined"
   /** The org owes less than the smallest amount a card can be charged. */
@@ -84,17 +86,21 @@ export class PaymentModeSwitchRefused extends Error {
   readonly code: PaymentModeRefusalCode;
   readonly owedCents: string;
   readonly cardRefusedReason: PostpaidCardRefusal | null;
+  /** `postpaid_card_hold_requires_action` only: for Stripe.js `handleNextAction`. */
+  readonly clientSecret: string | null;
   constructor(
     code: PaymentModeRefusalCode,
     owedCents: string,
     message: string,
-    cardRefusedReason: PostpaidCardRefusal | null = null
+    cardRefusedReason: PostpaidCardRefusal | null = null,
+    clientSecret: string | null = null
   ) {
     super(message);
     this.name = "PaymentModeSwitchRefused";
     this.code = code;
     this.owedCents = owedCents;
     this.cardRefusedReason = cardRefusedReason;
+    this.clientSecret = clientSecret;
   }
 }
 
@@ -233,9 +239,19 @@ export async function setPaymentMode(
     // charged. Refused = no line, the wall says so. Grandfathered / already passed
     // = nothing to ask. No card yet = nothing to check (no line either).
     if (facts.saved && !postpaidCardCheckOpensLine(account.postpaidCardCheck)) {
-      const check = await runPostpaidCardCheck(orgId);
+      // The customer is on the wall: on_session, so 3-D Secure is a challenge, not a refusal.
+      const check = await runPostpaidCardCheck(orgId, actor === "customer" ? "on_session" : "off_session");
       if (check.result === "refused") {
         throw new PaymentModeSwitchRefused("postpaid_card_hold_refused", "0", check.message, "card_hold_refused");
+      }
+      if (check.result === "requires_action") {
+        throw new PaymentModeSwitchRefused(
+          "postpaid_card_hold_requires_action",
+          "0",
+          "Your bank wants to confirm this card. Complete the check, then continue.",
+          null,
+          check.clientSecret
+        );
       }
     }
     if (current !== "postpaid") await withdrawOnboardingAdvanceForPostpaid(orgId);

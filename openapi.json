@@ -2102,7 +2102,8 @@
               "outstanding_balance_below_minimum_charge",
               "subscription_mode_staff_only",
               "postpaid_card_not_allowed",
-              "postpaid_card_hold_refused"
+              "postpaid_card_hold_refused",
+              "postpaid_card_hold_requires_action"
             ]
           },
           "owed_cents": {
@@ -2115,6 +2116,9 @@
               "card_issuing_country_unsupported",
               "card_hold_refused"
             ]
+          },
+          "client_secret": {
+            "type": "string"
           }
         },
         "required": [
