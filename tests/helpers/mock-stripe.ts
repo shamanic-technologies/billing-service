@@ -48,6 +48,36 @@ export interface StripeServiceMocks {
   reloadOffSession: ReturnType<typeof vi.fn>;
   /** The org's payments across acquirers. Defaults to none. */
   listOrgPayments: ReturnType<typeof vi.fn>;
+  /**
+   * Card holds (lib/postpaid-card-check). Default: the bank ACCEPTS the hold, so
+   * every postpaid suite written before the check opens its line as it did. No live
+   * hold by default, so no charge is paid by a capture unless a test asks for it.
+   */
+  placeCardHold: ReturnType<typeof vi.fn>;
+  getLiveCardHold: ReturnType<typeof vi.fn>;
+  captureCardHold: ReturnType<typeof vi.fn>;
+}
+
+/** A card hold as stripe-service answers it. */
+export function mockCardHold(overrides: Partial<ssClient.CardHold> = {}): ssClient.CardHold {
+  return {
+    object: "card_hold",
+    id: "11111111-1111-4111-8111-111111111111",
+    org_id: "org_mock",
+    acquirer: "stripe",
+    status: "held",
+    amount: 5000,
+    currency: "usd",
+    amount_captured: null,
+    session: "off_session",
+    expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+    created_at: new Date().toISOString(),
+    captured_at: null,
+    ended_at: null,
+    reference: "pi_hold_mock",
+    metadata: { billing_purpose: "postpaid_credit_line_step" },
+    ...overrides,
+  };
 }
 
 const MOCK_CUSTOMER_ID = "cus_mock_123";
@@ -190,6 +220,13 @@ export function setupStripeMocks(): StripeServiceMocks {
       reference: "pi_mock",
     }),
     listOrgPayments: vi.fn().mockResolvedValue([]),
+    placeCardHold: vi.fn().mockImplementation(async (_orgId: string, body: { amount: number }) =>
+      mockCardHold({ amount: body.amount })
+    ),
+    getLiveCardHold: vi.fn().mockResolvedValue(null),
+    captureCardHold: vi.fn().mockImplementation(async (_orgId: string, holdId: string, amount: number) =>
+      mockCardHold({ id: holdId, status: "captured", amount_captured: amount })
+    ),
   };
 
   // The `*OrNull` reads are the ones production actually makes; the throwing
@@ -242,6 +279,9 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "getStats").mockImplementation(mocks.getStats);
   vi.spyOn(reload, "reloadOffSession").mockImplementation(mocks.reloadOffSession);
   vi.spyOn(ssClient, "listOrgPayments").mockImplementation(mocks.listOrgPayments);
+  vi.spyOn(ssClient, "placeCardHold").mockImplementation(mocks.placeCardHold as never);
+  vi.spyOn(ssClient, "getLiveCardHold").mockImplementation(mocks.getLiveCardHold);
+  vi.spyOn(ssClient, "captureCardHold").mockImplementation(mocks.captureCardHold as never);
 
   return mocks;
 }

@@ -146,6 +146,14 @@ export const billingAccounts = pgTable(
     // existing row and every new account is 'postpaid' until someone chooses
     // otherwise. See lib/payment-mode.
     paymentMode: text("payment_mode").notNull().default("postpaid"),
+    // Has the org's card proven it holds the first credit-line step (migration
+    // 0090, lib/postpaid-card-check)? 'required' (every new account) | 'passed' (a
+    // $50 authorization hold was accepted) | 'refused' (the bank refused it) |
+    // 'grandfathered' (postpaid before the check existed, keeps running as it did).
+    // A POSTPAID org has a credit line only when 'passed' or 'grandfathered'.
+    postpaidCardCheck: text("postpaid_card_check").notNull().default("required"),
+    postpaidCardCheckMessage: text("postpaid_card_check_message"),
+    postpaidCardCheckedAt: timestamp("postpaid_card_checked_at", { withTimezone: true }),
     // The free-credit OFFER this account was created under (migration 0066):
     // 'legacy' for every account that predates it, 'match_100' for every new one.
     // Frozen at creation, like the two figures above. See MATCH_FREE_CREDIT_OFFER.

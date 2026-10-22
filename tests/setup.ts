@@ -57,6 +57,9 @@ beforeAll(async () => {
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "topup_minimums_set_at" timestamp with time zone`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_check" text NOT NULL DEFAULT 'required'`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_check_message" text`;
+  await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_checked_at" timestamptz`;
   // Subscription checkout stamp (migration 0055).
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "subscription_checkout_started_at" timestamp with time zone`;
 

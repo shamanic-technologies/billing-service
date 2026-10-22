@@ -70,12 +70,20 @@ export const POSTPAID_RELOAD_STEP_MIN_CENTS = 5000;
  *
  * Every reader of "is auto top-up on" goes through this, never the bare columns.
  */
+/** 'passed' (a hold was accepted) or 'grandfathered' (postpaid before the check). */
+export function postpaidCardCheckOpensLine(check: string): boolean {
+  return check === "passed" || check === "grandfathered";
+}
+
 export function autoTopupArmed(account: {
   paymentMode: string;
   topupAmountCents: number | null;
   topupThresholdCents: number | null;
+  postpaidCardCheck: string;
 }): boolean {
-  if (account.paymentMode === "postpaid") return true;
+  // A postpaid line opens only once the card held the first step (owner
+  // 2026-10-22, lib/postpaid-card-check): 'required' / 'refused' = no line.
+  if (account.paymentMode === "postpaid") return postpaidCardCheckOpensLine(account.postpaidCardCheck);
   if (account.paymentMode === "subscription") return false;
   return account.topupAmountCents != null && account.topupThresholdCents != null;
 }

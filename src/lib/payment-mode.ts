@@ -35,6 +35,7 @@
 
 import { topupMinimumsFor, withdrawOnboardingAdvanceForPostpaid } from "./free-credit-offer.js";
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
+import { runPostpaidCardCheck } from "./postpaid-card-check.js";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -48,7 +49,7 @@ import { computeBalance, computeSettleBalanceCents, type BalanceSnapshot } from 
 import { cmpCents } from "./cents.js";
 import { computeSettleCharge } from "./month-end-sweep.js";
 import { chargeOrgOnDemand, OnDemandChargeError } from "./on-demand-charge.js";
-import { tierFor } from "./topup-tier.js";
+import { postpaidCardCheckOpensLine, tierFor } from "./topup-tier.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
 import { getCardFacts, type PostpaidCardRefusal } from "./card-facts.js";
 
@@ -59,6 +60,8 @@ export type { PaymentMode } from "./payment-mode-types.js";
 export type PaymentModeRefusalCode =
   /** The org owes money and holds no card we can charge for it. */
   | "outstanding_balance_no_card"
+  /** Postpaid asked, the bank refused the $50 card check hold: no credit line. */
+  | "postpaid_card_hold_refused"
   /** The org owes money and the card was refused (or is in retry backoff). */
   | "outstanding_balance_charge_declined"
   /** The org owes less than the smallest amount a card can be charged. */
@@ -220,8 +223,22 @@ export async function setPaymentMode(
     }
     armPostpaidLine = facts.saved;
     // Postpaid gets no $30 onboarding advance: its signup credit is the $100 match
-    // (owner 2026-10-20). Before any other write, so a client never reads $30 here.
-    await withdrawOnboardingAdvanceForPostpaid(orgId);
+    // (owner 2026-10-20). Before any other write, so a client never reads $30. An org
+    // already postpaid (the signup arm) loses it before the card check too: a refused
+    // card must not leave $30 for campaigns to spend. A prepaid org asking to switch
+    // keeps it until its card passed.
+    if (current === "postpaid") await withdrawOnboardingAdvanceForPostpaid(orgId);
+    // The card must HOLD the first step before any credit is extended (owner
+    // 2026-10-22, lib/postpaid-card-check): a $50 authorization hold, nothing
+    // charged. Refused = no line, the wall says so. Grandfathered / already passed
+    // = nothing to ask. No card yet = nothing to check (no line either).
+    if (facts.saved && !postpaidCardCheckOpensLine(account.postpaidCardCheck)) {
+      const check = await runPostpaidCardCheck(orgId);
+      if (check.result === "refused") {
+        throw new PaymentModeSwitchRefused("postpaid_card_hold_refused", "0", check.message, "card_hold_refused");
+      }
+    }
+    if (current !== "postpaid") await withdrawOnboardingAdvanceForPostpaid(orgId);
   }
 
   if (current === target) {

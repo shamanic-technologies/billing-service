@@ -63,7 +63,7 @@ describe("postpaid: no off switch on the credit line", () => {
   const insertSwitchedOff = (paymentMode: "postpaid" | "prepaid" = "postpaid") =>
     db
       .insert(billingAccounts)
-      .values({ orgId, paymentMode, topupAmountCents: null, topupThresholdCents: null })
+      .values({ orgId, paymentMode, topupAmountCents: null, topupThresholdCents: null, postpaidCardCheck: "grandfathered" })
       .returning();
 
   const authorize = () =>
@@ -123,7 +123,7 @@ describe("postpaid: no off switch on the credit line", () => {
   it("postpaid has no auto top-up and no Add credit: PATCH 409, payment checkout 409, card capture allowed", async () => {
     await db
       .insert(billingAccounts)
-      .values({ orgId, paymentMode: "postpaid", freeCreditOffer: "match_100", topupAmountCents: null, topupThresholdCents: null });
+      .values({ orgId, paymentMode: "postpaid", freeCreditOffer: "match_100", topupAmountCents: null, topupThresholdCents: null, postpaidCardCheck: "passed" });
     ssMocks.getCustomerByOrgOrNull.mockResolvedValue(customerWithEmail("client@lbv.test"));
     const patch = await request(app)
       .patch("/v1/accounts/auto_topup")
@@ -208,9 +208,13 @@ describe("postpaid: no off switch on the credit line", () => {
   });
 
   it("autoTopupArmed: postpaid always, subscription never, prepaid by its flag", () => {
-    const none = { topupAmountCents: null, topupThresholdCents: null };
-    const set = { topupAmountCents: 10000, topupThresholdCents: 500 };
+    const none = { topupAmountCents: null, topupThresholdCents: null, postpaidCardCheck: "grandfathered" };
+    const set = { topupAmountCents: 10000, topupThresholdCents: 500, postpaidCardCheck: "grandfathered" };
     expect(autoTopupArmed({ paymentMode: "postpaid", ...none })).toBe(true);
+    expect(autoTopupArmed({ paymentMode: "postpaid", ...none, postpaidCardCheck: "passed" })).toBe(true);
+    // A card that never held the first step carries no line (lib/postpaid-card-check).
+    expect(autoTopupArmed({ paymentMode: "postpaid", ...none, postpaidCardCheck: "required" })).toBe(false);
+    expect(autoTopupArmed({ paymentMode: "postpaid", ...none, postpaidCardCheck: "refused" })).toBe(false);
     expect(autoTopupArmed({ paymentMode: "subscription", ...set })).toBe(false);
     expect(autoTopupArmed({ paymentMode: "prepaid", ...none })).toBe(false);
     expect(autoTopupArmed({ paymentMode: "prepaid", ...set })).toBe(true);

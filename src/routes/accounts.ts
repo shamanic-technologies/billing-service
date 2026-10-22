@@ -258,7 +258,7 @@ function buildAccountResponse(
       ? reloadTierFor(funds.paidTopupsCents, paymentMode, configuredReloadFor(account))
       : null;
   const postpaidLine =
-    paymentMode === "postpaid" && funds.hasPaymentMethod && funds.autoReloadSupported
+    paymentMode === "postpaid" && enabled && funds.hasPaymentMethod && funds.autoReloadSupported
       ? reloadTierFor(funds.paidTopupsCents, "postpaid")
       : null;
   const freeCredit = computeFreeCreditStatus({
@@ -364,6 +364,10 @@ function buildAccountResponse(
     // when no chargeable card can carry it.
     credit_line_cents: postpaidLine ? Math.abs(postpaidLine.thresholdCents) : null,
     credit_line_step_cents: postpaidLine ? postpaidLine.amountCents : null,
+    // Did the card hold the first step (lib/postpaid-card-check)? 'required' | 'passed'
+    // | 'refused' | 'grandfathered'; the bank's sentence when it refused.
+    postpaid_card_check: account.postpaidCardCheck,
+    postpaid_card_check_message: account.postpaidCardCheckMessage,
     amount_owed_cents:
       paymentMode === "postpaid"
         ? cmpCents(funds.actualBalanceCents, "0") < 0

@@ -347,6 +347,8 @@ export async function insertTestAccount(data: {
   paymentMode?: "prepaid" | "postpaid" | "subscription";
   /** Defaults to 'legacy' (an account that predates migration 0066), like the offer figures above. */
   freeCreditOffer?: "legacy" | "match_100";
+  /** Defaults to 'grandfathered' (postpaid before the card check, migration 0090), like the offer above. */
+  postpaidCardCheck?: "required" | "passed" | "refused" | "grandfathered";
 }) {
   const [account] = await db
     .insert(billingAccounts)
@@ -364,6 +366,7 @@ export async function insertTestAccount(data: {
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
       ...(data.paymentMode ? { paymentMode: data.paymentMode } : {}),
       freeCreditOffer: data.freeCreditOffer ?? "legacy",
+      postpaidCardCheck: data.postpaidCardCheck ?? "grandfathered",
     })
     .returning();
   return account;

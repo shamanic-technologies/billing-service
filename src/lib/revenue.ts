@@ -95,6 +95,8 @@ export type RevenueClassReason =
   | "prepaid_no_chargeable_card"
   | "postpaid_no_chargeable_card"
   | "postpaid_charge_retries_exhausted"
+  /** Postpaid whose card has not (yet) held the first step: no credit line, nothing charged. */
+  | "postpaid_card_not_checked"
   | "postpaid_idle"
   | "prepaid_auto_topup_idle"
   | "prepaid_balance_spent"
@@ -159,6 +161,11 @@ export function classify(p: {
     return { revenueClass: "recurring", reason: "subscription", chargeableCard };
   }
   if (p.paymentMode === "postpaid") {
+    // autoTopupEnabled = the line is open (lib/topup-tier autoTopupArmed): a card
+    // that never held the first step carries no line, so nothing is collected.
+    if (!p.autoTopupEnabled) {
+      return { revenueClass: "none", reason: "postpaid_card_not_checked", chargeableCard };
+    }
     if (!chargeableCard) {
       return p.chargeRetriesExhausted && p.hasCardPm
         ? { revenueClass: "none", reason: "postpaid_charge_retries_exhausted", chargeableCard }

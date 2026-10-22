@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as ssClient from "../../src/lib/stripe-service-client.js";
 import { reloadOffSession } from "../../src/lib/reload.js";
+import * as cardCheck from "../../src/lib/postpaid-card-check.js";
 
 const ORG_ID = "org_test";
 const IDEMPOTENCY_KEY = "ik_test_123";
@@ -28,6 +29,8 @@ describe("reloadOffSession", () => {
     chargeOrgOffSession = vi
       .spyOn(ssClient, "chargeOrgOffSession")
       .mockResolvedValue(buildCharge());
+    // No live credit-line hold: every charge goes to the card (tests/integration/postpaid-card-hold).
+    vi.spyOn(cardCheck, "payByCapturingHold").mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -141,6 +144,7 @@ describe("reloadOffSession on a refused card", () => {
 
   beforeEach(() => {
     chargeOrgOffSession = vi.spyOn(ssClient, "chargeOrgOffSession");
+    vi.spyOn(cardCheck, "payByCapturingHold").mockResolvedValue(null);
   });
 
   afterEach(() => {

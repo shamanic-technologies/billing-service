@@ -532,6 +532,7 @@ router.get("/internal/accounts/by-org/:orgId/balance", async (req, res) => {
     .select({
       id: billingAccounts.id,
       paymentMode: billingAccounts.paymentMode,
+      postpaidCardCheck: billingAccounts.postpaidCardCheck,
       topupAmountCents: billingAccounts.topupAmountCents,
       topupThresholdCents: billingAccounts.topupThresholdCents,
     })
