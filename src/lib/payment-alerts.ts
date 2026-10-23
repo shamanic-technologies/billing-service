@@ -56,10 +56,14 @@ const HOT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const SCAN_CONCURRENCY = 4;
 
 /**
- * Staff, mirrored from api-service `src/lib/staff.ts` (STAFF_EMAILS), plus any
- * `@distribute.you` address (our own test accounts). Plus-addressing is ignored.
+ * Is this address US? Staff, mirrored from api-service `src/lib/staff.ts` (STAFF_EMAILS),
+ * plus any `@distribute.you` address, plus the owner's own TEST addresses (owner
+ * 2026-10-23: kevin@pressbeat.io « is me … test user », never a staff recipient).
+ * Plus-addressing is ignored. Used ONLY to silence an alert or exclude an org from
+ * customer figures; never read it as a list of people to email.
  */
 const STAFF_EMAILS = new Set(["kevin.lourd@gmail.com", "kevin@distribute.you"]);
+const OWNER_TEST_EMAILS = new Set(["kevin@pressbeat.io"]);
 const STAFF_DOMAIN = "@distribute.you";
 
 export function isStaffEmail(email: string | null | undefined): boolean {
@@ -67,7 +71,8 @@ export function isStaffEmail(email: string | null | undefined): boolean {
   if (!normalized) return false;
   if (normalized.endsWith(STAFF_DOMAIN)) return true;
   const [local, domain] = normalized.split("@");
-  return STAFF_EMAILS.has(`${local.split("+")[0]}@${domain}`);
+  const base = `${local.split("+")[0]}@${domain}`;
+  return STAFF_EMAILS.has(base) || OWNER_TEST_EMAILS.has(base);
 }
 
 export type PaymentKind =

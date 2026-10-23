@@ -135,6 +135,8 @@ describe("composeAbsorbedCosts", () => {
   });
 
   it("names a staff test org as ours: no billing contact, every user staff", () => {
+    // pressbeat.io: the owner's own test address on the card and as the only user.
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "kevin@pressbeat.io", userEmails: ["kevin@pressbeat.io"] })).toBe("staff_billing_contact");
     expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: ["kevin@distribute.you", "kevin.lourd+e2e@gmail.com"] })).toBe("staff_test_org");
     // No user at all: nobody to say it is ours.
     expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: [] })).toBeNull();
