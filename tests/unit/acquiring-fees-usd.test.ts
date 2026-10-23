@@ -66,4 +66,17 @@ describe("fetchOrgNames", () => {
     expect(out.get(REAL)).toBe("GrowthAgency.dev");
     expect(out.has("unknown")).toBe(false);
   });
+
+  it("tells a deleted org (notFound) apart, and refuses a reply without notFound", async () => {
+    process.env.CLIENT_SERVICE_URL = "http://client.test";
+    process.env.CLIENT_SERVICE_API_KEY = "k";
+    const GONE = "17962970-7099-4a73-88e2-deefdbd9d966";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ orgs: [{ orgId: REAL, name: null }], notFound: [GONE] }), { status: 200 })));
+    const { fetchOrgNamesAndDeleted } = await import("../../src/lib/client-service-client.js");
+    const out = await fetchOrgNamesAndDeleted([REAL, GONE]);
+    expect(out.names.get(REAL)).toBeNull();
+    expect([...out.notFound]).toEqual([GONE]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ orgs: [] }), { status: 200 })));
+    await expect(fetchOrgNamesAndDeleted([REAL])).rejects.toThrow(/unusable shape/);
+  });
 });
