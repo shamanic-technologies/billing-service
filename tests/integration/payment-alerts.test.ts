@@ -149,6 +149,10 @@ describe("owner Telegram alert when a customer pays", () => {
     ]);
     expect(isStaffEmail("kevin.lourd+qa@gmail.com")).toBe(true);
     expect(isStaffEmail("client@acme.com")).toBe(false);
+    // The owner's own test address counts as us (owner 2026-10-23), nobody else at that domain.
+    expect(isStaffEmail("kevin@pressbeat.io")).toBe(true);
+    expect(isStaffEmail("Kevin+demo@Pressbeat.io")).toBe(true);
+    expect(isStaffEmail("press@pressbeat.io")).toBe(false);
   });
 
   it("a failed Telegram send releases the claim, the next scan sends it once", async () => {
