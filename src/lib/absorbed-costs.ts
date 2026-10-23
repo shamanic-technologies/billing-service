@@ -299,12 +299,12 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       cardFeesOtherCurrencies: otherWire(total.other),
       campaignSpendCents: fx(total.campaign),
       /**
-       * Brands moved IN with their history: runs-service moves every past cost row of the
-       * brand, so this org's spend figures INCLUDE spend incurred and paid under the source
-       * org before the transfer. movedUsageNetCents = that history (all costs, net).
+       * Brands moved IN, with the history runs-service moved over (movedUsageNetCents, all
+       * costs, net). Context only: every spend figure here is on the org that INCURRED it,
+       * so that history stays on the source org, where it was spent and paid.
        */
       brandTransfersIn: transfersIn,
-      /** Brands moved OUT: their history left this org's spend figures (it was spent and paid here). */
+      /** Brands moved OUT: their history before the move still counts here (spent and paid here). */
       brandTransfersOut: transfersOut,
       transferredInUsageCents: fx(transfersIn.reduce((s, t) => s.plus(t.movedUsageNetCents), D(0))),
       transferredOutUsageCents: fx(transfersOut.reduce((s, t) => s.plus(t.movedUsageNetCents), D(0))),
@@ -415,8 +415,8 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
         "every card fee is in USD: one taken in EUR (the Stripe account settled in EUR until 2026-08-13) is converted by stripe-service with the rate Stripe recorded on that fee; only a fee with no recorded rate would be served in cardFeesOtherCurrencies, outside the USD figures",
       excluded:
         "our own orgs (ownOrg: true): a platform org, an org whose billing contact is staff and which no non-staff person uses, or a staff test org (no billing contact, every user staff); deleted orgs (orgDeleted: true, client-service no longer holds them); both listed apart, kept out of every fleet figure",
-      brandTransfers:
-        "a brand transfer moves the brand's whole cost history to the new org, so the receiving org's spend includes history paid under the source org; brandTransfersIn / transferredInUsageCents state how much",
+      orgBasis:
+        "every spend figure counts under the org that INCURRED it (the org its run was opened under, runs-service orgBasis=incurred): a transferred brand's history stays on the org that spent and paid it; brandTransfersIn / Out state what moved, context only",
       customerStatus:
         "current = a campaign running now; churned = paid before, nothing running; never_paid = never paid, nothing running; null = unreadable, or the org is deleted",
     },
