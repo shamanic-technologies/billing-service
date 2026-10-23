@@ -6,6 +6,7 @@ const B = "22222222-2222-2222-2222-222222222222"; // never-paid signup
 const P = "33333333-3333-3333-3333-333333333333"; // our own platform org
 const C = "44444444-4444-4444-4444-444444444444"; // account with no absorbed cost
 const K = "55555555-5555-5555-5555-555555555555"; // our own working org (staff billing contact)
+const X = "66666666-6666-6666-6666-666666666666"; // a deleted (torn down) test org that once paid
 
 function inputs() {
   return {
@@ -16,6 +17,8 @@ function inputs() {
       { orgId: P, month: "2026-10", noCampaignCents: "99999", campaignCents: "0" },
       { orgId: K, month: "2026-10", noCampaignCents: "3474", campaignCents: "0" },
     ],
+    deletedOrgIds: new Set<string>(),
+    brandTransfers: [] as Array<{ sourceOrgId: string; targetOrgId: string; brandId: string; movedUsageNetCents: string; transferredAt: Date }>,
     fees: [
       { orgId: A, month: "2026-10", currency: "usd", feeCents: "60" },
       { orgId: A, month: "2026-07", currency: "eur", feeCents: "33" },
@@ -126,9 +129,49 @@ describe("composeAbsorbedCosts", () => {
     // Staff saved the card but a client uses the org: a customer.
     expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "kevin.lourd@gmail.com", userEmails: ["kevin+x@distribute.you", "client@acme.com"] })).toBeNull();
     expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "client@acme.com", userEmails: [] })).toBeNull();
-    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: ["kevin.lourd@gmail.com"] })).toBeNull();
     expect(customerStatusOf({ lastPaymentAt: undefined, campaignsRunning: 1 })).toBe("current");
     expect(customerStatusOf({ lastPaymentAt: undefined, campaignsRunning: 0 })).toBeNull();
     expect(customerStatusOf({ lastPaymentAt: null, campaignsRunning: 0 })).toBe("never_paid");
+  });
+
+  it("names a staff test org as ours: no billing contact, every user staff", () => {
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: ["kevin@distribute.you", "kevin.lourd+e2e@gmail.com"] })).toBe("staff_test_org");
+    // No user at all: nobody to say it is ours.
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: [] })).toBeNull();
+    // A client among the users: a customer.
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: null, userEmails: ["kevin@distribute.you", "client@acme.com"] })).toBeNull();
+    // A client's card on file, staff users only (agency set it up): a customer.
+    expect(ownOrgReasonOf({ platformOrg: false, billingContactEmail: "client@acme.com", userEmails: ["kevin@distribute.you"] })).toBeNull();
+  });
+
+  it("keeps a deleted org out of the customers and every fleet figure, listed apart", () => {
+    const inp = inputs();
+    inp.fees.push({ orgId: X, month: "2026-06", currency: "usd", feeCents: "25" });
+    inp.cashPaidCents.set(X, "2500");
+    inp.activity.set(X, { lastPaymentAt: new Date("2026-06-17T00:00:00Z"), campaignsRunning: 0 });
+    inp.deletedOrgIds.add(X);
+    const out = composeAbsorbedCosts(inp);
+    const x = out.customers.find((c) => c.orgId === X)!;
+    expect(x.orgDeleted).toBe(true);
+    expect(x.ownOrg).toBe(false);
+    expect(x.customerStatus).toBeNull();
+    expect(out.deletedOrgs).toEqual([{ orgId: X, cashPaidCents: "2500", lastPaymentAt: "2026-06-17T00:00:00.000Z", absorbedCents: "25.0000000000" }]);
+    expect(out.fleet.absorbedCents).toBe("710.0000000000");
+    expect(out.fleet.customers).toBe(3);
+    expect(out.fleet.churnedCustomers).toBe(1);
+    expect(out.fleetByMonth.find((m) => m.month === "2026-06")!.absorbedCents).toBe("0.0000000000");
+  });
+
+  it("states the history a brand transfer moved in, on both orgs", () => {
+    const inp = inputs();
+    inp.brandTransfers.push({ sourceOrgId: K, targetOrgId: A, brandId: "brand-1", movedUsageNetCents: "4000.5", transferredAt: new Date("2026-09-28T04:29:06Z") });
+    const out = composeAbsorbedCosts(inp);
+    const a = out.customers.find((c) => c.orgId === A)!;
+    expect(a.transferredInUsageCents).toBe("4000.5000000000");
+    expect(a.brandTransfersIn).toEqual([{ orgId: K, orgName: "GrowthAgency.dev", brandId: "brand-1", movedUsageNetCents: "4000.5000000000", transferredAt: "2026-09-28T04:29:06.000Z" }]);
+    expect(a.transferredOutUsageCents).toBe("0.0000000000");
+    const k = out.customers.find((c) => c.orgId === K)!;
+    expect(k.transferredOutUsageCents).toBe("4000.5000000000");
+    expect(k.brandTransfersOut[0].orgId).toBe(A);
   });
 });

@@ -24,8 +24,20 @@ function config(): { url: string; apiKey: string } {
  * is absent from the map.
  */
 export async function fetchOrgNames(orgIds: string[]): Promise<Map<string, string | null>> {
+  return (await fetchOrgNamesAndDeleted(orgIds)).names;
+}
+
+/**
+ * Same read, plus the ids client-service answered `notFound`: an org it no longer holds
+ * (torn down). A positive answer from the owner of orgs, never inferred from a missing
+ * name. A client-service that does not serve `notFound` throws (never "nobody deleted").
+ */
+export async function fetchOrgNamesAndDeleted(
+  orgIds: string[]
+): Promise<{ names: Map<string, string | null>; notFound: Set<string> }> {
   const { url, apiKey } = config();
   const out = new Map<string, string | null>();
+  const notFound = new Set<string>();
   // client-service validates each id as a UUID and refuses the WHOLE batch on one bad id;
   // an id it would refuse names no org of its own (absent from the map).
   const unique = [...new Set(orgIds)].filter((id) => RFC_UUID.test(id));
@@ -37,11 +49,14 @@ export async function fetchOrgNames(orgIds: string[]): Promise<Map<string, strin
       signal: AbortSignal.timeout(READ_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`client-service POST /internal/orgs/names failed: ${res.status} ${await res.text()}`);
-    const body = (await res.json()) as { orgs?: Array<{ orgId: string; name: string | null }> };
-    if (!Array.isArray(body?.orgs)) throw new Error("client-service org names answered an unusable shape");
+    const body = (await res.json()) as { orgs?: Array<{ orgId: string; name: string | null }>; notFound?: string[] };
+    if (!Array.isArray(body?.orgs) || !Array.isArray(body?.notFound)) {
+      throw new Error("client-service org names answered an unusable shape");
+    }
     for (const o of body.orgs) out.set(o.orgId, typeof o.name === "string" && o.name.trim() ? o.name.trim() : null);
+    for (const id of body.notFound) notFound.add(id);
   }
-  return out;
+  return { names: out, notFound };
 }
 
 /** `GET /internal/users?orgId=`: emails of the people whose org it is (client-service users). */

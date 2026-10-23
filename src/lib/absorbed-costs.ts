@@ -1,12 +1,12 @@
 import { Decimal } from "decimal.js";
 import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "./platform-absorbed.js";
 import { db } from "../db/index.js";
-import { billingAccounts, platformOrgs } from "../db/schema.js";
+import { billingAccounts, brandTransfers, platformOrgs } from "../db/schema.js";
 import { fetchRunsNoCampaignMonthly } from "./runs-client.js";
 import { fetchAcquiringFeesByOrgMonth, fetchOrgCustomerOrNull, listOrgPayments } from "./stripe-service-client.js";
 import { getOrgCash } from "./org-cash.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { RFC_UUID, fetchOrgNames, fetchOrgUserEmails } from "./client-service-client.js";
+import { RFC_UUID, fetchOrgNamesAndDeleted, fetchOrgUserEmails } from "./client-service-client.js";
 import { isStaffEmail } from "./payment-alerts.js";
 import { listAllOffPlatformPayments } from "./off-platform-payments.js";
 
@@ -22,9 +22,11 @@ import { listAllOffPlatformPayments } from "./off-platform-payments.js";
  * absorbed under the rule (the org was billed for it then); from it on, what was.
  *
  * Every figure the page draws is served here; the browser computes nothing.
- * Our OWN orgs (a platform org, or an org whose billing contact is staff and which no
- * non-staff person uses: see `ownOrgReasonOf`) are listed apart and kept out of every
- * fleet statistic. A row names the org by its org name (client-service), never a brand.
+ * Our OWN orgs (a platform org, an org whose billing contact is staff and which no
+ * non-staff person uses, or a staff test org: see `ownOrgReasonOf`) are listed apart and
+ * kept out of every fleet statistic. So are DELETED orgs (client-service answers
+ * `notFound`: torn down, nobody left to be a customer). A row names the org by its org
+ * name (client-service), never a brand.
  * A source we could not read is a 502 upstream, never a zero.
  */
 
@@ -55,7 +57,7 @@ export interface AccountContext {
 }
 
 /** Why an org is OURS, from a recorded fact (never a name match). */
-export type OwnOrgReason = "platform_org" | "staff_billing_contact";
+export type OwnOrgReason = "platform_org" | "staff_billing_contact" | "staff_test_org";
 
 /**
  * Is this org one of ours?
@@ -64,6 +66,9 @@ export type OwnOrgReason = "platform_org" | "staff_billing_contact";
  *   email, set to whoever saved the card) is staff, AND no non-staff person uses the org
  *   (client-service users whose org it is). A client org whose card staff saved still
  *   reads as a customer the moment the client signs in.
+ * - `staff_test_org`: no billing contact at all (no card ever saved) and every person
+ *   whose org it is is staff, at least one (the same fact lib/staff-alert-guard reads as
+ *   a staff test org). A billing contact who is NOT staff keeps it a customer.
  */
 export function ownOrgReasonOf(p: {
   platformOrg: boolean;
@@ -73,6 +78,13 @@ export function ownOrgReasonOf(p: {
   if (p.platformOrg) return "platform_org";
   if (isStaffEmail(p.billingContactEmail) && p.userEmails.every((e) => isStaffEmail(e))) {
     return "staff_billing_contact";
+  }
+  if (
+    p.billingContactEmail === null &&
+    p.userEmails.length > 0 &&
+    p.userEmails.every((e) => isStaffEmail(e))
+  ) {
+    return "staff_test_org";
   }
   return null;
 }
@@ -99,6 +111,15 @@ export function customerStatusOf(a: CustomerActivity | undefined): CustomerStatu
   return a.lastPaymentAt ? "churned" : "never_paid";
 }
 
+export interface BrandTransferRow {
+  sourceOrgId: string;
+  targetOrgId: string;
+  brandId: string;
+  /** Net spend runs-service moved with the brand (all costs, campaign or not). */
+  movedUsageNetCents: string;
+  transferredAt: Date;
+}
+
 export interface AbsorbedInputs {
   spend: SpendMonthRow[];
   fees: FeeMonthRow[];
@@ -110,6 +131,10 @@ export interface AbsorbedInputs {
   cashPaidCents: Map<string, string | null>;
   /** The org's name (client-service), null = the org holds none. */
   orgNames: Map<string, string | null>;
+  /** Orgs client-service no longer holds (answered `notFound`): torn down. */
+  deletedOrgIds: Set<string>;
+  /** Brand transfers (billing's `brand_transfers`): history runs-service moved between orgs. */
+  brandTransfers: BrandTransferRow[];
   activity: Map<string, CustomerActivity>;
   now: Date;
 }
@@ -228,8 +253,18 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
     const absorbed = total.noCampaign.plus(total.fees);
     const platformOrg = inp.platformOrgIds.has(orgId);
     const ownOrgReason: OwnOrgReason | null = platformOrg ? "platform_org" : inp.ownOrgReasons.get(orgId) ?? null;
+    const orgDeleted = inp.deletedOrgIds.has(orgId);
     const activity = inp.activity.get(orgId);
     const lastPaymentAt = activity?.lastPaymentAt;
+    const transferWire = (t: BrandTransferRow, other: string) => ({
+      orgId: other,
+      orgName: inp.orgNames.get(other) ?? null,
+      brandId: t.brandId,
+      movedUsageNetCents: fx(D(t.movedUsageNetCents)),
+      transferredAt: t.transferredAt.toISOString(),
+    });
+    const transfersIn = inp.brandTransfers.filter((t) => t.targetOrgId === orgId).map((t) => transferWire(t, t.sourceOrgId));
+    const transfersOut = inp.brandTransfers.filter((t) => t.sourceOrgId === orgId).map((t) => transferWire(t, t.targetOrgId));
     return {
       orgId,
       orgName: inp.orgNames.get(orgId) ?? null,
@@ -238,6 +273,8 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       platformOrg,
       ownOrg: ownOrgReason !== null,
       ownOrgReason,
+      /** true = client-service no longer holds this org (torn down): not a customer, kept out of every fleet figure. */
+      orgDeleted,
       /** ISO; null = never paid (or unreadable: see lastPaymentReadable). */
       lastPaymentAt: lastPaymentAt ? lastPaymentAt.toISOString() : null,
       lastPaymentReadable: lastPaymentAt !== undefined,
@@ -245,7 +282,8 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
         ? Math.floor((inp.now.getTime() - lastPaymentAt.getTime()) / 86_400_000)
         : null,
       campaignsRunning: activity ? activity.campaignsRunning : null,
-      customerStatus: customerStatusOf(activity),
+      /** null for a deleted org: it is no customer at all. */
+      customerStatus: orgDeleted ? null : customerStatusOf(activity),
       /** true = at least one campaign running now; null = unreadable. */
       current: activity && activity.campaignsRunning !== null ? activity.campaignsRunning > 0 : null,
       hasBillingAccount: acc !== null,
@@ -260,6 +298,16 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       cardFeesCents: fx(total.fees),
       cardFeesOtherCurrencies: otherWire(total.other),
       campaignSpendCents: fx(total.campaign),
+      /**
+       * Brands moved IN with their history: runs-service moves every past cost row of the
+       * brand, so this org's spend figures INCLUDE spend incurred and paid under the source
+       * org before the transfer. movedUsageNetCents = that history (all costs, net).
+       */
+      brandTransfersIn: transfersIn,
+      /** Brands moved OUT: their history left this org's spend figures (it was spent and paid here). */
+      brandTransfersOut: transfersOut,
+      transferredInUsageCents: fx(transfersIn.reduce((s, t) => s.plus(t.movedUsageNetCents), D(0))),
+      transferredOutUsageCents: fx(transfersOut.reduce((s, t) => s.plus(t.movedUsageNetCents), D(0))),
       firstAbsorbedMonth: series.find((s) => D(s.absorbedCents).greaterThan(0))?.month ?? null,
       byMonth: series,
       _absorbed: absorbed,
@@ -267,7 +315,7 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
   });
   customers.sort((a, b) => b._absorbed.comparedTo(a._absorbed) || a.orgId.localeCompare(b.orgId));
 
-  const counted = customers.filter((c) => !c.ownOrg);
+  const counted = customers.filter((c) => !c.ownOrg && !c.orgDeleted);
   const groupStats = (group: typeof counted) => {
     const withCost = group.filter((c) => c._absorbed.greaterThan(0));
     const total = withCost.reduce((s, c) => s.plus(c._absorbed), D(0));
@@ -366,9 +414,11 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       otherCurrencies:
         "every card fee is in USD: one taken in EUR (the Stripe account settled in EUR until 2026-08-13) is converted by stripe-service with the rate Stripe recorded on that fee; only a fee with no recorded rate would be served in cardFeesOtherCurrencies, outside the USD figures",
       excluded:
-        "our own orgs (ownOrg: true): a platform org, or an org whose billing contact is staff and which no non-staff person uses; listed apart, kept out of every fleet figure",
+        "our own orgs (ownOrg: true): a platform org, an org whose billing contact is staff and which no non-staff person uses, or a staff test org (no billing contact, every user staff); deleted orgs (orgDeleted: true, client-service no longer holds them); both listed apart, kept out of every fleet figure",
+      brandTransfers:
+        "a brand transfer moves the brand's whole cost history to the new org, so the receiving org's spend includes history paid under the source org; brandTransfersIn / transferredInUsageCents state how much",
       customerStatus:
-        "current = a campaign running now; churned = paid before, nothing running; never_paid = never paid, nothing running; null = unreadable",
+        "current = a campaign running now; churned = paid before, nothing running; never_paid = never paid, nothing running; null = unreadable, or the org is deleted",
     },
     firstMonth: months[0] ?? null,
     lastMonth: months[months.length - 1] ?? null,
@@ -393,6 +443,10 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
     ownOrgs: customers
       .filter((c) => c.ownOrg)
       .map((c) => ({ orgId: c.orgId, orgName: c.orgName, reason: c.ownOrgReason })),
+    /** Orgs client-service no longer holds, with what they paid and cost while they existed. */
+    deletedOrgs: customers
+      .filter((c) => c.orgDeleted && !c.ownOrg)
+      .map((c) => ({ orgId: c.orgId, cashPaidCents: c.cashPaidCents, lastPaymentAt: c.lastPaymentAt, absorbedCents: c.absorbedCents })),
     fleetByMonth,
     distribution,
     customers: customers.map(({ _absorbed, ...c }) => c),
@@ -467,7 +521,7 @@ const CACHE_MS = 5 * 60_000;
 /** The staff read. Cached 5 minutes: it fans out one cash read per customer. */
 export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
   if (!fresh && cache && now.getTime() - cache.at < CACHE_MS) return cache.value;
-  const [runs, fees, accounts, platform] = await Promise.all([
+  const [runs, fees, accounts, platform, transfers] = await Promise.all([
     fetchRunsNoCampaignMonthly(),
     fetchAcquiringFeesByOrgMonth(),
     db
@@ -479,13 +533,25 @@ export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
       })
       .from(billingAccounts),
     db.select({ orgId: platformOrgs.orgId }).from(platformOrgs),
+    db
+      .select({
+        sourceOrgId: brandTransfers.sourceOrgId,
+        targetOrgId: brandTransfers.targetOrgId,
+        brandId: brandTransfers.sourceBrandId,
+        movedUsageNetCents: brandTransfers.movedUsageNetCents,
+        transferredAt: brandTransfers.transferredAt,
+      })
+      .from(brandTransfers),
   ]);
   const spend = spendRowsFromRuns(runs.orgs);
   const orgIds = [...new Set([...accounts.map((a) => a.orgId), ...spend.map((s) => s.orgId), ...fees.flatMap((f) => (f.orgId ? [f.orgId] : []))])];
   const platformOrgIds = new Set(platform.map((p) => p.orgId));
-  const [orgNames, offPlatform] = orgIds.length
-    ? await Promise.all([fetchOrgNames(orgIds), listAllOffPlatformPayments()])
-    : [new Map<string, string | null>(), []];
+  const [{ names: orgNames, notFound: deletedOrgIds }, offPlatform] = orgIds.length
+    ? await Promise.all([
+        fetchOrgNamesAndDeleted([...new Set([...orgIds, ...transfers.flatMap((t) => [t.sourceOrgId, t.targetOrgId])])]),
+        listAllOffPlatformPayments(),
+      ])
+    : [{ names: new Map<string, string | null>(), notFound: new Set<string>() }, []];
   const lastOffPlatform = new Map<string, Date>();
   for (const p of offPlatform) {
     const prev = lastOffPlatform.get(p.orgId);
@@ -545,6 +611,8 @@ export async function getAbsorbedCosts(now: Date = new Date(), fresh = false) {
     ownOrgReasons,
     cashPaidCents: cash,
     orgNames,
+    deletedOrgIds,
+    brandTransfers: transfers,
     activity,
     now,
   });
