@@ -372,7 +372,7 @@ Owner 2026-10-06: Â« JE NE RECOIS PAS DE NOTIF QUAND ON A UN CLIENT QUI A PAYE Â
 - **Exactly once = `payment_alerts` PK `<acquirer>:<payment id>`**, claimed (`ON CONFLICT DO NOTHING`) before the send; a failed send DELETES the claim (next scan retries, logged loudly); nothing older than 3 days or before `PAYMENT_ALERTS_LAUNCH_AT_ISO` is ever alerted (no history replay at deploy).
 - **Scan**: every 30s the hot orgs (checkout opened / off-session charge in 48h), every 10 min every billing account (backstop: an invoice paid later from its hosted page). 45s grace so the charge's signal lands first.
 - **Labels from `payment_alert_signals`**: `reloadOffSession` records each succeeded charge with its metadata `reason` (Revolut: matched by reference; Stripe answers an invoice id, so matched on amount within 15 min); no signal = checkout top-up. A new `reloadOffSession` reason maps in `kindFromChargeReason`.
-- **Never the owner's own actions**: `direct` (hand-recorded) payments ignored; platform orgs and a checkout opened by staff (`isStaffEmail`: api-service `STAFF_EMAILS` mirror + any `@distribute.you`) are claimed `skipped`.
+- **Never the owner's own actions**: `direct` (hand-recorded) payments ignored; platform orgs and a checkout opened by staff (`isStaffEmail`: api-service `STAFF_EMAILS` mirror + any `@distribute.you` + the owner's TEST addresses, `kevin@pressbeat.io` since 2026-10-23) are claimed `skipped`. `isStaffEmail` means "is this us": every caller silences or excludes, none emails it.
 - Refunds are not alerted (issued by staff by hand = the owner's own action; a lost dispute is indistinguishable here).
 
 ### Every other customer billing event (`src/lib/owner-alerts.ts`, migration 0073)
