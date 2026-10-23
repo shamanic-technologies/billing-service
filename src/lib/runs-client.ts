@@ -385,17 +385,25 @@ export interface RunsNoCampaignOrgMonth {
 }
 
 export interface RunsNoCampaignMonthly {
+  /** Which org a row counts under: `incurred` = the org its run was opened under (a brand transfer never moves it). */
+  orgBasis?: string;
   months: Array<{ month: string; netNoCampaignCostInUsdCents: string; netCampaignCostInUsdCents: string; netUnknownCostInUsdCents: string }>;
   orgs: RunsNoCampaignOrgMonth[];
 }
 
-/** runs-service `GET /internal/stats/costs/no-campaign/monthly`: per org per UTC month since the first cost row. */
+/**
+ * runs-service `GET /internal/stats/costs/no-campaign/monthly`: per org per UTC month since
+ * the first cost row, keyed on the org that INCURRED the spend (`orgBasis=incurred`): a
+ * transferred brand's history stays on the org that spent and paid it. The echoed basis is
+ * checked: an older runs-service ignores the parameter and answers the current basis, which
+ * would put that history on the receiving org again, so a mismatch throws.
+ */
 export async function fetchRunsNoCampaignMonthly(): Promise<RunsNoCampaignMonthly> {
   const config = getRunsServiceConfig();
   if (!config) {
     throw new Error("RUNS_SERVICE_URL and RUNS_SERVICE_API_KEY must be configured");
   }
-  const res = await fetchWithRetry(`${config.url}/internal/stats/costs/no-campaign/monthly`, {
+  const res = await fetchWithRetry(`${config.url}/internal/stats/costs/no-campaign/monthly?orgBasis=incurred`, {
     headers: { "x-api-key": config.apiKey },
     signal: AbortSignal.timeout(120_000),
   });
@@ -406,6 +414,9 @@ export async function fetchRunsNoCampaignMonthly(): Promise<RunsNoCampaignMonthl
   const body = (await res.json()) as RunsNoCampaignMonthly;
   if (!Array.isArray(body.orgs) || !Array.isArray(body.months)) {
     throw new Error("runs-service no-campaign monthly answered an unusable shape");
+  }
+  if (body.orgBasis !== "incurred") {
+    throw new Error(`runs-service no-campaign monthly answered orgBasis=${String(body.orgBasis)}, asked incurred`);
   }
   return body;
 }
