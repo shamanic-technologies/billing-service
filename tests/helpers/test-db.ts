@@ -28,6 +28,7 @@ import {
   subscriptionAutoUpgrades,
   paymentConsents,
   paymentAlerts,
+  featuresCatalogueSnapshots,
   paymentAlertSignals,
   ownerAlerts,
   WELCOME_PROMO_CODE,
@@ -72,6 +73,7 @@ export async function cleanTestData() {
   await db.delete(subscriptionAutoUpgrades);
   await db.delete(paymentConsents);
   await db.delete(paymentAlerts);
+  await db.delete(featuresCatalogueSnapshots);
   await db.delete(paymentAlertSignals);
   await db.delete(ownerAlerts);
   await db.delete(subscriptionCreditExpiries);
