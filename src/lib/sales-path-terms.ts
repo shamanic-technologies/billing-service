@@ -40,6 +40,7 @@
 import { fetchWithRetry } from "./fetch-retry.js";
 import { legIdentityKey } from "./leg-identity.js";
 import { errorReason } from "./pg-error.js";
+import { readCatalogueSnapshot, writeCatalogueSnapshot } from "./features-catalogue-snapshots.js";
 
 const CATALOGUE_TIMEOUT_MS = 10_000;
 const CATALOGUE_TTL_MS = 60_000;
@@ -224,9 +225,25 @@ export function salesPathTermsOf(
   return toTerms(full);
 }
 
+/**
+ * NEVER BLOCKS ON features-service ONCE READ (CAPS-READ-FEATURES-DOWN-1024): the
+ * caps read and authorize ask these terms on every measurement, and a refresh
+ * awaited every minute held them whenever features-service was slow. A known
+ * snapshot (memory, else the persisted one after a restart) is served at once and
+ * refreshed in the background (one at a time, at most one attempt per TTL while
+ * features-service fails). Only a process that never read them, with nothing
+ * persisted, waits on features-service (and fails loud).
+ */
 let snapshot: { at: number; index: TermsIndex } | null = null;
 let inFlight: Promise<TermsIndex> | null = null;
 let pinned = false;
+
+const SNAPSHOT_KEY = "sales_path_terms";
+
+interface CatalogueBodies {
+  channels: PublishedSalesChannel[];
+  origins: PublishedSourcingOrigins;
+}
 
 async function readJson<T>(url: string, what: string): Promise<T> {
   const res = await fetchWithRetry(url, { signal: AbortSignal.timeout(CATALOGUE_TIMEOUT_MS) });
@@ -234,6 +251,20 @@ async function readJson<T>(url: string, what: string): Promise<T> {
     throw new SalesPathTermsUnavailableError(`features-service answered ${res.status} for the ${what}.`);
   }
   return (await res.json()) as T;
+}
+
+/** PURE: the index out of the two published bodies; throws on a malformed one. */
+function indexFromBodies(body: { channels?: unknown }, origins: unknown): TermsIndex {
+  const o = origins as PublishedSourcingOrigins | null;
+  if (!Array.isArray(body?.channels)) {
+    throw new SalesPathTermsUnavailableError("features-service returned no channels array.");
+  }
+  if (!Array.isArray(o?.origins) || typeof o?.sourceLegKey !== "string") {
+    throw new SalesPathTermsUnavailableError(
+      "features-service returned no sourcing origins (origins[] + sourceLegKey)."
+    );
+  }
+  return termsIndexFrom(body.channels as PublishedSalesChannel[], o);
 }
 
 async function readCatalogue(): Promise<TermsIndex> {
@@ -247,39 +278,70 @@ async function readCatalogue(): Promise<TermsIndex> {
     readJson<{ channels?: PublishedSalesChannel[] }>(`${url}/public/channels`, "published channels"),
     readJson<PublishedSourcingOrigins>(`${url}/public/sourcing-origins`, "published sourcing origins"),
   ]);
-  if (!Array.isArray(body?.channels)) {
-    throw new SalesPathTermsUnavailableError("features-service returned no channels array.");
+  const index = indexFromBodies(body, origins);
+  try {
+    await writeCatalogueSnapshot(SNAPSHOT_KEY, { channels: body.channels!, origins } satisfies CatalogueBodies);
+  } catch (err) {
+    console.error(`[billing-service] sales-path item terms: snapshot not persisted: ${errorReason(err)}`);
   }
-  if (!Array.isArray(origins?.origins) || typeof origins?.sourceLegKey !== "string") {
-    throw new SalesPathTermsUnavailableError(
-      "features-service returned no sourcing origins (origins[] + sourceLegKey)."
-    );
-  }
-  return termsIndexFrom(body.channels, origins);
+  return index;
 }
 
-/** The terms, read from the published catalogue (reused for a minute). */
+/** The persisted terms, or null (none, or a body this code can no longer parse). */
+async function storedIndex(): Promise<TermsIndex | null> {
+  const snap = await readCatalogueSnapshot(SNAPSHOT_KEY);
+  if (!snap) return null;
+  try {
+    const b = snap.body as Partial<CatalogueBodies>;
+    return indexFromBodies({ channels: b?.channels }, b?.origins);
+  } catch (err) {
+    console.error(`[billing-service] stored sales-path item terms unparseable, asking features-service: ${errorReason(err)}`);
+    return null;
+  }
+}
+
+function refresh(): Promise<TermsIndex> {
+  if (!inFlight) {
+    inFlight = readCatalogue()
+      .then((index) => {
+        snapshot = { at: Date.now(), index };
+        return index;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+  }
+  return inFlight;
+}
+
+function refreshInBackground(): void {
+  if (inFlight) return;
+  refresh().catch((err) => {
+    // Keep serving the last snapshot; next attempt in one TTL.
+    if (snapshot) snapshot = { at: Date.now(), index: snapshot.index };
+    console.error(
+      "[billing-service] could not refresh the sales-path item terms; using the last snapshot.",
+      err
+    );
+  });
+}
+
+/** The terms, read from the published catalogue (reused for a minute, never awaited once known). */
 export async function getSalesPathTerms(): Promise<SalesPathTerms> {
-  if (snapshot && (pinned || Date.now() - snapshot.at < CATALOGUE_TTL_MS)) {
+  if (snapshot) {
+    if (!pinned && Date.now() - snapshot.at >= CATALOGUE_TTL_MS) refreshInBackground();
     return toTerms(snapshot.index);
   }
-  if (!inFlight) {
-    inFlight = readCatalogue().finally(() => {
-      inFlight = null;
-    });
+  const stored = await storedIndex();
+  if (stored) {
+    // at 0: refreshed now, in the background.
+    snapshot = { at: 0, index: stored };
+    refreshInBackground();
+    return toTerms(stored);
   }
   try {
-    const index = await inFlight;
-    snapshot = { at: Date.now(), index };
-    return toTerms(index);
+    return toTerms(await refresh());
   } catch (err) {
-    if (snapshot) {
-      console.error(
-        "[billing-service] could not refresh the sales-path item terms; using the last snapshot.",
-        err
-      );
-      return toTerms(snapshot.index);
-    }
     throw err instanceof SalesPathTermsUnavailableError
       ? err
       : new SalesPathTermsUnavailableError(
