@@ -1293,6 +1293,14 @@ export const platformOrgs = pgTable("platform_orgs", {
 // sales_path_reactive_charges (migration 0062) was DROPPED by migration 0088 with
 // the per-campaign item budgets it charged (it never held a row).
 
+// The last features-service catalogue answer per key (migration 0091,
+// lib/features-catalogue-snapshots): served when features-service cannot answer.
+export const featuresCatalogueSnapshots = pgTable("features_catalogue_snapshots", {
+  key: text("key").primaryKey(),
+  body: jsonb("body").notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // Owner Telegram alert per succeeded payment (migration 0072, lib/payment-alerts).
 // The primary key is the exactly-once guarantee: claimed before any send.
 export const paymentAlerts = pgTable("payment_alerts", {

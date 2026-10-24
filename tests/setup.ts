@@ -372,6 +372,7 @@ beforeAll(async () => {
     // Drops the per-campaign ceilings created above (and altered by 0064/0065/0074),
     // so the suite runs on prod's shape.
     "0088_drop_per_campaign_ceilings.sql",
+    "0091_features_catalogue_snapshots.sql",
   ]) {
     const { readFileSync } = await import("fs");
     const migration = readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8");
