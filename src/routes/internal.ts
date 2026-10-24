@@ -45,6 +45,12 @@ import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
 import { flagUncollectableDebt, listUnpaidDebts } from "../lib/unpaid-debt.js";
 import { getPaymentStoppedPeriods } from "../lib/payment-stopped.js";
+import {
+  CREDIT_EVENTS_DEFAULT_LIMIT,
+  CREDIT_EVENTS_MAX_LIMIT,
+  InvalidCreditEventsCursorError,
+  listCreditEvents,
+} from "../lib/credit-events.js";
 import { getPaymentOutlook } from "../lib/payment-outlook.js";
 import {
   getChargeSchedule,
@@ -738,6 +744,47 @@ router.get("/internal/unpaid-debts", async (_req, res) => {
   } catch (err) {
     console.error("[billing-service] unpaid-debts read failed:", err);
     res.status(502).json({ error: "Failed to read unpaid debts" });
+  }
+});
+
+// GET /internal/credit-events?cursor=&limit=
+//
+// "Credit ran out" / "credit restored" as a dated, fleet-wide feed, for
+// crm-service (the fact registry) to put on the client's Unibox timeline
+// (CREDIT-RAN-OUT-UNIBOX-EVENT-1024). A replay of credit-depletion episodes:
+// nothing stored, nothing sent. See lib/credit-events.
+//
+// Auth: x-api-key only. Resp: { events, nextCursor, hasMore }.
+router.get("/internal/credit-events", async (req, res) => {
+  const rawLimit = req.query.limit;
+  let limit = CREDIT_EVENTS_DEFAULT_LIMIT;
+  if (rawLimit !== undefined) {
+    const n = Number(rawLimit);
+    if (!Number.isInteger(n) || n < 1 || n > CREDIT_EVENTS_MAX_LIMIT) {
+      res.status(400).json({
+        error: `limit must be an integer between 1 and ${CREDIT_EVENTS_MAX_LIMIT}`,
+      });
+      return;
+    }
+    limit = n;
+  }
+  const rawCursor = req.query.cursor;
+  if (rawCursor !== undefined && (typeof rawCursor !== "string" || rawCursor === "")) {
+    res.status(400).json({ error: "cursor must be a non-empty string" });
+    return;
+  }
+
+  try {
+    res.json(
+      await listCreditEvents({ cursor: (rawCursor as string | undefined) ?? null, limit })
+    );
+  } catch (err) {
+    if (err instanceof InvalidCreditEventsCursorError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    console.error("[billing-service] credit-events read failed:", err);
+    res.status(502).json({ error: "Failed to read credit events" });
   }
 });
 

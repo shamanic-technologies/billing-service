@@ -1906,6 +1906,62 @@
           "consents"
         ]
       },
+      "CreditEvent": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "credit_ran_out",
+              "credit_restored"
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "episodeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "type",
+          "orgId",
+          "episodeId",
+          "at"
+        ]
+      },
+      "CreditEventsResponse": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditEvent"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "nextCursor",
+          "hasMore"
+        ]
+      },
       "UnpaidDebtsResponse": {
         "type": "object",
         "properties": {
@@ -8387,6 +8443,72 @@
           },
           "400": {
             "description": "orgId is not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/credit-events": {
+      "get": {
+        "summary": "Credit ran out / credit restored, as a dated fleet-wide feed",
+        "description": "Every credit-depletion episode replayed as events, for the fact registry (crm-service) to show on the client's Unibox timeline. One `credit_ran_out` per episode (at = when the org ran out of credit) and one `credit_restored` when it closed (at = when a real recharge landed). `eventId` is stable (`<episodeId>:ran_out` / `<episodeId>:restored`): the consumer's idempotency key. Total order (at, eventId); pass back `nextCursor` (opaque) to read on; absent cursor = from the first episode. Only events at least 60 seconds old are served, so a cursor never jumps a late commit. `orgId` is the internal org UUID; who the person is behind it is the consumer's to resolve. Platform orgs never open an episode; staff/test orgs are not filtered here. Pure read, x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Events, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditEventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Read failed",
             "content": {
               "application/json": {
                 "schema": {
