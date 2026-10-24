@@ -1169,6 +1169,24 @@ export const PaymentMethodLostResponseSchema = z
   })
   .openapi("PaymentMethodLostResponse");
 
+export const CreditEventSchema = z
+  .object({
+    eventId: z.string(),
+    type: z.enum(["credit_ran_out", "credit_restored"]),
+    orgId: z.string().uuid(),
+    episodeId: z.string().uuid(),
+    at: z.string(),
+  })
+  .openapi("CreditEvent");
+
+export const CreditEventsResponseSchema = z
+  .object({
+    events: z.array(CreditEventSchema),
+    nextCursor: z.string().nullable(),
+    hasMore: z.boolean(),
+  })
+  .openapi("CreditEventsResponse");
+
 export const UnpaidDebtsResponseSchema = z
   .object({
     unpaid_debts: z.array(
@@ -2918,6 +2936,33 @@ registry.registerPath({
   responses: {
     200: { description: "Consents", content: { "application/json": { schema: PaymentConsentsResponseSchema } } },
     400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/credit-events",
+  summary: "Credit ran out / credit restored, as a dated fleet-wide feed",
+  description:
+    "Every credit-depletion episode replayed as events, for the fact registry (crm-service) to show on " +
+    "the client's Unibox timeline. One `credit_ran_out` per episode (at = when the org ran out of credit) " +
+    "and one `credit_restored` when it closed (at = when a real recharge landed). `eventId` is stable " +
+    "(`<episodeId>:ran_out` / `<episodeId>:restored`): the consumer's idempotency key. Total order " +
+    "(at, eventId); pass back `nextCursor` (opaque) to read on; absent cursor = from the first episode. " +
+    "Only events at least 60 seconds old are served, so a cursor never jumps a late commit. `orgId` is the " +
+    "internal org UUID; who the person is behind it is the consumer's to resolve. Platform orgs never open " +
+    "an episode; staff/test orgs are not filtered here. Pure read, x-api-key only.",
+  request: {
+    headers: internalHeaders,
+    query: z.object({
+      cursor: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(1000).optional(),
+    }),
+  },
+  responses: {
+    200: { description: "Events, oldest first", content: { "application/json": { schema: CreditEventsResponseSchema } } },
+    400: { description: "Bad limit or cursor", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: { description: "Read failed", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 
