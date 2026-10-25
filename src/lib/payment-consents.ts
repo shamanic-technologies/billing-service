@@ -14,6 +14,7 @@
 import { asc, eq } from "drizzle-orm";
 import type { Request } from "express";
 import { z } from "zod";
+import "./zod-v3-compat.js";
 import { db } from "../db/index.js";
 import { paymentConsents, PLATFORM_USER_ID, type PaymentConsent } from "../db/schema.js";
 import { PaymentConsentSchema } from "../schemas.js";

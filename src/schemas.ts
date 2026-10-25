@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ZOD3_EMAIL, zod3Uuid } from "./lib/zod-v3-compat.js";
 import {
   OpenAPIRegistry,
   extendZodWithOpenApi,
@@ -35,8 +36,8 @@ const ActualBalanceCentsSchema = CentsStringSchema.openapi({
 
 export const BillingAccountSchema = z
   .object({
-    id: z.string().uuid(),
-    org_id: z.string().uuid(),
+    id: zod3Uuid(),
+    org_id: zod3Uuid(),
     /** How this org pays (prepaid | postpaid). See PUT /v1/accounts/payment_mode. */
     payment_mode: z.enum(["prepaid", "postpaid"]),
     /** Lifetime credits added: stripe-service paid topups + sum(local_promos). */
@@ -272,7 +273,7 @@ export const PrepaidCheckoutResponseSchema = z
   .object({
     url: z.string().url().openapi({ description: "Hosted payment page. Paying it charges topup_amount_cents and saves the card for the automatic reloads." }),
     session_id: z.string(),
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: z.literal("prepaid"),
     free_credit_offer: z.string(),
     topup_amount_cents: z.number().int(),
@@ -282,7 +283,7 @@ export const PrepaidCheckoutResponseSchema = z
 
 export const PrepaidStatusResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     state: z.enum(["awaiting_payment", "active", "card_not_reloadable", "auto_topup_off", "not_prepaid"]).openapi({
       description:
         "`awaiting_payment` nothing paid and no card yet. `active` prepaid, auto top-up armed, the saved card can be reloaded. `card_not_reloadable` the payment landed (credit is spendable) but the card cannot be charged with nobody present: no reload will fire, add another card (POST /v1/accounts/card_setup). `auto_topup_off` prepaid without auto top-up. `not_prepaid` postpaid or subscription.",
@@ -308,7 +309,7 @@ export const PrepaidStatusResponseSchema = z
 
 export const AgentApiSignupResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     freeCreditOffer: z.literal("agent_api"),
     paymentMode: z.string(),
     created: z.boolean().openapi({ description: "True when this call created the billing account." }),
@@ -380,7 +381,7 @@ export const DeclareAcquirerRequestSchema = z
     /** The only declaration this surface accepts: this new org pays through Revolut. */
     acquirer: z.literal("revolut"),
     /** The creator's email, used to create the acquirer-side customer. */
-    email: z.string().email().optional(),
+    email: z.string().email({ pattern: ZOD3_EMAIL }).optional(),
     /** The creator's name, used to create the acquirer-side customer. */
     full_name: z.string().min(1).optional(),
   })
@@ -637,7 +638,7 @@ export const RedeemPromotionCodeResponseSchema = z
 
 export const CreditGrantRequestSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     amountCents: z.number().int().positive(),
     /**
      * Closed set — a caller can never supply an arbitrary reason. The two invite
@@ -761,8 +762,8 @@ export const OffPlatformPaymentReclassifyRequestSchema = z
 
 export const OffPlatformPaymentReclassifyResponseSchema = z
   .object({
-    grantId: z.string().uuid(),
-    orgId: z.string().uuid(),
+    grantId: zod3Uuid(),
+    orgId: zod3Uuid(),
     amountCents: CentsStringSchema,
     paidAt: z.string(),
     recordedBy: z.string().nullable(),
@@ -845,7 +846,7 @@ export const SetUsageDiscountRequestSchema = z
 
 export const InternalUsageDiscountSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /**
      * Current discount percentage (0–100). A known org with NO discount returns 0
      * (NOT null, NOT 404) so a non-discounted org resolves to "0% off" = no change.
@@ -858,7 +859,7 @@ export const InternalUsageDiscountSchema = z
 
 export const UsageDiscountResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** Current discount percentage (0–100); null when no discount is set. */
     discountPct: z.number().int().nullable(),
     /** Staff email that set the discount; null when unset or none recorded. */
@@ -887,7 +888,7 @@ export const InternalAccountTeardownDeletedRowsSchema = z
 export const InternalAccountTeardownResponseSchema = z
   .object({
     ok: z.literal(true),
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /**
      * False when billing never held an account for this org. The teardown then
      * created nothing (no account, no Stripe customer, no welcome evaluation) and
@@ -903,7 +904,7 @@ export const InternalAccountTeardownResponseSchema = z
 export const OrgCreationBonusResponseSchema = z
   .object({
     ok: z.literal(true),
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** Ledger reason the row carries in GET /v1/credits/grants. Always `org_creation_bonus`. */
     reason: z.literal("org_creation_bonus"),
     /** What this org received, in cents ($5 = 500). On a retry: the original amount. */
@@ -918,7 +919,7 @@ export const OrgCreationBonusResponseSchema = z
 export const TrialSeedResponseSchema = z
   .object({
     ok: z.literal(true),
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** What the org holds as a trial seed, in cents. */
     seededCents: z.number().int(),
     /** true when the org was already seeded — the seed is never doubled. */
@@ -929,7 +930,7 @@ export const TrialSeedResponseSchema = z
 export const SignupWelcomeResponseSchema = z
   .object({
     ok: z.literal(true),
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** What this org was seeded with before signing up (0 when it never was). */
     trialSeedCents: z.number().int(),
     /** What this call granted under the welcome code (0 when nothing was left to grant). */
@@ -952,16 +953,16 @@ export const SignupWelcomeResponseSchema = z
 export const ReferralClaimRequestSchema = z
   .object({
     /** The org that signed up through the invite link (the invitee). */
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** The org whose invite link they used (the inviter). */
-    referrerOrgId: z.string().uuid(),
+    referrerOrgId: zod3Uuid(),
   })
   .openapi("ReferralClaimRequest");
 
 export const FreeCreditPromiseSchema = z
   .object({
-    id: z.string().uuid(),
-    orgId: z.string().uuid(),
+    id: zod3Uuid(),
+    orgId: zod3Uuid(),
     /** 'welcome' (the signup offer) | 'referral' (the invite offer). */
     kind: z.string(),
     /** What lands when it unlocks; frozen at creation, integer cents. */
@@ -969,9 +970,9 @@ export const FreeCreditPromiseSchema = z
     /** Cumulative succeeded payments (net of returns) that unlock it; frozen. */
     paidTriggerCents: z.number().int(),
     /** Legacy (pre-0071 invitee-held promises); always null on a new claim. */
-    referrerOrgId: z.string().uuid().nullable(),
+    referrerOrgId: zod3Uuid().nullable(),
     /** On a referrer's promise: the referred org whose payments earn it. */
-    referredOrgId: z.string().uuid().nullable(),
+    referredOrgId: zod3Uuid().nullable(),
     /** ISO-8601 instant the promise was granted; null while outstanding. */
     grantedAt: z.string().nullable(),
     createdAt: z.string(),
@@ -989,7 +990,7 @@ export const ReferralClaimResponseSchema = z
 
 export const OutstandingFreeCreditPromiseSchema = z
   .object({
-    id: z.string().uuid(),
+    id: zod3Uuid(),
     kind: z.string(),
     /**
      * What would actually land if it unlocked right now. For a welcome promise that
@@ -1011,7 +1012,7 @@ export const OutstandingFreeCreditPromiseSchema = z
      * paid_so_far / remaining / progress are measured on THAT org's payments, not
      * this org's. Null otherwise.
      */
-    referred_org_id: z.string().uuid().nullable(),
+    referred_org_id: zod3Uuid().nullable(),
     /**
      * Display name of that referred org, so an inviter holding three pending $500s
      * can tell WHICH referral earned each one. billing resolves it through
@@ -1035,14 +1036,14 @@ export const OutstandingFreeCreditPromiseSchema = z
      * Legacy: set only on a pre-0071 invitee-held promise (none outstanding after
      * 0071). A referred org holds no referral promise and is credited nothing.
      */
-    referrer_org_id: z.string().uuid().nullable(),
+    referrer_org_id: zod3Uuid().nullable(),
     created_at: z.string(),
   })
   .openapi("OutstandingFreeCreditPromise");
 
 export const FreeCreditPromisesResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     /** Cumulative succeeded payments, net of refunds + lost disputes. */
     paid_topups_cents: CentsStringSchema,
     /**
@@ -1083,10 +1084,10 @@ export const UpdatePromoCodeRequestSchema = z
 
 export const TransferBrandRequestSchema = z
   .object({
-    sourceBrandId: z.string().uuid(),
-    sourceOrgId: z.string().uuid(),
-    targetOrgId: z.string().uuid(),
-    targetBrandId: z.string().uuid().optional(),
+    sourceBrandId: zod3Uuid(),
+    sourceOrgId: zod3Uuid(),
+    targetOrgId: zod3Uuid(),
+    targetBrandId: zod3Uuid().optional(),
   })
   .openapi("TransferBrandRequest");
 
@@ -1122,7 +1123,7 @@ export const TransferBrandResponseSchema = z
     updatedTables: z.array(TransferBrandTableResultSchema),
     balanceAdjustment: z
       .object({
-        transferId: z.string().uuid(),
+        transferId: zod3Uuid(),
         movedUsageNetCents: z.string(),
         movedActualNetCents: z.string(),
         transferredAt: z.string(),
@@ -1148,13 +1149,13 @@ export const DunningTickResponseSchema = z
 
 export const PaymentMethodLostRequestSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
   })
   .openapi("PaymentMethodLostRequest");
 
 export const PaymentMethodLostResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     state: z.enum([
       "no_debt",
       "collectable",
@@ -1173,8 +1174,8 @@ export const CreditEventSchema = z
   .object({
     eventId: z.string(),
     type: z.enum(["credit_ran_out", "credit_restored"]),
-    orgId: z.string().uuid(),
-    episodeId: z.string().uuid(),
+    orgId: zod3Uuid(),
+    episodeId: zod3Uuid(),
     at: z.string(),
   })
   .openapi("CreditEvent");
@@ -1191,7 +1192,7 @@ export const UnpaidDebtsResponseSchema = z
   .object({
     unpaid_debts: z.array(
       z.object({
-        org_id: z.string().uuid(),
+        org_id: zod3Uuid(),
         owed_cents: z.string(),
         flagged_at: z.string(),
         episode_started_at: z.string(),
@@ -1258,8 +1259,8 @@ const BrandFundingModeSchema = z
 
 export const BrandSalesBudgetSchema = z
   .object({
-    brandId: z.string().uuid(),
-    orgId: z.string().uuid(),
+    brandId: zod3Uuid(),
+    orgId: zod3Uuid(),
     mode: BrandFundingModeSchema,
     /** global: the stated daily sales budget; null in campaigns mode. */
     dailyBudgetCents: CentsStringSchema.nullable(),
@@ -1283,8 +1284,8 @@ export const ClearBrandSalesBudgetResponseSchema = BrandSalesBudgetSchema.extend
 
 export const BrandSalesBudgetHistorySchema = z
   .object({
-    brandId: z.string().uuid(),
-    orgId: z.string().uuid(),
+    brandId: zod3Uuid(),
+    orgId: zod3Uuid(),
     history: z.array(
       z.object({
         mode: BrandBudgetModeSchema,
@@ -1298,8 +1299,8 @@ export const BrandSalesBudgetHistorySchema = z
 
 export const BrandDailyBudgetSchema = z
   .object({
-    brandId: z.string().uuid(),
-    orgId: z.string().uuid(),
+    brandId: zod3Uuid(),
+    orgId: zod3Uuid(),
     /** Current daily spend ceiling, decimal string (numeric(16,10)). */
     dailyBudgetCents: CentsStringSchema,
     updatedAt: z.string(),
@@ -1308,7 +1309,7 @@ export const BrandDailyBudgetSchema = z
 
 export const ReadBrandDailyBudgetSchema = z
   .object({
-    brandId: z.string().uuid(),
+    brandId: zod3Uuid(),
     /** Current daily spend ceiling; null when no budget has been set. */
     dailyBudgetCents: CentsStringSchema.nullable(),
     /** Last-set timestamp; null when no budget has been set. */
@@ -1327,7 +1328,7 @@ export const BrandDailyBudgetChangeSchema = z
 
 export const ReadBrandDailyBudgetHistorySchema = z
   .object({
-    brandId: z.string().uuid(),
+    brandId: zod3Uuid(),
     /**
      * Ordered daily-budget change history, oldest first (chronological
      * timeline). Empty when no budget has been set for this org+brand since the
@@ -1362,8 +1363,8 @@ export const BrandDailyBudgetDaySchema = z
 
 export const ReadBrandDailyBudgetByDaySchema = z
   .object({
-    brandId: z.string().uuid(),
-    orgId: z.string().uuid(),
+    brandId: zod3Uuid(),
+    orgId: zod3Uuid(),
     /**
      * The grain these amounts are stated at. The BRAND total is the finest
      * grain billing genuinely records over time.
@@ -1392,7 +1393,7 @@ export const PaymentStoppedPeriodSchema = z
 
 export const PaymentStoppedPeriodsResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /**
      * The earliest instant this record demonstrably exists (ISO 8601), across
      * BOTH sources (depletion episodes and failed reload streaks), or null when
@@ -1443,14 +1444,14 @@ export const StaffSetPaymentModeRequestSchema = z
 
 export const PaymentModeResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: PaymentModeSchema,
   })
   .openapi("PaymentModeResponse");
 
 export const SetPaymentModeResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: PaymentModeSchema,
     /** Cents collected by this switch to settle what was owed ("0" when nothing). */
     settled_cents: z.string(),
@@ -1493,7 +1494,7 @@ export const PaymentModeRefusalSchema = z
 
 export const PaymentOutlookResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     /** How this org pays. A prepaid org is never charge_blocked. */
     paymentMode: PaymentModeSchema,
     /**
@@ -1585,7 +1586,7 @@ export const ExpectedChargeSchema = z
 
 export const ChargeScheduleResponseSchema = z
   .object({
-    orgId: z.string().uuid(),
+    orgId: zod3Uuid(),
     paymentMode: PaymentModeSchema,
     /** The payment outlook's state, decided at the same instant. */
     state: z.enum([
@@ -1748,9 +1749,9 @@ export const PublicBillingStatsSchema = z
 
 const protectedHeaders = z.object({
   "x-api-key": z.string(),
-  "x-org-id": z.string().uuid(),
-  "x-user-id": z.string().uuid(),
-  "x-run-id": z.string().uuid(),
+  "x-org-id": zod3Uuid(),
+  "x-user-id": zod3Uuid(),
+  "x-run-id": zod3Uuid(),
   "x-campaign-id": z.string().optional().openapi({ description: "Campaign ID injected by workflow-service" }),
   "x-brand-id": z.string().optional().openapi({ description: "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)", example: "uuid1,uuid2,uuid3" }),
   "x-workflow-slug": z.string().optional().openapi({ description: "Workflow slug injected by workflow-service" }),
@@ -1867,7 +1868,7 @@ registry.registerPath({
 
 export const RunwayResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: z.enum(["prepaid", "postpaid", "subscription"]),
     state: z.enum(["days", "depleted", "no_budget", "budget_unavailable", "not_prepaid"]).openapi({
       description:
@@ -2199,7 +2200,7 @@ registry.registerPath({
   summary: "Mark an org as opened by an AI agent through the API (no free credit, ever)",
   description:
     "Called by client-service at provisioning, BEFORE anything else touches billing for the org. Creates the billing account as `agent_api` (prepaid, entitlement 0) when none exists; an existing account has its offer switched and any free credit still to come withdrawn (credit already granted is kept and reported in freeCreditHeldCents). From then on every automatic free-credit path refuses the org (welcome, any promo redeem, the $30 advance, trial seed, signup welcome, invite and task grants, subscription trial): the explicit grant routes answer 409 `free_credit_not_offered`, signup answers zeros, a subscription starts with no trial. DELETE /v1/accounts/auto_topup answers 409 `auto_topup_required` while the org is prepaid. Idempotent.",
-  request: { headers: z.object({ "x-api-key": z.string() }), params: z.object({ orgId: z.string().uuid() }) },
+  request: { headers: z.object({ "x-api-key": z.string() }), params: z.object({ orgId: zod3Uuid() }) },
   responses: {
     200: { description: "Marked", content: { "application/json": { schema: AgentApiSignupResponseSchema } } },
     400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -2292,7 +2293,7 @@ const internalHeaders = z.object({
 
 const internalOrgHeaders = z.object({
   "x-api-key": z.string(),
-  "x-org-id": z.string().uuid(),
+  "x-org-id": zod3Uuid(),
 });
 
 registry.registerPath({
@@ -2312,7 +2313,7 @@ registry.registerPath({
     "remainder (welcome − seeded), which is 0 for an org seeded this way.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -2354,16 +2355,14 @@ registry.registerPath({
     "`x-user-id` the welcome is checked per org only (historical behaviour).",
   request: {
     headers: internalHeaders.extend({
-      "x-user-id": z
-        .string()
-        .uuid()
+      "x-user-id": zod3Uuid()
         .optional()
         .openapi({
           description:
             "The person who signed up (client-service internal user id). Makes the welcome once per person.",
         }),
     }),
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -2400,7 +2399,7 @@ registry.registerPath({
     "customer, or runs a welcome evaluation.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -2438,7 +2437,7 @@ registry.registerPath({
     "body. Creates no billing account and no Stripe customer.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -2498,7 +2497,7 @@ registry.registerPath({
 
 const adminGrantHeaders = z.object({
   "x-api-key": z.string(),
-  "x-org-id": z.string().uuid(),
+  "x-org-id": zod3Uuid(),
   "x-email": z.string().optional().openapi({
     description: "Staff email behind the grant; recorded as grantedBy.",
   }),
@@ -2554,7 +2553,7 @@ registry.registerPath({
   request: {
     headers: z.object({
       "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
+      "x-org-id": zod3Uuid(),
     }),
   },
   responses: {
@@ -2585,7 +2584,7 @@ registry.registerPath({
   request: {
     headers: z.object({
       "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
+      "x-org-id": zod3Uuid(),
       "x-email": z.string().openapi({
         description: "Staff email behind the debit; recorded as debitedBy. Required.",
       }),
@@ -2620,7 +2619,7 @@ registry.registerPath({
   request: {
     headers: z.object({
       "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
+      "x-org-id": zod3Uuid(),
     }),
   },
   responses: {
@@ -2756,7 +2755,7 @@ registry.registerPath({
     "same date → 200 alreadyRecorded; a different date → 409.",
   request: {
     headers: internalHeaders,
-    params: z.object({ grantId: z.string().uuid() }),
+    params: z.object({ grantId: zod3Uuid() }),
     body: {
       content: { "application/json": { schema: OffPlatformPaymentReclassifyRequestSchema } },
     },
@@ -2901,9 +2900,9 @@ registry.registerPath({
 
 export const PaymentConsentRecordSchema = z
   .object({
-    id: z.string().uuid(),
-    org_id: z.string().uuid(),
-    user_id: z.string().uuid().nullable(),
+    id: zod3Uuid(),
+    org_id: zod3Uuid(),
+    user_id: zod3Uuid().nullable(),
     email: z.string().nullable(),
     /** topup_checkout | subscription_checkout | subscription_start */
     context: z.string(),
@@ -2917,7 +2916,7 @@ export const PaymentConsentRecordSchema = z
   .openapi("PaymentConsentRecord");
 
 export const PaymentConsentsResponseSchema = z
-  .object({ org_id: z.string().uuid(), consents: z.array(PaymentConsentRecordSchema) })
+  .object({ org_id: zod3Uuid(), consents: z.array(PaymentConsentRecordSchema) })
   .openapi("PaymentConsentsResponse");
 
 registry.registerPath({
@@ -2931,7 +2930,7 @@ registry.registerPath({
     "verbatim and the terms version. Kept when the org is deleted.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: { description: "Consents", content: { "application/json": { schema: PaymentConsentsResponseSchema } } },
@@ -3014,7 +3013,7 @@ registry.registerPath({
     "stopped while the org was trying to spend.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3115,7 +3114,7 @@ registry.registerPath({
   summary: "Staff/service read of an org's payment mode",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3142,7 +3141,7 @@ registry.registerPath({
     "from the dashboard. Leaving subscription does not cancel the Stripe subscription.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
     body: { content: { "application/json": { schema: StaffSetPaymentModeRequestSchema } } },
   },
   responses: {
@@ -3180,7 +3179,7 @@ registry.registerPath({
     "nothing, reserves nothing, writes nothing.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
     query: z.object({ horizonDays: z.string().optional() }),
   },
   responses: {
@@ -3231,7 +3230,7 @@ registry.registerPath({
     "configuration, and the per-org usage modifier applies to charges only.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3268,7 +3267,7 @@ registry.registerPath({
     "can run once to establish its cost. Otherwise affordable = live balance >= lastRequiredCents.",
   request: {
     headers: internalHeaders,
-    params: z.object({ campaignId: z.string().uuid() }),
+    params: z.object({ campaignId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3300,7 +3299,7 @@ registry.registerPath({
     "404 when the org has no billing account; 502 when stripe-service/runs-service is unreachable.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3340,7 +3339,7 @@ registry.registerPath({
     "cash_paid_cents. Pure read. 0 everywhere for an org that never paid or has no account.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
     query: z.object({ by_month: z.enum(["true", "false"]).optional() }),
   },
   responses: {
@@ -3349,7 +3348,7 @@ registry.registerPath({
       content: {
         "application/json": {
           schema: z.object({
-            org_id: z.string().uuid(),
+            org_id: zod3Uuid(),
             cash_paid_cents: CentsStringSchema,
             credited_cents: CentsStringSchema,
             non_cash_credit_cents: CentsStringSchema,
@@ -3385,7 +3384,7 @@ registry.registerPath({
     "features-service reader.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3416,7 +3415,7 @@ registry.registerPath({
     "billing-service only stores + serves this value; enforcement is campaign-service's job.",
   request: {
     headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
+    params: z.object({ brandId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3444,7 +3443,7 @@ registry.registerPath({
     "billing-service only stores + serves this; the current-value read is unchanged.",
   request: {
     headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
+    params: z.object({ brandId: zod3Uuid() }),
   },
   responses: {
     200: {
@@ -3480,7 +3479,7 @@ registry.registerPath({
     "amount in force right now); a future day is refused.",
   request: {
     headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
+    params: z.object({ brandId: zod3Uuid() }),
     query: z.object({
       from: z.string().openapi({ description: "First UTC day, YYYY-MM-DD (inclusive)." }),
       to: z.string().openapi({ description: "Last UTC day, YYYY-MM-DD (inclusive, not in the future)." }),
@@ -3515,7 +3514,7 @@ registry.registerPath({
     "Shared brands can have independent budget rows per org.",
   request: {
     headers: protectedHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
+    params: z.object({ brandId: zod3Uuid() }),
     body: {
       content: {
         "application/json": { schema: SetBrandDailyBudgetRequestSchema },
@@ -3632,8 +3631,8 @@ registry.registerPath({
   request: {
     headers: z.object({
       "x-api-key": z.string(),
-      "x-org-id": z.string().uuid(),
-      "x-user-id": z.string().uuid(),
+      "x-org-id": zod3Uuid(),
+      "x-user-id": zod3Uuid(),
     }),
   },
   responses: {
@@ -3656,9 +3655,9 @@ registry.registerPath({
 
 export const MissionStatusChangedRequestSchema = z
   .object({
-    campaignId: z.string().uuid(),
+    campaignId: zod3Uuid(),
     featureSlug: z.string().min(1).nullable(),
-    offerId: z.string().uuid().nullable(),
+    offerId: zod3Uuid().nullable(),
     legKey: z.string().min(1).nullable(),
     fromStatus: z.string().min(1).nullable(),
     toStatus: z.string().min(1),
@@ -3682,7 +3681,7 @@ registry.registerPath({
     "Headers: x-api-key, x-org-id; x-user-id, x-run-id and x-email when known.",
   request: {
     headers: internalOrgHeaders,
-    params: z.object({ brandId: z.string().uuid() }),
+    params: z.object({ brandId: zod3Uuid() }),
     body: { content: { "application/json": { schema: MissionStatusChangedRequestSchema } } },
   },
   responses: {
@@ -3703,7 +3702,7 @@ registry.registerPath({
 
 // --- Brand global sales budget -----------------------------------------------
 
-const brandIdParam = z.object({ brandId: z.string().uuid() });
+const brandIdParam = z.object({ brandId: zod3Uuid() });
 
 registry.registerPath({
   method: "get",
@@ -3814,8 +3813,8 @@ const DailyBudgetUnknownReasonSchema = z.enum([
 export const RevenueSubscriptionSchema = z
   .object({
     /** The brand x offer the plan pays for; null on a plan not attributed yet. */
-    brandId: z.string().uuid().nullable(),
-    offerId: z.string().uuid().nullable(),
+    brandId: zod3Uuid().nullable(),
+    offerId: zod3Uuid().nullable(),
     status: z.string(),
     /** The plan we collect each month: a recurring subscription's MRR. */
     monthlyAmountCents: z.number().int(),
@@ -3895,7 +3894,7 @@ export const RevenueSalesFunnelLineSchema = z
   });
 
 const revenueCore = {
-  orgId: z.string().uuid(),
+  orgId: zod3Uuid(),
   paymentMode: PaymentModeSchema,
   revenueClass: RevenueClassSchema,
   classReason: RevenueClassReasonSchema,
@@ -3994,7 +3993,7 @@ registry.registerPath({
     "reason, never 0. x-api-key only; pure read.",
   request: {
     headers: internalHeaders,
-    params: z.object({ orgId: z.string().uuid() }),
+    params: z.object({ orgId: zod3Uuid() }),
     query: z.object({ cashHorizonDays: z.string().optional() }),
   },
   responses: {
@@ -4065,7 +4064,7 @@ export const SubscriptionCheckoutResponseSchema = z
      * (switch on `mode`: embedded_widget = Revolut widget, embedded_checkout = Stripe,
      * hosted_redirect = redirect to url). Null when card_required is false.
      */
-    card_setup: z.record(z.unknown()).nullable(),
+    card_setup: z.record(z.string(), z.unknown()).nullable(),
     /**
      * Why the card on file cannot start this subscription, when one is on file:
      * "prepaid_card" = a prepaid card cannot start a free trial (card_required is
@@ -4102,10 +4101,10 @@ export const ChangeSubscriptionAmountRequestSchema = z
 
 export const SubscriptionViewSchema = z
   .object({
-    id: z.string().uuid(),
+    id: zod3Uuid(),
     /** The brand x offer this plan pays for. Null on an onboarding plan not attributed yet. */
-    brand_id: z.string().uuid().nullable(),
-    offer_id: z.string().uuid().nullable(),
+    brand_id: zod3Uuid().nullable(),
+    offer_id: zod3Uuid().nullable(),
     status: z.enum(["trialing", "active", "past_due", "canceled"]),
     trial_end: z.string().nullable(),
     /** true = ends at current_period_end, no further charge. */
@@ -4158,7 +4157,7 @@ export const SubscriptionReadResponseSchema = z
     sending_stopped: z.boolean(),
     /** plan_canceled | plan_paused; null while sending. */
     sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: PaymentModeSchema.nullable(),
     subscription: SubscriptionViewSchema.nullable(),
     /** Spendable credit right now (= balance_cents on GET /v1/accounts). */
@@ -4187,7 +4186,7 @@ export const SubscriptionActionResponseSchema = z
     sending_stopped: z.boolean(),
     /** plan_canceled | plan_paused; null while sending. */
     sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     subscription: SubscriptionViewSchema,
     credits_remaining_cents: z.string(),
   })
@@ -4232,8 +4231,8 @@ export const PauseSubscriptionRequestSchema = z
 
 export const StartPlanRequestSchema = z
   .object({
-    brand_id: z.string().uuid(),
-    offer_id: z.string().uuid(),
+    brand_id: zod3Uuid(),
+    offer_id: zod3Uuid(),
     monthly_amount_cents: MonthlyAmountSchema,
   })
   .strict()
@@ -4249,7 +4248,7 @@ export const PlanListResponseSchema = z
     sending_stopped: z.boolean(),
     /** plan_canceled | plan_paused; null while sending. */
     sending_stopped_reason: z.enum(["plan_paused", "plan_canceled"]).nullable(),
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     payment_mode: PaymentModeSchema.nullable(),
     /** Every plan of the org, live ones first (oldest first), then ended ones (newest first). */
     subscriptions: z.array(SubscriptionViewSchema),
@@ -4431,7 +4430,7 @@ registry.registerPath({
 
 // --- Plans per brand x offer (one live plan per brand x offer; lib/subscription) ---
 
-const planIdParams = z.object({ subscriptionId: z.string().uuid() });
+const planIdParams = z.object({ subscriptionId: zod3Uuid() });
 
 registry.registerPath({
   method: "get",
@@ -4565,7 +4564,7 @@ registry.registerPath({
   path: "/internal/accounts/by-org/{orgId}/subscription",
   summary: "Staff/service: read an org's subscription, payment mode and remaining credits",
   description: "Same body as GET /v1/accounts/subscription. x-api-key only, org in the path.",
-  request: { headers: internalHeaders, params: z.object({ orgId: z.string().uuid() }) },
+  request: { headers: internalHeaders, params: z.object({ orgId: zod3Uuid() }) },
   responses: {
     200: { description: "The subscription view", content: { "application/json": { schema: SubscriptionReadResponseSchema } } },
     400: { description: "Bad orgId", content: { "application/json": { schema: ErrorResponseSchema } } },
@@ -4728,9 +4727,9 @@ const MeasuredSourceSchema = z
 
 export const SalesFunnelCapsSchema = z
   .object({
-    orgId: z.string().uuid(),
-    brandId: z.string().uuid(),
-    offerId: z.string().uuid(),
+    orgId: zod3Uuid(),
+    brandId: zod3Uuid(),
+    offerId: zod3Uuid(),
     salesFunnelId: z.string(),
     stated: z.boolean(),
     funded: z.boolean().openapi({
@@ -4752,7 +4751,7 @@ export const SalesFunnelCapsSchema = z
 
 const StatedSalesFunnelCapsSchema = z
   .object({
-    offerId: z.string().uuid(),
+    offerId: zod3Uuid(),
     salesFunnelId: z.string(),
     salesFunnelCampaignId: z.string().optional().openapi({
       description: "Present only on ONE funnel campaign's cap: campaign-service's funnel campaign id. Absent = the funnel-wide cap.",
@@ -4772,15 +4771,15 @@ const StatedSalesFunnelCapsSchema = z
 
 export const BrandSalesFunnelCapsSchema = z
   .object({
-    orgId: z.string().uuid(),
-    brandId: z.string().uuid(),
+    orgId: zod3Uuid(),
+    brandId: zod3Uuid(),
     caps: z.array(StatedSalesFunnelCapsSchema),
   })
   .openapi("BrandSalesFunnelCaps");
 
 const funnelCapParams = z.object({
-  brandId: z.string().uuid(),
-  offerId: z.string().uuid(),
+  brandId: zod3Uuid(),
+  offerId: zod3Uuid(),
   salesFunnelId: z.string().openapi({
     description:
       "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. " +
@@ -4872,7 +4871,7 @@ registry.registerPath({
 });
 
 export const SalesFunnelCampaignCapsSchema = SalesFunnelCapsSchema.extend({
-  salesFunnelCampaignId: z.string().uuid(),
+  salesFunnelCampaignId: zod3Uuid(),
   capScope: z.enum(["sales_funnel_campaign", "sales_funnel"]).openapi({
     description:
       "sales_funnel_campaign = this funnel campaign's OWN cap, consumption counted on its units only (pipes[].campaignIds " +
@@ -4882,7 +4881,7 @@ export const SalesFunnelCampaignCapsSchema = SalesFunnelCapsSchema.extend({
 }).openapi("SalesFunnelCampaignCaps");
 
 const funnelCampaignCapParams = funnelCapParams.extend({
-  salesFunnelCampaignId: z.string().uuid().openapi({ description: "campaign-service's sales funnel campaign id" }),
+  salesFunnelCampaignId: zod3Uuid().openapi({ description: "campaign-service's sales funnel campaign id" }),
 });
 const funnelCampaignCapsPath = "/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps";
 const funnelCampaignCapsJson = { "application/json": { schema: SalesFunnelCampaignCapsSchema } };
@@ -4946,7 +4945,7 @@ for (const [prefix, headers, body] of [
   });
 }
 
-const brandFunnelCapsQuery = z.object({ offerId: z.string().uuid().optional() });
+const brandFunnelCapsQuery = z.object({ offerId: zod3Uuid().optional() });
 
 registry.registerPath({
   method: "get",
@@ -4989,7 +4988,7 @@ export const SetTopupMinimumsRequestSchema = z
 
 export const TopupMinimumsResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     free_credit_offer: z.string(),
     /** The minimum in force (null = none). */
     topup_minimum_cents: z.number().int().nullable(),
@@ -5022,7 +5021,7 @@ registry.registerPath({
   path: "/v1/accounts/topup_minimums",
   summary: "Read this org's top-up minimums",
   description: topupMinimumsDescription,
-  request: { headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string().uuid() }) },
+  request: { headers: z.object({ "x-api-key": z.string(), "x-org-id": zod3Uuid() }) },
   responses: topupMinimumsResponses,
 });
 
@@ -5032,13 +5031,13 @@ registry.registerPath({
   summary: "Staff: set this org's top-up minimums",
   description: topupMinimumsDescription + " Staff only (the gateway gates it); x-email is recorded as set_by.",
   request: {
-    headers: z.object({ "x-api-key": z.string(), "x-org-id": z.string().uuid(), "x-email": z.string() }),
+    headers: z.object({ "x-api-key": z.string(), "x-org-id": zod3Uuid(), "x-email": z.string() }),
     body: { content: { "application/json": { schema: SetTopupMinimumsRequestSchema } } },
   },
   responses: topupMinimumsResponses,
 });
 
-const topupMinimumsOrgParam = z.object({ orgId: z.string().uuid() });
+const topupMinimumsOrgParam = z.object({ orgId: zod3Uuid() });
 
 registry.registerPath({
   method: "get",
@@ -5073,7 +5072,7 @@ export const SetMonthlyChargeLimitRequestSchema = z
 
 export const MonthlyChargeLimitResponseSchema = z
   .object({
-    org_id: z.string().uuid(),
+    org_id: zod3Uuid(),
     /** null = no limit (today's behaviour: nothing is capped). */
     monthly_charge_limit_cents: z.number().int().nullable(),
     period: z.literal("calendar_month_utc"),
@@ -5143,7 +5142,7 @@ registry.registerPath({
   },
 });
 
-const monthlyLimitOrgParam = z.object({ orgId: z.string().uuid() });
+const monthlyLimitOrgParam = z.object({ orgId: zod3Uuid() });
 
 registry.registerPath({
   method: "get",
