@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { z } from "zod";
 import { autoTopupArmed } from "../lib/topup-tier.js";
 import { getAbsorbedCosts } from "../lib/absorbed-costs.js";
 import { FreeCreditNotOfferedError } from "../lib/agent-api-org.js";
@@ -90,7 +91,7 @@ const router = Router();
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type InternalAccountTeardownResponse = typeof InternalAccountTeardownResponseSchema._type;
+type InternalAccountTeardownResponse = z.infer<typeof InternalAccountTeardownResponseSchema>;
 
 async function deleteWelcomeCreditClaimsIfPresent(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],

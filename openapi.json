@@ -12,33 +12,6 @@
   ],
   "components": {
     "schemas": {
-      "BillingGrowthRow": {
-        "type": "object",
-        "properties": {
-          "period": {
-            "type": "string"
-          },
-          "credited_cents": {
-            "type": "string"
-          },
-          "revenue_cents": {
-            "type": "string"
-          },
-          "paying_accounts": {
-            "type": "integer"
-          },
-          "first_time_paying_accounts": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "period",
-          "credited_cents",
-          "revenue_cents",
-          "paying_accounts",
-          "first_time_paying_accounts"
-        ]
-      },
       "PublicBillingStats": {
         "type": "object",
         "properties": {
@@ -106,6 +79,33 @@
           "first_payment_times",
           "monthly_growth",
           "weekly_growth"
+        ]
+      },
+      "BillingGrowthRow": {
+        "type": "object",
+        "properties": {
+          "period": {
+            "type": "string"
+          },
+          "credited_cents": {
+            "type": "string"
+          },
+          "revenue_cents": {
+            "type": "string"
+          },
+          "paying_accounts": {
+            "type": "integer"
+          },
+          "first_time_paying_accounts": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "period",
+          "credited_cents",
+          "revenue_cents",
+          "paying_accounts",
+          "first_time_paying_accounts"
         ]
       },
       "ErrorResponse": {
@@ -592,7 +592,10 @@
               "id",
               "type",
               "saved_for"
-            ]
+            ],
+            "additionalProperties": {
+              "nullable": true
+            }
           },
           "reason": {
             "type": "string"
@@ -616,7 +619,8 @@
             "nullable": true,
             "enum": [
               "prepaid_card",
-              "card_issuing_country_unsupported"
+              "card_issuing_country_unsupported",
+              null
             ],
             "description": "Why postpaid_allowed is false: the dashboard asks the customer to switch to prepaid or change card."
           }
@@ -764,42 +768,6 @@
           "welcome_gift_cents"
         ]
       },
-      "PaymentConsent": {
-        "type": "object",
-        "properties": {
-          "statements": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 2000
-            },
-            "minItems": 1,
-            "maxItems": 10
-          },
-          "terms_version": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "accepted_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "user_agent": {
-            "type": "string",
-            "maxLength": 1000
-          },
-          "ip_address": {
-            "type": "string",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "statements",
-          "terms_version"
-        ]
-      },
       "CreateCheckoutRequest": {
         "type": "object",
         "properties": {
@@ -836,6 +804,42 @@
             "$ref": "#/components/schemas/PaymentConsent"
           }
         }
+      },
+      "PaymentConsent": {
+        "type": "object",
+        "properties": {
+          "statements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "terms_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user_agent": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "ip_address": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "statements",
+          "terms_version"
+        ]
       },
       "PrepaidCheckoutResponse": {
         "type": "object",
@@ -998,7 +1002,8 @@
                   "card_issuing_country_unsupported",
                   "prepaid_card",
                   "recurring_charge_not_authorized",
-                  "card_unusable"
+                  "card_unusable",
+                  null
                 ]
               }
             },
@@ -1118,24 +1123,6 @@
           "required_cents"
         ]
       },
-      "AuthorizeCostItem": {
-        "type": "object",
-        "properties": {
-          "costName": {
-            "type": "string",
-            "minLength": 1
-          },
-          "quantity": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
-          }
-        },
-        "required": [
-          "costName",
-          "quantity"
-        ]
-      },
       "AuthorizeRequest": {
         "type": "object",
         "properties": {
@@ -1152,6 +1139,24 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "AuthorizeCostItem": {
+        "type": "object",
+        "properties": {
+          "costName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          }
+        },
+        "required": [
+          "costName",
+          "quantity"
         ]
       },
       "UsageApplyResponse": {
@@ -1277,6 +1282,33 @@
           "welcomeReceivedElsewhere"
         ]
       },
+      "InternalAccountTeardownResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "billingAccountExisted": {
+            "type": "boolean"
+          },
+          "deletedRows": {
+            "$ref": "#/components/schemas/InternalAccountTeardownDeletedRows"
+          }
+        },
+        "required": [
+          "ok",
+          "orgId",
+          "billingAccountExisted",
+          "deletedRows"
+        ]
+      },
       "InternalAccountTeardownDeletedRows": {
         "type": "object",
         "properties": {
@@ -1318,33 +1350,6 @@
           "welcomeCreditClaims",
           "freeCreditPromises",
           "staffDebits"
-        ]
-      },
-      "InternalAccountTeardownResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          },
-          "orgId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "billingAccountExisted": {
-            "type": "boolean"
-          },
-          "deletedRows": {
-            "$ref": "#/components/schemas/InternalAccountTeardownDeletedRows"
-          }
-        },
-        "required": [
-          "ok",
-          "orgId",
-          "billingAccountExisted",
-          "deletedRows"
         ]
       },
       "OrgCreationBonusResponse": {
@@ -1474,6 +1479,20 @@
           "idempotencyKey"
         ]
       },
+      "CreditGrantsListResponse": {
+        "type": "object",
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditGrantItem"
+            }
+          }
+        },
+        "required": [
+          "grants"
+        ]
+      },
       "CreditGrantItem": {
         "type": "object",
         "properties": {
@@ -1517,18 +1536,30 @@
           "offPlatformPaidAt"
         ]
       },
-      "CreditGrantsListResponse": {
+      "StaffDebitResponse": {
         "type": "object",
         "properties": {
-          "grants": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CreditGrantItem"
-            }
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "debit": {
+            "$ref": "#/components/schemas/StaffDebitItem"
+          },
+          "alreadyDebited": {
+            "type": "boolean"
+          },
+          "newBalanceCents": {
+            "type": "string"
           }
         },
         "required": [
-          "grants"
+          "ok",
+          "debit",
+          "alreadyDebited",
+          "newBalanceCents"
         ]
       },
       "StaffDebitItem": {
@@ -1564,32 +1595,6 @@
           "debitedBy",
           "idempotencyKey",
           "createdAt"
-        ]
-      },
-      "StaffDebitResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          },
-          "debit": {
-            "$ref": "#/components/schemas/StaffDebitItem"
-          },
-          "alreadyDebited": {
-            "type": "boolean"
-          },
-          "newBalanceCents": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "ok",
-          "debit",
-          "alreadyDebited",
-          "newBalanceCents"
         ]
       },
       "StaffDebitRequest": {
@@ -1826,6 +1831,25 @@
           "orgId"
         ]
       },
+      "PaymentConsentsResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentConsentRecord"
+            }
+          }
+        },
+        "required": [
+          "org_id",
+          "consents"
+        ]
+      },
       "PaymentConsentRecord": {
         "type": "object",
         "properties": {
@@ -1887,23 +1911,27 @@
           "recorded_at"
         ]
       },
-      "PaymentConsentsResponse": {
+      "CreditEventsResponse": {
         "type": "object",
         "properties": {
-          "org_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "consents": {
+          "events": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PaymentConsentRecord"
+              "$ref": "#/components/schemas/CreditEvent"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasMore": {
+            "type": "boolean"
           }
         },
         "required": [
-          "org_id",
-          "consents"
+          "events",
+          "nextCursor",
+          "hasMore"
         ]
       },
       "CreditEvent": {
@@ -1937,29 +1965,6 @@
           "orgId",
           "episodeId",
           "at"
-        ]
-      },
-      "CreditEventsResponse": {
-        "type": "object",
-        "properties": {
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CreditEvent"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          },
-          "hasMore": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "events",
-          "nextCursor",
-          "hasMore"
         ]
       },
       "UnpaidDebtsResponse": {
@@ -1997,22 +2002,6 @@
           "unpaid_debts"
         ]
       },
-      "PaymentStoppedPeriod": {
-        "type": "object",
-        "properties": {
-          "startedAt": {
-            "type": "string"
-          },
-          "endedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "startedAt",
-          "endedAt"
-        ]
-      },
       "PaymentStoppedPeriodsResponse": {
         "type": "object",
         "properties": {
@@ -2035,6 +2024,22 @@
           "orgId",
           "recordBeginsAt",
           "periods"
+        ]
+      },
+      "PaymentStoppedPeriod": {
+        "type": "object",
+        "properties": {
+          "startedAt": {
+            "type": "string"
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "startedAt",
+          "endedAt"
         ]
       },
       "DeclareAcquirerResponse": {
@@ -2218,42 +2223,6 @@
           "payment_mode"
         ]
       },
-      "ExpectedCharge": {
-        "type": "object",
-        "properties": {
-          "at": {
-            "type": "string"
-          },
-          "trigger": {
-            "type": "string",
-            "enum": [
-              "floor",
-              "month_end",
-              "retry_rung",
-              "subscription_renewal"
-            ]
-          },
-          "expectedAmountCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "projectedBalanceBeforeCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "projectedBalanceAfterCents": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "at",
-          "trigger",
-          "expectedAmountCents",
-          "projectedBalanceBeforeCents",
-          "projectedBalanceAfterCents"
-        ]
-      },
       "ChargeScheduleResponse": {
         "type": "object",
         "properties": {
@@ -2289,7 +2258,8 @@
               "card_unusable",
               "retries_exhausted",
               "no_chargeable_card",
-              "card_country_unsupported"
+              "card_country_unsupported",
+              null
             ]
           },
           "asOf": {
@@ -2315,7 +2285,8 @@
             "type": "string",
             "nullable": true,
             "enum": [
-              "platform_only_dated_spend_not_served"
+              "platform_only_dated_spend_not_served",
+              null
             ]
           },
           "burnWindowDays": {
@@ -2347,6 +2318,42 @@
           "burnWindowDays",
           "events",
           "expectedTotalCents"
+        ]
+      },
+      "ExpectedCharge": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "floor",
+              "month_end",
+              "retry_rung",
+              "subscription_renewal"
+            ]
+          },
+          "expectedAmountCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectedBalanceBeforeCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "projectedBalanceAfterCents": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "at",
+          "trigger",
+          "expectedAmountCents",
+          "projectedBalanceBeforeCents",
+          "projectedBalanceAfterCents"
         ]
       },
       "PaymentOutlookResponse": {
@@ -2387,7 +2394,8 @@
               "floor",
               "month_end",
               "retry_rung",
-              "subscription_renewal"
+              "subscription_renewal",
+              null
             ]
           },
           "blockedReason": {
@@ -2398,7 +2406,8 @@
               "card_unusable",
               "retries_exhausted",
               "no_chargeable_card",
-              "card_country_unsupported"
+              "card_country_unsupported",
+              null
             ]
           },
           "balanceCents": {
@@ -2415,7 +2424,8 @@
             "type": "string",
             "nullable": true,
             "enum": [
-              "platform_only_dated_spend_not_served"
+              "platform_only_dated_spend_not_served",
+              null
             ]
           },
           "burnWindowDays": {
@@ -2509,21 +2519,6 @@
           "updatedAt"
         ]
       },
-      "BrandDailyBudgetChange": {
-        "type": "object",
-        "properties": {
-          "dailyBudgetCents": {
-            "type": "string"
-          },
-          "changedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dailyBudgetCents",
-          "changedAt"
-        ]
-      },
       "ReadBrandDailyBudgetHistory": {
         "type": "object",
         "properties": {
@@ -2543,33 +2538,19 @@
           "history"
         ]
       },
-      "BrandDailyBudgetDay": {
+      "BrandDailyBudgetChange": {
         "type": "object",
         "properties": {
-          "date": {
+          "dailyBudgetCents": {
             "type": "string"
           },
-          "state": {
-            "type": "string",
-            "enum": [
-              "recorded",
-              "not_recorded"
-            ]
-          },
-          "dailyBudgetCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "inForceSince": {
-            "type": "string",
-            "nullable": true
+          "changedAt": {
+            "type": "string"
           }
         },
         "required": [
-          "date",
-          "state",
           "dailyBudgetCents",
-          "inForceSince"
+          "changedAt"
         ]
       },
       "ReadBrandDailyBudgetByDay": {
@@ -2606,6 +2587,35 @@
           "grain",
           "recordBeginsAt",
           "days"
+        ]
+      },
+      "BrandDailyBudgetDay": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "not_recorded"
+            ]
+          },
+          "dailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "inForceSince": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "date",
+          "state",
+          "dailyBudgetCents",
+          "inForceSince"
         ]
       },
       "BrandDailyBudget": {
@@ -2651,21 +2661,6 @@
           "dailyBudgetCents"
         ]
       },
-      "TransferBrandTableResult": {
-        "type": "object",
-        "properties": {
-          "tableName": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "tableName",
-          "count"
-        ]
-      },
       "TransferBrandResponse": {
         "type": "object",
         "properties": {
@@ -2706,6 +2701,21 @@
           "balanceAdjustment"
         ]
       },
+      "TransferBrandTableResult": {
+        "type": "object",
+        "properties": {
+          "tableName": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tableName",
+          "count"
+        ]
+      },
       "TransferBrandRequest": {
         "type": "object",
         "properties": {
@@ -2730,6 +2740,28 @@
           "sourceBrandId",
           "sourceOrgId",
           "targetOrgId"
+        ]
+      },
+      "ReferralClaimResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyClaimed": {
+            "type": "boolean"
+          },
+          "promise": {
+            "$ref": "#/components/schemas/FreeCreditPromise"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyClaimed",
+          "promise"
         ]
       },
       "FreeCreditPromise": {
@@ -2782,28 +2814,6 @@
           "createdAt"
         ]
       },
-      "ReferralClaimResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "enum": [
-              true
-            ]
-          },
-          "alreadyClaimed": {
-            "type": "boolean"
-          },
-          "promise": {
-            "$ref": "#/components/schemas/FreeCreditPromise"
-          }
-        },
-        "required": [
-          "ok",
-          "alreadyClaimed",
-          "promise"
-        ]
-      },
       "ReferralClaimRequest": {
         "type": "object",
         "properties": {
@@ -2819,6 +2829,33 @@
         "required": [
           "orgId",
           "referrerOrgId"
+        ]
+      },
+      "FreeCreditPromisesResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paid_topups_cents": {
+            "type": "string"
+          },
+          "outstanding_total_cents": {
+            "type": "string"
+          },
+          "promises": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutstandingFreeCreditPromise"
+            }
+          }
+        },
+        "required": [
+          "org_id",
+          "paid_topups_cents",
+          "outstanding_total_cents",
+          "promises"
         ]
       },
       "OutstandingFreeCreditPromise": {
@@ -2881,33 +2918,6 @@
           "created_at"
         ]
       },
-      "FreeCreditPromisesResponse": {
-        "type": "object",
-        "properties": {
-          "org_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "paid_topups_cents": {
-            "type": "string"
-          },
-          "outstanding_total_cents": {
-            "type": "string"
-          },
-          "promises": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OutstandingFreeCreditPromise"
-            }
-          }
-        },
-        "required": [
-          "org_id",
-          "paid_topups_cents",
-          "outstanding_total_cents",
-          "promises"
-        ]
-      },
       "MissionStatusChangedRequest": {
         "type": "object",
         "properties": {
@@ -2949,14 +2959,6 @@
           "toStatus"
         ]
       },
-      "BrandFundingMode": {
-        "type": "string",
-        "enum": [
-          "global",
-          "campaigns"
-        ],
-        "description": "global = one daily sales budget campaign-service allocates; campaigns = no global amount (the default)."
-      },
       "BrandSalesBudget": {
         "type": "object",
         "properties": {
@@ -2988,13 +2990,13 @@
           "updatedAt"
         ]
       },
-      "BrandBudgetMode": {
+      "BrandFundingMode": {
         "type": "string",
         "enum": [
           "global",
           "campaigns"
         ],
-        "description": "global = the brand stated one daily sales budget that campaign-service allocates; campaigns = every campaign is paced on its own ceiling (the default)."
+        "description": "global = one daily sales budget campaign-service allocates; campaigns = no global amount (the default)."
       },
       "BrandSalesBudgetHistory": {
         "type": "object",
@@ -3036,6 +3038,14 @@
           "orgId",
           "history"
         ]
+      },
+      "BrandBudgetMode": {
+        "type": "string",
+        "enum": [
+          "global",
+          "campaigns"
+        ],
+        "description": "global = the brand stated one daily sales budget that campaign-service allocates; campaigns = every campaign is paced on its own ceiling (the default)."
       },
       "SetBrandSalesBudgetResponse": {
         "allOf": [
@@ -3102,6 +3112,166 @@
           }
         ]
       },
+      "OrgRevenueResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
+            ],
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
+          },
+          "revenueClass": {
+            "type": "string",
+            "enum": [
+              "recurring",
+              "one_off",
+              "none"
+            ]
+          },
+          "classReason": {
+            "type": "string",
+            "enum": [
+              "postpaid_chargeable_card",
+              "prepaid_auto_topup",
+              "prepaid_no_auto_topup",
+              "prepaid_no_chargeable_card",
+              "postpaid_no_chargeable_card",
+              "postpaid_charge_retries_exhausted",
+              "postpaid_card_not_checked",
+              "postpaid_idle",
+              "prepaid_auto_topup_idle",
+              "prepaid_balance_spent",
+              "subscription",
+              "subscription_trialing",
+              "subscription_canceling",
+              "subscription_paused",
+              "subscription_payment_failed",
+              "subscription_ended",
+              "subscription_not_started"
+            ]
+          },
+          "chargeableCard": {
+            "type": "boolean"
+          },
+          "autoTopupEnabled": {
+            "type": "boolean"
+          },
+          "balanceCents": {
+            "type": "string"
+          },
+          "proactiveDailyBudgetCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "proactiveDailyBudgetUnknownReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "campaign_service_unconfigured",
+              "campaign_service_unavailable",
+              "campaign_recurrence_unknown",
+              null
+            ]
+          },
+          "drrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "mrrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "arrCents": {
+            "type": "string",
+            "nullable": true
+          },
+          "oneOff": {
+            "$ref": "#/components/schemas/OneOffRevenue"
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/RevenueSubscription"
+          },
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueSubscription"
+            }
+          },
+          "projections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectedRevenue"
+            }
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "hasPaymentMethod": {
+            "type": "boolean"
+          },
+          "cardCountrySupported": {
+            "type": "boolean"
+          },
+          "cardUnusable": {
+            "type": "boolean"
+          },
+          "cash": {
+            "$ref": "#/components/schemas/ChargeScheduleResponse"
+          },
+          "brands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueBrandLine"
+            }
+          },
+          "campaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueCampaignLine"
+            }
+          },
+          "salesFunnelCampaigns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevenueSalesFunnelLine"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "paymentMode",
+          "revenueClass",
+          "classReason",
+          "chargeableCard",
+          "autoTopupEnabled",
+          "balanceCents",
+          "proactiveDailyBudgetCents",
+          "proactiveDailyBudgetUnknownReason",
+          "drrCents",
+          "mrrCents",
+          "arrCents",
+          "oneOff",
+          "subscription",
+          "subscriptions",
+          "projections",
+          "asOf",
+          "hasPaymentMethod",
+          "cardCountrySupported",
+          "cardUnusable",
+          "cash",
+          "brands",
+          "campaigns",
+          "salesFunnelCampaigns"
+        ]
+      },
       "OneOffRevenue": {
         "type": "object",
         "nullable": true,
@@ -3124,7 +3294,8 @@
               "campaign_service_unconfigured",
               "campaign_service_unavailable",
               "campaign_recurrence_unknown",
-              "no_proactive_spend"
+              "no_proactive_spend",
+              null
             ]
           }
         },
@@ -3229,7 +3400,8 @@
             "enum": [
               "campaign_service_unconfigured",
               "campaign_service_unavailable",
-              "campaign_recurrence_unknown"
+              "campaign_recurrence_unknown",
+              null
             ]
           }
         },
@@ -3271,7 +3443,8 @@
             "nullable": true,
             "enum": [
               "proactive",
-              "reactive"
+              "reactive",
+              null
             ]
           },
           "audience": {
@@ -3356,188 +3529,6 @@
           "counted"
         ],
         "description": "A sales funnel campaign: its money is the funnel's MAX BUDGET, never a per-pipe ceiling (its units carry none)."
-      },
-      "OrgRevenueResponse": {
-        "type": "object",
-        "properties": {
-          "orgId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "paymentMode": {
-            "type": "string",
-            "enum": [
-              "prepaid",
-              "postpaid",
-              "subscription"
-            ],
-            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
-          },
-          "revenueClass": {
-            "type": "string",
-            "enum": [
-              "recurring",
-              "one_off",
-              "none"
-            ]
-          },
-          "classReason": {
-            "type": "string",
-            "enum": [
-              "postpaid_chargeable_card",
-              "prepaid_auto_topup",
-              "prepaid_no_auto_topup",
-              "prepaid_no_chargeable_card",
-              "postpaid_no_chargeable_card",
-              "postpaid_charge_retries_exhausted",
-              "postpaid_card_not_checked",
-              "postpaid_idle",
-              "prepaid_auto_topup_idle",
-              "prepaid_balance_spent",
-              "subscription",
-              "subscription_trialing",
-              "subscription_canceling",
-              "subscription_paused",
-              "subscription_payment_failed",
-              "subscription_ended",
-              "subscription_not_started"
-            ]
-          },
-          "chargeableCard": {
-            "type": "boolean"
-          },
-          "autoTopupEnabled": {
-            "type": "boolean"
-          },
-          "balanceCents": {
-            "type": "string"
-          },
-          "proactiveDailyBudgetCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "proactiveDailyBudgetUnknownReason": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "campaign_service_unconfigured",
-              "campaign_service_unavailable",
-              "campaign_recurrence_unknown"
-            ]
-          },
-          "drrCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "mrrCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "arrCents": {
-            "type": "string",
-            "nullable": true
-          },
-          "oneOff": {
-            "$ref": "#/components/schemas/OneOffRevenue"
-          },
-          "subscription": {
-            "$ref": "#/components/schemas/RevenueSubscription"
-          },
-          "subscriptions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RevenueSubscription"
-            }
-          },
-          "projections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ProjectedRevenue"
-            }
-          },
-          "asOf": {
-            "type": "string"
-          },
-          "hasPaymentMethod": {
-            "type": "boolean"
-          },
-          "cardCountrySupported": {
-            "type": "boolean"
-          },
-          "cardUnusable": {
-            "type": "boolean"
-          },
-          "cash": {
-            "$ref": "#/components/schemas/ChargeScheduleResponse"
-          },
-          "brands": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RevenueBrandLine"
-            }
-          },
-          "campaigns": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RevenueCampaignLine"
-            }
-          },
-          "salesFunnelCampaigns": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RevenueSalesFunnelLine"
-            }
-          }
-        },
-        "required": [
-          "orgId",
-          "paymentMode",
-          "revenueClass",
-          "classReason",
-          "chargeableCard",
-          "autoTopupEnabled",
-          "balanceCents",
-          "proactiveDailyBudgetCents",
-          "proactiveDailyBudgetUnknownReason",
-          "drrCents",
-          "mrrCents",
-          "arrCents",
-          "oneOff",
-          "subscription",
-          "subscriptions",
-          "projections",
-          "asOf",
-          "hasPaymentMethod",
-          "cardCountrySupported",
-          "cardUnusable",
-          "cash",
-          "brands",
-          "campaigns",
-          "salesFunnelCampaigns"
-        ]
-      },
-      "CashBucket": {
-        "type": "object",
-        "properties": {
-          "start": {
-            "type": "string"
-          },
-          "amountCents": {
-            "type": "string"
-          },
-          "eventCount": {
-            "type": "integer"
-          },
-          "unknownAmountEventCount": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "start",
-          "amountCents",
-          "eventCount",
-          "unknownAmountEventCount"
-        ]
       },
       "FleetRevenueResponse": {
         "type": "object",
@@ -3750,7 +3741,8 @@
                   "enum": [
                     "campaign_service_unconfigured",
                     "campaign_service_unavailable",
-                    "campaign_recurrence_unknown"
+                    "campaign_recurrence_unknown",
+                    null
                   ]
                 },
                 "drrCents": {
@@ -3802,7 +3794,8 @@
                     "card_unusable",
                     "retries_exhausted",
                     "no_chargeable_card",
-                    "card_country_unsupported"
+                    "card_country_unsupported",
+                    null
                   ]
                 },
                 "cashEvents": {
@@ -3865,6 +3858,29 @@
           "unreadableOrgs"
         ]
       },
+      "CashBucket": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "string"
+          },
+          "eventCount": {
+            "type": "integer"
+          },
+          "unknownAmountEventCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "amountCents",
+          "eventCount",
+          "unknownAmountEventCount"
+        ]
+      },
       "SubscriptionCheckoutResponse": {
         "type": "object",
         "properties": {
@@ -3895,7 +3911,8 @@
             "type": "string",
             "nullable": true,
             "enum": [
-              "prepaid_card"
+              "prepaid_card",
+              null
             ]
           }
         },
@@ -3970,6 +3987,66 @@
             "$ref": "#/components/schemas/PaymentConsent"
           }
         }
+      },
+      "SubscriptionReadResponse": {
+        "type": "object",
+        "properties": {
+          "sending_stopped": {
+            "type": "boolean"
+          },
+          "sending_stopped_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "plan_paused",
+              "plan_canceled",
+              null
+            ]
+          },
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_mode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription",
+              null
+            ],
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
+          },
+          "subscription": {
+            "$ref": "#/components/schemas/SubscriptionView"
+          },
+          "credits_remaining_cents": {
+            "type": "string"
+          },
+          "trial_grant_cents": {
+            "type": "number",
+            "nullable": true
+          },
+          "trial_credit_cents": {
+            "type": "number",
+            "nullable": true
+          },
+          "expired_cents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sending_stopped",
+          "sending_stopped_reason",
+          "org_id",
+          "payment_mode",
+          "subscription",
+          "credits_remaining_cents",
+          "trial_grant_cents",
+          "trial_credit_cents",
+          "expired_cents"
+        ]
       },
       "SubscriptionView": {
         "type": "object",
@@ -4096,64 +4173,6 @@
           "next_raise_monthly_amount_cents"
         ]
       },
-      "SubscriptionReadResponse": {
-        "type": "object",
-        "properties": {
-          "sending_stopped": {
-            "type": "boolean"
-          },
-          "sending_stopped_reason": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "plan_paused",
-              "plan_canceled"
-            ]
-          },
-          "org_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "payment_mode": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "prepaid",
-              "postpaid",
-              "subscription"
-            ],
-            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
-          },
-          "subscription": {
-            "$ref": "#/components/schemas/SubscriptionView"
-          },
-          "credits_remaining_cents": {
-            "type": "string"
-          },
-          "trial_grant_cents": {
-            "type": "number",
-            "nullable": true
-          },
-          "trial_credit_cents": {
-            "type": "number",
-            "nullable": true
-          },
-          "expired_cents": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "sending_stopped",
-          "sending_stopped_reason",
-          "org_id",
-          "payment_mode",
-          "subscription",
-          "credits_remaining_cents",
-          "trial_grant_cents",
-          "trial_credit_cents",
-          "expired_cents"
-        ]
-      },
       "StartSubscriptionRequest": {
         "type": "object",
         "properties": {
@@ -4179,7 +4198,8 @@
             "nullable": true,
             "enum": [
               "plan_paused",
-              "plan_canceled"
+              "plan_canceled",
+              null
             ]
           },
           "org_id": {
@@ -4260,7 +4280,8 @@
             "nullable": true,
             "enum": [
               "plan_paused",
-              "plan_canceled"
+              "plan_canceled",
+              null
             ]
           },
           "org_id": {
@@ -4273,7 +4294,8 @@
             "enum": [
               "prepaid",
               "postpaid",
-              "subscription"
+              "subscription",
+              null
             ],
             "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
           },
@@ -4325,29 +4347,97 @@
         ],
         "additionalProperties": false
       },
-      "SalesFunnelCapPeriod": {
-        "type": "string",
-        "enum": [
-          "one_off",
-          "daily",
-          "weekly",
-          "monthly"
-        ],
-        "description": "UTC. daily = the calendar day; weekly = Monday 00:00 to the next Monday; monthly = the calendar month; one_off = once, counted from when the cap was first stated in this period (never resets)."
-      },
-      "SalesFunnelConsumedUnavailableReason": {
-        "type": "string",
-        "nullable": true,
-        "enum": [
-          "sales_funnel_not_found",
-          "sales_funnel_catalogue_unavailable",
-          "campaign_service_unconfigured",
-          "campaign_service_unavailable",
-          "runs_service_unavailable",
-          "no_proactive_pipe",
-          "volume_not_measured_on_channel",
-          "sourcing_catalogue_unavailable",
-          "sales_funnel_campaign_not_found"
+      "SalesFunnelCaps": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "offerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "salesFunnelId": {
+            "type": "string"
+          },
+          "stated": {
+            "type": "boolean"
+          },
+          "funded": {
+            "type": "boolean",
+            "description": "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it."
+          },
+          "fundedBy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "max_budget",
+              "max_volume",
+              "both",
+              null
+            ],
+            "description": "Which stated cap funds the funnel; null when not funded."
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxBudget": {
+            "$ref": "#/components/schemas/SalesFunnelBudgetCap"
+          },
+          "maxVolume": {
+            "$ref": "#/components/schemas/SalesFunnelVolumeCap"
+          },
+          "salesFunnelName": {
+            "type": "string",
+            "nullable": true
+          },
+          "salesFunnelType": {
+            "$ref": "#/components/schemas/SalesFunnelType"
+          },
+          "salesFunnelTypeUnavailableReason": {
+            "$ref": "#/components/schemas/SalesFunnelTypeUnavailableReason"
+          },
+          "volumeUnit": {
+            "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
+          },
+          "pipes": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/SalesFunnelMeasuredPipe"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "$ref": "#/components/schemas/SalesFunnelMeasuredSource"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "offerId",
+          "salesFunnelId",
+          "stated",
+          "funded",
+          "fundedBy",
+          "updatedAt",
+          "maxBudget",
+          "maxVolume",
+          "salesFunnelName",
+          "salesFunnelType",
+          "salesFunnelTypeUnavailableReason",
+          "volumeUnit",
+          "pipes",
+          "sources"
         ]
       },
       "SalesFunnelBudgetCap": {
@@ -4422,14 +4512,31 @@
         ],
         "description": "consumedCents = committed NET spend (actual + provisioned, what the org pays) of every campaign on the funnel's pipes for this brand x offer PLUS every lead SOURCE campaign (Start -> Lead found) feeding those pipes (sources[]): ALL-INCLUSIVE, sourcing + sending + LLM. Runs started in [periodStart, periodEnd). reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0."
       },
-      "SalesFunnelVolumeUnit": {
+      "SalesFunnelCapPeriod": {
+        "type": "string",
+        "enum": [
+          "one_off",
+          "daily",
+          "weekly",
+          "monthly"
+        ],
+        "description": "UTC. daily = the calendar day; weekly = Monday 00:00 to the next Monday; monthly = the calendar month; one_off = once, counted from when the cap was first stated in this period (never resets)."
+      },
+      "SalesFunnelConsumedUnavailableReason": {
         "type": "string",
         "nullable": true,
         "enum": [
-          "first_contacts",
-          "prospects_handled"
-        ],
-        "description": "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step)."
+          "sales_funnel_not_found",
+          "sales_funnel_catalogue_unavailable",
+          "campaign_service_unconfigured",
+          "campaign_service_unavailable",
+          "runs_service_unavailable",
+          "no_proactive_pipe",
+          "volume_not_measured_on_channel",
+          "sourcing_catalogue_unavailable",
+          "sales_funnel_campaign_not_found",
+          null
+        ]
       },
       "SalesFunnelVolumeCap": {
         "type": "object",
@@ -4485,12 +4592,23 @@
         ],
         "description": "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run (email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. A channel with no measure yet answers null + volume_not_measured_on_channel. unit null = the funnel is unreadable."
       },
+      "SalesFunnelVolumeUnit": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "first_contacts",
+          "prospects_handled",
+          null
+        ],
+        "description": "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step)."
+      },
       "SalesFunnelType": {
         "type": "string",
         "nullable": true,
         "enum": [
           "proactive",
-          "reactive"
+          "reactive",
+          null
         ],
         "description": "features-service's served funnel type, RELAYED (never derived here): proactive when at least one pipe is proactive, else reactive. Labels the caps: proactive = Max budget / Max volume, reactive = Up to $X / Up to N."
       },
@@ -4500,7 +4618,8 @@
         "enum": [
           "type_not_served_by_features_service",
           "sales_funnel_not_found",
-          "sales_funnel_catalogue_unavailable"
+          "sales_funnel_catalogue_unavailable",
+          null
         ]
       },
       "SalesFunnelMeasuredPipe": {
@@ -4580,98 +4699,6 @@
           "campaignIds"
         ],
         "description": "A lead source (features-service sourcing origin) feeding the funnel's pipes; its spend counts in the budget."
-      },
-      "SalesFunnelCaps": {
-        "type": "object",
-        "properties": {
-          "orgId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "offerId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "salesFunnelId": {
-            "type": "string"
-          },
-          "stated": {
-            "type": "boolean"
-          },
-          "funded": {
-            "type": "boolean",
-            "description": "May the funnel's campaign spend at all: true when a max budget AND/OR a max volume is stated, each above 0 (owner rule 2026-10-11). A volume-only funnel is funded: it spends from the org's balance until its max volume is reached. Nothing stated = false. Read it, never re-derive it."
-          },
-          "fundedBy": {
-            "type": "string",
-            "nullable": true,
-            "enum": [
-              "max_budget",
-              "max_volume",
-              "both"
-            ],
-            "description": "Which stated cap funds the funnel; null when not funded."
-          },
-          "updatedAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "maxBudget": {
-            "$ref": "#/components/schemas/SalesFunnelBudgetCap"
-          },
-          "maxVolume": {
-            "$ref": "#/components/schemas/SalesFunnelVolumeCap"
-          },
-          "salesFunnelName": {
-            "type": "string",
-            "nullable": true
-          },
-          "salesFunnelType": {
-            "$ref": "#/components/schemas/SalesFunnelType"
-          },
-          "salesFunnelTypeUnavailableReason": {
-            "$ref": "#/components/schemas/SalesFunnelTypeUnavailableReason"
-          },
-          "volumeUnit": {
-            "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
-          },
-          "pipes": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "$ref": "#/components/schemas/SalesFunnelMeasuredPipe"
-            }
-          },
-          "sources": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "$ref": "#/components/schemas/SalesFunnelMeasuredSource"
-            }
-          }
-        },
-        "required": [
-          "orgId",
-          "brandId",
-          "offerId",
-          "salesFunnelId",
-          "stated",
-          "funded",
-          "fundedBy",
-          "updatedAt",
-          "maxBudget",
-          "maxVolume",
-          "salesFunnelName",
-          "salesFunnelType",
-          "salesFunnelTypeUnavailableReason",
-          "volumeUnit",
-          "pipes",
-          "sources"
-        ]
       },
       "SetSalesFunnelCapsRequest": {
         "type": "object",
@@ -4754,6 +4781,30 @@
           }
         ]
       },
+      "BrandSalesFunnelCaps": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatedSalesFunnelCaps"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "brandId",
+          "caps"
+        ]
+      },
       "StatedSalesFunnelCaps": {
         "type": "object",
         "properties": {
@@ -4784,7 +4835,8 @@
             "enum": [
               "max_budget",
               "max_volume",
-              "both"
+              "both",
+              null
             ],
             "description": "Which stated cap funds the funnel; null when not funded."
           },
@@ -4842,30 +4894,6 @@
           "maxBudget",
           "maxVolume",
           "updatedAt"
-        ]
-      },
-      "BrandSalesFunnelCaps": {
-        "type": "object",
-        "properties": {
-          "orgId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "brandId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "caps": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/StatedSalesFunnelCaps"
-            }
-          }
-        },
-        "required": [
-          "orgId",
-          "brandId",
-          "caps"
         ]
       },
       "TopupMinimumsResponse": {
@@ -5036,7 +5064,10 @@
             },
             "required": [
               "ruleSince"
-            ]
+            ],
+            "additionalProperties": {
+              "nullable": true
+            }
           },
           "firstMonth": {
             "type": "string",
@@ -5061,7 +5092,10 @@
             },
             "required": [
               "absorbedCents"
-            ]
+            ],
+            "additionalProperties": {
+              "nullable": true
+            }
           },
           "fleetByMonth": {
             "type": "array",
@@ -5074,7 +5108,10 @@
               },
               "required": [
                 "month"
-              ]
+              ],
+              "additionalProperties": {
+                "nullable": true
+              }
             }
           },
           "distribution": {
@@ -5092,7 +5129,10 @@
               "required": [
                 "label",
                 "customers"
-              ]
+              ],
+              "additionalProperties": {
+                "nullable": true
+              }
             }
           },
           "customers": {
@@ -5117,7 +5157,10 @@
                     },
                     "required": [
                       "month"
-                    ]
+                    ],
+                    "additionalProperties": {
+                      "nullable": true
+                    }
                   }
                 }
               },
@@ -5125,7 +5168,10 @@
                 "orgId",
                 "absorbedCents",
                 "byMonth"
-              ]
+              ],
+              "additionalProperties": {
+                "nullable": true
+              }
             }
           }
         },
@@ -5246,6 +5292,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5256,6 +5303,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5265,6 +5313,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5274,6 +5323,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5283,6 +5333,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -5366,6 +5417,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5376,6 +5428,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5385,6 +5438,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5394,6 +5448,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5403,6 +5458,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -5476,6 +5532,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5486,6 +5543,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5495,6 +5553,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5504,6 +5563,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5513,6 +5573,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -5596,6 +5657,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5606,6 +5668,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5615,6 +5678,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5624,6 +5688,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5633,6 +5698,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -5723,6 +5789,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5733,6 +5800,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5742,6 +5810,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5751,6 +5820,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5760,6 +5830,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -5844,6 +5915,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -5854,6 +5926,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -5863,6 +5936,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -5872,6 +5946,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -5881,6 +5956,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6007,6 +6083,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6017,6 +6094,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6026,6 +6104,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6035,6 +6114,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6044,6 +6124,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6147,6 +6228,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6157,6 +6239,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6166,6 +6249,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6175,6 +6259,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6184,6 +6269,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6287,6 +6373,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6297,6 +6384,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6306,6 +6394,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6315,6 +6404,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6324,6 +6414,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6406,6 +6497,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6416,6 +6508,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6425,6 +6518,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6434,6 +6528,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6443,6 +6538,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6527,6 +6623,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6537,6 +6634,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6546,6 +6644,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6555,6 +6654,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6564,6 +6664,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6657,6 +6758,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6667,6 +6769,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6676,6 +6779,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6685,6 +6789,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6694,6 +6799,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6797,6 +6903,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6807,6 +6914,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6816,6 +6924,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6825,6 +6934,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -6834,6 +6944,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -6965,6 +7076,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -6975,6 +7087,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -6984,6 +7097,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -6993,6 +7107,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -7002,6 +7117,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -7085,6 +7201,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -7095,6 +7212,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -7104,6 +7222,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -7113,6 +7232,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -7122,6 +7242,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -7205,6 +7326,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -7215,6 +7337,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -7224,6 +7347,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -7233,6 +7357,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -7242,6 +7367,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -7395,6 +7521,7 @@
               "description": "The person who signed up (client-service internal user id). Makes the welcome once per person."
             },
             "required": false,
+            "description": "The person who signed up (client-service internal user id). Makes the welcome once per person.",
             "name": "x-user-id",
             "in": "header"
           }
@@ -7662,6 +7789,7 @@
               "description": "Staff email behind the grant; recorded as grantedBy."
             },
             "required": false,
+            "description": "Staff email behind the grant; recorded as grantedBy.",
             "name": "x-email",
             "in": "header"
           }
@@ -7794,6 +7922,7 @@
               "description": "Staff email behind the debit; recorded as debitedBy. Required."
             },
             "required": true,
+            "description": "Staff email behind the debit; recorded as debitedBy. Required.",
             "name": "x-email",
             "in": "header"
           }
@@ -7954,6 +8083,7 @@
               "description": "Staff email behind the grant; recorded as grantedBy."
             },
             "required": false,
+            "description": "Staff email behind the grant; recorded as grantedBy.",
             "name": "x-email",
             "in": "header"
           }
@@ -8008,6 +8138,7 @@
               "description": "Staff email behind the grant; recorded as grantedBy."
             },
             "required": false,
+            "description": "Staff email behind the grant; recorded as grantedBy.",
             "name": "x-email",
             "in": "header"
           }
@@ -8071,6 +8202,7 @@
               "description": "Staff email behind the grant; recorded as grantedBy."
             },
             "required": false,
+            "description": "Staff email behind the grant; recorded as grantedBy.",
             "name": "x-email",
             "in": "header"
           }
@@ -8661,6 +8793,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -8671,6 +8804,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -8680,6 +8814,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -8689,6 +8824,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -8698,6 +8834,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -8800,6 +8937,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -8810,6 +8948,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -8819,6 +8958,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -8828,6 +8968,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -8837,6 +8978,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -8899,6 +9041,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -8909,6 +9052,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -8918,6 +9062,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -8927,6 +9072,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -8936,6 +9082,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -9696,6 +9843,7 @@
               "description": "First UTC day, YYYY-MM-DD (inclusive)."
             },
             "required": true,
+            "description": "First UTC day, YYYY-MM-DD (inclusive).",
             "name": "from",
             "in": "query"
           },
@@ -9705,6 +9853,7 @@
               "description": "Last UTC day, YYYY-MM-DD (inclusive, not in the future)."
             },
             "required": true,
+            "description": "Last UTC day, YYYY-MM-DD (inclusive, not in the future).",
             "name": "to",
             "in": "query"
           },
@@ -9805,6 +9954,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -9815,6 +9965,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -9824,6 +9975,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -9833,6 +9985,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -9842,6 +9995,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -10146,7 +10300,8 @@
                       "nullable": true,
                       "enum": [
                         "paused",
-                        "restarted"
+                        "restarted",
+                        null
                       ]
                     }
                   },
@@ -10336,6 +10491,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -10346,6 +10502,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -10355,6 +10512,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -10364,6 +10522,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -10373,6 +10532,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -10454,6 +10614,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -10464,6 +10625,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -10473,6 +10635,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -10482,6 +10645,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -10491,6 +10655,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -10581,6 +10746,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -10591,6 +10757,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -10600,6 +10767,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -10609,6 +10777,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -10618,6 +10787,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -10700,6 +10870,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -10710,6 +10881,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -10719,6 +10891,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -10728,6 +10901,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -10737,6 +10911,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -10942,6 +11117,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -10952,6 +11128,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -10961,6 +11138,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -10970,6 +11148,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -10979,6 +11158,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11082,6 +11262,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11092,6 +11273,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11101,6 +11283,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11110,6 +11293,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11119,6 +11303,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11222,6 +11407,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11232,6 +11418,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11241,6 +11428,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11250,6 +11438,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11259,6 +11448,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11331,6 +11521,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11341,6 +11532,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11350,6 +11542,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11359,6 +11552,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11368,6 +11562,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11481,6 +11676,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11491,6 +11687,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11500,6 +11697,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11509,6 +11707,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11518,6 +11717,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11601,6 +11801,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11611,6 +11812,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11620,6 +11822,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11629,6 +11832,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11638,6 +11842,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11732,6 +11937,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11742,6 +11948,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11751,6 +11958,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11760,6 +11968,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11769,6 +11978,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -11882,6 +12092,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -11892,6 +12103,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -11901,6 +12113,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -11910,6 +12123,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -11919,6 +12133,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12013,6 +12228,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12023,6 +12239,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12032,6 +12249,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12041,6 +12259,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12050,6 +12269,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12122,6 +12342,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12132,6 +12353,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12141,6 +12363,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12150,6 +12373,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12159,6 +12383,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12280,6 +12505,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12290,6 +12516,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12299,6 +12526,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12308,6 +12536,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12317,6 +12546,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12439,6 +12669,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12449,6 +12680,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12458,6 +12690,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12467,6 +12700,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12476,6 +12710,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12568,6 +12803,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12578,6 +12814,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12587,6 +12824,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12596,6 +12834,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12605,6 +12844,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12708,6 +12948,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12718,6 +12959,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12727,6 +12969,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12736,6 +12979,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12745,6 +12989,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -12867,6 +13112,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -12877,6 +13123,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -12886,6 +13133,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -12895,6 +13143,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -12904,6 +13153,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -13048,6 +13298,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13120,6 +13371,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13222,6 +13474,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13266,6 +13519,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -13276,6 +13530,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -13285,6 +13540,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -13294,6 +13550,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -13303,6 +13560,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -13358,6 +13616,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13402,6 +13661,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -13412,6 +13672,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -13421,6 +13682,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -13430,6 +13692,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -13439,6 +13702,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -13523,6 +13787,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13567,6 +13832,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -13577,6 +13843,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -13586,6 +13853,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -13595,6 +13863,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -13604,6 +13873,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -13661,6 +13931,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13671,6 +13942,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -13743,6 +14015,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13753,6 +14026,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -13853,6 +14127,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13863,6 +14138,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -13936,6 +14212,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -13946,6 +14223,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -13990,6 +14268,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14000,6 +14279,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14009,6 +14289,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -14018,6 +14299,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -14027,6 +14309,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -14082,6 +14365,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -14092,6 +14376,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -14136,6 +14421,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14146,6 +14432,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14155,6 +14442,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -14164,6 +14452,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -14173,6 +14462,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -14256,6 +14546,7 @@
               "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
             },
             "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
             "name": "salesFunnelId",
             "in": "path"
           },
@@ -14266,6 +14557,7 @@
               "description": "campaign-service's sales funnel campaign id"
             },
             "required": true,
+            "description": "campaign-service's sales funnel campaign id",
             "name": "salesFunnelCampaignId",
             "in": "path"
           },
@@ -14310,6 +14602,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14320,6 +14613,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14329,6 +14623,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -14338,6 +14633,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -14347,6 +14643,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -14503,6 +14800,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14513,6 +14811,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14522,6 +14821,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -14531,6 +14831,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -14540,6 +14841,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -14864,6 +15166,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14874,6 +15177,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14883,6 +15187,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -14892,6 +15197,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -14901,6 +15207,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -14973,6 +15280,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -14983,6 +15291,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -14992,6 +15301,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -15001,6 +15311,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -15010,6 +15321,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
@@ -15100,6 +15412,7 @@
               "description": "Campaign ID injected by workflow-service"
             },
             "required": false,
+            "description": "Campaign ID injected by workflow-service",
             "name": "x-campaign-id",
             "in": "header"
           },
@@ -15110,6 +15423,7 @@
               "example": "uuid1,uuid2,uuid3"
             },
             "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
             "name": "x-brand-id",
             "in": "header"
           },
@@ -15119,6 +15433,7 @@
               "description": "Workflow slug injected by workflow-service"
             },
             "required": false,
+            "description": "Workflow slug injected by workflow-service",
             "name": "x-workflow-slug",
             "in": "header"
           },
@@ -15128,6 +15443,7 @@
               "description": "Feature slug for tracking"
             },
             "required": false,
+            "description": "Feature slug for tracking",
             "name": "x-feature-slug",
             "in": "header"
           },
@@ -15137,6 +15453,7 @@
               "description": "Audience ID injected by campaign-service for per-audience cost attribution"
             },
             "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
             "name": "x-audience-id",
             "in": "header"
           }
