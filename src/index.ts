@@ -31,6 +31,7 @@ import { startDunningScheduler } from "./lib/dunning-scheduler.js";
 import { deployEmailTemplates } from "./instrument.js";
 import { startSubscriptionOutOfCreditsWatcher } from "./lib/subscription-out-of-credits.js";
 import { startPaymentAlertScheduler } from "./lib/payment-alerts.js";
+import { startStripeStepAlertScheduler } from "./lib/stripe-step-alert.js";
 import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
 import { legacyOutboundLegKeyLogMiddleware } from "./lib/legacy-leg-key-log.js";
@@ -109,6 +110,8 @@ if (process.env.NODE_ENV !== "test") {
         // Owner Telegram alert per succeeded payment. Missing vars = a loud warning.
         warnIfTelegramUnconfigured();
         startPaymentAlertScheduler();
+        // One owner ping per card step, sent once the budgets set right after landed.
+        startStripeStepAlertScheduler();
         // The by-day history learns the funnel caps stated before it counted them.
         void reconcileFunnelCapHistory();
       });

@@ -74,6 +74,8 @@ export interface SalesFunnel {
    * `email_pushed_via_api`, `positive_reply_received`); null when not served.
    */
   triggerSlug: string | null;
+  /** The trigger's served display name (`trigger.name`: "Positive reply"); null/absent when not served. */
+  triggerName?: string | null;
 }
 
 export class SalesFunnelNotFoundError extends Error {
@@ -109,7 +111,7 @@ const snapshotKey = (id: string) => `sales_funnel:${id}`;
 
 /** PURE: the funnel out of features-service's detail body. Throws on a malformed one. */
 export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
-  const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown; trigger?: { slug?: unknown } | null };
+  const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown; trigger?: { slug?: unknown; name?: unknown } | null };
   if (!b || typeof b !== "object" || !Array.isArray(b.legs)) {
     throw new SalesFunnelCatalogueUnavailableError(
       `features-service sales funnel ${id} carried no legs array`
@@ -150,7 +152,8 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
   }
   const type = b.type === "proactive" || b.type === "reactive" ? b.type : null;
   const trigger = typeof b.trigger?.slug === "string" && b.trigger.slug.trim() ? b.trigger.slug.trim() : null;
-  return { id, name: typeof b.name === "string" ? b.name : null, type, pipes, triggerSlug: trigger };
+  const triggerName = typeof b.trigger?.name === "string" && b.trigger.name.trim() ? b.trigger.name.trim() : null;
+  return { id, name: typeof b.name === "string" ? b.name : null, type, pipes, triggerSlug: trigger, triggerName };
 }
 
 /**

@@ -11,6 +11,7 @@ import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import * as telegram from "../../src/lib/telegram-client.js";
 import * as brandClient from "../../src/lib/brand-service-client.js";
 import { deliver } from "../../src/lib/owner-alerts.js";
+import { runStripeStepAlertSweep } from "../../src/lib/stripe-step-alert.js";
 import {
   cancelSubscription,
   changeSubscriptionAmount,
@@ -115,6 +116,9 @@ describe("owner Telegram per customer billing event", () => {
     await insertTestAccount({ orgId });
     const now = new Date();
     const trial = await startSubscription({ orgId, userId, monthlyAmountCents: 9900, now: new Date(now.getTime() - 4 * DAY) });
+    await settle();
+    // The card-step ping goes out once due (lib/stripe-step-alert), budgets and limit read then.
+    await runStripeStepAlertSweep(now);
     await advanceSubscription(trial, now); // trial end paid: a payment, not a lifecycle message
     await changeSubscriptionAmount(orgId, 19900, now);
     await pauseSubscription(orgId, 2, now);
@@ -122,7 +126,7 @@ describe("owner Telegram per customer billing event", () => {
 
     const m = messages();
     expect(m).toHaveLength(3);
-    expect(m[0]).toContain("Subscription started: $99.00/month, 3-day free trial");
+    expect(m[0]).toContain("Card page: $0 today, 3-day free trial, then $99.00/month.");
     expect(m[1]).toContain("Subscription upgraded: $99.00 → $199.00/month");
     expect(m[2]).toContain("Subscription paused for 2 months");
   });

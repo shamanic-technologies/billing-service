@@ -1341,3 +1341,19 @@ export const ownerAlerts = pgTable("owner_alerts", {
   text: text("text").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// One owner Telegram per client going through the card page (migration 0092,
+// lib/stripe-step-alert): written at the card step, SENT once the budgets the
+// client states right after have landed (due_at, pushed back by each cap write).
+export const ownerStripeStepAlerts = pgTable("owner_stripe_step_alerts", {
+  dedupKey: text("dedup_key").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  stripeLine: text("stripe_line").notNull(),
+  acceptedLine: text("accepted_line"),
+  actorEmail: text("actor_email"),
+  actorUserId: text("actor_user_id"),
+  dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+  settledAt: timestamp("settled_at", { withTimezone: true }),
+  outcome: text("outcome"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

@@ -26,6 +26,7 @@ import {
 } from "../lib/sales-funnel-caps.js";
 import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 import { errorReason } from "../lib/pg-error.js";
+import { deferStripeStepAlertOnCapWrite } from "../lib/stripe-step-alert.js";
 
 const router = Router();
 
@@ -159,6 +160,8 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     userId ?? null,
     new Date()
   );
+  // A card-step owner ping still pending waits for this budget (lib/stripe-step-alert).
+  await deferStripeStepAlertOnCapWrite(key.orgId);
   const view = key.salesFunnelCampaignId
     ? await composeSalesFunnelCampaignCapsView({ ...key, salesFunnelCampaignId: key.salesFunnelCampaignId })
     : await composeSalesFunnelCapsView(key);

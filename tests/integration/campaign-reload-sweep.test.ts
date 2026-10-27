@@ -96,6 +96,10 @@ describe("blocked-campaign reload sweep", () => {
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue(PROD_PAID);
     setUsage(orgA, PROD_USAGE);
     await upsertCampaignAuthorizeCost(campaignA, orgA, estimate);
+    // The authorize happened at the test's NOW, not the wall clock: the 21-day
+    // freshness window is measured from it (a wall-clock stamp made the "past the
+    // window" case fail from 2026-10-27 on, once NOW + 60d - 21d passed today).
+    await db.execute(sql`UPDATE campaign_authorize_costs SET updated_at = ${NOW.toISOString()}::timestamptz WHERE org_id = ${orgA}`);
   }
 
   it("charges the reload authorize would have fired, sized to (floor + estimate)", async () => {

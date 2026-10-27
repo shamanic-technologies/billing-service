@@ -34,7 +34,8 @@
  */
 
 import { topupMinimumsFor, withdrawOnboardingAdvanceForPostpaid } from "./free-credit-offer.js";
-import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
+import { notifyOwnerBillingEvent, usd, utcDay } from "./owner-alerts.js";
+import { scheduleStripeStepAlert } from "./stripe-step-alert.js";
 import { runPostpaidCardCheck } from "./postpaid-card-check.js";
 import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/index.js";
@@ -268,7 +269,13 @@ export async function setPaymentMode(
           .where(eq(billingAccounts.orgId, orgId));
       }
       if (armPostpaidLine && actor === "customer") {
-        notifyOwnerBillingEvent({ orgId, emoji: "💳", text: postpaidLineArmedAlertText() });
+        // ONE ping for the card step, sent once the budgets the client states right
+        // after have landed (lib/stripe-step-alert, OWNER-PING-BUDGET-1027).
+        scheduleStripeStepAlert({
+          orgId,
+          dedupKey: `stripe-step:postpaid:${orgId}:${utcDay()}`,
+          ...postpaidCardStepLines(account.freeCreditOffer === MATCH_FREE_CREDIT_OFFER),
+        });
       }
     }
     return {
@@ -420,6 +427,11 @@ export function paymentModeAlertText(input: {
   return lines.join("\n");
 }
 
-export function postpaidLineArmedAlertText(): string {
-  return "Now pays after use: card saved, first charge when spend reaches $50. Changed by the client.";
+/** The owner's card-step lines for a client whose card was saved to pay after use. */
+export function postpaidCardStepLines(matchOffer: boolean): { stripeLine: string; acceptedLine: string } {
+  return {
+    stripeLine: "Card page: $0 today, card saved.",
+    acceptedLine:
+      "Pays after use: first charge when spend reaches $50." + (matchOffer ? " We match their first $100." : ""),
+  };
 }

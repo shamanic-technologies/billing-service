@@ -74,6 +74,7 @@ describe("salesFunnelFromDetail", () => {
         },
       ],
       triggerSlug: null,
+      triggerName: null,
     });
   });
 

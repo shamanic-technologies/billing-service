@@ -645,6 +645,13 @@
       "when": 1796032800000,
       "tag": "0091_features_catalogue_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1796119200000,
+      "tag": "0092_owner_stripe_step_alerts",
+      "breakpoints": true
     }
   ]
 }
