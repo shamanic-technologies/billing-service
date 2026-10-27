@@ -1,4 +1,6 @@
 import { recordCheckoutOpened } from "../lib/payment-alerts.js";
+import { currentActor, usd, utcDay } from "../lib/owner-alerts.js";
+import { PREPAID_CHECKOUT_SETTLE_MS, scheduleStripeStepAlertNow } from "../lib/stripe-step-alert.js";
 import { hasPostpaidCreditLine } from "../lib/pay-balance.js";
 import { recordPaymentConsent } from "../lib/payment-consents.js";
 import { Router } from "express";
@@ -257,6 +259,10 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         (req.headers["x-email"] as string | undefined) ?? null,
         welcomeDiscount ? welcomeDiscount.amountDueCents : topup_amount_cents ?? null
       );
+      // A client who never paid reaching the card page: ONE owner ping a few minutes
+      // later, with the budgets they set meanwhile (lib/stripe-step-alert). A later
+      // top-up by a paying client is already told by the payment alert.
+      scheduleFirstTopupCardStep(orgId, topup_amount_cents!, welcomeDiscount);
     }
 
     traceEvent(runId, { service: "billing-service", event: "checkout.done", data: { session_id: session.session_id ?? session.id } }, req.headers);
@@ -306,5 +312,31 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/** Never throws, never awaited: the checkout answers at once. */
+function scheduleFirstTopupCardStep(
+  orgId: string,
+  topupCents: number,
+  welcomeDiscount: OnboardingWelcomeDiscount | null
+): void {
+  const actor = currentActor();
+  void (async () => {
+    const paid = await sumSucceededTopupsForOrg(orgId);
+    if (Number(paid) > 0) return;
+    const stripeLine = welcomeDiscount
+      ? `Card page: ${usd(welcomeDiscount.amountDueCents)} to pay now (${usd(topupCents)} top-up, ${usd(welcomeDiscount.giftCents)} welcome gift off).`
+      : `Card page: ${usd(topupCents)} to pay now.`;
+    await scheduleStripeStepAlertNow({
+      orgId,
+      dedupKey: `stripe-step:topup:${orgId}:${utcDay()}`,
+      stripeLine,
+      acceptedLine: null,
+      settleMs: PREPAID_CHECKOUT_SETTLE_MS,
+      actor,
+    });
+  })().catch((err) => {
+    console.error(`[billing-service] card step alert for a first top-up failed for org ${orgId}:`, err);
+  });
+}
 
 export default router;

@@ -63,6 +63,7 @@
  */
 
 import { notifyOwnerBillingEvent, usd } from "./owner-alerts.js";
+import { scheduleStripeStepAlert } from "./stripe-step-alert.js";
 import { and, asc, desc, eq, gte, isNotNull, ne, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -519,11 +520,13 @@ export async function startSubscription(params: {
     await enterSubscriptionMode(orgId);
     await grantSubscriptionTrial(orgId);
     console.log(`[billing-service] subscription: org ${orgId} started a trial (${amount} cents/month)`);
-    notifyOwnerBillingEvent({
+    // ONE owner ping for the card step, with the budgets set right after (lib/stripe-step-alert).
+    scheduleStripeStepAlert({
       orgId,
-      emoji: "🆕",
-      text: `Subscription started: ${usd(amount)}/month, ${SUBSCRIPTION_TRIAL_DAYS}-day free trial`,
+      now,
       dedupKey: `sub-started:${sub.id}`,
+      stripeLine: `Card page: $0 today, ${SUBSCRIPTION_TRIAL_DAYS}-day free trial, then ${usd(amount)}/month.`,
+      acceptedLine: "Monthly plan started.",
     });
     return sub;
   }
@@ -569,11 +572,12 @@ export async function startSubscription(params: {
     .where(eq(subscriptions.id, sub.id))
     .returning();
   await enterSubscriptionMode(orgId);
-  notifyOwnerBillingEvent({
+  scheduleStripeStepAlert({
     orgId,
-    emoji: "🆕",
-    text: `Subscription started: ${usd(amount)}/month, first month paid now`,
+    now,
     dedupKey: `sub-started:${active.id}`,
+    stripeLine: `Card page: ${usd(amount)} paid now, then ${usd(amount)}/month.`,
+    acceptedLine: "Monthly plan started, first month paid.",
   });
   return active;
 }
@@ -697,11 +701,12 @@ export async function startPlanForOffer(params: {
   console.log(
     `[billing-service] plan: org ${orgId} bought ${monthlyAmountCents} cents/month for brand ${brandId} x offer ${offerId}`
   );
-  notifyOwnerBillingEvent({
+  scheduleStripeStepAlert({
     orgId,
-    emoji: "🆕",
-    text: `New plan started: ${usd(monthlyAmountCents)}/month, first month paid now`,
+    now,
     dedupKey: `sub-started:${active.id}`,
+    stripeLine: `Card page: ${usd(monthlyAmountCents)} paid now, then ${usd(monthlyAmountCents)}/month.`,
+    acceptedLine: "New monthly plan started, first month paid.",
   });
   return active;
 }
