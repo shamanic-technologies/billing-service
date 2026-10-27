@@ -31,6 +31,7 @@ import {
   featuresCatalogueSnapshots,
   paymentAlertSignals,
   ownerAlerts,
+  ownerStripeStepAlerts,
   WELCOME_PROMO_CODE,
   INVITE_REWARD_CODE,
   INVITE_WELCOME_CODE,
@@ -76,6 +77,7 @@ export async function cleanTestData() {
   await db.delete(featuresCatalogueSnapshots);
   await db.delete(paymentAlertSignals);
   await db.delete(ownerAlerts);
+  await db.delete(ownerStripeStepAlerts);
   await db.delete(subscriptionCreditExpiries);
   await db.delete(subscriptionCharges);
   await db.delete(subscriptions);
