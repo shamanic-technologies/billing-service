@@ -113,8 +113,9 @@ describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () =>
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ acknowledged: true, topup_triggered: true });
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    // Charge is the tier amount (5000), NOT the stored daily topup_amount (1000).
-    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
+    // Charge is the BILLED amount owed (5001), NOT the stored daily topup_amount
+    // (1000) nor a step (POSTPAID-CHARGE-ON-BILLED-1029).
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5001);
   });
 
   it("the GROSS body spent_total_cents does NOT gate the reload — only the NET balance does (bug #285)", async () => {

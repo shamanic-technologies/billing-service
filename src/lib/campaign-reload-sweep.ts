@@ -83,7 +83,8 @@ import { computeBalance, type BalanceSnapshot } from "./balance.js";
 import { openBlockedCampaignEpisode } from "./dunning.js";
 import { computeTopupCharge } from "./topup-tier.js";
 import { addCents, cmpCents } from "./cents.js";
-import { cannotSpend, resolveOrgFloor } from "./spend-block.js";
+import { cannotSpend, gateBalanceCents, resolveOrgFloor } from "./spend-block.js";
+import { computeSettleCharge } from "./month-end-sweep.js";
 import { isPlatformOrg } from "./platform-org.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
@@ -496,11 +497,14 @@ export async function runCampaignReloadSweep(
       // Our own internal org is never blocked and never charged (lib/platform-org).
       if (await isPlatformOrg(orgId)) continue;
       const snapshot = await computeBalance(orgId);
-      const { tier, floorCents: thresholdCents } = await resolveOrgFloor(orgId, snapshot);
+      const floor = await resolveOrgFloor(orgId, snapshot);
+      const { tier, floorCents: thresholdCents } = floor;
+      // A postpaid credit line is measured on BILLED usage only (lib/spend-block).
+      const gateBalance = await gateBalanceCents(orgId, snapshot, floor);
 
       // The affordability verdict, on the org's hungriest campaign. Not blocked
       // → nothing due.
-      if (!cannotSpend(snapshot.balanceCents, maxRequiredCents, thresholdCents)) {
+      if (!cannotSpend(gateBalance, maxRequiredCents, thresholdCents)) {
         continue;
       }
       result.blocked += 1;
@@ -510,7 +514,7 @@ export async function runCampaignReloadSweep(
         result.notReloadCapable += 1;
         console.warn(
           `[billing-service] campaign reload sweep: org ${orgId} is blocked ` +
-            `(balance=${snapshot.balanceCents} required=${maxRequiredCents} ` +
+            `(balance=${gateBalance} required=${maxRequiredCents} ` +
             `floor=${thresholdCents}) and has no credit line — owned by dunning, ` +
             `not charged here`
         );
@@ -544,12 +548,12 @@ export async function runCampaignReloadSweep(
       // Exactly what authorize charges: enough whole tier multiples to lift the
       // balance to (floor + required), so the run clears WITH the floor headroom
       // preserved.
+      // A postpaid org is charged exactly the BILLED amount it owes, never
+      // provisioned holds (owner 2026-10-29).
       const targetCents = addCents(thresholdCents, maxRequiredCents);
-      const chargeAmount = computeTopupCharge(
-        snapshot.balanceCents,
-        targetCents,
-        tier.amountCents
-      );
+      const chargeAmount = floor.chargesOnBilled
+        ? computeSettleCharge(gateBalance)
+        : computeTopupCharge(snapshot.balanceCents, targetCents, tier.amountCents);
       if (chargeAmount <= 0) continue;
 
       const outcome = await coalesceReload(orgId, () =>

@@ -364,7 +364,8 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     expect(res.status).toBe(200);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
+    // Postpaid: the billed amount owed ($51), never a step (POSTPAID-CHARGE-ON-BILLED-1029).
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5100);
     expect(res.body.required_cents).toBe("2500.0000000000");
   });
 

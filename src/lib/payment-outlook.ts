@@ -657,8 +657,10 @@ async function decideOutlook(
   // carried the balance below zero by the time it arrives.
   const candidates: { at: Date; trigger: PaymentChargeTrigger }[] = [];
 
+  // A postpaid credit line is crossed on BILLED usage only, never provisioned
+  // holds (lib/spend-block `gateBalanceCents`).
   const crossing = floorCrossingAt(
-    snapshot.balanceCents,
+    block.gateBalanceCents,
     block.floorCents,
     block.requiredCents,
     burn.dailyCents,

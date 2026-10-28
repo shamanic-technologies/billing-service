@@ -9,6 +9,13 @@ vi.mock("../src/lib/runs-client.js", async (importOriginal) => {
   return {
     ...actual,
     fetchRunsOrgNoCampaignTotal: async () => ({ usageNetCents: "0", actualNetCents: "0" }),
+    // A postpaid credit line is gated + charged on BILLED (actual) usage
+    // (lib/spend-block `gateBalanceCents`). Default: no provisioned holds, so
+    // billed = the usage the suite already mocks and every suite written before
+    // reads exactly the balance it always did. A suite exercising holds spies on
+    // `fetchRunsOrgActualUsageTotal` with its own figure.
+    fetchRunsOrgActualUsageTotal: async (orgId: string, wfHeaders: Record<string, string>) =>
+      (await import("../src/lib/runs-client.js")).fetchRunsOrgUsageTotal(orgId, wfHeaders),
   };
 });
 

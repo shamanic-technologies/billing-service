@@ -139,9 +139,14 @@ export function replayCharges(params: {
   const events: ExpectedCharge[] = [];
   const burn = new Decimal(params.dailyBurnCents);
   const required = new Decimal(params.requiredCents);
-  let balance = new Decimal(params.balanceCents);
+  // A POSTPAID org's credit line is crossed and charged on BILLED usage only
+  // (owner 2026-10-29, lib/spend-block `gateBalanceCents`): its replay runs on the
+  // settle balance, and each floor charge is the billed amount owed.
+  const onBilled = params.paymentMode === "postpaid";
+  const settle = new Decimal(params.settleBalanceCents ?? params.balanceCents);
+  let balance = onBilled ? settle : new Decimal(params.balanceCents);
   // Provisioned holds: in the spendable balance, never in what a settle charges.
-  const holds = new Decimal(params.settleBalanceCents ?? params.balanceCents).minus(balance);
+  const holds = settle.minus(balance);
   let paid = new Decimal(params.paidTopupsCents);
   let t = params.now;
 
@@ -158,13 +163,15 @@ export function replayCharges(params: {
     paid = paid.plus(amount);
   };
 
+  const floorCharge = (tier: { amountCents: number }, target: Decimal): number =>
+    (onBilled
+      ? computeSettleCharge(fixed(balance))
+      : computeTopupCharge(fixed(balance), fixed(target), tier.amountCents)) ||
+    tier.amountCents;
+
   if (params.dueNow) {
     const tier = reloadTierFor(fixed(paid), params.paymentMode, params.configuredReload);
-    const target = required.plus(tier.thresholdCents);
-    const amount =
-      computeTopupCharge(fixed(balance), fixed(target), tier.amountCents) ||
-      tier.amountCents;
-    charge(t, "floor", amount);
+    charge(t, "floor", floorCharge(tier, required.plus(tier.thresholdCents)));
   }
 
   while (events.length < MAX_EVENTS) {
@@ -175,12 +182,7 @@ export function replayCharges(params: {
     // Already unable to spend (a prepaid org settled to exactly zero, say): the
     // reload fires on the spot, never "at the crossing", which is in the past.
     if (cannotSpend(fixed(balance), fixed(required), floor)) {
-      charge(
-        t,
-        "floor",
-        computeTopupCharge(fixed(balance), fixed(target), tier.amountCents) ||
-          tier.amountCents
-      );
+      charge(t, "floor", floorCharge(tier, target));
       continue;
     }
 
@@ -193,10 +195,7 @@ export function replayCharges(params: {
       t = crossing;
       // The balance sits exactly on `floor + required` at the crossing; the rule
       // fires a hair past it, which is one unit of the tier.
-      const amount =
-        computeTopupCharge(fixed(balance), fixed(target), tier.amountCents) ||
-        tier.amountCents;
-      charge(t, "floor", amount);
+      charge(t, "floor", floorCharge(tier, target));
       continue;
     }
 
@@ -286,10 +285,14 @@ export function chargeScheduleFrom(
       inputs.configuredReload
     );
     const target = new Decimal(inputs.requiredCents).plus(tier.thresholdCents);
+    // A postpaid org's retry asks the BILLED amount owed (lib/campaign-reload-sweep).
+    const onBilled = outlook.paymentMode === "postpaid";
     const amount =
-      computeTopupCharge(inputs.balanceCents, fixed(target), tier.amountCents) ||
+      (onBilled
+        ? computeSettleCharge(inputs.settleBalanceCents)
+        : computeTopupCharge(inputs.balanceCents, fixed(target), tier.amountCents)) ||
       tier.amountCents;
-    const before = new Decimal(inputs.balanceCents);
+    const before = new Decimal(onBilled ? inputs.settleBalanceCents : inputs.balanceCents);
     events = [
       {
         at: outlook.nextChargeAttemptAt,
