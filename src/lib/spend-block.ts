@@ -33,7 +33,7 @@ import { configuredReloadFor } from "./free-credit-offer.js";
 import { billingAccounts } from "../db/schema.js";
 import { isDepleted, subCents, gte as gteCents } from "./cents.js";
 import { autoTopupArmed, resolvePostpaidTier, type TopupTier } from "./topup-tier.js";
-import type { BalanceSnapshot } from "./balance.js";
+import { computeSettleBalanceCents, type BalanceSnapshot } from "./balance.js";
 import { asPaymentMode } from "./payment-mode-types.js";
 import { isPlatformOrg } from "./platform-org.js";
 
@@ -65,9 +65,46 @@ export interface OrgFloor {
   tier: TopupTier | null;
   /** The org's postpaid credit-line floor ("0" when it has no credit line). */
   floorCents: string;
+  /**
+   * True for a POSTPAID org with a credit line: its line is measured on BILLED
+   * usage only, never on provisioned holds (see `gateBalanceCents`).
+   */
+  chargesOnBilled: boolean;
+}
+
+/**
+ * The balance an org's credit line is measured against — the ONE reader.
+ *
+ * Owner rule 2026-10-29 (POSTPAID-CHARGE-ON-BILLED-1029), verbatim: « Tout sur le
+ * facturé : prélèvement quand le facturé atteint $50 ou le 31, montant = facturé.
+ * Les provisions ne sont jamais encaissées, juste affichées à côté. »
+ *
+ * So a POSTPAID org with a credit line is judged on credited − ACTUAL usage
+ * (`computeSettleBalanceCents`, the figure every settle already charges), never on
+ * the spendable balance, which also subtracts provisioned holds (worst-case
+ * reservations for follow-up emails that may never go out). Example: billed $45,
+ * holds $10, $50 line → no charge, campaigns keep running; billed crosses $50 →
+ * one charge of the billed amount owed. The small exposure of holds above the
+ * line is accepted by the owner.
+ *
+ * The gate (authorize, the affordability pre-flight, the reload sweep, dunning)
+ * and the charge read the SAME figure, so a campaign can never be refused on a
+ * balance no charge will ever lift (the reload-sweep deadlock). Prepaid,
+ * subscription and an org with no credit line keep the spendable balance.
+ */
+export async function gateBalanceCents(
+  orgId: string,
+  snapshot: BalanceSnapshot,
+  floor: Pick<OrgFloor, "chargesOnBilled">
+): Promise<string> {
+  return floor.chargesOnBilled
+    ? computeSettleBalanceCents(orgId, snapshot)
+    : snapshot.balanceCents;
 }
 
 export interface SpendBlock extends OrgFloor {
+  /** The balance the floor is compared to (`gateBalanceCents`). */
+  gateBalanceCents: string;
   /** The largest stored campaign estimate for this org ("0" when none). */
   requiredCents: string;
   /** Whether the next run is refused right now. */
@@ -98,15 +135,20 @@ export async function resolveOrgFloor(
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
+  const paymentMode = account ? asPaymentMode(account.paymentMode) : "postpaid";
   const { tier, thresholdCents } = resolvePostpaidTier({
     topupEnabled: account ? autoTopupArmed(account) : false,
     hasCardPm: snapshot.hasCardPm,
     autoReloadSupported: snapshot.autoReloadSupported,
     paidTopupsCents: snapshot.paidTopupsCents,
-    paymentMode: account ? asPaymentMode(account.paymentMode) : "postpaid",
+    paymentMode,
     configuredReload: account ? configuredReloadFor(account) : null,
   });
-  return { tier, floorCents: thresholdCents };
+  return {
+    tier,
+    floorCents: thresholdCents,
+    chargesOnBilled: paymentMode === "postpaid" && tier !== null,
+  };
 }
 
 /**
@@ -145,11 +187,12 @@ export async function resolveSpendBlock(
     maxCampaignEstimateCents(orgId),
     isPlatformOrg(orgId),
   ]);
+  const gate = await gateBalanceCents(orgId, snapshot, floor);
   return {
     ...floor,
     requiredCents,
+    gateBalanceCents: gate,
     // Our own internal org is never blocked (lib/platform-org).
-    blocked:
-      !platformOrg && cannotSpend(snapshot.balanceCents, requiredCents, floor.floorCents),
+    blocked: !platformOrg && cannotSpend(gate, requiredCents, floor.floorCents),
   };
 }

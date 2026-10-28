@@ -10,6 +10,8 @@ import { traceEvent } from "../lib/trace-event.js";
 import { addCents, subCents, gte as gteCents, parseNonNegativeCents } from "../lib/cents.js";
 import { applyUsageDiscount, getUsageDiscountPct } from "../lib/usage-discount.js";
 import { computeBalance } from "../lib/balance.js";
+import { gateBalanceCents } from "../lib/spend-block.js";
+import { computeSettleCharge } from "../lib/month-end-sweep.js";
 import { autoTopupArmed, reloadTierFor, computeTopupCharge, resolvePostpaidTier } from "../lib/topup-tier.js";
 import { asPaymentMode } from "../lib/payment-mode-types.js";
 import { configuredReloadFor } from "../lib/free-credit-offer.js";
@@ -232,10 +234,27 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       configuredReload: configuredReloadFor(account),
     });
 
+    // A POSTPAID org with a credit line is measured on BILLED usage only, never
+    // on provisioned holds (lib/spend-block `gateBalanceCents`, owner 2026-10-29):
+    // the gate and the charge read the same figure, so holds are never charged
+    // and never wedge a campaign. Prepaid / no credit line: the spendable balance.
+    const billedGate = {
+      chargesOnBilled: asPaymentMode(account.paymentMode) === "postpaid" && tier !== null,
+    };
+    let gateBalance: string;
+    try {
+      gateBalance = await gateBalanceCents(orgId, snapshot, billedGate);
+    } catch (err) {
+      console.error("[billing-service] Failed to compute billed balance:", err);
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.compose-failed", level: "error", detail: String(pgDriverError(err)) }, req.headers);
+      res.status(502).json({ error: "Failed to compute balance" });
+      return;
+    }
+
     // Sufficient (no reload) when running this cost keeps the balance at/above
     // the floor: balance − required >= threshold. A negative balance still
     // within the credit line reads sufficient and runs on credit.
-    if (gteCents(subCents(snapshot.balanceCents, requiredCents), thresholdCents)) {
+    if (gteCents(subCents(gateBalance, requiredCents), thresholdCents)) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, balance_cents: snapshot.balanceCents, required_cents: requiredCents, threshold_cents: thresholdCents } }, req.headers);
       res.json({
         sufficient: true,
@@ -248,7 +267,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     if (!autoTopupArmed(account)) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: snapshot.balanceCents,
+        balanceCents: gateBalance,
         thresholdCents,
         requiredCents,
         creditedCents: snapshot.creditedCents,
@@ -269,7 +288,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     if (!snapshot.hasCardPm) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: snapshot.balanceCents,
+        balanceCents: gateBalance,
         thresholdCents,
         requiredCents,
         creditedCents: snapshot.creditedCents,
@@ -292,7 +311,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       // it and fall through to depletion dunning, which prompts a manual recharge.
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: snapshot.balanceCents,
+        balanceCents: gateBalance,
         thresholdCents,
         requiredCents,
         creditedCents: snapshot.creditedCents,
@@ -314,12 +333,16 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     // multiples to bring the balance up to (threshold + required) so the run
     // clears WITH the floor headroom preserved. Charge uses the tier amount, not
     // the stored daily amount.
+    // A postpaid org is charged exactly the BILLED amount it owes (settled to
+    // zero), never a step that would also pay for provisioned holds.
     const targetCents = addCents(thresholdCents, requiredCents);
-    const chargeAmount = computeTopupCharge(snapshot.balanceCents, targetCents, tier!.amountCents);
+    const chargeAmount = billedGate.chargesOnBilled
+      ? computeSettleCharge(gateBalance)
+      : computeTopupCharge(snapshot.balanceCents, targetCents, tier!.amountCents);
     if (chargeAmount <= 0) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: snapshot.balanceCents,
+        balanceCents: gateBalance,
         thresholdCents,
         requiredCents,
         creditedCents: snapshot.creditedCents,
@@ -381,7 +404,7 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       }
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: snapshot.balanceCents,
+        balanceCents: gateBalance,
         thresholdCents,
         requiredCents,
         creditedCents: snapshot.creditedCents,
@@ -407,11 +430,20 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
-    const sufficient = gteCents(subCents(after.balanceCents, requiredCents), thresholdCents);
+    let afterGate: string;
+    try {
+      afterGate = await gateBalanceCents(orgId, after, billedGate);
+    } catch (err) {
+      console.error("[billing-service] Failed to recompute billed balance after reload:", err);
+      res.status(502).json({ error: "Failed to recompute balance after reload" });
+      return;
+    }
+
+    const sufficient = gteCents(subCents(afterGate, requiredCents), thresholdCents);
     if (!sufficient) {
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
-        balanceCents: after.balanceCents,
+        balanceCents: afterGate,
         thresholdCents,
         requiredCents,
         creditedCents: after.creditedCents,
@@ -511,13 +543,27 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     );
     const thresholdCents = String(tier.thresholdCents);
 
-    if (gteCents(snapshot.balanceCents, thresholdCents)) {
-      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: snapshot.balanceCents, threshold_cents: thresholdCents } }, req.headers);
+    // A POSTPAID org crosses its line on BILLED usage only and is charged the
+    // billed amount owed, never provisioned holds (lib/spend-block).
+    const chargesOnBilled = asPaymentMode(account.paymentMode) === "postpaid";
+    let gateBalance: string;
+    try {
+      gateBalance = await gateBalanceCents(orgId, snapshot, { chargesOnBilled });
+    } catch (err) {
+      console.error("[billing-service] usage_apply: failed to compute billed balance:", err);
+      res.status(502).json({ error: "Failed to compute balance" });
+      return;
+    }
+
+    if (gteCents(gateBalance, thresholdCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.no-topup", data: { balance_cents: gateBalance, threshold_cents: thresholdCents } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
 
-    const chargeAmount = computeTopupCharge(snapshot.balanceCents, thresholdCents, tier.amountCents);
+    const chargeAmount = chargesOnBilled
+      ? computeSettleCharge(gateBalance)
+      : computeTopupCharge(snapshot.balanceCents, thresholdCents, tier.amountCents);
     if (chargeAmount <= 0) {
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
