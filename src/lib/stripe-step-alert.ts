@@ -28,7 +28,7 @@ import { ownerStripeStepAlerts, salesFunnelCaps, type SalesFunnelCapRow } from "
 import { currentActor, deliver, type AlertActor } from "./owner-alerts.js";
 import { getMonthlyChargeLimit } from "./monthly-charge-limit.js";
 import { getSalesFunnel, type SalesFunnel } from "./sales-funnel-catalogue.js";
-import { volumeUnitOf, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
+import { volumeUnitFor, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
 
 /** Card step to send, when no budget lands meanwhile. */
 export const STRIPE_STEP_SETTLE_MS = 60_000;
@@ -211,7 +211,7 @@ export async function readOrgBudgetLines(orgId: string): Promise<BudgetLine[]> {
       period: (row.maxBudgetPeriod as CapPeriod | null) ?? null,
       volume:
         row.maxVolume != null && row.maxVolumePeriod
-          ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: funnel ? volumeUnitOf(funnel) : null }
+          ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: funnel ? await volumeUnitFor(funnel) : null }
           : null,
     });
   }

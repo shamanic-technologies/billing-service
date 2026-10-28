@@ -9,6 +9,7 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
+import { __resetStepEvidence } from "../../src/lib/sales-funnel-caps.js";
 
 const orgId = "00000000-0000-0000-0000-000000102801";
 const userId = "00000000-0000-0000-0000-000000102809";
@@ -99,7 +100,11 @@ const occurrence = (campaignId: string | null, quantity = "1.000000") => ({
 });
 
 function mockUpstreams(opts: { published: number; runsStatus?: number }) {
-  const calls: { occurrences: URLSearchParams[]; runOutcomes: number } = { occurrences: [], runOutcomes: 0 };
+  const calls: { occurrences: URLSearchParams[]; evidence: URLSearchParams[]; runOutcomes: number } = {
+    occurrences: [],
+    evidence: [],
+    runOutcomes: 0,
+  };
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     if (url.pathname.startsWith("/internal/catalogue/sales-funnels/")) {
@@ -143,8 +148,18 @@ function mockUpstreams(opts: { published: number; runsStatus?: number }) {
       });
     }
     if (url.pathname === "/internal/outcome-occurrences") {
-      calls.occurrences.push(url.searchParams);
       if (opts.runsStatus) return new Response("down", { status: opts.runsStatus });
+      // The evidence read (fleet-wide, no org, no window): has the step's producer ever
+      // declared it on a campaign's run? post_published: yes; website_visit: never.
+      if (!url.searchParams.get("orgId")) {
+        calls.evidence.push(url.searchParams);
+        const step = url.searchParams.get("outcomeKey");
+        return Response.json({
+          occurrences: [occurrence(null), ...(step === "post_published" ? [occurrence(CAMPAIGN_OTHER)] : [])],
+          nextCursor: null,
+        });
+      }
+      calls.occurrences.push(url.searchParams);
       // Two pages: this unit's publications, plus another campaign's and an org-less
       // publication (social-service daily comments) that are never this funnel's.
       const mine = Array.from({ length: opts.published }, () => occurrence(CAMPAIGN_THREADS));
@@ -179,6 +194,7 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
   beforeEach(async () => {
     await cleanTestData();
     __resetSalesFunnelCache();
+    __resetStepEvidence();
     __primeSalesPathTerms([], { sourceLegKey: "start_to_lead_found", origins: [], originsByChannel: {} } as never);
   });
   afterEach(() => {
@@ -237,15 +253,26 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
     expect(res.body.maxVolume).toMatchObject({ consumed: null, reached: null, consumedUnavailableReason: "runs_service_unavailable" });
   });
 
-  it("a Start pipe whose step no producer is verified to declare stays unmeasured (fail-closed)", async () => {
+  it("the evidence is read once: the ledger showed the producer declares the step on campaign runs", async () => {
+    const calls = mockUpstreams({ published: 1 });
+    await put(THREADS_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
+    await read(THREADS_FUNNEL);
+    await read(THREADS_FUNNEL);
+    expect(calls.evidence).toHaveLength(1);
+    expect(calls.evidence[0]!.get("outcomeKey")).toBe("post_published");
+    expect(calls.evidence[0]!.get("direction")).toBe("produced");
+  });
+
+  it("a Start pipe whose step no producer ever declared on a campaign's run stays unmeasured (fail-closed)", async () => {
     const calls = mockUpstreams({ published: 5 });
     await put(UNDECLARED_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
     const res = await read(UNDECLARED_FUNNEL);
-    expect(res.body.volumeUnit).toBe("first_contacts");
+    expect(res.body.volumeUnit).toBe("outcomes_produced");
     expect(res.body.maxVolume).toMatchObject({
       consumed: null,
       reached: null,
       consumedUnavailableReason: "volume_not_measured_on_channel",
+      consumedUnavailableDetail: "no website_visit outcome was ever declared on a campaign's run",
     });
     expect(calls.occurrences).toHaveLength(0);
   });
