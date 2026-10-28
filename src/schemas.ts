@@ -4658,11 +4658,15 @@ const BudgetCapViewSchema = z
       "reached = consumedCents >= amountCents. null + a reason when it cannot be measured, never 0.",
   });
 
-const VolumeUnitSchema = z.enum(["first_contacts", "prospects_handled"]).openapi("SalesFunnelVolumeUnit", {
-  description:
-    "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). " +
-    "prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step).",
-});
+const VolumeUnitSchema = z
+  .enum(["first_contacts", "prospects_handled", "outcomes_produced"])
+  .openapi("SalesFunnelVolumeUnit", {
+    description:
+      "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). " +
+      "prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step). " +
+      "outcomes_produced: every proactive pipe starts at Start and makes its own item (a Threads post, a daily video): " +
+      "each outcome of its leg's step declared on its campaigns' runs.",
+  });
 
 const SalesFunnelTypeSchema = z.enum(["proactive", "reactive"]).openapi("SalesFunnelType", {
   description:
@@ -4695,6 +4699,9 @@ const VolumeCapViewSchema = z
       "the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a " +
       "declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run " +
       "(email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. " +
+      "unit outcomes_produced: consumed = produced outcomes of the pipe's step (post_published: one Threads thread or " +
+      "X/LinkedIn post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted " +
+      "campaigns in the window. " +
       "A channel with no measure yet answers null + " +
       "volume_not_measured_on_channel. unit null = the funnel is unreadable.",
   });
