@@ -53,6 +53,12 @@ export interface SalesFunnelPipe {
    * channel catalogue no longer publishes still carries it.
    */
   toStep: string | null;
+  /**
+   * Whether WE run this pipe's channel (the leg's `channels[].runByUs` for this channel):
+   * false = the customer's own team (`your-team-*`), never a pipe the caps count; null /
+   * absent = not served.
+   */
+  runByUs?: boolean | null;
 }
 
 /**
@@ -109,6 +115,13 @@ export function __resetSalesFunnelCache(): void {
 
 const snapshotKey = (id: string) => `sales_funnel:${id}`;
 
+/** PURE: the leg's served `runByUs` for one channel; no key when not served. */
+function runByUsOf(channels: unknown, channelSlug: string): { runByUs?: boolean } {
+  if (!Array.isArray(channels)) return {};
+  const c = channels.find((x) => (x as { id?: unknown })?.id === channelSlug) as { runByUs?: unknown } | undefined;
+  return typeof c?.runByUs === "boolean" ? { runByUs: c.runByUs } : {};
+}
+
 /** PURE: the funnel out of features-service's detail body. Throws on a malformed one. */
 export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
   const b = body as { id?: unknown; name?: unknown; type?: unknown; legs?: unknown; trigger?: { slug?: unknown; name?: unknown } | null };
@@ -118,7 +131,7 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
     );
   }
   const pipes: SalesFunnelPipe[] = [];
-  for (const leg of b.legs as Array<{ pipe?: unknown; toStep?: unknown }>) {
+  for (const leg of b.legs as Array<{ pipe?: unknown; toStep?: unknown; channels?: unknown }>) {
     const pipe = leg?.pipe as { id?: unknown; mode?: unknown } | null | undefined;
     if (pipe == null) continue;
     const pipeId = typeof pipe.id === "string" ? pipe.id : null;
@@ -148,6 +161,7 @@ export function salesFunnelFromDetail(id: string, body: unknown): SalesFunnel {
       strategyId: tilde < 0 ? null : legPart.slice(tilde + 1) || null,
       mode: pipe.mode,
       toStep: typeof leg.toStep === "string" && leg.toStep.trim() ? leg.toStep.trim() : null,
+      ...runByUsOf(leg.channels, pipeId.slice(0, bar)),
     });
   }
   const type = b.type === "proactive" || b.type === "reactive" ? b.type : null;

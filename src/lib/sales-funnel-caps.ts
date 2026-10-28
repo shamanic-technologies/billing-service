@@ -118,7 +118,7 @@ export type VolumeUnit = (typeof VOLUME_UNITS)[number];
  * contacts when a pipe is proactive, else prospects handled.
  */
 export function volumeUnitOf(funnel: Pick<SalesFunnel, "pipes">): VolumeUnit {
-  const proactive = funnel.pipes.filter((p) => p.mode === "proactive");
+  const proactive = funnel.pipes.filter(isOurProactivePipe);
   if (proactive.length === 0) return "prospects_handled";
   return proactive.every(isOutcomePipe) ? "outcomes_produced" : "first_contacts";
 }
@@ -234,6 +234,16 @@ export function itemTaskOf(
  *   on the Social post unit's run (campaign attributed, prod 2026-10-28).
  */
 export const STEP_OUTCOMES: ReadonlySet<string> = new Set(["post_published", "industry_update_video"]);
+
+/**
+ * PURE: a proactive pipe WE run. A customer-team pipe (`runByUs: false`, `your-team-*`:
+ * the client's own people, no workflow) makes nothing we can count, so it is never a
+ * counted pipe and never blocks the measure (THREADS-CAMPAIGN-1028: the Threads funnel's
+ * `your-team-closing-calls` leg is served proactive).
+ */
+export function isOurProactivePipe(pipe: Pick<SalesFunnelPipe, "mode" | "runByUs">): boolean {
+  return pipe.mode === "proactive" && pipe.runByUs !== false;
+}
 
 /**
  * PURE: an OUTCOME pipe = a proactive pipe that starts at Start (no prospect: it makes its own
@@ -1031,8 +1041,8 @@ async function measureVolume(
   triggerSlug: string | null,
   now: Date
 ): Promise<Measured<number>> {
-  // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
-  let proactive = pipes.filter((p) => p.mode === "proactive");
+  // first_contacts: the proactive pipes we run; prospects_handled (all reactive): the reactive ones.
+  let proactive = pipes.filter(isOurProactivePipe);
   // OUTCOME pipes (a Threads post, a daily video): their item IS their leg's outcome,
   // counted on runs-service's ledger (`STEP_OUTCOMES`). Only when EVERY proactive pipe
   // is one (the same rule as `volumeUnitOf`, so the unit and the count agree): a funnel

@@ -17,8 +17,8 @@ const brandId = "00000000-0000-0000-0000-000000102811";
 const OFFER = "aaaaaaaa-1028-4028-8028-aaaaaaaaaaaa";
 
 const THREADS = "threads-post";
-const TEAM = "your-team-whatsapp";
-const THREADS_FUNNEL = "start_to_post_published@threads-post+post_published_to_paid_client@your-team-whatsapp";
+const TEAM = "your-team-closing-calls";
+const THREADS_FUNNEL = "start_to_post_published@threads-post+post_published_to_paid_client";
 // A proactive Start pipe whose step no producer is verified to declare on the unit: fail-closed.
 const UNDECLARED_FUNNEL = "start_to_website_visit@google-ads+website_visit_to_paid_client";
 const CAMPAIGN_THREADS = "22222222-0000-4000-8000-000000000001";
@@ -40,15 +40,19 @@ const funnelDetail = (id: string) =>
         name: "Daily Threads",
         type: "proactive",
         legs: [
+          // The live shape (prod 2026-10-28): the customer's own team leg is served PROACTIVE,
+          // run by them (`runByUs: false`): never counted, never blocking the measure.
           {
             legKey: "start_to_post_published",
             toStep: "post_published",
+            channels: [{ id: THREADS, name: "Threads posts", runByUs: true }],
             pipe: { id: `${THREADS}|start_to_post_published`, mode: "proactive" },
           },
           {
             legKey: "post_published_to_paid_client",
             toStep: "paid_client",
-            pipe: { id: `${TEAM}|post_published_to_paid_client`, mode: "reactive" },
+            channels: [{ id: TEAM, name: "Your Team Closing Calls", runByUs: false }],
+            pipe: { id: `${TEAM}|post_published_to_paid_client`, mode: "proactive" },
           },
         ],
       }
