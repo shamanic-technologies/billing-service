@@ -34,7 +34,9 @@ describe("replayCharges", () => {
     expect(Number(first.projectedBalanceAfterCents)).toBeGreaterThanOrEqual(0);
 
     expect(second.trigger).toBe("floor");
-    expect(second.expectedAmountCents).toBe("20000");
+    // Postpaid: the billed amount owed at the crossing (−20000 + the 100 run),
+    // never a step (POSTPAID-CHARGE-ON-BILLED-1029).
+    expect(second.expectedAmountCents).toBe("19900");
     expect(second.at.startsWith("2026-10-30")).toBe(true);
 
     // The month-end after the reload settles the day or so of burn since.

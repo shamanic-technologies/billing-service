@@ -183,7 +183,7 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
 
   it("crossing the $50 line charges $50", async () => {
     await choosePostpaid();
-    usage = "8000.0000000000"; // balance -$50: the next $1 run crosses the line
+    usage = "5000.0000000000"; // billed -$50 (no advance on postpaid): the next $1 run crosses the line
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
       .set({ ...getAuthHeaders(orgId), "x-campaign-id": campaignId })

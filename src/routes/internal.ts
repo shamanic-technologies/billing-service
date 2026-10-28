@@ -40,7 +40,7 @@ import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
-import { cannotSpend, resolveOrgFloor } from "../lib/spend-block.js";
+import { cannotSpend, gateBalanceCents, resolveOrgFloor } from "../lib/spend-block.js";
 import { fetchOrgActualUsageTotal } from "../lib/transfer-usage.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
@@ -387,8 +387,22 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
   // and the dunning tick decide on, applied to THIS campaign's own estimate: a
   // reload-capable org is affordable while its (possibly negative) balance stays
   // within the line, and flips only when the next run would cross past the floor.
-  const { floorCents } = await resolveOrgFloor(orgId, snapshot);
+  const floor = await resolveOrgFloor(orgId, snapshot);
+  const { floorCents } = floor;
   const lastRequiredCents = stored.lastAuthorizeRequiredCents;
+  // A postpaid credit line is measured on BILLED usage only, never provisioned
+  // holds (lib/spend-block), so this verdict agrees with the charge that lifts it.
+  let gateBalance: string;
+  try {
+    gateBalance = await gateBalanceCents(orgId, snapshot, floor);
+  } catch (err) {
+    console.error(
+      `[billing-service] affordability: billed balance read failed for campaign ${campaignId} (org ${orgId}):`,
+      err
+    );
+    res.status(502).json({ error: "Failed to compute balance" });
+    return;
+  }
 
   res.json({
     // Our own internal org is never refused (lib/platform-org); an org whose
@@ -396,7 +410,7 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     affordable:
       (await isPlatformOrg(orgId)) ||
       ((await getOrgSendingStopped(orgId)) === null &&
-        !cannotSpend(snapshot.balanceCents, lastRequiredCents, floorCents)),
+        !cannotSpend(gateBalance, lastRequiredCents, floorCents)),
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
     hasHistory: true,

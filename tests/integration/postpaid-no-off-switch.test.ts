@@ -98,7 +98,8 @@ describe("postpaid: no off switch on the credit line", () => {
     const res = await authorize();
     expect(res.status).toBe(200);
     expect(ssMocks.reloadOffSession).toHaveBeenCalled();
-    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(5000);
+    // The billed amount owed, never a step (POSTPAID-CHARGE-ON-BILLED-1029).
+    expect(ssMocks.reloadOffSession.mock.calls[0][1]).toBe(4950);
   });
 
   it("removing the card is still a brake: no card, no line", async () => {

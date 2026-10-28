@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import * as fetchRetry from "../../src/lib/fetch-retry.js";
-import {
-  fetchRunsOrgUsageTotal,
-  fetchRunsOrgActualUsageTotal,
-} from "../../src/lib/runs-client.js";
+import { fetchRunsOrgUsageTotal } from "../../src/lib/runs-client.js";
+
+// tests/setup-runs-absorbed.ts defaults this read to the usage total for every
+// suite; this file pins the REAL wire parsing.
+const { fetchRunsOrgActualUsageTotal } = await vi.importActual<
+  typeof import("../../src/lib/runs-client.js")
+>("../../src/lib/runs-client.js");
 
 const ORG = "5fefaf5a-8d50-4c5f-aa4b-3d35bcd1de93";
 

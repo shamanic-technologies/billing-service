@@ -277,6 +277,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
     // GROSS body value below is ignored by the gate.
     ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("0.0000000000");
     setUsage("6000.0000000000");
+    setActualUsage("6000.0000000000"); // a postpaid line is crossed on BILLED usage
     ssMocks.reloadOffSession.mockResolvedValue({ status: "succeeded", reference: "pi_x" });
 
     const res = await request(app)

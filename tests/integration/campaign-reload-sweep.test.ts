@@ -115,9 +115,11 @@ describe("blocked-campaign reload sweep", () => {
     // Base tier ($50 line) → one $50 multiple lifts −4994.13 to the −4988.20
     // target (floor −5000 + the 11.80 estimate), leaving the run its headroom.
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
+    // Postpaid: the BILLED amount owed (−4994.13 → 4995), never a step
+    // (POSTPAID-CHARGE-ON-BILLED-1029).
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(4995);
     expect(ssMocks.reloadOffSession.mock.calls[0]?.[2]).toBe(
-      campaignReloadIdempotencyKey(orgA, HOUR_BUCKET, 5000)
+      campaignReloadIdempotencyKey(orgA, HOUR_BUCKET, 4995)
     );
     // Nothing is mailed on the happy path — the customer's campaign simply runs.
     expect(sendMock).not.toHaveBeenCalled();
@@ -176,9 +178,10 @@ describe("blocked-campaign reload sweep", () => {
     expect(res.scanned).toBe(1);
     expect(res.blocked).toBe(1);
     expect(res.charged).toBe(1);
-    // ONE charge for the org, never one per campaign.
+    // ONE charge for the org, never one per campaign: what it owes (credited
+    // 19515 − usage 27505).
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(5000);
+    expect(ssMocks.reloadOffSession.mock.calls[0]?.[1]).toBe(7990);
   });
 
   it("never charges an org with no credit line — dunning owns those", async () => {
