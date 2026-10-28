@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isOutcomePipe,
   itemTaskOf,
   ITEM_TASKS,
   periodWindow,
@@ -116,6 +117,34 @@ describe("salesFunnelFromDetail", () => {
     const pipe = (mode: "proactive" | "reactive") => ({ pipeId: "a|b", channelSlug: "a", legKey: "b", strategyId: null, mode });
     expect(volumeUnitOf({ pipes: [pipe("reactive"), pipe("proactive")] })).toBe("first_contacts");
     expect(volumeUnitOf({ pipes: [pipe("reactive")] })).toBe("prospects_handled");
+  });
+
+  it("volumeUnitOf / isOutcomePipe: outcomes produced only when every proactive pipe is a Start outcome pipe", () => {
+    const p = (channelSlug: string, legKey: string, toStep: string | null, mode: "proactive" | "reactive" = "proactive") => ({
+      pipeId: `${channelSlug}|${legKey}`,
+      channelSlug,
+      legKey,
+      strategyId: null,
+      mode,
+      toStep,
+    });
+    const threads = p("threads-post", "start_to_post_published", "post_published");
+    const team = p("your-team-whatsapp", "post_published_to_paid_client", "paid_client", "reactive");
+    expect(isOutcomePipe(threads)).toBe(true);
+    expect(isOutcomePipe(p("social-post", "start_to_industry_update_video", "industry_update_video"))).toBe(true);
+    expect(volumeUnitOf({ pipes: [threads, team] })).toBe("outcomes_produced");
+    // Not a Start pipe, a step no producer is verified on, reactive, or a channel with a run task: never.
+    expect(isOutcomePipe(p("cold-whatsapp-outreach", "lead_found_to_conversation", "conversation"))).toBe(false);
+    expect(isOutcomePipe(p("cold-x-outreach", "post_published_to_conversation", "post_published"))).toBe(false);
+    expect(isOutcomePipe(p("google-ads", "start_to_website_visit", "website_visit"))).toBe(false);
+    expect(isOutcomePipe({ ...threads, mode: "reactive" })).toBe(false);
+    expect(isOutcomePipe(p("sales-cold-email-outreach", "start_to_post_published", "post_published"))).toBe(false);
+    // Mixed with a contact or source pipe: first contacts, as before.
+    const source = p("sourcing-apollo-cold-filters", "start_to_lead_found", "lead_found");
+    expect(volumeUnitOf({ pipes: [threads, source] })).toBe("first_contacts");
+    expect(volumeUnitOf({ pipes: [threads, p("sales-cold-email-outreach", "lead_found_to_conversation", "conversation")] })).toBe(
+      "first_contacts"
+    );
   });
 
   it("refuses a pipe id without <channel>|<leg>, a missing mode, or no legs", () => {

@@ -39,7 +39,11 @@
  *     `email_sent` = one email sent), else by the TRIGGER the funnel fires on
  *     (`TRIGGER_ITEM_TASKS`, `email_pushed_via_api` = one email sent: Email
  *     Sending); another channel reads null +
- *     `volume_not_measured_on_channel`, never 0.
+ *     `volume_not_measured_on_channel`, never 0;
+ *   - `outcomes_produced` when every proactive pipe is an OUTCOME pipe (a Start pipe
+ *     making its own item: a Threads post, a daily video, `isOutcomePipe`): the
+ *     produced outcomes of its leg's step (`STEP_OUTCOMES`) declared on runs-service's
+ *     ledger on runs of the counted campaigns (THREADS-CAMPAIGN-1028).
  * - ONE funnel CAMPAIGN may hold its own cap (`salesFunnelCampaignId`, migration
  *   0083): consumption is then counted on that campaign's units only.
  *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
@@ -77,7 +81,7 @@ import {
 } from "../db/schema.js";
 import { readJson } from "./runs-org-read.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
-import { sameLeg } from "./leg-identity.js";
+import { canonicalLegKey, sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
 import {
   brandFunnelDailyCentsVia,
@@ -105,12 +109,18 @@ export const CAP_PERIODS = ["one_off", "daily", "weekly", "monthly"] as const;
 export type CapPeriod = (typeof CAP_PERIODS)[number];
 
 /** The volume units billing names on every answer (see the header). */
-export const VOLUME_UNITS = ["first_contacts", "prospects_handled"] as const;
+export const VOLUME_UNITS = ["first_contacts", "prospects_handled", "outcomes_produced"] as const;
 export type VolumeUnit = (typeof VOLUME_UNITS)[number];
 
-/** PURE: the unit a funnel's volume is counted in: first contacts when a pipe is proactive. */
+/**
+ * PURE: the unit a funnel's volume is counted in. `outcomes_produced` when every proactive
+ * pipe is an OUTCOME pipe (`isOutcomePipe`: a Threads post, a daily video), else first
+ * contacts when a pipe is proactive, else prospects handled.
+ */
 export function volumeUnitOf(funnel: Pick<SalesFunnel, "pipes">): VolumeUnit {
-  return funnel.pipes.some((p) => p.mode === "proactive") ? "first_contacts" : "prospects_handled";
+  const proactive = funnel.pipes.filter((p) => p.mode === "proactive");
+  if (proactive.length === 0) return "prospects_handled";
+  return proactive.every(isOutcomePipe) ? "outcomes_produced" : "first_contacts";
 }
 
 export type SalesFunnelTypeUnavailableReason =
@@ -206,6 +216,36 @@ export function itemTaskOf(
     (triggerSlug ? TRIGGER_ITEM_TASKS[triggerSlug] : undefined) ??
     null
   );
+}
+
+/**
+ * The steps whose OUTCOMES count one item, read off runs-service's ledger: produced
+ * occurrences of the step declared on runs carrying one of the counted campaigns' ids
+ * (THREADS-CAMPAIGN-1028). Keyed on the shared STEP vocabulary, never a channel: any
+ * proactive Start pipe whose leg produces one of these is measured with no code here.
+ *
+ * A step is listed only once its producer is verified to declare it on the UNIT campaign's
+ * run tree; an unlisted step stays `volume_not_measured_on_channel` (fail-closed), because a
+ * producer that declares nothing on the campaign would read 0 forever and never hold it.
+ * - `post_published`: one publication. meta-service declares ONE per Threads thread (the
+ *   main post, never its replies) on the workflow's campaign run; social-service one per
+ *   X/LinkedIn post of a campaign (`social-post-publish`, campaign attributed, prod 2026-10-28).
+ * - `industry_update_video`: one daily video, content-generation-service `industry-debrief-video`
+ *   on the Social post unit's run (campaign attributed, prod 2026-10-28).
+ */
+export const STEP_OUTCOMES: ReadonlySet<string> = new Set(["post_published", "industry_update_video"]);
+
+/**
+ * PURE: an OUTCOME pipe = a proactive pipe that starts at Start (no prospect: it makes its own
+ * item), whose channel and step name no run task, and whose leg produces a `STEP_OUTCOMES`
+ * step. Its item IS its leg's outcome, so it is counted as that outcome. A pipe starting
+ * after Start (cold WhatsApp `lead_found_to_conversation`) is never one: its first contact
+ * is not its leg's outcome.
+ */
+export function isOutcomePipe(pipe: Pick<SalesFunnelPipe, "channelSlug" | "legKey" | "toStep" | "mode">): boolean {
+  if (pipe.mode !== "proactive" || !pipe.toStep || !STEP_OUTCOMES.has(pipe.toStep)) return false;
+  if (ITEM_TASKS[pipe.channelSlug] || STEP_ITEM_TASKS[pipe.toStep]) return false;
+  return canonicalLegKey(pipe.channelSlug, pipe.legKey).startsWith("start_to_");
 }
 
 export type ConsumedUnavailableReason =
@@ -698,6 +738,47 @@ async function itemsSince(
   return n;
 }
 
+const OUTCOME_PAGE = 1000;
+const MAX_OUTCOME_PAGES = 20;
+
+/**
+ * Produced occurrences of `outcomeKey` declared since `start` on runs of these campaigns
+ * (runs-service `/internal/outcome-occurrences`, the org's, filtered on each run's campaign
+ * tag), summed by declared quantity. A voided declaration is gone from the ledger.
+ */
+async function outcomesSince(orgId: string, campaignIds: string[], outcomeKey: string, start: Date): Promise<number> {
+  if (campaignIds.length === 0) return 0;
+  const wanted = new Set(campaignIds);
+  let total = new Decimal(0);
+  let cursor: string | null = null;
+  for (let page = 0; ; page += 1) {
+    if (page >= MAX_OUTCOME_PAGES) {
+      throw new Error(`runs-service outcome ${outcomeKey} walk exceeded ${MAX_OUTCOME_PAGES} pages`);
+    }
+    const params = new URLSearchParams({
+      orgId,
+      outcomeKey,
+      direction: "produced",
+      declaredAfter: start.toISOString(),
+      limit: String(OUTCOME_PAGE),
+    });
+    if (cursor) params.set("cursor", cursor);
+    const body = await readJson<{
+      occurrences?: Array<{ quantity?: string; tags?: { campaignId?: string | null } }>;
+      nextCursor?: string | null;
+    }>("/internal/outcome-occurrences", orgId, params);
+    if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
+    for (const o of body.occurrences) {
+      if (!o.tags?.campaignId || !wanted.has(o.tags.campaignId)) continue;
+      if (o.quantity == null) throw new Error("runs-service /internal/outcome-occurrences stated no quantity");
+      total = total.plus(o.quantity);
+    }
+    cursor = body.nextCursor ?? null;
+    if (!cursor) break;
+  }
+  return total.floor().toNumber();
+}
+
 // ── The served view ───────────────────────────────────────────────────────────
 
 interface Measured<T> {
@@ -952,6 +1033,27 @@ async function measureVolume(
 ): Promise<Measured<number>> {
   // first_contacts: the proactive pipes; prospects_handled (all reactive): the reactive ones.
   let proactive = pipes.filter((p) => p.mode === "proactive");
+  // OUTCOME pipes (a Threads post, a daily video): their item IS their leg's outcome,
+  // counted on runs-service's ledger (`STEP_OUTCOMES`). Only when EVERY proactive pipe
+  // is one (the same rule as `volumeUnitOf`, so the unit and the count agree): a funnel
+  // mixing them with contact or source pipes reads as before.
+  if (proactive.length > 0 && proactive.every(isOutcomePipe)) {
+    const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
+    const byStep = new Map<string, Set<string>>();
+    for (const p of proactive) {
+      const ids = byStep.get(p.toStep!) ?? new Set<string>();
+      p.campaignIds.forEach((id) => ids.add(id));
+      byStep.set(p.toStep!, ids);
+    }
+    try {
+      let n = 0;
+      for (const [step, ids] of byStep) n += await outcomesSince(k.orgId, [...ids], step, w.start);
+      return { consumed: n, reason: null, detail: null };
+    } catch (err) {
+      console.error(`[billing-service] sales funnel caps: outcomes of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
+      return { consumed: null, reason: "runs_service_unavailable", detail: errorReason(err) };
+    }
+  }
   // A SOURCE pipe (Start -> Lead found) finds leads and contacts nobody: it is never a
   // first-contact pipe. Asked only when a proactive pipe has no measure, so a funnel
   // without a source pipe reads exactly as before (2026-10-13: every funnel opening on
