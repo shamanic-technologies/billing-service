@@ -28,7 +28,7 @@ import { ownerStripeStepAlerts, salesFunnelCaps, type SalesFunnelCapRow } from "
 import { currentActor, deliver, type AlertActor } from "./owner-alerts.js";
 import { getMonthlyChargeLimit } from "./monthly-charge-limit.js";
 import { getSalesFunnel, type SalesFunnel } from "./sales-funnel-catalogue.js";
-import { volumeUnitOf, type CapPeriod } from "./sales-funnel-caps.js";
+import { volumeUnitOf, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
 
 /** Card step to send, when no budget lands meanwhile. */
 export const STRIPE_STEP_SETTLE_MS = 60_000;
@@ -112,12 +112,16 @@ export interface BudgetLine {
   triggerName: string | null;
   amountCents: string | null;
   period: CapPeriod | null;
-  volume: { count: number; period: CapPeriod; unit: "first_contacts" | "prospects_handled" | null } | null;
+  volume: { count: number; period: CapPeriod; unit: VolumeUnit | null } | null;
 }
 
 const PER: Record<CapPeriod, string> = { monthly: "/month", weekly: "/week", daily: "/day", one_off: " one time" };
 const PERIOD_ORDER: CapPeriod[] = ["monthly", "weekly", "daily", "one_off"];
-const UNIT_WORDS = { first_contacts: "first contacts", prospects_handled: "prospects handled" } as const;
+const UNIT_WORDS: Record<VolumeUnit, string> = {
+  first_contacts: "first contacts",
+  prospects_handled: "prospects handled",
+  outcomes_produced: "outcomes produced",
+};
 
 /** `$10`, `$10.50`, `$9,000` from cents. */
 export function dollars(cents: string | number | Decimal): string {
