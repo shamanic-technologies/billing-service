@@ -4654,6 +4654,10 @@
             "nullable": true,
             "description": "The step this pipe's leg produces (features-service legs[].toStep); null when not served."
           },
+          "runByUs": {
+            "type": "boolean",
+            "description": "features-service legs[].channels[].runByUs for this channel; false = the customer's own team, never counted in a max volume. Absent when not served."
+          },
           "campaignIds": {
             "type": "array",
             "items": {

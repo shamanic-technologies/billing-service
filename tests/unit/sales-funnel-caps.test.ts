@@ -129,10 +129,12 @@ describe("salesFunnelFromDetail", () => {
       toStep,
     });
     const threads = p("threads-post", "start_to_post_published", "post_published");
-    const team = p("your-team-whatsapp", "post_published_to_paid_client", "paid_client", "reactive");
+    const team = { ...p("your-team-closing-calls", "post_published_to_paid_client", "paid_client"), runByUs: false };
     expect(isOutcomePipe(threads)).toBe(true);
     expect(isOutcomePipe(p("social-post", "start_to_industry_update_video", "industry_update_video"))).toBe(true);
+    // The customer's own team pipe (served proactive, runByUs false) is never counted.
     expect(volumeUnitOf({ pipes: [threads, team] })).toBe("outcomes_produced");
+    expect(volumeUnitOf({ pipes: [threads, { ...team, runByUs: undefined }] })).toBe("first_contacts");
     // Not a Start pipe, a step no producer is verified on, reactive, or a channel with a run task: never.
     expect(isOutcomePipe(p("cold-whatsapp-outreach", "lead_found_to_conversation", "conversation"))).toBe(false);
     expect(isOutcomePipe(p("cold-x-outreach", "post_published_to_conversation", "post_published"))).toBe(false);

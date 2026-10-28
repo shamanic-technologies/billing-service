@@ -4717,6 +4717,13 @@ const MeasuredPipeSchema = z
       .string()
       .nullable()
       .describe("The step this pipe's leg produces (features-service legs[].toStep); null when not served."),
+    runByUs: z
+      .boolean()
+      .optional()
+      .describe(
+        "features-service legs[].channels[].runByUs for this channel; false = the customer's own team, never counted " +
+          "in a max volume. Absent when not served."
+      ),
     campaignIds: z.array(z.string()),
   })
   .openapi("SalesFunnelMeasuredPipe");
