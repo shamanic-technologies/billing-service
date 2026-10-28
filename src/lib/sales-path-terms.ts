@@ -74,11 +74,14 @@ export interface ItemTerms {
    * "Positive reply"); null for an entry leg, or when the catalogue names no key.
    */
   trigger: { key: string; label: string | null } | null;
+  /** The step the leg PRODUCES (the catalogue's `to.key`); null when not stated. */
+  toStep?: string | null;
 }
 
 interface PublishedTransition {
   legKey?: string | null;
   from?: { key?: unknown; label?: unknown } | null;
+  to?: { key?: unknown } | null;
   /** features-service's explicit flag; absent → derived from `from`. */
   reactive?: boolean | null;
   minimumMonthlyBudgetCents?: number | null;
@@ -135,6 +138,7 @@ export function itemTermsFrom(channels: PublishedSalesChannel[]): Map<string, It
           typeof t.from?.key === "string" && t.from.key.trim()
             ? { key: t.from.key.trim(), label: typeof t.from.label === "string" ? t.from.label : null }
             : null,
+        toStep: typeof t.to?.key === "string" && t.to.key.trim() ? t.to.key.trim() : null,
       });
     }
   }

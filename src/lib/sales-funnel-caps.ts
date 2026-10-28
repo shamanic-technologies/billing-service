@@ -91,6 +91,7 @@ import {
   unitIdsOf,
   type FundedBy,
   type SalesFunnelCampaign,
+  type SalesFunnelUnit,
 } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import { brandDailyBudgetChanges } from "../db/schema.js";
@@ -501,6 +502,13 @@ export async function reconcileFunnelCapHistory(): Promise<void> {
 export interface MeasuredPipe extends SalesFunnelPipe {
   /** The campaigns campaign-service states for this brand x offer on this pipe. */
   campaignIds: string[];
+  /**
+   * true on a pipe the cap's funnel does not list, run by a unit of a funnel campaign
+   * FOLLOWING ITS PLAN (its mode read off the channel catalogue); absent on the funnel's own.
+   */
+  outsideFunnel?: true;
+  /** On an `outsideFunnel` pipe: the step its leg starts from (catalogue `from.key`); null from Start. */
+  fromStep?: string | null;
 }
 
 /**
@@ -594,15 +602,77 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   }
   const onPipe = held.flatMap((c) => c.units);
   const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
-  const sources = await feedingSources(funnel, ofOffer, unitIdsOf(fcs.campaigns));
-  const pipes = funnel.pipes.map((p) => ({
+  const onFunnelPipe = (u: SalesFunnelUnit, p: SalesFunnelPipe) =>
+    u.featureSlug === p.channelSlug && sameLeg(p.channelSlug, u.legKey, p.legKey);
+  const funnelPipes: MeasuredPipe[] = funnel.pipes.map((p) => ({
     ...p,
     campaignIds: onPipe
-      .filter((c) => c.featureSlug === p.channelSlug && sameLeg(p.channelSlug, c.legKey, p.legKey))
-      .map((c) => c.campaignId)
+      .filter((u) => onFunnelPipe(u, p))
+      .map((u) => u.campaignId)
       .sort(),
   }));
+  // A funnel campaign FOLLOWING ITS PLAN (FACTORY-P1-FOLLOW-PLAN, owner 2026-10-28) runs
+  // units on pipes its own funnel does not list. They are still the campaign's spend and
+  // volume, held to the same cap: measured as pipes of their own, never uncounted.
+  const outside = onPipe.filter((u) => !funnel.pipes.some((p) => onFunnelPipe(u, p)));
+  let pipes = funnelPipes;
+  if (outside.length > 0) {
+    const extra = await planPipesOf(outside);
+    if (!extra.ok) return { ok: false, reason: extra.reason, detail: extra.detail, funnel };
+    pipes = [...funnelPipes, ...extra.pipes];
+  }
+  const sources = await feedingSources(pipes, ofOffer, unitIdsOf(fcs.campaigns));
   return { ok: true, funnel, pipes, sources };
+}
+
+/**
+ * The pipes of units a followed plan put OUTSIDE the cap's funnel, one per (channel, leg),
+ * their mode / produced step / operator read off features-service's channel catalogue
+ * (`/public/channels`). A pipe the catalogue does not carry, or an unreadable catalogue,
+ * makes the whole measure unreadable (fail-closed): an unknown pipe is never uncounted.
+ */
+async function planPipesOf(
+  units: SalesFunnelUnit[]
+): Promise<{ ok: true; pipes: MeasuredPipe[] } | { ok: false; reason: ConsumedUnavailableReason; detail: string }> {
+  let terms: SalesPathTerms;
+  try {
+    terms = await getSalesPathTerms();
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: channel catalogue unreadable for plan pipes: ${errorReason(err)}`);
+    return { ok: false, reason: "sales_funnel_catalogue_unavailable", detail: errorReason(err) };
+  }
+  const byPipe = new Map<string, MeasuredPipe>();
+  for (const u of units) {
+    const id = `${u.featureSlug}|${canonicalLegKey(u.featureSlug, u.legKey)}`;
+    const known = byPipe.get(id);
+    if (known) {
+      known.campaignIds.push(u.campaignId);
+      continue;
+    }
+    const t = terms.termsFor(u.featureSlug, u.legKey);
+    if (!t) {
+      return {
+        ok: false,
+        reason: "sales_funnel_catalogue_unavailable",
+        detail: `features-service publishes no pipe ${u.featureSlug}|${u.legKey} (unit ${u.campaignId} of a followed plan)`,
+      };
+    }
+    byPipe.set(id, {
+      pipeId: `${u.featureSlug}|${u.legKey}`,
+      channelSlug: u.featureSlug,
+      legKey: u.legKey,
+      strategyId: null,
+      mode: t.role === "reactive" ? "reactive" : "proactive",
+      toStep: t.toStep ?? null,
+      ...(t.role === "customer" ? { runByUs: false } : {}),
+      outsideFunnel: true,
+      fromStep: t.trigger?.key ?? null,
+      campaignIds: [u.campaignId],
+    });
+  }
+  const pipes = [...byPipe.values()];
+  for (const p of pipes) p.campaignIds.sort();
+  return { ok: true, pipes: pipes.sort((a, b) => a.pipeId.localeCompare(b.pipeId)) };
 }
 
 /**
@@ -614,7 +684,7 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
  * (that would under-count the spend and stop the funnel late).
  */
 async function feedingSources(
-  funnel: SalesFunnel,
+  pipes: SalesFunnelPipe[],
   ofOffer: Array<{ campaignId: string; featureSlug: string | null; legKey: string | null }>,
   funnelUnitIds: Set<string>
 ): Promise<SourcesAnswer> {
@@ -627,9 +697,9 @@ async function feedingSources(
   }
   // A funnel with its OWN source pipe buys its leads there (a unit of its campaign,
   // already counted): no other source feeds it.
-  if (funnel.pipes.some((p) => terms.isSourceItem(p.channelSlug, p.legKey))) return { ok: true, sources: [] };
+  if (pipes.some((p) => terms.isSourceItem(p.channelSlug, p.legKey))) return { ok: true, sources: [] };
   const byOrigin = new Map<string, MeasuredSource>();
-  for (const p of funnel.pipes) {
+  for (const p of pipes) {
     for (const origin of terms.originsFeeding(p.channelSlug)) {
       const entry = byOrigin.get(origin) ?? { channelSlug: origin, legKey: "", feedsPipeIds: [], campaignIds: [] };
       entry.feedsPipeIds.push(p.pipeId);
@@ -1154,13 +1224,26 @@ async function measureVolume(
   }
   // A reactive funnel takes a prospect on at its FIRST pipe; the later pipes
   // handle that same prospect, so only the first is counted (never twice).
-  const counted = proactive.length > 0 ? proactive : pipes.slice(0, 1);
+  // A followed plan's REACTIVE pipe outside the funnel is counted when it takes prospects
+  // on itself: its start step is produced by no other pipe measured (else it handles a
+  // prospect another pipe already counted).
+  const planEntries = pipes.filter(
+    (p) =>
+      p.outsideFunnel &&
+      p.mode === "reactive" &&
+      p.runByUs !== false &&
+      !(p.fromStep && pipes.some((q) => q !== p && q.toStep === p.fromStep))
+  );
+  const counted = proactive.length > 0 ? proactive : [...pipes.filter((p) => !p.outsideFunnel).slice(0, 1), ...planEntries];
   const tasks = proactive.length > 0 ? ITEM_TASKS : REACTIVE_ITEM_TASKS;
   if (counted.length === 0) {
     return { consumed: null, reason: "no_proactive_pipe", detail: `sales funnel ${k.salesFunnelId} has no pipe` };
   }
   // The trigger only names what the FIRST pipe of a reactive funnel takes on.
-  const measures = counted.map((p) => ({ pipe: p, task: itemTaskOf(p, tasks, proactive.length > 0 ? null : triggerSlug) }));
+  const measures = counted.map((p) => ({
+    pipe: p,
+    task: itemTaskOf(p, tasks, proactive.length > 0 || p.outsideFunnel ? null : triggerSlug),
+  }));
   const unmeasured = measures.filter((m) => m.task === null).map((m) => m.pipe.channelSlug);
   if (unmeasured.length > 0) {
     const what = proactive.length > 0 ? "first-contact" : "prospect-handled";
@@ -1226,7 +1309,8 @@ export async function composeSalesFunnelCapsView(
         : Promise.resolve(NOT_MEASURED<number>()),
     ]);
   }
-  const unit = answer.funnel ? await volumeUnitFor(answer.funnel) : null;
+  // The unit follows every pipe measured (a followed plan's pipes included), so it and the count agree.
+  const unit = answer.ok ? await volumeUnitFor({ pipes: answer.pipes }) : answer.funnel ? await volumeUnitFor(answer.funnel) : null;
   return {
     ...k,
     stated: true,
