@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  isOutcomePipe,
+  isItemPipe,
   itemTaskOf,
   ITEM_TASKS,
   periodWindow,
@@ -119,7 +119,7 @@ describe("salesFunnelFromDetail", () => {
     expect(volumeUnitOf({ pipes: [pipe("reactive")] })).toBe("prospects_handled");
   });
 
-  it("volumeUnitOf / isOutcomePipe: outcomes produced only when every proactive pipe is a Start outcome pipe", () => {
+  it("volumeUnitOf / isItemPipe: outcomes produced only when every proactive pipe we run is a Start item pipe", () => {
     const p = (channelSlug: string, legKey: string, toStep: string | null, mode: "proactive" | "reactive" = "proactive") => ({
       pipeId: `${channelSlug}|${legKey}`,
       channelSlug,
@@ -128,23 +128,27 @@ describe("salesFunnelFromDetail", () => {
       mode,
       toStep,
     });
+    const isSource = (x: { legKey: string }) => x.legKey === "start_to_lead_found";
     const threads = p("threads-post", "start_to_post_published", "post_published");
     const team = { ...p("your-team-closing-calls", "post_published_to_paid_client", "paid_client"), runByUs: false };
-    expect(isOutcomePipe(threads)).toBe(true);
-    expect(isOutcomePipe(p("social-post", "start_to_industry_update_video", "industry_update_video"))).toBe(true);
+    expect(isItemPipe(threads)).toBe(true);
+    expect(isItemPipe(p("social-post", "start_to_industry_update_video", "industry_update_video"))).toBe(true);
     // The customer's own team pipe (served proactive, runByUs false) is never counted.
-    expect(volumeUnitOf({ pipes: [threads, team] })).toBe("outcomes_produced");
-    expect(volumeUnitOf({ pipes: [threads, { ...team, runByUs: undefined }] })).toBe("first_contacts");
-    // Not a Start pipe, a step no producer is verified on, reactive, or a channel with a run task: never.
-    expect(isOutcomePipe(p("cold-whatsapp-outreach", "lead_found_to_conversation", "conversation"))).toBe(false);
-    expect(isOutcomePipe(p("cold-x-outreach", "post_published_to_conversation", "post_published"))).toBe(false);
-    expect(isOutcomePipe(p("google-ads", "start_to_website_visit", "website_visit"))).toBe(false);
-    expect(isOutcomePipe({ ...threads, mode: "reactive" })).toBe(false);
-    expect(isOutcomePipe(p("sales-cold-email-outreach", "start_to_post_published", "post_published"))).toBe(false);
-    // Mixed with a contact or source pipe: first contacts, as before.
+    expect(volumeUnitOf({ pipes: [threads, team] }, isSource)).toBe("outcomes_produced");
+    expect(volumeUnitOf({ pipes: [threads, { ...team, runByUs: undefined }] }, isSource)).toBe("first_contacts");
+    // Without the sourcing terms no pipe is an item pipe: today's unit.
+    expect(volumeUnitOf({ pipes: [threads, team] })).toBe("first_contacts");
+    // Not a Start pipe, no step, reactive, or a channel with a run task: never.
+    expect(isItemPipe(p("cold-whatsapp-outreach", "lead_found_to_conversation", "conversation"))).toBe(false);
+    expect(isItemPipe(p("cold-x-outreach", "post_published_to_conversation", "post_published"))).toBe(false);
+    expect(isItemPipe(p("threads-post", "start_to_post_published", null))).toBe(false);
+    expect(isItemPipe({ ...threads, mode: "reactive" })).toBe(false);
+    expect(isItemPipe(p("sales-cold-email-outreach", "start_to_post_published", "post_published"))).toBe(false);
+    // A lead source is never an item pipe: a funnel opening on one reads first contacts, as before.
     const source = p("sourcing-apollo-cold-filters", "start_to_lead_found", "lead_found");
-    expect(volumeUnitOf({ pipes: [threads, source] })).toBe("first_contacts");
-    expect(volumeUnitOf({ pipes: [threads, p("sales-cold-email-outreach", "lead_found_to_conversation", "conversation")] })).toBe(
+    expect(volumeUnitOf({ pipes: [source, team] }, isSource)).toBe("first_contacts");
+    expect(volumeUnitOf({ pipes: [threads, source] }, isSource)).toBe("first_contacts");
+    expect(volumeUnitOf({ pipes: [threads, p("sales-cold-email-outreach", "lead_found_to_conversation", "conversation")] }, isSource)).toBe(
       "first_contacts"
     );
   });
