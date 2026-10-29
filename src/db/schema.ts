@@ -103,8 +103,9 @@ export const AGENT_API_FREE_CREDIT_OFFER = "agent_api";
  *   first payment exactly like the match_100 $30), never a gift: « mets le à $5 max »;
  * - no match, no welcome, no trial seed beyond that advance, no invite/task grant, no
  *   subscription trial, and its org earns NO referral reward as a referrer;
- * - PREPAID only (the customer cannot choose postpaid), auto top-up mandatory, the
- *   same model as the API path (`agent_api`); minimums are a front validation;
+ * - PREPAID only (the customer cannot choose postpaid); auto top-up OPTIONAL, on by
+ *   default (owner 2026-10-29: « Top up should be optional, but checked by default »),
+ *   unlike the API path (`agent_api`, mandatory); minimums are a front validation;
  * - it pays every cost it causes: its spend with no campaign (onboarding, Copilot
  *   chat, card fees) lowers its balance (lib/platform-absorbed does not apply).
  *
