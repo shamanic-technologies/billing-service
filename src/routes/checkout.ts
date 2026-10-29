@@ -27,10 +27,10 @@ const CHECKOUT_CURRENCY = "usd";
 import {
   assertTopupMinimum,
   getOrgFreeCreditOffer,
+  offerGrantsOnboardingAdvance,
   getOrgTopupMinimums,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
-import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
 
 const router = Router();
 
@@ -103,7 +103,7 @@ router.post("/v1/checkout-sessions", requireOrgHeaders, async (req, res) => {
         }
         throw err;
       }
-      if (applyWelcomeGift && offer === MATCH_FREE_CREDIT_OFFER) {
+      if (applyWelcomeGift && offerGrantsOnboardingAdvance(offer)) {
         res.status(409).json({
           error: "This organization's free credit is not a checkout discount",
           code: "welcome_discount_not_offered",

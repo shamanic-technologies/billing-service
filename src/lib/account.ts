@@ -2,9 +2,9 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   billingAccounts,
-  MATCH_FREE_CREDIT_OFFER,
   WELCOME_PROMO_CODE,
 } from "../db/schema.js";
+import { asFreeCreditOffer, offerGrantsOnboardingAdvance } from "./free-credit-offer.js";
 import {
   grantOrgCreationBonus,
   redeemPromoCode,
@@ -74,7 +74,9 @@ export async function findOrCreateAccount(
     // "We match your first $100" (lib/free-credit-offer): a new org's up-front gift
     // is its org-creation bonus, never the per-person welcome, and a person whose
     // welcome lives elsewhere does NOT zero this org's offer.
-    if (inserted.freeCreditOffer === MATCH_FREE_CREDIT_OFFER) {
+    // Same for the at-cost offer (owner 2026-10-29): its up-front credit is a $5
+    // advance on the same key.
+    if (offerGrantsOnboardingAdvance(asFreeCreditOffer(inserted.freeCreditOffer))) {
       return { account: inserted, welcomeHere: false, match: true };
     }
 
@@ -105,7 +107,7 @@ export async function findOrCreateAccount(
   }
 
   if ("match" in created && created.match) {
-    // The $30 up-front gift, whatever path created the org. Idempotent: an org that
+    // The up-front advance ($30 match_100, $5 at-cost), whatever path created the org. Idempotent: an org that
     // already got it (the dashboard's creation-bonus call, the trial seed) gets
     // nothing more — one (org, org_creation_bonus) row, ever.
     await grantOrgCreationBonus(orgId);

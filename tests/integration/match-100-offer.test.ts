@@ -6,7 +6,8 @@
  *
  * Own file: other suites close the shared connection in `afterAll` (see CLAUDE.md).
  */
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi, beforeAll } from "vitest";
+import { useMatchOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -61,7 +62,13 @@ describe("We match your first $100", () => {
     } as never);
   });
 
+  // Written against a fresh account of the match_100 era (pre-0093).
+  beforeAll(async () => {
+    await useMatchOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await cleanTestData();
     await closeDb();
   });

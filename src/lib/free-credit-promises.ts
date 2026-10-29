@@ -77,6 +77,7 @@ import {
   type FreeCreditPromise,
 } from "../db/schema.js";
 import { addCents, gte, subCents } from "./cents.js";
+import { isNoFreeCreditOrg } from "./agent-api-org.js";
 import { sumEntitlementGrantsForOrg } from "./promos.js";
 import { sumSucceededTopupsForOrg } from "./stripe-service-client.js";
 import {
@@ -204,8 +205,11 @@ export async function markWelcomePromiseGranted(
 }
 
 export interface ReferralClaimResult {
-  /** The REFERRER's promise this claim opened (or the one an earlier claim opened). */
-  promise: FreeCreditPromise;
+  /**
+   * The REFERRER's promise this claim opened (or the one an earlier claim opened).
+   * null = the referrer is on an offer with no referral reward (nothing recorded).
+   */
+  promise: FreeCreditPromise | null;
   alreadyClaimed: boolean;
 }
 
@@ -230,6 +234,17 @@ export async function claimReferral(
 
   const existing = await findReferralOf(orgId);
   if (existing) return sameReferrerOrThrow(existing, orgId, referrerOrgId);
+
+  // No referral reward for a referrer on an offer with no free money (owner
+  // 2026-10-29: « on arrete … les $ gratuits de referral. Bien sur on grandfather
+  // les clients actuels »): an account created since the at-cost offer, or an
+  // agent/API org. A referrer that existed before keeps earning its $500.
+  if (await isNoFreeCreditOrg(referrerOrgId)) {
+    console.log(
+      `[billing-service] referral claim: org=${orgId} referrer=${referrerOrgId} is on an offer with no referral reward: no promise opened`
+    );
+    return { promise: null, alreadyClaimed: false };
+  }
 
   const inserted = await db
     .insert(freeCreditPromises)

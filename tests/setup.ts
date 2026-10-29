@@ -57,6 +57,13 @@ beforeAll(async () => {
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "topup_minimums_set_at" timestamp with time zone`;
   // Payment mode (migration 0050): every row defaults to postpaid.
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "payment_mode" text NOT NULL DEFAULT 'postpaid'`;
+  // OFFER-RESET-1029 (migration 0093): a NEW account is on the at-cost offer, prepaid,
+  // entitled to nothing. DEFAULTS only, like the migration.
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'prepaid_at_cost'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 0`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 0`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "payment_mode" SET DEFAULT 'prepaid'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "welcome_completion_eligible" SET DEFAULT false`;
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_check" text NOT NULL DEFAULT 'required'`;
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_check_message" text`;
   await sql`ALTER TABLE "billing_accounts" ADD COLUMN IF NOT EXISTS "postpaid_card_checked_at" timestamptz`;

@@ -11,7 +11,8 @@
  * Own file rather than a describe appended to the referral suite: that one closes
  * the shared postgres.js connection in afterAll (see CLAUDE.md).
  */
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi, beforeAll } from "vitest";
+import { useMatchOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import { eq } from "drizzle-orm";
 import {
   cleanTestData,
@@ -88,7 +89,15 @@ describe("referral notifications", () => {
     vi.spyOn(emailClient, "sendEmail").mockImplementation(sendMock as never);
   });
 
-  afterAll(closeDb);
+  // Written against a fresh account of the match_100 era (pre-0093).
+  beforeAll(async () => {
+    await useMatchOfferDefaults();
+  });
+
+  afterAll(async () => {
+    await restoreCurrentOfferDefaults();
+    await closeDb();
+  });
 
   type Sent = { eventType: string; orgId: string; runId: string; metadata: Record<string, string> };
   const sent = (): Sent[] => sendMock.mock.calls.map((c) => c[0] as Sent);

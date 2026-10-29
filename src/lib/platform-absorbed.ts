@@ -22,6 +22,14 @@
  *
  * Card-acquiring fees are cost rows with no campaign, so they are absorbed by
  * construction, whatever stripe-service does with them.
+ *
+ * NOT for an org on the at-cost offer (every account created since 2026-10-29): it
+ * pays every cost it causes, onboarding, Copilot chat and card fees included (owner:
+ * « dans ce monde sans marge tous les couts de supports sont refacturés à l'org
+ * cliente »). Its balance subtracts its no-campaign spend like any spend
+ * (lib/transfer-usage). Its authorize without a campaign is still never refused, so
+ * onboarding never stops halfway: the spend lands on its balance, repaid by its first
+ * top-up.
  */
 
 /** From this instant on, spend with no campaign is the platform's (literal, never `now()`). */

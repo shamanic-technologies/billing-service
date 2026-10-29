@@ -652,6 +652,13 @@
       "when": 1796119200000,
       "tag": "0092_owner_stripe_step_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1796205600000,
+      "tag": "0093_offer_reset_at_cost",
+      "breakpoints": true
     }
   ]
 }
