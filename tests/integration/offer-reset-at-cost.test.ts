@@ -159,7 +159,7 @@ describe("At-cost offer for every new account (OFFER-RESET-1029)", () => {
     expect(row.paymentMode).toBe("prepaid");
   });
 
-  it("the dashboard checkout takes the first top-up AND the reload settings in one step; auto top-up cannot be switched off", async () => {
+  it("the dashboard checkout takes the first top-up AND the reload settings in one step; the reload is optional (off, then on again)", async () => {
     await account(orgId);
     const res = await request(app)
       .post("/v1/accounts/prepaid_checkout")
@@ -176,9 +176,19 @@ describe("At-cost offer for every new account (OFFER-RESET-1029)", () => {
     const [row] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
     expect(row).toMatchObject({ topupAmountCents: 1500, topupThresholdCents: 500 });
 
+    // Owner 2026-10-29: « Top up should be optional, but checked by default ».
     const off = await request(app).delete("/v1/accounts/auto_topup").set(getAuthHeaders(orgId, person));
-    expect(off.status).toBe(409);
-    expect(off.body.code).toBe("auto_topup_required");
+    expect(off.status).toBe(200);
+    const [disarmed] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect(disarmed).toMatchObject({ topupAmountCents: null, topupThresholdCents: null, paymentMode: "prepaid" });
+
+    const on = await request(app)
+      .patch("/v1/accounts/auto_topup")
+      .set(getAuthHeaders(orgId, person))
+      .send({ topup_amount_cents: 1500, topup_threshold_cents: 500 });
+    expect(on.status).toBe(200);
+    const [rearmed] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect(rearmed).toMatchObject({ topupAmountCents: 1500, topupThresholdCents: 500, paymentMode: "prepaid" });
   });
 
   it("its no-campaign spend (onboarding, chat, card fees) lowers ITS balance; an older org's is still absorbed", async () => {
