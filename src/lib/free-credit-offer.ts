@@ -8,6 +8,8 @@ import {
   localPromos,
   ORG_CREATION_BONUS_CODE,
   AGENT_API_FREE_CREDIT_OFFER,
+  AT_COST_FREE_CREDIT_OFFER,
+  AT_COST_ONBOARDING_ADVANCE_CENTS,
   LEGACY_FREE_CREDIT_OFFER,
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
@@ -58,12 +60,70 @@ export class TopupBelowMinimumError extends Error {
 export function asFreeCreditOffer(value: string | null | undefined): FreeCreditOfferKind {
   if (value === MATCH_FREE_CREDIT_OFFER) return MATCH_FREE_CREDIT_OFFER;
   if (value === AGENT_API_FREE_CREDIT_OFFER) return AGENT_API_FREE_CREDIT_OFFER;
+  if (value === AT_COST_FREE_CREDIT_OFFER) return AT_COST_FREE_CREDIT_OFFER;
   return LEGACY_FREE_CREDIT_OFFER;
 }
 
 /**
+ * The offer a NEW account will be created under: the live `free_credit_offer` column
+ * DEFAULT (migration 0093: the at-cost offer), read rather than restated so this
+ * answer and the row an insert writes can never disagree. Only asked for an org with
+ * no account yet.
+ */
+export async function newAccountFreeCreditOffer(): Promise<FreeCreditOfferKind> {
+  const rows = (await db.execute(sql`
+    SELECT column_default AS d
+      FROM information_schema.columns
+     WHERE table_schema = current_schema() AND table_name = 'billing_accounts' AND column_name = 'free_credit_offer'
+     LIMIT 1
+  `)) as unknown as Array<{ d: string | null }>;
+  const match = /^'([^']+)'/.exec(rows[0]?.d ?? "");
+  if (!match) throw new Error("billing_accounts.free_credit_offer has no readable column default");
+  return asFreeCreditOffer(match[1]);
+}
+
+/**
+ * Offers with NO free money (owner 2026-10-12 for the API, 2026-10-29 for every new
+ * signup): no welcome, no match, no trial seed or subscription trial, no invite or
+ * product-task grant, no referral reward as a referrer. Staff grants stay possible.
+ */
+export function isNoFreeCreditOffer(offer: FreeCreditOfferKind): boolean {
+  return offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER;
+}
+
+/**
+ * Offers whose up-front credit is an ADVANCE on the first payment (one
+ * `org_creation_bonus` row, repaid by that payment): match_100 ($30) and the at-cost
+ * offer ($5). An agent/API org gets none (but one it held before its mark stays an
+ * advance, see getOnboardingAdvanceCents).
+ */
+export function offerGrantsOnboardingAdvance(offer: FreeCreditOfferKind): boolean {
+  return offer === MATCH_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER;
+}
+
+/**
+ * The advance an org of this offer receives at creation: the live `org_creation_bonus`
+ * price for match_100, at most $5 for the at-cost offer (« mets le à $5 max »).
+ */
+export function onboardingAdvanceCentsFor(offer: FreeCreditOfferKind, codeAmountCents: number): number {
+  return offer === AT_COST_FREE_CREDIT_OFFER
+    ? Math.min(codeAmountCents, AT_COST_ONBOARDING_ADVANCE_CENTS)
+    : codeAmountCents;
+}
+
+/**
+ * The at-cost offer pays every cost it causes, campaign or not (owner 2026-10-29:
+ * « dans ce monde sans marge tous les couts de supports sont refacturés à l'org
+ * cliente, incluant l'onboarding, stripe, les chat etc »): lib/platform-absorbed
+ * does not apply to it.
+ */
+export function offerPaysNoCampaignSpend(offer: FreeCreditOfferKind): boolean {
+  return offer === AT_COST_FREE_CREDIT_OFFER;
+}
+
+/**
  * The offer an org is under. An org with NO billing account yet is a NEW org: its
- * account will be created with the column default (match_100), so it already is one.
+ * account will be created with the column default (the at-cost offer), so it already is one.
  */
 export async function getOrgFreeCreditOffer(orgId: string): Promise<FreeCreditOfferKind> {
   const [row] = await db
@@ -71,7 +131,7 @@ export async function getOrgFreeCreditOffer(orgId: string): Promise<FreeCreditOf
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
-  return row ? asFreeCreditOffer(row.offer) : MATCH_FREE_CREDIT_OFFER;
+  return row ? asFreeCreditOffer(row.offer) : newAccountFreeCreditOffer();
 }
 
 export async function isMatchOfferOrg(orgId: string): Promise<boolean> {
@@ -114,7 +174,7 @@ export function topupMinimumsFor(account: TopupMinimumsSource): TopupMinimums {
 
 /**
  * The minimums of an org. An org with NO billing account yet is a NEW org (its
- * account will be created match_100, with no staff override): the match defaults.
+ * account will be created at-cost, with no staff override): that offer's defaults (none).
  */
 export async function getOrgTopupMinimums(orgId: string): Promise<TopupMinimums> {
   const [row] = await db
@@ -126,7 +186,7 @@ export async function getOrgTopupMinimums(orgId: string): Promise<TopupMinimums>
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
-  return row ? topupMinimumsFor(row) : offerDefaultTopupMinimums(MATCH_FREE_CREDIT_OFFER);
+  return row ? topupMinimumsFor(row) : offerDefaultTopupMinimums(await newAccountFreeCreditOffer());
 }
 
 /** Refuse a top-up below the org's minimum (none = accepted). */
@@ -170,7 +230,8 @@ export function configuredReloadFor(account: TopupMinimumsSource & {
   // An agent/API org reloads EXACTLY what it chose (pay $10, reload $15 below $5).
   // Its minimums are the agent-facing API's (owner: customer minimums are a front
   // validation), so nothing is clamped here.
-  if (offer === AGENT_API_FREE_CREDIT_OFFER) {
+  // The at-cost offer is the same model (owner 2026-10-29: « comme via API »).
+  if (offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER) {
     return { amountCents: account.topupAmountCents, thresholdCents: account.topupThresholdCents };
   }
   if (offer !== MATCH_FREE_CREDIT_OFFER) return null;
@@ -239,7 +300,7 @@ export async function getOnboardingAdvanceCents(orgId: string): Promise<string> 
   // agent-api-org) keeps it as what it was: an advance its first payment repays,
   // never a gift. A cleanly marked agent org holds no such row.
   const offer = await getOrgFreeCreditOffer(orgId);
-  if (offer !== MATCH_FREE_CREDIT_OFFER && offer !== AGENT_API_FREE_CREDIT_OFFER) {
+  if (!offerGrantsOnboardingAdvance(offer) && offer !== AGENT_API_FREE_CREDIT_OFFER) {
     return "0.0000000000";
   }
   // A subscription trial started AFTER the bonus tops credit up TO $99 counting the

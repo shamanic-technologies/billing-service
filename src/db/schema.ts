@@ -38,8 +38,8 @@ const FUNNEL_CAP_PRECISION = 22;
 // export any more — a global entitlement is the bug this shape exists to prevent.)
 
 /**
- * Total free credits a NEWLY created account may ever receive, every up-front gift
- * INCLUDED: "We match your first $100" (owner 2026-10-06, migration 0066).
+ * Total free credits a match_100 account (created 0066-0093) may ever receive, every
+ * up-front gift INCLUDED: "We match your first $100" (owner 2026-10-06, migration 0066).
  *
  * $30 lands at org creation (the `org_creation_bonus` ledger key, see
  * MATCH_FREE_CREDIT_OFFER) and the $70 remainder lands once the org's cumulative
@@ -49,14 +49,17 @@ const FUNNEL_CAP_PRECISION = 22;
  * Earlier cohorts keep their own frozen figures: $25 (pre-0032), $400 (0032-0040),
  * $30 flat (0040-0066, FLAT_THIRTY_*).
  */
-export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 10000;
+export const MATCH_FREE_CREDIT_ENTITLEMENT_CENTS = 10000;
+/** Since migration 0093 (at-cost offer): a new account is entitled to no free credit. */
+export const CURRENT_FREE_CREDIT_ENTITLEMENT_CENTS = 0;
 
 /**
- * Cumulative SUCCEEDED payments that earn the completion for a NEWLY created
+ * Cumulative SUCCEEDED payments that earn the completion for a match_100
  * account ($100). The trigger is money actually received — NOT usage consumed
  * (owner's pick): we must not gift credits to someone whose card may still fail.
  */
-export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 10000;
+export const MATCH_FREE_CREDIT_PAID_TRIGGER_CENTS = 10000;
+export const CURRENT_FREE_CREDIT_PAID_TRIGGER_CENTS = 0;
 
 /**
  * The flat $30 cohort (accounts created between migrations 0040 and 0066): the
@@ -91,10 +94,30 @@ export const MATCH_FREE_CREDIT_OFFER = "match_100";
  * checkout for an org with no account yet). See lib/agent-api-org.
  */
 export const AGENT_API_FREE_CREDIT_OFFER = "agent_api";
+/**
+ * Every account created after migration 0093 (owner 2026-10-29, OFFER-RESET-1029):
+ * prepaid at cost, no free money. « on arrete le $100 de free credit et les $
+ * gratuits de referral. Bien sur on grandfather les clients actuels. »
+ *
+ * - a $5 onboarding ADVANCE at creation (one `org_creation_bonus` row, repaid by the
+ *   first payment exactly like the match_100 $30), never a gift: « mets le à $5 max »;
+ * - no match, no welcome, no trial seed beyond that advance, no invite/task grant, no
+ *   subscription trial, and its org earns NO referral reward as a referrer;
+ * - PREPAID only (the customer cannot choose postpaid), auto top-up mandatory, the
+ *   same model as the API path (`agent_api`); minimums are a front validation;
+ * - it pays every cost it causes: its spend with no campaign (onboarding, Copilot
+ *   chat, card fees) lowers its balance (lib/platform-absorbed does not apply).
+ *
+ * Every account that existed before keeps its own offer. See lib/free-credit-offer.
+ */
+export const AT_COST_FREE_CREDIT_OFFER = "prepaid_at_cost";
+/** The onboarding advance of an at-cost org ($5), repaid by its first payment. */
+export const AT_COST_ONBOARDING_ADVANCE_CENTS = 500;
 export type FreeCreditOfferKind =
   | typeof LEGACY_FREE_CREDIT_OFFER
   | typeof MATCH_FREE_CREDIT_OFFER
-  | typeof AGENT_API_FREE_CREDIT_OFFER;
+  | typeof AGENT_API_FREE_CREDIT_OFFER
+  | typeof AT_COST_FREE_CREDIT_OFFER;
 
 /** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
 export const MATCH_MIN_TOPUP_CENTS = 10000;
@@ -128,7 +151,8 @@ export const billingAccounts = pgTable(
     // migration 0030.
     welcomeCompletionEligible: boolean("welcome_completion_eligible")
       .notNull()
-      .default(true),
+      // false since 0093: a new (at-cost) account has no welcome completion to earn.
+      .default(false),
     // The org's OWN free-credit offer, frozen at account creation (migration 0032).
     // Written from the DB column DEFAULT on INSERT and never updated: re-pricing the
     // offer moves the default for FUTURE accounts only, so every existing org keeps
@@ -145,7 +169,8 @@ export const billingAccounts = pgTable(
     // How this org pays — the customer's explicit choice (migration 0050). Every
     // existing row and every new account is 'postpaid' until someone chooses
     // otherwise. See lib/payment-mode.
-    paymentMode: text("payment_mode").notNull().default("postpaid"),
+    // Since migration 0093 a NEW account is 'prepaid' (the at-cost offer has no postpaid).
+    paymentMode: text("payment_mode").notNull().default("prepaid"),
     // Has the org's card proven it holds the first credit-line step (migration
     // 0090, lib/postpaid-card-check)? 'required' (every new account) | 'passed' (a
     // $50 authorization hold was accepted) | 'refused' (the bank refused it) |
@@ -155,11 +180,11 @@ export const billingAccounts = pgTable(
     postpaidCardCheckMessage: text("postpaid_card_check_message"),
     postpaidCardCheckedAt: timestamp("postpaid_card_checked_at", { withTimezone: true }),
     // The free-credit OFFER this account was created under (migration 0066):
-    // 'legacy' for every account that predates it, 'match_100' for every new one.
+    // 'legacy' before 0066, 'match_100' from 0066, 'prepaid_at_cost' from 0093.
     // Frozen at creation, like the two figures above. See MATCH_FREE_CREDIT_OFFER.
     freeCreditOffer: text("free_credit_offer")
       .notNull()
-      .default(MATCH_FREE_CREDIT_OFFER),
+      .default(AT_COST_FREE_CREDIT_OFFER),
     // When this org last opened a SUBSCRIPTION checkout (migration 0055). Cleared
     // once the subscription is observed live (or the attempt is abandoned), so it
     // bounds which orgs the hourly settle asks stripe-service about. See

@@ -193,9 +193,10 @@
             "enum": [
               "legacy",
               "match_100",
-              "agent_api"
+              "agent_api",
+              "prepaid_at_cost"
             ],
-            "description": "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged."
+            "description": "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with a mandatory auto top-up, and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged."
           },
           "free_credit_entitlement_cents": {
             "type": "integer",
@@ -2164,7 +2165,8 @@
               "subscription_mode_staff_only",
               "postpaid_card_not_allowed",
               "postpaid_card_hold_refused",
-              "postpaid_card_hold_requires_action"
+              "postpaid_card_hold_requires_action",
+              "postpaid_not_offered"
             ]
           },
           "owed_cents": {
@@ -2754,6 +2756,9 @@
           "alreadyClaimed": {
             "type": "boolean"
           },
+          "rewardOffered": {
+            "type": "boolean"
+          },
           "promise": {
             "$ref": "#/components/schemas/FreeCreditPromise"
           }
@@ -2761,11 +2766,13 @@
         "required": [
           "ok",
           "alreadyClaimed",
+          "rewardOffered",
           "promise"
         ]
       },
       "FreeCreditPromise": {
         "type": "object",
+        "nullable": true,
         "properties": {
           "id": {
             "type": "string",
@@ -6719,8 +6726,8 @@
     },
     "/v1/accounts/prepaid_checkout": {
       "post": {
-        "summary": "One call: prepay + saved card + mandatory auto top-up (agent/API orgs)",
-        "description": "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). 409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
+        "summary": "One call: prepay + saved card + mandatory auto top-up (agent/API orgs and every new dashboard org)",
+        "description": "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). 409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
         "parameters": [
           {
             "schema": {
@@ -9003,7 +9010,7 @@
       },
       "put": {
         "summary": "Choose how this org pays (prepaid | postpaid)",
-        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). POSTPAID (also when already postpaid, the onboarding postpaid arm) with a saved chargeable card arms the credit line ($50 -> $200 -> $500 ladder), charging nothing; a prepaid or India-issued card is refused 409 postpaid_card_not_allowed with card_refused_reason.",
+        "description": "Switch between prepaid and postpaid. Idempotent (same mode = no-op, nothing charged). POSTPAID -> PREPAID with a negative balance: what is owed is charged to the saved card FIRST; if it cannot be (no card, declined, below the minimum charge) the switch does NOT happen and 409 names why. Becoming prepaid turns auto top-up ON (the customer can turn it off). PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). POSTPAID (also when already postpaid, the onboarding postpaid arm) with a saved chargeable card arms the credit line ($50 -> $200 -> $500 ladder), charging nothing; a prepaid or India-issued card is refused 409 postpaid_card_not_allowed with card_refused_reason. An org created under the at-cost offer (free_credit_offer = prepaid_at_cost, every new account since 2026-10-29) is PREPAID only: asking POSTPAID answers 409 postpaid_not_offered.",
         "parameters": [
           {
             "schema": {
@@ -10118,7 +10125,7 @@
     "/internal/referrals/claim": {
       "post": {
         "summary": "Record that an org was referred, and open the REFERRER's reward promise",
-        "description": "Called by client-service when a new org signs up through another org's invite link. Opens ONE promise, held by the REFERRER (promise.orgId = referrerOrgId, promise.referredOrgId = orgId): the referral amount ($500 today), granted to the referrer once the REFERRED org's cumulative real payments reach that same amount. The referred org gets nothing from the referral. Grants nothing now. Idempotent: re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
+        "description": "Called by client-service when a new org signs up through another org's invite link. Opens ONE promise, held by the REFERRER (promise.orgId = referrerOrgId, promise.referredOrgId = orgId): the referral amount ($500 today), granted to the referrer once the REFERRED org's cumulative real payments reach that same amount. The referred org gets nothing from the referral. Grants nothing now. Idempotent: re-claiming the same invite returns the existing promise with alreadyClaimed=true. A referrer created since 2026-10-29 (free_credit_offer prepaid_at_cost) or an agent/API org earns NO referral reward: 200 with rewardOffered=false and promise=null, nothing recorded.",
         "parameters": [
           {
             "schema": {

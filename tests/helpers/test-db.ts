@@ -350,7 +350,7 @@ export async function insertTestAccount(data: {
   freeCreditPaidTriggerCents?: number;
   paymentMode?: "prepaid" | "postpaid" | "subscription";
   /** Defaults to 'legacy' (an account that predates migration 0066), like the offer figures above. */
-  freeCreditOffer?: "legacy" | "match_100";
+  freeCreditOffer?: "legacy" | "match_100" | "agent_api" | "prepaid_at_cost";
   /** Defaults to 'grandfathered' (postpaid before the card check, migration 0090), like the offer above. */
   postpaidCardCheck?: "required" | "passed" | "refused" | "grandfathered";
 }) {
@@ -368,7 +368,8 @@ export async function insertTestAccount(data: {
         data.freeCreditPaidTriggerCents ??
         GRANDFATHERED_FREE_CREDIT_PAID_TRIGGER_CENTS,
       ...(data.createdAt ? { createdAt: data.createdAt } : {}),
-      ...(data.paymentMode ? { paymentMode: data.paymentMode } : {}),
+      // An account that predates the at-cost offer (0093) was postpaid unless it chose.
+      paymentMode: data.paymentMode ?? "postpaid",
       freeCreditOffer: data.freeCreditOffer ?? "legacy",
       postpaidCardCheck: data.postpaidCardCheck ?? "grandfathered",
     })
@@ -479,10 +480,28 @@ export async function useLegacyOfferDefaults(): Promise<void> {
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'legacy'`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 3000`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 3000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "payment_mode" SET DEFAULT 'postpaid'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "welcome_completion_eligible" SET DEFAULT true`;
 }
 
-export async function restoreCurrentOfferDefaults(): Promise<void> {
+/**
+ * Point the column DEFAULTS at the match_100 offer (a fresh account created between
+ * migrations 0066 and 0093: "We match your first $100", postpaid by default), for a
+ * suite written against what a new account got before the at-cost offer.
+ */
+export async function useMatchOfferDefaults(): Promise<void> {
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'match_100'`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 10000`;
   await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 10000`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "payment_mode" SET DEFAULT 'postpaid'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "welcome_completion_eligible" SET DEFAULT true`;
+}
+
+/** Back to what a NEW account gets today (migration 0093, the at-cost offer). */
+export async function restoreCurrentOfferDefaults(): Promise<void> {
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_offer" SET DEFAULT 'prepaid_at_cost'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_entitlement_cents" SET DEFAULT 0`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "free_credit_paid_trigger_cents" SET DEFAULT 0`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "payment_mode" SET DEFAULT 'prepaid'`;
+  await sql`ALTER TABLE "billing_accounts" ALTER COLUMN "welcome_completion_eligible" SET DEFAULT false`;
 }

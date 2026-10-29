@@ -83,8 +83,9 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
     traceEvent(runId, { service: "billing-service", event: "prepaid_checkout.start", data: { topupAmountCents, reloadAmountCents, reloadThresholdCents } }, req.headers);
 
     // An org with no billing account yet is created WITHOUT any free credit: this
-    // path is the API's, and a default (match_100) account would hand it a $30
-    // advance. An existing account keeps its own offer.
+    // path is the API's, and a default (at-cost) account would hand it a $5
+    // advance. An existing account keeps its own offer: the dashboard org of every
+    // new signup (prepaid_at_cost) checks out here too, first top-up + reload in one step.
     let [account] = await db
       .select()
       .from(billingAccounts)

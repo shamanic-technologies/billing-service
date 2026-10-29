@@ -103,9 +103,9 @@ export const BillingAccountSchema = z
      * Where the org stands on its free-credit offer, ready-made for the payment wall
      * ("$30 is already yours, $70 more once you've paid $100"). See lib/free-credit-offer.
      */
-    free_credit_offer: z.enum(["legacy", "match_100", "agent_api"]).openapi({
+    free_credit_offer: z.enum(["legacy", "match_100", "agent_api", "prepaid_at_cost"]).openapi({
       description:
-        "The free-credit offer this org was created under. `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged.",
+        "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with a mandatory auto top-up, and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged.",
     }),
     free_credit_entitlement_cents: z.number().int().openapi({
       description: "Total free credit the offer gives, every gift included (10000 for match_100).",
@@ -984,7 +984,13 @@ export const ReferralClaimResponseSchema = z
     ok: z.literal(true),
     /** True when this invite had already been claimed (no second promise opened). */
     alreadyClaimed: z.boolean(),
-    promise: FreeCreditPromiseSchema,
+    /**
+     * false = the referrer earns no referral reward (its account was created under the
+     * at-cost offer, since 2026-10-29, or it is an agent/API org): nothing recorded,
+     * `promise` is null.
+     */
+    rewardOffered: z.boolean(),
+    promise: FreeCreditPromiseSchema.nullable(),
   })
   .openapi("ReferralClaimResponse");
 
@@ -1471,6 +1477,7 @@ export const PaymentModeRefusalSchema = z
       "postpaid_card_not_allowed",
       "postpaid_card_hold_refused",
       "postpaid_card_hold_requires_action",
+      "postpaid_not_offered",
     ]),
     /** What the org owes, positive cents. */
     owed_cents: z.string(),
@@ -2163,9 +2170,10 @@ registry.registerPath({
 registry.registerPath({
   method: "post",
   path: "/v1/accounts/prepaid_checkout",
-  summary: "One call: prepay + saved card + mandatory auto top-up (agent/API orgs)",
+  summary: "One call: prepay + saved card + mandatory auto top-up (agent/API orgs and every new dashboard org)",
   description:
     "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
+    "This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). " +
     "Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. " +
     "A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). " +
     "409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
@@ -3089,7 +3097,9 @@ registry.registerPath({
     "PREPAID -> POSTPAID: postpaid rules apply from then on (a card becomes required). " +
     "POSTPAID (also when already postpaid, the onboarding postpaid arm) with a saved chargeable card arms the " +
     "credit line ($50 -> $200 -> $500 ladder), charging nothing; a prepaid or India-issued card is refused " +
-    "409 postpaid_card_not_allowed with card_refused_reason.",
+    "409 postpaid_card_not_allowed with card_refused_reason. " +
+    "An org created under the at-cost offer (free_credit_offer = prepaid_at_cost, every new account since " +
+    "2026-10-29) is PREPAID only: asking POSTPAID answers 409 postpaid_not_offered.",
   request: {
     headers: protectedHeaders,
     body: { content: { "application/json": { schema: SetPaymentModeRequestSchema } } },
@@ -3587,7 +3597,9 @@ registry.registerPath({
     "promise.referredOrgId = orgId): the referral amount ($500 today), granted to the " +
     "referrer once the REFERRED org's cumulative real payments reach that same amount. " +
     "The referred org gets nothing from the referral. Grants nothing now. Idempotent: " +
-    "re-claiming the same invite returns the existing promise with alreadyClaimed=true.",
+    "re-claiming the same invite returns the existing promise with alreadyClaimed=true. " +
+    "A referrer created since 2026-10-29 (free_credit_offer prepaid_at_cost) or an agent/API org earns NO " +
+    "referral reward: 200 with rewardOffered=false and promise=null, nothing recorded.",
   request: {
     headers: internalHeaders,
     body: {
