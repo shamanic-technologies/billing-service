@@ -33,7 +33,7 @@
  * postpaid, what is owed is settled first exactly as for prepaid.
  */
 
-import { topupMinimumsFor, withdrawOnboardingAdvanceForPostpaid } from "./free-credit-offer.js";
+import { asFreeCreditOffer, topupMinimumsFor, withdrawOnboardingAdvanceForPostpaid } from "./free-credit-offer.js";
 import { notifyOwnerBillingEvent, usd, utcDay } from "./owner-alerts.js";
 import { scheduleStripeStepAlert } from "./stripe-step-alert.js";
 import { runPostpaidCardCheck } from "./postpaid-card-check.js";
@@ -42,6 +42,7 @@ import { db } from "../db/index.js";
 import {
   billingAccounts,
   MATCH_FREE_CREDIT_OFFER,
+  AT_COST_FREE_CREDIT_OFFER,
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
   subscriptions,
@@ -81,7 +82,12 @@ export type PaymentModeRefusalCode =
    * dashboard asks the customer to switch to prepaid or change card (owner
    * 2026-10-13, no "continue anyway"). `card_refused_reason` says which.
    */
-  | "postpaid_card_not_allowed";
+  | "postpaid_card_not_allowed"
+  /**
+   * A CUSTOMER asked for POSTPAID on an account created under the at-cost offer
+   * (owner 2026-10-29: prepaid only, « comme via API »). Staff can still decide it.
+   */
+  | "postpaid_not_offered";
 
 export class PaymentModeSwitchRefused extends Error {
   readonly code: PaymentModeRefusalCode;
@@ -215,6 +221,19 @@ export async function setPaymentMode(
   // 2026-10-21): its line exists whenever a chargeable card does (lib/topup-tier
   // autoTopupArmed). Asked again on an org already postpaid (the postpaid signup
   // arm: card saved, nothing charged), it answers whether that line is armed.
+  if (
+    target === "postpaid" &&
+    actor === "customer" &&
+    current !== "postpaid" &&
+    asFreeCreditOffer(account.freeCreditOffer) === AT_COST_FREE_CREDIT_OFFER
+  ) {
+    throw new PaymentModeSwitchRefused(
+      "postpaid_not_offered",
+      "0",
+      "This organization pays upfront: add credit and set an automatic top-up."
+    );
+  }
+
   let armPostpaidLine = false;
   if (target === "postpaid" && current !== "subscription") {
     const facts = await getCardFacts(orgId);

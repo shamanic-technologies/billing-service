@@ -7,6 +7,7 @@ import {
   type BillingAccount,
 } from "../db/schema.js";
 import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
+import { getOrgFreeCreditOffer, isNoFreeCreditOffer } from "./free-credit-offer.js";
 
 /**
  * Orgs opened by an AI agent through the API (owner 2026-10-12, verbatim):
@@ -38,7 +39,7 @@ import { withdrawFreeCreditOffer } from "./welcome-recipient.js";
 export class FreeCreditNotOfferedError extends Error {
   readonly code = "free_credit_not_offered";
   constructor(orgId: string, what: string) {
-    super(`org ${orgId} was opened through the API: no free credit (${what})`);
+    super(`org ${orgId} is on an offer with no free credit (${what})`);
     this.name = "FreeCreditNotOfferedError";
   }
 }
@@ -52,12 +53,30 @@ export async function isAgentApiOrg(orgId: string): Promise<boolean> {
   return row?.offer === AGENT_API_FREE_CREDIT_OFFER;
 }
 
-/** Throws FreeCreditNotOfferedError for an agent/API org; a no-op for every other org. */
+/**
+ * Throws FreeCreditNotOfferedError for an org whose offer gives no free money: an
+ * agent/API org, and every account created since the at-cost offer (owner 2026-10-29,
+ * an org with no account yet is one). A no-op for every older org.
+ */
 export async function assertFreeCreditAllowed(orgId: string, what: string): Promise<void> {
-  if (await isAgentApiOrg(orgId)) {
-    console.warn(`[billing-service] refused free credit (${what}) to agent/API org ${orgId}`);
+  const offer = await getOrgFreeCreditOffer(orgId);
+  if (isNoFreeCreditOffer(offer)) {
+    console.warn(`[billing-service] refused free credit (${what}) to ${offer} org ${orgId}`);
     throw new FreeCreditNotOfferedError(orgId, what);
   }
+}
+
+/** Throws FreeCreditNotOfferedError for an agent/API org only (the at-cost onboarding advance path). */
+export async function assertNotAgentApiOrg(orgId: string, what: string): Promise<void> {
+  if (await isAgentApiOrg(orgId)) {
+    console.warn(`[billing-service] refused ${what} to agent/API org ${orgId}`);
+    throw new FreeCreditNotOfferedError(orgId, what);
+  }
+}
+
+/** An org on an offer with no free money (see assertFreeCreditAllowed). */
+export async function isNoFreeCreditOrg(orgId: string): Promise<boolean> {
+  return isNoFreeCreditOffer(await getOrgFreeCreditOffer(orgId));
 }
 
 /** The values an agent/API account is written with: no offer, prepaid. */

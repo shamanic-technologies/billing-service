@@ -45,6 +45,12 @@ router.post("/internal/referrals/claim", async (req, res) => {
 
   try {
     const { promise, alreadyClaimed } = await claimReferral(orgId, referrerOrgId);
+    if (!promise) {
+      // The referrer earns no referral reward (an account created since the at-cost
+      // offer): the claim is acknowledged, nothing is recorded.
+      res.json({ ok: true as const, alreadyClaimed: false, rewardOffered: false, promise: null });
+      return;
+    }
     console.log(
       `[billing-service] referral claim: org=${orgId} referrer=${referrerOrgId} ` +
         `promise=${promise.id} amount_cents=${promise.amountCents} ` +
@@ -53,6 +59,7 @@ router.post("/internal/referrals/claim", async (req, res) => {
     res.json({
       ok: true as const,
       alreadyClaimed,
+      rewardOffered: true,
       promise: {
         id: promise.id,
         orgId: promise.orgId,

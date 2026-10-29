@@ -39,6 +39,7 @@ import { db } from "../db/index.js";
 import { brandTransfers } from "../db/schema.js";
 import { addCents, cmpCents, subCents } from "./cents.js";
 import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "./platform-absorbed.js";
+import { getOrgFreeCreditOffer, offerPaysNoCampaignSpend } from "./free-credit-offer.js";
 import {
   fetchRunsOrgActualUsageTotal,
   fetchRunsOrgNoCampaignTotal,
@@ -95,6 +96,21 @@ export interface StaffDebitsPart {
   platform_absorbed_cents: string;
 }
 
+/**
+ * The no-campaign spend the platform absorbs for this org: none for an org on the
+ * at-cost offer, which pays every cost it causes (lib/free-credit-offer
+ * offerPaysNoCampaignSpend, owner 2026-10-29), so its runs-service read is skipped.
+ */
+async function absorbedFor(
+  orgId: string,
+  wfHeaders: Record<string, string>
+): Promise<{ usageNetCents: string; actualNetCents: string }> {
+  if (offerPaysNoCampaignSpend(await getOrgFreeCreditOffer(orgId))) {
+    return { usageNetCents: "0", actualNetCents: "0" };
+  }
+  return fetchRunsOrgNoCampaignTotal(orgId, PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO, wfHeaders);
+}
+
 function minus(cents: string, absorbed: string): string {
   return cmpCents(absorbed, "0") === 0 ? cents : subCents(cents, absorbed);
 }
@@ -112,7 +128,7 @@ export async function fetchOrgUsageTotal(
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
     sumSubscriptionExpiriesForOrg(orgId),
-    fetchRunsOrgNoCampaignTotal(orgId, PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO, wfHeaders),
+    absorbedFor(orgId, wfHeaders),
   ]);
   return {
     ...runs,
@@ -139,7 +155,7 @@ export async function fetchOrgActualUsageTotal(
     getTransferUsageAdjustment(orgId),
     sumStaffDebitsForOrg(orgId),
     sumSubscriptionExpiriesForOrg(orgId),
-    fetchRunsOrgNoCampaignTotal(orgId, PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO, wfHeaders),
+    absorbedFor(orgId, wfHeaders),
   ]);
   return {
     spent_cents: minus(

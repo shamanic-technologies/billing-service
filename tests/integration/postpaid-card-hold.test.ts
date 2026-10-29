@@ -6,7 +6,8 @@
  * nothing: the step charges as today. Orgs already postpaid are grandfathered.
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi, beforeAll } from "vitest";
+import { useMatchOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -32,7 +33,7 @@ describe("postpaid card check: $50 hold before credit, captured at the step", ()
     vi.restoreAllMocks();
     _resetCoalescer();
     await cleanTestData();
-    await restoreCurrentOfferDefaults();
+    await useMatchOfferDefaults();
     usage = "0.0000000000";
 
     ssMocks = setupStripeMocks();
@@ -61,7 +62,13 @@ describe("postpaid card check: $50 hold before credit, captured at the step", ()
     vi.spyOn(costs, "resolveRequiredCents").mockResolvedValue("100.0000000000");
   });
 
+  // Written against a fresh account of the match_100 era (pre-0093).
+  beforeAll(async () => {
+    await useMatchOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await closeDb();
   });
 

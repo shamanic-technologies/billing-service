@@ -1,8 +1,12 @@
 import { and, desc, eq, sql as rawSql } from "drizzle-orm";
 import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
-import { isMatchOfferOrg } from "./free-credit-offer.js";
-import { assertFreeCreditAllowed } from "./agent-api-org.js";
+import {
+  getOrgFreeCreditOffer,
+  offerGrantsOnboardingAdvance,
+  onboardingAdvanceCentsFor,
+} from "./free-credit-offer.js";
+import { assertFreeCreditAllowed, assertNotAgentApiOrg } from "./agent-api-org.js";
 import {
   billingAccounts,
   localPromoCodes,
@@ -54,7 +58,7 @@ export interface RedeemResult {
  */
 export class WelcomeNotOfferedError extends Error {
   constructor(orgId: string) {
-    super(`org ${orgId} is on the match_100 offer: the welcome gift is not part of it`);
+    super(`org ${orgId} is on an offer without the welcome gift (match_100 or prepaid_at_cost)`);
   }
 }
 
@@ -70,13 +74,14 @@ export async function redeemPromoCode(
     .limit(1);
 
   if (!promo) throw new PromoNotFoundError(code);
-  // An agent/API org receives no free credit of any kind (lib/agent-api-org).
-  await assertFreeCreditAllowed(orgId, `promo ${code}`);
-  // A match_100 org's only up-front gift is its org-creation bonus: the welcome
-  // gift never stacks on it (lib/free-credit-offer).
-  if (code === WELCOME_PROMO_CODE && (await isMatchOfferOrg(orgId))) {
+  // A match_100 or at-cost org's only up-front credit is its onboarding advance: the
+  // welcome gift is never offered to it (lib/free-credit-offer). Same answer as before
+  // for a match_100 org, so a caller handling `welcome_not_offered` keeps working.
+  if (code === WELCOME_PROMO_CODE && offerGrantsOnboardingAdvance(await getOrgFreeCreditOffer(orgId))) {
     throw new WelcomeNotOfferedError(orgId);
   }
+  // An agent/API or at-cost org receives no free credit of any kind (lib/agent-api-org).
+  await assertFreeCreditAllowed(orgId, `promo ${code}`);
   if (promo.expiresAt && promo.expiresAt < new Date()) {
     throw new PromoExpiredError(code);
   }
@@ -363,19 +368,24 @@ export async function grantOrgCreationBonus(
     .where(eq(localPromoCodes.code, ORG_CREATION_BONUS_CODE))
     .limit(1);
   if (!code) throw new GrantPromoCodeMissingError(ORG_CREATION_BONUS_CODE);
-  await assertFreeCreditAllowed(orgId, ORG_CREATION_BONUS_CODE);
+  // The at-cost offer gets its $5 ADVANCE here (never free money); only an agent/API
+  // org gets nothing at all.
+  await assertNotAgentApiOrg(orgId, ORG_CREATION_BONUS_CODE);
+  const offer = await getOrgFreeCreditOffer(orgId);
+  const amountCents = onboardingAdvanceCentsFor(offer, code.amountCents);
 
   const inserted = await db
     .insert(localPromos)
     .values({
       orgId,
       userId: SYSTEM_USER_ID,
-      amountCents: String(code.amountCents),
+      amountCents: String(amountCents),
       promoCodeId: code.id,
-      // A match_100 org's $30 is an advance on its first payment, never a gift.
-      description: (await isMatchOfferOrg(orgId))
-        ? `Onboarding credit advance: $${(code.amountCents / 100).toFixed(2)}`
-        : `Organization creation bonus: $${(code.amountCents / 100).toFixed(2)}`,
+      // A match_100 ($30) or at-cost ($5) org's credit is an advance on its first
+      // payment, never a gift.
+      description: offerGrantsOnboardingAdvance(offer)
+        ? `Onboarding credit advance: $${(amountCents / 100).toFixed(2)}`
+        : `Organization creation bonus: $${(amountCents / 100).toFixed(2)}`,
     })
     .onConflictDoNothing({
       target: [localPromos.orgId, localPromos.promoCodeId],

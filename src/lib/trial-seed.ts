@@ -13,10 +13,9 @@ import {
   withdrawFreeCreditOffer,
 } from "./welcome-recipient.js";
 import { getSubscriptionTrialGrantCents } from "./subscription.js";
-import { getOrgFreeCreditOffer } from "./free-credit-offer.js";
-import { assertFreeCreditAllowed, isAgentApiOrg } from "./agent-api-org.js";
+import { getOrgFreeCreditOffer, offerGrantsOnboardingAdvance } from "./free-credit-offer.js";
+import { assertNotAgentApiOrg, isAgentApiOrg } from "./agent-api-org.js";
 import { grantOrgCreationBonus, sumEntitlementGrantsForOrg } from "./promos.js";
-import { MATCH_FREE_CREDIT_OFFER } from "../db/schema.js";
 
 /**
  * Trial seed — free credit for an org that has NOT signed up yet, and the settlement
@@ -136,15 +135,16 @@ export interface TrialSeedResult {
  * is exactly the "welcome amount PLUS the seed" outcome this exists to prevent.
  */
 export async function seedTrialCredit(orgId: string): Promise<TrialSeedResult> {
-  // An agent/API org never gets a trial seed (lib/agent-api-org).
-  await assertFreeCreditAllowed(orgId, "trial_seed");
+  // An agent/API org never gets a trial seed (lib/agent-api-org). An at-cost org's
+  // seed is its $5 onboarding advance, below.
+  await assertNotAgentApiOrg(orgId, "trial_seed");
   // "We match your first $100": a NEW org's up-front free credit is its ONE
   // org-creation bonus ($30), whichever path asks first — so the anonymous walk gets
   // the same $30 a dashboard-created org gets, and a racing first billing touch can
   // never add a second up-front gift (same unique row). No `trial_seed` row.
   // The account first, so its offer is the one the DB default gives a new org.
   await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
-  if ((await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER) {
+  if (offerGrantsOnboardingAdvance(await getOrgFreeCreditOffer(orgId))) {
     const bonus = await grantOrgCreationBonus(orgId);
     return { orgId, seededCents: bonus.grantedCents, alreadySeeded: bonus.alreadyGranted };
   }
@@ -257,7 +257,7 @@ export async function settleSignupWelcome(
     };
   }
   await db.insert(billingAccounts).values({ orgId }).onConflictDoNothing();
-  if ((await getOrgFreeCreditOffer(orgId)) === MATCH_FREE_CREDIT_OFFER) {
+  if (offerGrantsOnboardingAdvance(await getOrgFreeCreditOffer(orgId))) {
     await grantOrgCreationBonus(orgId);
     return {
       orgId,

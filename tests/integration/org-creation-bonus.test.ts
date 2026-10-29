@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi, beforeAll } from "vitest";
+import { useMatchOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -49,7 +50,13 @@ describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
     } as never);
   });
 
+  // Written against a fresh account of the match_100 era (pre-0093).
+  beforeAll(async () => {
+    await useMatchOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await cleanTestData();
     await closeDb();
   });

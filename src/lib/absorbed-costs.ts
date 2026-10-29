@@ -1,5 +1,6 @@
 import { Decimal } from "decimal.js";
 import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "./platform-absorbed.js";
+import { asFreeCreditOffer, offerPaysNoCampaignSpend } from "./free-credit-offer.js";
 import { db } from "../db/index.js";
 import { billingAccounts, brandTransfers, platformOrgs } from "../db/schema.js";
 import { fetchRunsNoCampaignMonthly } from "./runs-client.js";
@@ -200,9 +201,16 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
   const unattributedFees = new Map<string, Decimal>();
   const unattributedOther = new Map<string, Map<string, Decimal>>();
   const allMonths = new Set<string>();
+  // An org on the at-cost offer PAYS its no-campaign spend and card fees (lib/
+  // platform-absorbed): nothing of it is absorbed, so none of it is counted here.
+  const paysAll = new Set(
+    inp.accounts
+      .filter((a) => offerPaysNoCampaignSpend(asFreeCreditOffer(a.freeCreditOffer)))
+      .map((a) => a.orgId)
+  );
   for (const r of inp.spend) {
     const c = cell(r.orgId, r.month);
-    c.noCampaign = c.noCampaign.plus(r.noCampaignCents);
+    if (!paysAll.has(r.orgId)) c.noCampaign = c.noCampaign.plus(r.noCampaignCents);
     c.campaign = c.campaign.plus(r.campaignCents);
     allMonths.add(r.month);
   }
@@ -219,6 +227,7 @@ export function composeAbsorbedCosts(inp: AbsorbedInputs) {
       continue;
     }
     const c = cell(r.orgId, r.month);
+    if (paysAll.has(r.orgId)) continue;
     if (usd) c.fees = c.fees.plus(r.feeCents);
     else addOther(c.other, r.currency, r.feeCents);
   }
@@ -471,6 +480,15 @@ export const ACQUIRING_FEE_COST_NAMES = new Set([
   "revolut-acquiring-fee",
 ]);
 
+/**
+ * A card-acquiring fee cost name: the listed ones, plus any `stripe-*-fee` stripe-service
+ * declares (it declares every fee on the paying org since STRIPE-FEE-ORG-1029, capture
+ * included), so a fee is never counted twice (fee source + no-campaign spend).
+ */
+export function isAcquiringFeeCostName(name: string): boolean {
+  return ACQUIRING_FEE_COST_NAMES.has(name) || /^stripe-[a-z0-9-]+-fee$/.test(name);
+}
+
 const CONCURRENCY = 8;
 
 const isUuid = (id: string) => RFC_UUID.test(id);
@@ -504,7 +522,7 @@ export function spendRowsFromRuns(
       );
     }
     const fees = (o.noCampaignByCostName ?? [])
-      .filter((c) => ACQUIRING_FEE_COST_NAMES.has(c.costName))
+      .filter((c) => isAcquiringFeeCostName(c.costName))
       .reduce((s, c) => s.plus(c.netNoCampaignCostInUsdCents), D(0));
     return {
       orgId: o.orgId,

@@ -6,7 +6,8 @@
  * Indian card cannot be postpaid (the dashboard asks: switch to prepaid or change card).
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi, beforeAll } from "vitest";
+import { useMatchOfferDefaults, restoreCurrentOfferDefaults } from "../helpers/test-db.js";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
@@ -35,7 +36,7 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     vi.restoreAllMocks();
     _resetCoalescer();
     await cleanTestData();
-    await restoreCurrentOfferDefaults();
+    await useMatchOfferDefaults();
     usage = "0.0000000000";
 
     ssMocks = setupStripeMocks();
@@ -59,7 +60,13 @@ describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $10
     vi.spyOn(costs, "resolveRequiredCents").mockResolvedValue("100.0000000000");
   });
 
+  // Written against a fresh account of the match_100 era (pre-0093).
+  beforeAll(async () => {
+    await useMatchOfferDefaults();
+  });
+
   afterAll(async () => {
+    await restoreCurrentOfferDefaults();
     await closeDb();
   });
 
