@@ -1159,6 +1159,15 @@ export const DUNNING_EVENT_T0_BLOCKED = "credit-depleted-blocked";
 export const DUNNING_EVENT_3D_BLOCKED = "credit-depleted-followup-3d-blocked";
 export const DUNNING_EVENT_10D_BLOCKED = "credit-depleted-followup-10d-blocked";
 
+// Postpaid variants (POSTPAID-DUNNING-1030, owner 2026-10-30). A postpaid org has
+// no credit to add and no top-up switch: it pays what it spent. These twins say
+// "settle your balance due" / "keep your card on file". Registered by the dashboard
+// (distribute.you, byte-equal names) and platform-paid in postmark-service
+// PLATFORM_LIFECYCLE_TAGS. LOCKED contract; copy lives in the DB templates.
+export const DUNNING_EVENT_T0_POSTPAID = "credit-depleted-postpaid";
+export const DUNNING_EVENT_3D_POSTPAID = "credit-depleted-followup-3d-postpaid";
+export const DUNNING_EVENT_10D_POSTPAID = "credit-depleted-followup-10d-postpaid";
+
 // --- SUBSCRIPTION, owned by billing (migration 0056; lib/subscription) ---
 
 export const subscriptions = pgTable(

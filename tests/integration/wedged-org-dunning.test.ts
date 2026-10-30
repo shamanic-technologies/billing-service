@@ -102,8 +102,14 @@ describe("a wedged org is owned by the dunning engine", () => {
     await upsertCampaignAuthorizeCost(campaignA, orgA, PROD_ESTIMATE);
   }
 
+  // The wedged org is POSTPAID (the account default), so its T0 is the postpaid
+  // twin (POSTPAID-DUNNING-1030); a prepaid org's is the base template.
   const t0s = () =>
-    sendMock.mock.calls.filter((c) => c[0].eventType === "credit-depleted");
+    sendMock.mock.calls.filter(
+      (c) =>
+        c[0].eventType === "credit-depleted" ||
+        c[0].eventType === "credit-depleted-postpaid"
+    );
 
   it("opens an episode for the subject org on the first tick after the deploy", async () => {
     await seedWedgedOrg();
