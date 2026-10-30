@@ -29,6 +29,9 @@ import {
   DUNNING_EVENT_T0_BLOCKED,
   DUNNING_EVENT_3D_BLOCKED,
   DUNNING_EVENT_10D_BLOCKED,
+  DUNNING_EVENT_T0_POSTPAID,
+  DUNNING_EVENT_3D_POSTPAID,
+  DUNNING_EVENT_10D_POSTPAID,
 } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
 import { computeBalance, type BalanceSnapshot } from "./balance.js";
@@ -54,26 +57,44 @@ function hasCampaignActivity(wf: WorkflowHeaders): boolean {
   return Boolean(wf.campaignId || wf.workflowSlug || wf.featureSlug);
 }
 
+type DunningBase =
+  | typeof DUNNING_EVENT_T0
+  | typeof DUNNING_EVENT_3D
+  | typeof DUNNING_EVENT_10D;
+
+const BLOCKED_TWIN: Record<DunningBase, string> = {
+  [DUNNING_EVENT_T0]: DUNNING_EVENT_T0_BLOCKED,
+  [DUNNING_EVENT_3D]: DUNNING_EVENT_3D_BLOCKED,
+  [DUNNING_EVENT_10D]: DUNNING_EVENT_10D_BLOCKED,
+};
+
+const POSTPAID_TWIN: Record<DunningBase, string> = {
+  [DUNNING_EVENT_T0]: DUNNING_EVENT_T0_POSTPAID,
+  [DUNNING_EVENT_3D]: DUNNING_EVENT_3D_POSTPAID,
+  [DUNNING_EVENT_10D]: DUNNING_EVENT_10D_POSTPAID,
+};
+
 /**
- * Pick the dunning eventType for a stage. When the org's card can't be charged
- * off_session (auto-reload-blocked country, e.g. India), the base templates'
- * "turn on auto-topup" nudge is a dead-end, so we route to the `-blocked` sibling
- * template whose copy points to a manual recharge instead. `autoReloadSupported`
- * comes straight from the balance snapshot — no extra Stripe call.
+ * Pick the dunning eventType for a stage. Pure string routing: copy lives in the
+ * transactional-email-service templates.
+ *
+ * 1. The org's card can't be charged off_session (auto-reload-blocked country,
+ *    e.g. India) → the `-blocked` twin (manual recharge copy), whatever the mode:
+ *    a card we cannot charge makes "we charge it as you spend" a lie too.
+ * 2. POSTPAID org → the `-postpaid` twin (POSTPAID-DUNNING-1030): it has no credit
+ *    to add and no top-up switch, it settles what it spent.
+ * 3. Otherwise (prepaid, unknown account) → the base template.
+ *
+ * Subscription orgs never reach here (they get their own out-of-credits mail).
  */
-function dunningEventType(
-  base: typeof DUNNING_EVENT_T0 | typeof DUNNING_EVENT_3D | typeof DUNNING_EVENT_10D,
-  autoReloadSupported: boolean
+export function dunningEventType(
+  base: DunningBase,
+  autoReloadSupported: boolean,
+  paymentMode: string | null = null
 ): string {
-  if (autoReloadSupported) return base;
-  switch (base) {
-    case DUNNING_EVENT_T0:
-      return DUNNING_EVENT_T0_BLOCKED;
-    case DUNNING_EVENT_3D:
-      return DUNNING_EVENT_3D_BLOCKED;
-    case DUNNING_EVENT_10D:
-      return DUNNING_EVENT_10D_BLOCKED;
-  }
+  if (!autoReloadSupported) return BLOCKED_TWIN[base];
+  if (paymentMode === "postpaid") return POSTPAID_TWIN[base];
+  return base;
 }
 
 export interface OpenEpisodeParams {
@@ -124,13 +145,14 @@ function notifySubscriptionOutOfCredits(orgId: string): void {
     .catch((err) => console.error(`[billing-service] out-of-credits trigger failed for org ${orgId}:`, err));
 }
 
-async function isSubscriptionOrg(orgId: string): Promise<boolean> {
+/** The org's payment mode, null when it has no billing account. */
+async function readPaymentMode(orgId: string): Promise<string | null> {
   const [row] = await db
     .select({ paymentMode: billingAccounts.paymentMode })
     .from(billingAccounts)
     .where(eq(billingAccounts.orgId, orgId))
     .limit(1);
-  return row?.paymentMode === "subscription";
+  return row?.paymentMode ?? null;
 }
 
 /**
@@ -151,7 +173,8 @@ export async function openDepletionEpisodeIfDepleted(
   // would route subscription orgs into the generic out-of-credit dunning. It gets
   // its OWN mail instead, once per period: "you are out of credits, upgrade"
   // (lib/subscription-out-of-credits, owner 2026-10-10), fire-and-forget.
-  if (await isSubscriptionOrg(params.orgId)) {
+  const paymentMode = await readPaymentMode(params.orgId);
+  if (paymentMode === "subscription") {
     notifySubscriptionOutOfCredits(params.orgId);
     return { opened: false };
   }
@@ -187,7 +210,11 @@ export async function openDepletionEpisodeIfDepleted(
   );
 
   sendEmail({
-    eventType: dunningEventType(DUNNING_EVENT_T0, params.autoReloadSupported),
+    eventType: dunningEventType(
+      DUNNING_EVENT_T0,
+      params.autoReloadSupported,
+      paymentMode
+    ),
     orgId: params.orgId,
     userId: params.userId,
     runId: params.runId,
@@ -286,7 +313,8 @@ export async function openBlockedCampaignEpisode(params: {
   sendT0?: boolean;
 }): Promise<{ opened: boolean }> {
   // Same as openDepletionEpisodeIfDepleted: never for a subscription org.
-  if (await isSubscriptionOrg(params.orgId)) {
+  const paymentMode = await readPaymentMode(params.orgId);
+  if (paymentMode === "subscription") {
     notifySubscriptionOutOfCredits(params.orgId);
     return { opened: false };
   }
@@ -324,7 +352,8 @@ export async function openBlockedCampaignEpisode(params: {
   sendEmail({
     eventType: dunningEventType(
       DUNNING_EVENT_T0,
-      params.snapshot.autoReloadSupported
+      params.snapshot.autoReloadSupported,
+      paymentMode
     ),
     orgId: params.orgId,
     userId: PLATFORM_USER_ID,
@@ -430,6 +459,9 @@ export async function runDunningTick(): Promise<DunningTickResult> {
     if (!blocked) continue;
 
     const ageMs = now - ep.startedAt.getTime();
+    // Read at send time, never frozen on the episode: an org that switched mode
+    // since the T0 gets the copy for how it pays NOW.
+    const paymentMode = await readPaymentMode(ep.orgId);
     const recipientEmail = snapshot.customer?.email ?? undefined;
 
     // The follow-ups run on a scheduler tick, so there is no request run to
@@ -465,7 +497,11 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       if (claimed) {
         result.followup3dSent += 1;
         sendEmail({
-          eventType: dunningEventType(DUNNING_EVENT_3D, snapshot.autoReloadSupported),
+          eventType: dunningEventType(
+            DUNNING_EVENT_3D,
+            snapshot.autoReloadSupported,
+            paymentMode
+          ),
           orgId: ep.orgId,
           userId: ep.userId,
           runId,
@@ -489,7 +525,11 @@ export async function runDunningTick(): Promise<DunningTickResult> {
       if (claimed) {
         result.followup10dSent += 1;
         sendEmail({
-          eventType: dunningEventType(DUNNING_EVENT_10D, snapshot.autoReloadSupported),
+          eventType: dunningEventType(
+            DUNNING_EVENT_10D,
+            snapshot.autoReloadSupported,
+            paymentMode
+          ),
           orgId: ep.orgId,
           userId: ep.userId,
           runId,
