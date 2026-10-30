@@ -311,6 +311,9 @@ beforeAll(async () => {
   // fail on a column that is present in schema.ts.
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "opened_notified_at" timestamp with time zone`;
   await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "granted_notified_at" timestamp with time zone`;
+  await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "withdrawn_at" timestamp with time zone`;
+  await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "withdrawn_reason" text`;
+  await sql`ALTER TABLE "free_credit_promises" ADD COLUMN IF NOT EXISTS "withdrawn_amount_cents" integer`;
 
   // welcome_recipients (the welcome is once per PERSON, migration 0049).
   await sql`

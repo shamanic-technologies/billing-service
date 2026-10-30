@@ -440,6 +440,15 @@ export const freeCreditPromises = pgTable(
     grantedNotifiedAt: timestamp("granted_notified_at", { withTimezone: true }),
     /** The `local_promos` row that granted it (audit link); NULL while outstanding. */
     grantedLocalPromoId: uuid("granted_local_promo_id"),
+    /**
+     * Set when an UNGRANTED promise was withdrawn instead of earned (migration 0094).
+     * `withdrawn_reason` 'usage_discount' = the org holds a usage discount, which never
+     * stacks with the welcome match (lib/discount-match-exclusion). The amount it held
+     * before being zeroed is kept in `withdrawn_amount_cents`.
+     */
+    withdrawnAt: timestamp("withdrawn_at", { withTimezone: true }),
+    withdrawnReason: text("withdrawn_reason"),
+    withdrawnAmountCents: integer("withdrawn_amount_cents"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
