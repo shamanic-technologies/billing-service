@@ -20,6 +20,7 @@ import { Decimal } from "decimal.js";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { orgUsageDiscounts } from "../db/schema.js";
+import { withdrawWelcomeMatchForUsageDiscount } from "./discount-match-exclusion.js";
 
 // Match the fractional-cents scale used everywhere (numeric(16,10)).
 const SCALE = 10;
@@ -90,6 +91,8 @@ export async function setUsageDiscount(
       set: { discountPct, setBy, setAt: now },
     })
     .returning();
+  // A usage discount never stacks with the welcome match (DISCOUNT-NO-MATCH-1030).
+  if (discountPct > 0) await withdrawWelcomeMatchForUsageDiscount(orgId);
   return {
     discountPct: row.discountPct,
     setBy: row.setBy,

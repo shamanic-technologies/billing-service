@@ -82,6 +82,8 @@
  * so the credit it mirrors is a row that exists, not one still to be written.
  */
 
+import { getUsageDiscountPct } from "./usage-discount.js";
+import { withdrawWelcomeMatchForUsageDiscount } from "./discount-match-exclusion.js";
 import { and, eq, notExists, sql as rawSql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
@@ -168,7 +170,9 @@ export type SettleReason =
   | "payments_below_trigger"
   | "entitlement_already_full"
   /** Payments had already crossed the trigger before the automation launched. */
-  | "trigger_crossed_before_launch";
+  | "trigger_crossed_before_launch"
+  /** The org holds a usage discount: the match never stacks with it (withdrawn). */
+  | "usage_discount";
 
 export interface WelcomeCompletionOutcome {
   granted: boolean;
@@ -218,6 +222,14 @@ export async function settleWelcomeCompletion(
 
   if (!account) return NOT_GRANTED("no_account");
   if (!account.eligible) return NOT_GRANTED("not_eligible");
+  // A usage discount and the match are not cumulative (DISCOUNT-NO-MATCH-1030):
+  // checked before any trigger, so an org discounted before this rule shipped is
+  // withdrawn on its next settle and can never be granted in between.
+  const discountPct = await getUsageDiscountPct(orgId);
+  if (discountPct !== null && discountPct > 0) {
+    await withdrawWelcomeMatchForUsageDiscount(orgId);
+    return NOT_GRANTED("usage_discount");
+  }
   // This org's OWN trigger, frozen when its account was created — never a
   // module-level constant, or a re-price would move every existing org's bar.
   if (!gte(paidTopupsCents, toCents(account.paidTriggerCents))) {

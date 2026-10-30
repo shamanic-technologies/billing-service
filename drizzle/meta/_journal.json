@@ -659,6 +659,13 @@
       "when": 1796205600000,
       "tag": "0093_offer_reset_at_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1796292000000,
+      "tag": "0094_promise_withdrawn",
+      "breakpoints": true
     }
   ]
 }
