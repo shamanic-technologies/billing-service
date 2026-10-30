@@ -985,6 +985,8 @@ Platform staff can give an org a percentage discount on ALL its platform usage. 
 
 `computeBalance` (`src/lib/balance.ts`), `usage_apply`, authorize, the dunning scheduler, month-end sweep, affordability, and `GET /internal/accounts/by-org/:orgId/balance` all subtract runs-service usage (already net) verbatim — none read or apply the discount. Removing the discount restores full pricing on NEW cost writes (not retroactive). Fail-loud: an out-of-range percentage is rejected at both the Zod route schema and `setUsageDiscount` (`InvalidUsageDiscountError`) — no clamp, no default.
 
+**A usage discount and the welcome match are NOT cumulative** (owner 2026-10-30, DISCOUNT-NO-MATCH-1030: « le 50% de discount et le 100 match 100 ne sont pas cumulables »; `lib/discount-match-exclusion.ts`, migration 0094). Example: match_100 org, staff sets 50% before it paid $100 -> its pending $100 match is withdrawn; paying $100 grants nothing; the 50% stays. Withdrawn by `setUsageDiscount` (pct > 0) AND at the top of `settleWelcomeCompletion` (reason `usage_discount`, before any trigger), so a discount set before the rule is withdrawn on the next settle (Beyond Logic). Withdrawal = `withdrawFreeCreditOffer` + a trace on the welcome promise row (`withdrawn_at`, `withdrawn_reason='usage_discount'`, `withdrawn_amount_cents`). Never touches a GRANTED match, never debits, sends nothing; removing the discount does not bring the match back.
+
 **Cross-service contract:** runs-service is the discount OWNER at write time. It reads billing's `GET /internal/accounts/by-org/:orgId/usage-discount` and applies the pct once per cost row (gross + net stored). billing only READS runs' net usage — it does NOT modify runs' gross ledger.
 
 **Follow-up (other repos, not built here):** runs-service consuming the internal discount read + storing gross/net per cost row; api-service gateway proxy gating `/v1/usage-discount` to staff; admin-console UI to read/set/remove; dashboard banner rendering from `usage_discount_pct`.
@@ -1146,6 +1148,14 @@ transactional-email-service resolves a template by looking up the row whose `nam
 - **The six dunning templates (`credit-depleted`, its two follow-ups, and their three `-blocked` variants) are NOT ours to register.** The dashboard owns that copy (distribute.you#1420) and all six are present in prod. Do not add them here — two services upserting the same name by boot order would fight over the body.
 - **Never paper over a missing template** with an inline body, a default template, or a swallowed send error. The template store is the single source for template content; a send failing loudly in the logs is the correct signal that a registration is missing.
 - `tests/unit/instrument-templates.test.ts` guards this. Note the first case reads `src/index.ts` as text and asserts the call site exists AFTER `app.listen(` and is not awaited — a behavioural test cannot see "nobody imports this module", which is the bug that shipped.
+
+## A customer's budget change is REPORTED to crm-service (`src/lib/account-activity.ts`, CLIENT-ACTIVITY-1030)
+
+Owner 2026-10-30: « ajouter une ligne quand un client update les budgets d'une de ses campagnes … Aussi envoie un message TG ». crm-service files each fact on the client's staff Unibox thread and sends the owner ONE Telegram (crm-service #239). Example: a client moves "ABA Owners Meetings" from $20/day to $50/day → one `POST /internal/account-activity` `{producer:"billing-service", activityId:"sales-funnel-cap-change:<change row id>", type:"campaign_budget_changed", title:"Budget changed", subject:{kind:"campaign", id, name}, changes:[{label:"Max budget", before:"$20/day", after:"$50/day"}]}`, identity headers forwarded.
+
+- **Who reports:** every sales funnel caps PUT/DELETE (funnel-wide: `subject.kind` `sales_funnel`; one funnel campaign: `campaign`, named from campaign-service) and the legacy brand daily budget PATCH (`brand`). Only a PERSON's write (an RFC `x-user-id`): a service write, the sentinel, a no-op save (`budgetChangeLines` = []) and a clear of nothing send nothing. Transfer / teardown / sweeps never pass here.
+- **Fire-and-forget after the commit**, never awaited, never throws: crm-service down changes nothing in the route's answer. `CRM_SERVICE_URL` + `CRM_SERVICE_API_KEY` in the box env file; absent = logged loudly, nothing sent.
+- **No budget Telegram from billing any more** (one Telegram per fact): the staff budget email keeps going, the 💸 line is gone, for budget writes AND for mission pause/restart (campaign-service reports those to crm-service itself).
 
 ## "Credit ran out" / "credit restored" feed for the Unibox (`src/lib/credit-events.ts`)
 

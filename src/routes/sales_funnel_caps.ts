@@ -27,6 +27,8 @@ import {
 import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 import { errorReason } from "../lib/pg-error.js";
 import { deferStripeStepAlertOnCapWrite } from "../lib/stripe-step-alert.js";
+import { budgetChangeLines, reportBudgetChange, type CapState } from "../lib/account-activity.js";
+import { fetchSalesFunnelCampaigns } from "../lib/funnel-campaigns.js";
 
 const router = Router();
 
@@ -72,6 +74,51 @@ function campaignKeyOf(req: Request, res: Response, orgId: string): (FunnelCapKe
     return null;
   }
   return { ...key, salesFunnelCampaignId: salesFunnelCampaignId.toLowerCase() };
+}
+
+function capStateOf(row: CapState | null): CapState | null {
+  if (!row) return null;
+  return {
+    maxBudgetCents: row.maxBudgetCents,
+    maxBudgetPeriod: row.maxBudgetPeriod,
+    maxVolume: row.maxVolume,
+    maxVolumePeriod: row.maxVolumePeriod,
+  };
+}
+
+/**
+ * After the caps write committed: report a PERSON's real change to crm-service
+ * (lib/account-activity, CLIENT-ACTIVITY-1030), fire-and-forget. A service write
+ * (no x-user-id), a no-op save or a clear of nothing reports nothing.
+ */
+function reportCapsWrite(
+  req: Request,
+  key: FunnelCapKey,
+  result: Awaited<ReturnType<typeof setSalesFunnelCaps>>,
+  funnelName: string | null,
+  occurredAt: Date
+): void {
+  if (result.changeId === null) return;
+  const changes = budgetChangeLines(capStateOf(result.previous), capStateOf(result.row));
+  const campaignId = key.salesFunnelCampaignId ?? null;
+  reportBudgetChange({
+    orgId: key.orgId,
+    userId: req.headers["x-user-id"] as string | undefined,
+    email: req.headers["x-email"] as string | undefined,
+    activityId: `sales-funnel-cap-change:${result.changeId}`,
+    brandId: key.brandId,
+    subject: campaignId ? { kind: "campaign", id: campaignId } : { kind: "sales_funnel", id: key.salesFunnelId },
+    changes,
+    occurredAt,
+    resolveName: async () => {
+      if (campaignId) {
+        const answer = await fetchSalesFunnelCampaigns(key.orgId);
+        const fc = answer.ok ? answer.campaigns.find((c) => c.id.toLowerCase() === campaignId) : undefined;
+        return fc?.name ?? fc?.salesFunnelName ?? funnelName;
+      }
+      return funnelName ?? (await getSalesFunnel(key.salesFunnelId)).name;
+    },
+  });
 }
 
 /** Express 4 does not catch a rejected async handler: answer 500, loudly. */
@@ -136,8 +183,11 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
   // Only a funnel features-service knows can be capped; its served type is stored
   // with the caps (a reactive funnel's "Up to $X" counts 0 in daily figures).
   let salesFunnelType: "proactive" | "reactive" | null = null;
+  let funnelName: string | null = null;
   try {
-    salesFunnelType = (await getSalesFunnel(key.salesFunnelId)).type;
+    const funnel = await getSalesFunnel(key.salesFunnelId);
+    salesFunnelType = funnel.type;
+    funnelName = funnel.name;
   } catch (err) {
     if (err instanceof SalesFunnelNotFoundError) {
       res.status(404).json({ error: err.message, reason: "sales_funnel_not_found" });
@@ -150,7 +200,8 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     }
     throw err;
   }
-  await setSalesFunnelCaps(
+  const now = new Date();
+  const result = await setSalesFunnelCaps(
     key,
     {
       maxBudget: body.maxBudget ? { amountCents: amountCents!, period: body.maxBudget.period } : null,
@@ -158,8 +209,9 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
       salesFunnelType,
     },
     userId ?? null,
-    new Date()
+    now
   );
+  reportCapsWrite(req, key, result, funnelName, now);
   // A card-step owner ping still pending waits for this budget (lib/stripe-step-alert).
   await deferStripeStepAlertOnCapWrite(key.orgId);
   const view = key.salesFunnelCampaignId
@@ -185,7 +237,9 @@ router.put(`/internal${FUNNEL_PATH}`, handle(async (req, res) => {
 router.delete(`/v1${FUNNEL_PATH}`, requireOrgHeaders, handle(async (req, res) => {
   const key = keyOf(req, res, req.headers["x-org-id"] as string);
   if (!key) return;
-  await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null);
+  const now = new Date();
+  const result = await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null, now);
+  reportCapsWrite(req, key, result, null, now);
   res.json(await composeSalesFunnelCapsView(key));
 }));
 
@@ -228,7 +282,9 @@ router.put(`/v1${CAMPAIGN_PATH}`, requireOrgHeaders, handle(async (req, res) => 
 }));
 
 async function deleteCampaignCaps(req: Request, res: Response, key: FunnelCapKey & { salesFunnelCampaignId: string }) {
-  await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null);
+  const now = new Date();
+  const result = await setSalesFunnelCaps(key, { maxBudget: null, maxVolume: null }, (req.headers["x-user-id"] as string) ?? null, now);
+  reportCapsWrite(req, key, result, null, now);
   res.json(await composeSalesFunnelCampaignCapsView(key));
 }
 
