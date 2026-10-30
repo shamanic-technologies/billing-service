@@ -426,7 +426,10 @@ describe("Out-of-credit dunning engine (issue #147)", () => {
     expect(res.status).toBe(200);
     expect(res.body.sufficient).toBe(false);
     expect(await listEpisodes(orgId)).toHaveLength(1);
-    const t0 = sendEmailSpy.mock.calls.filter((c) => c[0].eventType === "credit-depleted");
+    // A postpaid org (the account default) gets the postpaid twin (POSTPAID-DUNNING-1030).
+    const t0 = sendEmailSpy.mock.calls.filter(
+      (c) => c[0].eventType === "credit-depleted-postpaid"
+    );
     expect(t0).toHaveLength(1);
     expect(t0[0][0]).toMatchObject({ recipientEmail: billingEmail });
   });
