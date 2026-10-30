@@ -38,6 +38,8 @@ export interface StripeServiceMocks {
   sumSucceededTopupsForOrg: ReturnType<typeof vi.fn>;
   hasChargeablePmForOrg: ReturnType<typeof vi.fn>;
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
+  /** Card display asked of whichever acquirer holds the card (no Stripe customer path). Default null. */
+  getOrgCardDisplayByOrg: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getCardSetup: ReturnType<typeof vi.fn>;
@@ -172,6 +174,7 @@ export function setupStripeMocks(): StripeServiceMocks {
     sumSucceededTopupsForOrg: vi.fn().mockResolvedValue("0.0000000000"),
     hasChargeablePmForOrg: vi.fn().mockResolvedValue(true),
     getOrgCardCountryByOrg: vi.fn().mockResolvedValue(null),
+    getOrgCardDisplayByOrg: vi.fn().mockResolvedValue(null),
     createCheckoutSession: vi.fn().mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_mock",
       session_id: "cs_mock",
@@ -264,6 +267,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   );
   vi.spyOn(ssClient, "hasChargeablePmForOrg").mockImplementation(mocks.hasChargeablePmForOrg);
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);
+  vi.spyOn(ssClient, "getOrgCardDisplayByOrg").mockImplementation(mocks.getOrgCardDisplayByOrg);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
   vi.spyOn(ssClient, "getCardSetup").mockImplementation(mocks.getCardSetup as never);
   vi.spyOn(ssClient, "getSavedPaymentMethod").mockImplementation(

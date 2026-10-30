@@ -926,6 +926,26 @@ export async function getOrgCardCountryByOrg(orgId: string): Promise<string | nu
 }
 
 /**
+ * User-less twin of getOrgCardDisplay: brand, last4, expiry and country of the
+ * org's first card, asked of whichever acquirer holds it (stripe-service serves a
+ * Stripe-shaped `card` object for a Revolut card too, stripe-service #253). Null
+ * when the org has no card or no customer anywhere; a field the acquirer does not
+ * state stays null, nothing is invented. Fail-loud on any other error.
+ */
+export async function getOrgCardDisplayByOrg(orgId: string): Promise<CardDisplay | null> {
+  const cards = await listOrgPaymentMethodsOrNull(orgId, "card");
+  const card = cards?.data[0]?.card;
+  if (!card) return null;
+  return {
+    country: card.country ?? null,
+    brand: card.brand ?? null,
+    last4: card.last4 ?? null,
+    expMonth: card.exp_month ?? null,
+    expYear: card.exp_year ?? null,
+  };
+}
+
+/**
  * Take `amount` from the org off-session via the vendor-neutral
  * `POST /internal/charges/by-org/{orgId}` route. X-API-Key only — the org is in
  * the path, NO x-user-id / x-org-id / sentinel, because there is no end user
