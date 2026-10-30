@@ -41,6 +41,7 @@ import {
   hasChargeablePmForOrg,
   getOrgCardCountry,
   getOrgCardDisplay,
+  getOrgCardDisplayByOrg,
   isAutoReloadBlockedCountry,
   getCardSetup,
   getSavedPaymentMethod,
@@ -120,16 +121,16 @@ async function composeAccountFunds(
   // An org paying through Revolut has NO Stripe customer by design, so gating
   // this on one made its completed top-ups vanish from credited_paid and the
   // balance. For the same reason an org without a Stripe customer asks the
-  // acquirer-neutral card read (hasChargeablePmForOrg), which answers from
-  // whichever acquirer holds the org's card; the Stripe-shaped display read
-  // (brand, last4, expiry) stays Stripe-only — another acquirer does not state
-  // them, and nothing is invented.
+  // acquirer-neutral card reads (hasChargeablePmForOrg, getOrgCardDisplayByOrg),
+  // which answer from whichever acquirer holds the org's card: a Revolut card's
+  // brand, last4, expiry and country are served Stripe-shaped there
+  // (stripe-service #253). A field the acquirer does not state stays null.
   const customerP = getCustomerByOrgOrNull(identity);
   const stripeP = customerP.then((customer) =>
     Promise.all([
       sumSucceededTopupsForOrg(orgId),
       customer ? hasAttachedCardPm(identity, customer.id) : hasChargeablePmForOrg(orgId),
-      customer ? getOrgCardDisplay(identity, customer.id) : Promise.resolve(null),
+      customer ? getOrgCardDisplay(identity, customer.id) : getOrgCardDisplayByOrg(orgId),
     ])
   );
   const [
