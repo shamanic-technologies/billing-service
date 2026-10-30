@@ -187,6 +187,34 @@ describe("an org with credit and no Stripe customer", () => {
     expect(res.body.card_country).toBeNull();
   });
 
+  it("shows the card a Revolut org saved, read from the acquirer that holds it", async () => {
+    await seed();
+    // Revolut org: no Stripe customer, card held at Revolut (stripe-service #253
+    // serves it Stripe-shaped on the org-keyed payment-methods read).
+    ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
+    ssMocks.getOrgCardDisplayByOrg.mockResolvedValue({
+      country: "US",
+      brand: "mastercard",
+      last4: "5121",
+      expMonth: 4,
+      expYear: 2031,
+    });
+
+    const res = await request(app)
+      .get("/v1/accounts")
+      .set(getAuthHeaders(anonOrg, userId));
+
+    expect(res.status).toBe(200);
+    expect(res.body.has_payment_method).toBe(true);
+    expect(res.body.card_brand).toBe("mastercard");
+    expect(res.body.card_last4).toBe("5121");
+    expect(res.body.card_exp_month).toBe(4);
+    expect(res.body.card_exp_year).toBe(2031);
+    expect(res.body.card_country).toBe("US");
+    expect(ssMocks.getOrgCardDisplayByOrg).toHaveBeenCalledWith(anonOrg);
+    expect(ssMocks.getOrgCardDisplay).not.toHaveBeenCalled();
+  });
+
   it("refuses auto-topup with a 400 naming the missing card, never a 502", async () => {
     await seed();
     // PREPAID: a postpaid org has no auto top-up at all (409, postpaid-no-off-switch.test.ts).

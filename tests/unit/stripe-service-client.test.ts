@@ -5,6 +5,7 @@ import {
   getOrgCardCountry,
   getOrgCardCountryByOrg,
   getOrgCardDisplay,
+  getOrgCardDisplayByOrg,
   isAutoReloadBlockedCountry,
   type StripePaymentIntent,
   type StripePaymentIntentList,
@@ -194,6 +195,34 @@ describe("getOrgCardCountry / getOrgCardCountryByOrg", () => {
       new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
     );
     await expect(getOrgCardCountry({}, "cus_test")).rejects.toThrow(/failed: 500/);
+  });
+
+  it("by-org display reads a Revolut card served Stripe-shaped", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        pmListBody([
+          {
+            id: "pm_rev",
+            object: "payment_method",
+            type: "card",
+            card: { brand: "mastercard", last4: "5121", exp_month: 4, exp_year: 2031, country: "US" },
+          } as StripePaymentMethod,
+        ])
+      )
+    );
+    expect(await getOrgCardDisplayByOrg("org-123")).toEqual({
+      country: "US",
+      brand: "mastercard",
+      last4: "5121",
+      expMonth: 4,
+      expYear: 2031,
+    });
+    expect(fetchMock.mock.calls[0]?.[0] as string).toContain("/internal/payment_methods/by-org/org-123");
+  });
+
+  it("by-org display is null when the org has no customer anywhere (404)", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 404 }));
+    expect(await getOrgCardDisplayByOrg("org-123")).toBeNull();
   });
 });
 
