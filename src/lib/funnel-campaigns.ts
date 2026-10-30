@@ -45,6 +45,8 @@ export interface SalesFunnelCampaign {
   salesFunnelId: string;
   /** features-service's name of the funnel, as campaign-service stored it; null when absent. */
   salesFunnelName?: string | null;
+  /** The campaign's own name when campaign-service serves one; null/absent otherwise. */
+  name?: string | null;
   status: string;
   units: SalesFunnelUnit[];
 }
@@ -173,6 +175,7 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
       offerId: String(c.offerId),
       salesFunnelId: String(c.salesFunnelId),
       salesFunnelName: typeof c.salesFunnelName === "string" ? c.salesFunnelName : null,
+      name: typeof c.name === "string" && c.name.trim() ? c.name.trim() : null,
       status: String(c.status),
       units: Array.isArray(c.units)
         ? (c.units as Array<Record<string, unknown>>).map((u) => ({

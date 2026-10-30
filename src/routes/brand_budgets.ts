@@ -6,7 +6,7 @@ import {
   SetBrandDailyBudgetRequestSchema,
   SetBrandSalesBudgetRequestSchema,
 } from "../schemas.js";
-import { parseNonNegativeCents } from "../lib/cents.js";
+import { cmpCents, parseNonNegativeCents } from "../lib/cents.js";
 import {
   getBrandDailyBudget,
   getBrandDailyBudgetByDay,
@@ -33,6 +33,8 @@ import {
   statusMoveOf,
 } from "../lib/brand-budget-notification.js";
 import { brandGrainChange } from "../lib/brand-running-budget.js";
+import { formatUsd, reportBudgetChange } from "../lib/account-activity.js";
+import { fetchBrandName } from "../lib/budget-change-context.js";
 import { errorReason } from "../lib/pg-error.js";
 
 const router = Router();
@@ -311,6 +313,23 @@ router.patch(
       ],
       actingEmail: (req.headers["x-email"] as string | undefined) ?? null,
     });
+
+    // The owner's ONE Telegram for this change comes from crm-service
+    // (lib/account-activity, CLIENT-ACTIVITY-1030); a re-save reports nothing.
+    if (previousDailyBudgetCents === null || cmpCents(previousDailyBudgetCents, row.dailyBudgetCents) !== 0) {
+      const daily = (c: string | null) => (c === null ? "none" : `${formatUsd(c)}/day`);
+      reportBudgetChange({
+        orgId,
+        userId: req.headers["x-user-id"] as string | undefined,
+        email: req.headers["x-email"] as string | undefined,
+        activityId: `brand-daily-budget:${orgId}:${brandId}:${row.updatedAt.toISOString()}`,
+        brandId,
+        subject: { kind: "brand", id: brandId },
+        changes: [{ label: "Daily budget", before: daily(previousDailyBudgetCents), after: daily(row.dailyBudgetCents) }],
+        occurredAt: row.updatedAt,
+        resolveName: () => fetchBrandName(orgId, brandId),
+      });
+    }
 
     res.json({
       brandId: row.brandId,
