@@ -364,11 +364,18 @@ export async function setSalesFunnelCaps(
   },
   changedByUserId: string | null,
   now: Date = new Date()
-): Promise<{ row: SalesFunnelCapRow | null }> {
+): Promise<{
+  row: SalesFunnelCapRow | null;
+  /** The row as it stood before this write (read under the same lock); null = none. */
+  previous: SalesFunnelCapRow | null;
+  /** The `sales_funnel_cap_changes` row this write appended; null when nothing was written. */
+  changeId: number | null;
+}> {
   return db.transaction(async (tx) => {
     const [existing] = await tx.select().from(salesFunnelCaps).where(keyWhere(k)).limit(1).for("update");
+    const previous = existing ?? null;
     // Clearing what was never stated writes nothing (idempotent DELETE).
-    if (!input.maxBudget && !input.maxVolume && !existing) return { row: null };
+    if (!input.maxBudget && !input.maxVolume && !existing) return { row: null, previous, changeId: null };
     const funnelDailyBefore = await brandFunnelDailyCentsVia(tx, k.orgId, k.brandId);
     // The brand's by-day history (`brand_daily_budget_changes`) follows its daily
     // figure: legacy total + every recurring funnel cap per day. Appended only
@@ -382,20 +389,24 @@ export async function setSalesFunnelCaps(
       await tx.insert(brandDailyBudgetChanges).values({ orgId: k.orgId, brandId: k.brandId, dailyBudgetCents: total, changedAt: now });
     };
 
-    await tx.insert(salesFunnelCapChanges).values({
-      ...k,
-      maxBudgetCents: input.maxBudget?.amountCents ?? null,
-      maxBudgetPeriod: input.maxBudget?.period ?? null,
-      maxVolume: input.maxVolume?.count ?? null,
-      maxVolumePeriod: input.maxVolume?.period ?? null,
-      changedByUserId,
-      changedAt: now,
-    });
+    const [change] = await tx
+      .insert(salesFunnelCapChanges)
+      .values({
+        ...k,
+        maxBudgetCents: input.maxBudget?.amountCents ?? null,
+        maxBudgetPeriod: input.maxBudget?.period ?? null,
+        maxVolume: input.maxVolume?.count ?? null,
+        maxVolumePeriod: input.maxVolume?.period ?? null,
+        changedByUserId,
+        changedAt: now,
+      })
+      .returning({ id: salesFunnelCapChanges.id });
+    const changeId = change.id;
 
     if (!input.maxBudget && !input.maxVolume) {
       if (existing) await tx.delete(salesFunnelCaps).where(keyWhere(k));
       await journalBrandDaily();
-      return { row: null };
+      return { row: null, previous, changeId };
     }
 
     const budgetSince = !input.maxBudget
@@ -433,7 +444,7 @@ export async function setSalesFunnelCaps(
       })
       .returning();
     await journalBrandDaily();
-    return { row };
+    return { row, previous, changeId };
   });
 }
 

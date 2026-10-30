@@ -1147,6 +1147,14 @@ transactional-email-service resolves a template by looking up the row whose `nam
 - **Never paper over a missing template** with an inline body, a default template, or a swallowed send error. The template store is the single source for template content; a send failing loudly in the logs is the correct signal that a registration is missing.
 - `tests/unit/instrument-templates.test.ts` guards this. Note the first case reads `src/index.ts` as text and asserts the call site exists AFTER `app.listen(` and is not awaited — a behavioural test cannot see "nobody imports this module", which is the bug that shipped.
 
+## A customer's budget change is REPORTED to crm-service (`src/lib/account-activity.ts`, CLIENT-ACTIVITY-1030)
+
+Owner 2026-10-30: « ajouter une ligne quand un client update les budgets d'une de ses campagnes … Aussi envoie un message TG ». crm-service files each fact on the client's staff Unibox thread and sends the owner ONE Telegram (crm-service #239). Example: a client moves "ABA Owners Meetings" from $20/day to $50/day → one `POST /internal/account-activity` `{producer:"billing-service", activityId:"sales-funnel-cap-change:<change row id>", type:"campaign_budget_changed", title:"Budget changed", subject:{kind:"campaign", id, name}, changes:[{label:"Max budget", before:"$20/day", after:"$50/day"}]}`, identity headers forwarded.
+
+- **Who reports:** every sales funnel caps PUT/DELETE (funnel-wide: `subject.kind` `sales_funnel`; one funnel campaign: `campaign`, named from campaign-service) and the legacy brand daily budget PATCH (`brand`). Only a PERSON's write (an RFC `x-user-id`): a service write, the sentinel, a no-op save (`budgetChangeLines` = []) and a clear of nothing send nothing. Transfer / teardown / sweeps never pass here.
+- **Fire-and-forget after the commit**, never awaited, never throws: crm-service down changes nothing in the route's answer. `CRM_SERVICE_URL` + `CRM_SERVICE_API_KEY` in the box env file; absent = logged loudly, nothing sent.
+- **No budget Telegram from billing any more** (one Telegram per fact): the staff budget email keeps going, the 💸 line is gone, for budget writes AND for mission pause/restart (campaign-service reports those to crm-service itself).
+
 ## "Credit ran out" / "credit restored" feed for the Unibox (`src/lib/credit-events.ts`)
 
 Owner 2026-10-24 (CREDIT-RAN-OUT-UNIBOX-EVENT-1024): a client running out of credit is an EVENT on their people's timeline in the distribute.you staff Unibox, like a reply or a visit, so the generic reactive campaign (« A chaque event de l'Unibox pour un client actuel… une campagne réactive se déclenche ») fires on it. No credit-specific trigger (owner: « non »), dunning emails untouched (« ça n'annule pas le transactionnel »).
