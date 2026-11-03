@@ -7,10 +7,13 @@
  * Rules (owner review of the rendered draft, 2026-10-04):
  *  - Results only. No proposal to raise spend, no upsell, and never what the
  *    client paid ("$99 invested" was replaced by the delivery rate).
- *  - No return is stated (owner 2026-11-03, ROI-CONSISTENCY-1103): a client is told
- *    only features-service's EXPECTED return or its REALIZED return (Paid clients over
- *    money spent). The recap's `expectedReturn.roiMultiple` is the retired pipeline
- *    return (flash/mature, "still learning"), so it is neither read nor stated here.
+ *  - A return is ONLY features-service's EXPECTED return or its REALIZED return
+ *    (owner 2026-11-03, ROI-CONSISTENCY-1103), both from the recap's `returns` block,
+ *    each named: "Expected 19× · no paid client yet ($94 spent)". The expected one is
+ *    shown above 1x only (never surface a negative); the realized one states its paid
+ *    clients and spend, its multiple only from 1x. The recap's old
+ *    `expectedReturn.roiMultiple` (the retired pipeline return, "still learning") is
+ *    never read.
  *  - "Sent" only on positive evidence a send happened, a figure below 1 is never inflated, a null figure drops its
  *    sentence or its cell, never a 0.
  *  - The window's REAL outcomes (features-service `actualOutcomes`: positive replies
@@ -30,6 +33,8 @@ import {
   expectedRepliesStat,
   positive,
   statRowHtml,
+  multiple,
+  wholeDollars,
 } from "./subscription-email-format.js";
 
 export interface MonthlyUpdateEmail {
@@ -43,6 +48,30 @@ export interface MonthlyUpdateEmail {
 
 export const MONTHLY_UPDATE_CTA_LABEL = "See your results";
 export const NOTHING_TO_DO_SENTENCE = "Nothing to do on your side: we keep sending and track every reply.";
+
+/**
+ * The return line, or null. Expected (above 1x) and realized are joined by " · ".
+ * Realized: 0 paid clients -> "no paid client yet ($94 spent)"; paid clients below 1x
+ * -> their count and spend, no ratio; from 1x -> "3.2× realized on 2 paid clients".
+ */
+export function returnLine(r: SubscriptionRecap): string | null {
+  const parts: string[] = [];
+  if (r.expectedReturnMultiple !== null && r.expectedReturnMultiple > 1) {
+    parts.push(`Expected ${multiple(r.expectedReturnMultiple)}`);
+  }
+  const z = r.realizedReturn;
+  if (z && z.spentUsd > 0) {
+    const spent = `(${wholeDollars(z.spentUsd)} spent)`;
+    const n = Math.round(z.closedWonCount);
+    const clients = `${count(n)} paid ${n === 1 ? "client" : "clients"}`;
+    if (n <= 0) parts.push(`no paid client yet ${spent}`);
+    else if (z.roiMultiple >= 1) parts.push(`${multiple(z.roiMultiple)} realized on ${clients} ${spent}`);
+    else parts.push(`${clients} so far ${spent}`);
+  }
+  if (parts.length === 0) return null;
+  const line = parts.join(" · ");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
 
 /** Was anything lined up or sent in the window? An email about nothing is not sent. */
 export function recapHasActivity(r: SubscriptionRecap): boolean {
@@ -99,6 +128,7 @@ export function composeMonthlyUpdateEmail(params: {
   if (delivered !== null) cells.push({ value: `${delivered}%`, label: "delivered" });
 
   const finePrint = replies ? "Expected replies based on our current reply rates." : null;
+  const returns = returnLine(r);
 
   const status = NOTHING_TO_DO_SENTENCE;
   const ctaLabel = MONTHLY_UPDATE_CTA_LABEL;
@@ -112,6 +142,7 @@ export function composeMonthlyUpdateEmail(params: {
   if (finePrint) {
     html.push(`<p style="color:#8b8e98;font-size:13px;line-height:1.5;margin:0 0 24px;">${escapeHtml(finePrint)}</p>`);
   }
+  if (returns) html.push(`<p ${P}><strong>${escapeHtml(returns)}</strong></p>`);
   html.push(
     `<p ${P}>${escapeHtml(status)}</p>`,
     `<p style="margin:0 0 28px;"><a href="${escapeHtml(params.ctaUrl)}" style="display:inline-block;background:#2563EB;color:#ffffff;padding:13px 28px;border-radius:10px;text-decoration:none;font-size:16px;font-weight:600;">${escapeHtml(ctaLabel)}</a></p>`,
@@ -123,6 +154,7 @@ export function composeMonthlyUpdateEmail(params: {
   if (outcomeCells.length > 0) text.push("", ...outcomeCells.map((c) => `${c.value} ${c.label}`));
   if (cells.length > 0) text.push("", ...cells.map((c) => `${c.value} ${c.label}`));
   if (finePrint) text.push(finePrint);
+  if (returns) text.push("", returns);
   text.push("", status, "", `${ctaLabel}: ${params.ctaUrl}`, "", "Kevin", "Founder, distribute.you", "", "--", "distribute.you", "Revenue made easy.");
 
   return { subject, heading, bodyHtml: html.join("\n"), bodyText: text.join("\n"), ctaLabel, ctaUrl: params.ctaUrl };

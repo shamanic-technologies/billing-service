@@ -23,6 +23,17 @@ export interface SubscriptionRecap {
   sendStatus: "emails_sent" | "lined_up_not_sent" | "nothing_sent" | null;
   deliveryRatePct: number | null;
   expectedPositiveReplies: number | null;
+  /**
+   * features-service's EXPECTED return (`returns.expected.roiMultiple`, owner rule
+   * ROI-CONSISTENCY-1103): one value across the offers that sent, else null.
+   */
+  expectedReturnMultiple: number | null;
+  /**
+   * features-service's REALIZED return (`returns.realized`): revenue of the Paid
+   * clients our outreach caused over money actually spent, whole history. null when
+   * not one true figure (several offers sent, nothing sent, unavailable).
+   */
+  realizedReturn: { roiMultiple: number; closedWonCount: number; spentUsd: number } | null;
   /** Positive replies actually received in the window (features-service `actualOutcomes`, dashboard dated series). 0 = measured zero, null = unknown or an older features-service. */
   actualPositiveReplies: number | null;
   /** Meetings actually booked in the window (same source and null rule). */
@@ -40,6 +51,14 @@ interface PeriodRecapWire {
     deliveryRatePct?: number | null;
   };
   expectedPositiveReplies?: number | null;
+  returns?: {
+    expected?: { roiMultiple?: number | null } | null;
+    realized?: {
+      roiMultiple?: number | null;
+      closedWonCount?: number | null;
+      spentUsd?: number | null;
+    } | null;
+  } | null;
   actualOutcomes?: {
     basis?: string;
     positiveReplies?: number | null;
@@ -63,6 +82,15 @@ function sendStatus(v: unknown): SubscriptionRecap["sendStatus"] {
   return v === "emails_sent" || v === "lined_up_not_sent" || v === "nothing_sent" ? v : null;
 }
 
+/** All three figures, or nothing: a partial realized return is never stated. */
+function realizedOf(r: NonNullable<PeriodRecapWire["returns"]>["realized"]): SubscriptionRecap["realizedReturn"] {
+  const roiMultiple = num(r?.roiMultiple);
+  const closedWonCount = num(r?.closedWonCount);
+  const spentUsd = num(r?.spentUsd);
+  if (roiMultiple === null || closedWonCount === null || spentUsd === null) return null;
+  return { roiMultiple, closedWonCount, spentUsd };
+}
+
 /** Pure mapping, exported so the wire contract is pinned by a test. */
 export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
   return {
@@ -72,6 +100,8 @@ export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
     sendStatus: sendStatus(w.outbound?.sendStatus),
     deliveryRatePct: num(w.outbound?.deliveryRatePct),
     expectedPositiveReplies: num(w.expectedPositiveReplies),
+    expectedReturnMultiple: num(w.returns?.expected?.roiMultiple),
+    realizedReturn: realizedOf(w.returns?.realized),
     actualPositiveReplies: num(w.actualOutcomes?.positiveReplies),
     actualMeetingsBooked: num(w.actualOutcomes?.meetingsBooked),
   };
