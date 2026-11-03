@@ -11,11 +11,6 @@
 
 export const DASHBOARD_URL = "https://dashboard.distribute.you";
 
-/** A return is stated as a figure only when strictly above 1x (owner 2026-10-04). */
-export function expectedReturnAboveOne(roiMultiple: number | null | undefined): boolean {
-  return typeof roiMultiple === "number" && Number.isFinite(roiMultiple) && roiMultiple > 1;
-}
-
 /** Beyond this, a below-1 cadence is too slow to be worth a sentence. */
 const MAX_CADENCE_MONTHS = 12;
 
@@ -28,16 +23,8 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
-export function wholeDollars(usd: number): string {
-  return `$${Math.round(usd).toLocaleString("en-US")}`;
-}
-
 export function count(n: number): string {
   return Math.round(n).toLocaleString("en-US");
-}
-
-export function times(x: number): string {
-  return `${x.toFixed(1)}x`;
 }
 
 export function positive(v: number | null | undefined): v is number {
