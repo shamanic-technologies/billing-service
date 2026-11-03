@@ -23,6 +23,15 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+export function wholeDollars(usd: number): string {
+  return `$${Math.round(usd).toLocaleString("en-US")}`;
+}
+
+/** A return multiple as the dashboard prints it (`formatRoi`): 2.4× under ten, 19× from ten. */
+export function multiple(x: number): string {
+  return `${x.toFixed(Math.abs(x) < 10 ? 1 : 0)}×`;
+}
+
 export function count(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
