@@ -23,6 +23,7 @@ import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
 import { coalesceReload } from "../lib/reload-coalescer.js";
 import { pgDriverError, errorReason } from "../lib/pg-error.js";
+import { openRefusalStreak, refusalBlockingSpend } from "../lib/refused-charge.js";
 
 const router = Router();
 
@@ -216,6 +217,25 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         required_cents: requiredCents,
       });
       return;
+    }
+
+    // The bank REFUSED this org's card and no money has arrived since
+    // (lib/refused-charge, INSTANT-STOP-ON-DECLINE-1103): no new campaign spend,
+    // prepaid or postpaid, whatever the balance or the credit line. No reload
+    // (the retry schedule is the sweep's), no depletion episode, no email (the
+    // refusal was mailed when it happened). No `reason` field: several callers
+    // parse it as a closed enum. A top-up or a paid balance ends the streak.
+    {
+      const refusal = await refusalBlockingSpend(orgId, snapshot.creditedCents);
+      if (refusal) {
+        traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: "card_refused", balance_cents: snapshot.balanceCents, required_cents: requiredCents, refused_since: refusal.firstFailedAt?.toISOString() ?? null } }, req.headers);
+        res.json({
+          sufficient: false,
+          balance_cents: snapshot.balanceCents,
+          required_cents: requiredCents,
+        });
+        return;
+      }
     }
 
     // Threshold-based postpaid: the account is allowed to run NEGATIVE down to a
@@ -507,6 +527,15 @@ router.post("/v1/customer_balance/usage_apply", requireOrgHeaders, async (req, r
     }
     if (!snapshot.autoReloadSupported) {
       traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.topup-skipped", data: { reason: "auto_reload_unsupported_country" } }, req.headers);
+      res.status(202).json({ acknowledged: true, topup_triggered: false });
+      return;
+    }
+
+    // A card the bank already refused is not re-presented on every run: its
+    // retries are the sweep's spaced schedule (lib/campaign-reload-sweep), and
+    // money arriving ends the streak (lib/refused-charge).
+    if (await openRefusalStreak(orgId, snapshot.creditedCents)) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.usage_apply.topup-skipped", data: { reason: "card_refused" } }, req.headers);
       res.status(202).json({ acknowledged: true, topup_triggered: false });
       return;
     }
