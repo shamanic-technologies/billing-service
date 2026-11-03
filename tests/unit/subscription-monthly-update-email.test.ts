@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { toSubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
 import {
   composeMonthlyUpdateEmail,
+  returnLine,
   recapHasActivity,
 } from "../../src/lib/subscription-monthly-update-email.js";
 
@@ -148,5 +149,49 @@ describe("actualOutcomes (features-service period recap, the window's real resul
     expect(e).toEqual(base);
     expect(e.bodyText).not.toMatch(/positive replies\n|meetings? booked/);
     expect(e.bodyText).not.toMatch(/(^|\n)0 /);
+  });
+});
+
+describe("returns (features-service expected + realized, ROI-CONSISTENCY-1103)", () => {
+  const withReturns = (expected: unknown, realized: unknown) => recap(30, { returns: { expected, realized } });
+
+  it("Beyond Logic: expected 18.53x, realized 0 on $93.56 spent", () => {
+    const r = withReturns(
+      { roiMultiple: 18.53, basis: "default" },
+      { roiMultiple: 0, closedWonCount: 0, closedWonRevenueUsd: 0, spentUsd: 93.56 }
+    );
+    expect(returnLine(r)).toBe("Expected 19× · no paid client yet ($94 spent)");
+    const e = composeMonthlyUpdateEmail({ recap: r, brandName: "Beyond Logic", ctaUrl: CTA });
+    expect(e.bodyText).toContain("\nExpected 19× · no paid client yet ($94 spent)\n");
+    expect(e.bodyHtml).toContain("<strong>Expected 19× · no paid client yet ($94 spent)</strong>");
+    expect(all(e)).not.toMatch(/learning|30(\.0)?x|30×|[—–]/);
+  });
+
+  it.each([
+    ["realized above 1x", { roiMultiple: 3.24, closedWonCount: 2, spentUsd: 940 }, "Expected 2.4× · 3.2× realized on 2 paid clients ($940 spent)"],
+    ["one paid client below 1x: no ratio", { roiMultiple: 0.4, closedWonCount: 1, spentUsd: 1200 }, "Expected 2.4× · 1 paid client so far ($1,200 spent)"],
+    ["realized null (several offers)", null, "Expected 2.4×"],
+    ["realized partial: never stated", { roiMultiple: 0, closedWonCount: null, spentUsd: 50 }, "Expected 2.4×"],
+  ])("%s", (_l, realized, line) => {
+    expect(returnLine(withReturns({ roiMultiple: 2.42 }, realized))).toBe(line);
+  });
+
+  it.each([
+    ["expected below 1x", { roiMultiple: 0.6 }],
+    ["expected exactly 1x", { roiMultiple: 1 }],
+    ["expected null", { roiMultiple: null }],
+  ])("%s is not stated; realized still is", (_l, expected) => {
+    expect(returnLine(withReturns(expected, { roiMultiple: 0, closedWonCount: 0, spentUsd: 12 }))).toBe(
+      "No paid client yet ($12 spent)"
+    );
+  });
+
+  it("no returns block (older features-service): no line, email as before", () => {
+    expect(returnLine(recap(30))).toBeNull();
+    expect(composeMonthlyUpdateEmail({ recap: recap(30), brandName: "X", ctaUrl: CTA }).bodyText).not.toMatch(/×|paid client/);
+  });
+
+  it("nothing spent: realized is not stated", () => {
+    expect(returnLine(withReturns(null, { roiMultiple: 0, closedWonCount: 0, spentUsd: 0 }))).toBeNull();
   });
 });

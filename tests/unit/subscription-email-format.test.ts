@@ -61,6 +61,8 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
       sendStatus: "lined_up_not_sent",
       deliveryRatePct: null,
       expectedPositiveReplies: 1.24,
+      expectedReturnMultiple: null,
+      realizedReturn: null,
       actualPositiveReplies: null,
       actualMeetingsBooked: null,
     });
