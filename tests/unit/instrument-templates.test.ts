@@ -15,7 +15,7 @@ import {
   UNPAID_DEBT_CARD_REQUIRED_EVENT,
   UNPAID_DEBT_STAFF_EVENT,
 } from "../../src/lib/unpaid-debt.js";
-import { CARD_UNUSABLE_EVENT } from "../../src/lib/card-usability.js";
+import { CARD_REFUSED_EVENT } from "../../src/lib/card-refused-email.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "../../src/lib/subscription-monthly-update.js";
 import { SUBSCRIPTION_OUT_OF_CREDITS_EVENT } from "../../src/lib/subscription-out-of-credits.js";
 
@@ -86,11 +86,10 @@ describe("boot-time email template registration", () => {
 
     const names = lastBody(fetchMock).templates.map((t) => t.name);
     expect(names).toEqual([
-      "credits-reload-failed",
+      CARD_REFUSED_EVENT,
       SUBSCRIPTION_MONTHLY_UPDATE_EVENT,
       SUBSCRIPTION_OUT_OF_CREDITS_EVENT,
       "monthly-charge-limit-reached",
-      CARD_UNUSABLE_EVENT,
       BRAND_DAILY_BUDGET_CHANGED_EVENT,
       REFERRAL_REWARD_OPENED_EVENT,
       REFERRAL_CREDITS_GRANTED_EVENT,
@@ -179,11 +178,15 @@ describe("boot-time email template registration", () => {
   // Guard: a template name must stay byte-equal to the eventType the sender
   // passes to transactional-email-service, which resolves by name == eventType.
   it("keeps every registered name byte-equal to a real sendEmail eventType", () => {
-    const balance = readFileSync(
-      resolve(HERE, "../../src/routes/customer_balance.ts"),
+    // Every refused charge is mailed from lib/card-refused-email under the
+    // platform-paid `credits-reload-failed` name (postmark PLATFORM_LIFECYCLE_TAGS).
+    expect(CARD_REFUSED_EVENT).toBe("credits-reload-failed");
+    const refused = readFileSync(
+      resolve(HERE, "../../src/lib/card-refused-email.ts"),
       "utf-8",
     );
-    expect(balance).toContain('eventType: "credits-reload-failed"');
+    expect(refused).toContain("eventType: CARD_REFUSED_EVENT");
+    expect(REGISTERED_TEMPLATE_NAMES).toContain(CARD_REFUSED_EVENT);
     expect(REGISTERED_TEMPLATE_NAMES).toContain(BRAND_DAILY_BUDGET_CHANGED_EVENT);
     // The referral senders import their names from the same constants the
     // templates are keyed on, so the row and the eventType cannot drift.

@@ -77,7 +77,7 @@
 
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaignReloadSweepAttempts, PLATFORM_USER_ID } from "../db/schema.js";
+import { campaignReloadSweepAttempts } from "../db/schema.js";
 import crypto from "crypto";
 import { computeBalance, type BalanceSnapshot } from "./balance.js";
 import { openBlockedCampaignEpisode } from "./dunning.js";
@@ -88,13 +88,11 @@ import { computeSettleCharge } from "./month-end-sweep.js";
 import { isPlatformOrg } from "./platform-org.js";
 import { reloadOffSession } from "./reload.js";
 import { coalesceReload, type ReloadOutcome } from "./reload-coalescer.js";
-import { sendEmail } from "./email-client.js";
 import {
   isPermanentDecline,
   markCardUnusable,
   clearCardUnusable,
 } from "./card-usability.js";
-import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 import { pgDriverError } from "./pg-error.js";
 
 const RELOAD_TIMEOUT_MS = 30_000;
@@ -435,28 +433,6 @@ async function recordAttempt(
     });
 }
 
-/** Tell the customer their card could not be charged — once per failure streak. */
-async function notifyReloadFailed(
-  orgId: string,
-  recipientEmail: string | null | undefined
-): Promise<void> {
-  // A send with no end user behind it needs a run that ALREADY EXISTS in
-  // runs-service: transactional-email-service records the mail as a CHILD of the
-  // id we pass, so a minted uuid answers 200 with `sent: false` and the mail is
-  // silently dropped. A run we cannot open means we do not send — the next tick
-  // retries.
-  const runId = await createPlatformRun("campaign-reload-sweep-notify");
-  if (!runId) return;
-  sendEmail({
-    eventType: "credits-reload-failed",
-    orgId,
-    userId: PLATFORM_USER_ID,
-    runId,
-    recipientEmail: recipientEmail ?? undefined,
-  });
-  await completePlatformRun(runId);
-}
-
 /**
  * Charge every reload-capable org whose campaign the affordability pre-flight is
  * refusing. Per-org failure is logged and skipped — one unreachable org never
@@ -556,6 +532,7 @@ export async function runCampaignReloadSweep(
         : computeTopupCharge(snapshot.balanceCents, targetCents, tier.amountCents);
       if (chargeAmount <= 0) continue;
 
+      let threw = false;
       const outcome = await coalesceReload(orgId, () =>
         withTimeout(
           RELOAD_TIMEOUT_MS,
@@ -576,6 +553,7 @@ export async function runCampaignReloadSweep(
           err
         );
         const synthetic: ReloadOutcome = { status: "failed", failure_reason: String(pgDriverError(err)) };
+        threw = true;
         return synthetic;
       });
 
@@ -596,7 +574,6 @@ export async function runCampaignReloadSweep(
           orgId,
           declineCode: outcome.failure_code as string,
           creditedCents: snapshot.creditedCents,
-          recipientEmail: snapshot.customer?.email ?? null,
           now,
         });
         // That path tells the customer to REPLACE the card. The episode still
@@ -605,18 +582,12 @@ export async function runCampaignReloadSweep(
         continue;
       }
 
-      // Tell the customer ONCE per streak, and never on a backoff-skipped
-      // outcome (no charge was attempted, so nothing new was learned). The
-      // marker is a COLUMN rather than lib/reload-coalescer's in-memory
-      // counter, because that counter resets on every deploy and we deploy
-      // several times a day — "once per streak" silently meant "once per
-      // deploy". It is also why the email is decided BEFORE the row is written.
-      const shouldNotify =
-        !succeeded && !outcome.backoffSkipped && decision.notifiedAt == null;
-      if (shouldNotify) {
-        await notifyReloadFailed(orgId, snapshot.customer?.email ?? null);
-        mailedThisTick = true;
-      }
+      // The bank refused a REAL attempt: lib/reload already mailed the customer
+      // (one mail per refused attempt, lib/card-refused-email). A backoff-skipped
+      // outcome or a charge that threw never reached the bank and mailed nothing.
+      // `notifiedAt` keeps meaning "told about this streak" for the episode below.
+      const shouldNotify = !succeeded && !outcome.backoffSkipped && !threw;
+      if (shouldNotify) mailedThisTick = true;
 
       await recordAttempt(
         orgId,

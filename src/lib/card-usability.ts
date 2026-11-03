@@ -27,10 +27,8 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { campaignReloadSweepAttempts, PLATFORM_USER_ID } from "../db/schema.js";
+import { campaignReloadSweepAttempts } from "../db/schema.js";
 import { cmpCents } from "./cents.js";
-import { sendEmail } from "./email-client.js";
-import { createPlatformRun, completePlatformRun } from "./runs-client.js";
 
 /**
  * The card is gone, dead, or we are no longer allowed to charge it. Every entry
@@ -66,16 +64,6 @@ export function isPermanentDecline(code: string | null | undefined): boolean {
   if (!code) return false;
   return PERMANENT_DECLINE_CODES.has(code.trim().toLowerCase());
 }
-
-/**
- * "Your card cannot be charged again, replace it."
- *
- * Deliberately NOT `credit-debt-card-required`, which says we no longer have a
- * card on file. Here we DO have one — it is attached, it is just dead — and a
- * customer told "add a card" when they can see a card in their settings will
- * reasonably conclude the message is wrong and ignore it.
- */
-export const CARD_UNUSABLE_EVENT = "credit-card-unusable";
 
 /**
  * Has this org's card been judged permanently unusable — and is that judgement
@@ -121,7 +109,6 @@ export async function markCardUnusable(params: {
   orgId: string;
   declineCode: string;
   creditedCents: string;
-  recipientEmail?: string | null;
   now?: Date;
 }): Promise<{ marked: boolean }> {
   const now = params.now ?? new Date();
@@ -155,30 +142,10 @@ export async function markCardUnusable(params: {
       `until a charge succeeds`
   );
 
-  // Fail-soft, like every notification on a money path: a mail that cannot be
-  // sent must never undo a verdict that is already recorded.
-  try {
-    // The send needs a run that ALREADY EXISTS in runs-service — it records the
-    // mail as a CHILD of the id we pass, so a minted uuid is answered 200 with
-    // `sent: false` and the mail is silently dropped.
-    const runId = await createPlatformRun("card-unusable-notify");
-    if (runId) {
-      sendEmail({
-        eventType: CARD_UNUSABLE_EVENT,
-        orgId: params.orgId,
-        userId: PLATFORM_USER_ID,
-        runId,
-        recipientEmail: params.recipientEmail ?? undefined,
-        metadata: {},
-      });
-      await completePlatformRun(runId);
-    }
-  } catch (err) {
-    console.error(
-      `[billing-service] card-unusable notification failed for org ${params.orgId}:`,
-      err
-    );
-  }
+  // No mail here: the refusal that produced this verdict was already mailed by
+  // lib/reload, in words that say the card can no longer be used (one mail per
+  // refused attempt, lib/card-refused-email). A second mail for the same refusal
+  // is the duplicate the owner's rule forbids.
 
   return { marked: true };
 }
