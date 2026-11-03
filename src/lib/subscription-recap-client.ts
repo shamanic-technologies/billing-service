@@ -23,19 +23,6 @@ export interface SubscriptionRecap {
   sendStatus: "emails_sent" | "lined_up_not_sent" | "nothing_sent" | null;
   deliveryRatePct: number | null;
   expectedPositiveReplies: number | null;
-  expectedRoiMultiple: number | null;
-  /** The lifetime revenue per client (USD) the return is based on. */
-  lifetimeRevenueUsd: number | null;
-  /** Where it was read: the customer's own offer (`offer_stated`) or brand economics. null when unknown. */
-  lifetimeRevenueSource: "offer_stated" | "brand_economics" | null;
-  /** Revenue multiple at current results if the plan is raised by $100/month. */
-  raiseRevenueMultiple: number | null;
-  /** Extra revenue (USD) at current results if the plan is raised by $100/month. */
-  raiseAdditionalRevenueUsd: number | null;
-  /** Extra positive replies at current results if the plan is raised by $100/month. */
-  raiseAdditionalPositiveReplies: number | null;
-  /** Extra decision-makers lined up if the plan is raised by $100/month (features-service #1306; null on an older one). */
-  raiseAdditionalRecipients: number | null;
   /** Positive replies actually received in the window (features-service `actualOutcomes`, dashboard dated series). 0 = measured zero, null = unknown or an older features-service. */
   actualPositiveReplies: number | null;
   /** Meetings actually booked in the window (same source and null rule). */
@@ -53,17 +40,6 @@ interface PeriodRecapWire {
     deliveryRatePct?: number | null;
   };
   expectedPositiveReplies?: number | null;
-  expectedReturn?: {
-    roiMultiple?: number | null;
-    lifetimeRevenuePerClientUsd?: number | null;
-    lifetimeRevenueSource?: string | null;
-  };
-  budgetIncrease?: {
-    revenueMultiple?: number | null;
-    expectedAdditionalRevenueUsd?: number | null;
-    expectedAdditionalPositiveReplies?: number | null;
-    expectedAdditionalRecipientsEnrolled?: number | null;
-  };
   actualOutcomes?: {
     basis?: string;
     positiveReplies?: number | null;
@@ -96,17 +72,6 @@ export function toSubscriptionRecap(w: PeriodRecapWire): SubscriptionRecap {
     sendStatus: sendStatus(w.outbound?.sendStatus),
     deliveryRatePct: num(w.outbound?.deliveryRatePct),
     expectedPositiveReplies: num(w.expectedPositiveReplies),
-    expectedRoiMultiple: num(w.expectedReturn?.roiMultiple),
-    lifetimeRevenueUsd: num(w.expectedReturn?.lifetimeRevenuePerClientUsd),
-    lifetimeRevenueSource:
-      w.expectedReturn?.lifetimeRevenueSource === "offer_stated" ||
-      w.expectedReturn?.lifetimeRevenueSource === "brand_economics"
-        ? w.expectedReturn.lifetimeRevenueSource
-        : null,
-    raiseRevenueMultiple: num(w.budgetIncrease?.revenueMultiple),
-    raiseAdditionalRevenueUsd: num(w.budgetIncrease?.expectedAdditionalRevenueUsd),
-    raiseAdditionalPositiveReplies: num(w.budgetIncrease?.expectedAdditionalPositiveReplies),
-    raiseAdditionalRecipients: num(w.budgetIncrease?.expectedAdditionalRecipientsEnrolled),
     actualPositiveReplies: num(w.actualOutcomes?.positiveReplies),
     actualMeetingsBooked: num(w.actualOutcomes?.meetingsBooked),
   };

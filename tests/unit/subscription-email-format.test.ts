@@ -6,7 +6,6 @@
 import { describe, it, expect } from "vitest";
 import {
   expectedRepliesStat,
-  expectedReturnAboveOne,
   escapeHtml,
 } from "../../src/lib/subscription-email-format.js";
 import { toSubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
@@ -18,16 +17,6 @@ describe("expectedRepliesStat", () => {
     expect(expectedRepliesStat(0)).toBeNull();
     expect(expectedRepliesStat(null)).toBeNull();
     expect(expectedRepliesStat(1.6)).toEqual({ value: "~2", label: "positive replies expected" });
-  });
-});
-
-describe("expectedReturnAboveOne", () => {
-  it("strictly above 1x only; 1.0x, below, unknown are false", () => {
-    expect(expectedReturnAboveOne(1.2)).toBe(true);
-    expect(expectedReturnAboveOne(1)).toBe(false);
-    expect(expectedReturnAboveOne(0.35)).toBe(false);
-    expect(expectedReturnAboveOne(null)).toBe(false);
-    expect(expectedReturnAboveOne(Number.NaN)).toBe(false);
   });
 });
 
@@ -72,13 +61,6 @@ describe("toSubscriptionRecap (features-service OrgPeriodRecapResponse)", () => 
       sendStatus: "lined_up_not_sent",
       deliveryRatePct: null,
       expectedPositiveReplies: 1.24,
-      expectedRoiMultiple: 7.02,
-      lifetimeRevenueUsd: 2500,
-      lifetimeRevenueSource: "offer_stated",
-      raiseRevenueMultiple: null,
-      raiseAdditionalRevenueUsd: 701.75,
-      raiseAdditionalPositiveReplies: 1.26,
-      raiseAdditionalRecipients: 305,
       actualPositiveReplies: null,
       actualMeetingsBooked: null,
     });

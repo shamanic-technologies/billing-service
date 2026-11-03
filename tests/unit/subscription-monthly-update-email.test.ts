@@ -1,14 +1,13 @@
 /**
  * The informational monthly update's copy (owner review 2026-10-04): results only,
- * no upsell, never what the client paid; a return above 1x is a figure, anything
- * else is "still learning" with no ratio.
+ * no upsell, never what the client paid. No return is stated (ROI-CONSISTENCY-1103):
+ * the recap's pipeline return is retired, whatever its value.
  */
 import { describe, it, expect } from "vitest";
 import { toSubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
 import {
   composeMonthlyUpdateEmail,
   recapHasActivity,
-  STILL_LEARNING_SENTENCE,
 } from "../../src/lib/subscription-monthly-update-email.js";
 
 const CTA = "https://dashboard.distribute.you/orgs/org_1";
@@ -38,23 +37,22 @@ describe("monthly update email", () => {
   it.each([
     ["0.35x", 0.35],
     ["exactly 1x", 1],
+    ["1.8x", 1.8],
+    ["30x", 30],
     ["unknown", null],
-  ])("a return of %s reads 'still learning', shows the delivery rate, never a ratio", (_l, roi) => {
+  ])("a recap return of %s is never stated: volume, delivery rate, no ratio, no 'still learning'", (_l, roi) => {
     const e = composeMonthlyUpdateEmail({ recap: recap(roi), brandName: "Legistai", ctaUrl: CTA });
     expect(e.subject).toBe("Your month for Legistai");
     expect(e.bodyText).toContain("We sent 412 emails to 180 decision-makers this month.");
     expect(e.bodyText).toContain("96% delivered");
     expect(e.bodyText).not.toContain("were delivered");
-    expect(e.bodyText).toContain(STILL_LEARNING_SENTENCE);
-    expect(all(e)).not.toMatch(/expected return|0\.\dx|1\.0x/);
+    expect(all(e)).not.toMatch(/return|learning|lifetime revenue|\d(\.\d)?x\b/i);
+    expect(e.bodyText).toContain("Nothing to do on your side");
   });
 
-  it("a return above 1x is shown, with its basis; no learning sentence", () => {
-    const e = composeMonthlyUpdateEmail({ recap: recap(1.8), brandName: "Legistai", ctaUrl: CTA });
-    expect(e.bodyText).toContain("1.8x expected return");
-    expect(e.bodyText).toContain("96% were delivered.");
-    expect(e.bodyText).toContain("Based on your $5,000 lifetime revenue per client");
-    expect(e.bodyText).not.toContain(STILL_LEARNING_SENTENCE);
+  it("the email is byte-identical whatever return the recap carries", () => {
+    const base = composeMonthlyUpdateEmail({ recap: recap(null), brandName: "Legistai", ctaUrl: CTA });
+    expect(composeMonthlyUpdateEmail({ recap: recap(30), brandName: "Legistai", ctaUrl: CTA })).toEqual(base);
   });
 
   it.each([0.35, 1.8, null])("never an upsell, never what the client paid (roi %s)", (roi) => {

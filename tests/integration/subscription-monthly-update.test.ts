@@ -119,7 +119,7 @@ describe("subscription monthly update", () => {
     expect(sent.eventType).toBe(SUBSCRIPTION_MONTHLY_UPDATE_EVENT);
     expect(sent.recipientEmail).toBe("founder@legistai.test");
     expect(sent.metadata.ctaUrl).toBe("https://dashboard.distribute.you/orgs/org_clerk6");
-    expect(sent.metadata.bodyText).toContain("still learning");
+    expect(sent.metadata.bodyText).not.toMatch(/return|still learning/i);
     expect(JSON.stringify(sent.metadata)).not.toMatch(/\$100|Add more revenue|invested/);
 
     // The window is [trial start, current period start), as inclusive UTC days.

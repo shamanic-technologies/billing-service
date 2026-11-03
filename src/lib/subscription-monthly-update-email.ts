@@ -7,14 +7,16 @@
  * Rules (owner review of the rendered draft, 2026-10-04):
  *  - Results only. No proposal to raise spend, no upsell, and never what the
  *    client paid ("$99 invested" was replaced by the delivery rate).
- *  - A return above 1x is shown as a figure. Anything else (below 1x, unknown) is
- *    "still learning", in positive words, never a ratio.
+ *  - No return is stated (owner 2026-11-03, ROI-CONSISTENCY-1103): a client is told
+ *    only features-service's EXPECTED return or its REALIZED return (Paid clients over
+ *    money spent). The recap's `expectedReturn.roiMultiple` is the retired pipeline
+ *    return (flash/mature, "still learning"), so it is neither read nor stated here.
  *  - "Sent" only on positive evidence a send happened, a figure below 1 is never inflated, a null figure drops its
  *    sentence or its cell, never a 0.
  *  - The window's REAL outcomes (features-service `actualOutcomes`: positive replies
  *    received, meetings booked) lead, as their own stat row. Only a positive count
  *    is shown: unknown (null) and a measured 0 drop the cell (client-comms: never
- *    surface a negative; the existing "still learning" line carries a quiet month).
+ *    surface a negative; a quiet month simply shows the volume).
  *
  * The card is registered bare (src/instrument.ts) and wrapped by
  * transactional-email-service in the official layout. Values from other services
@@ -28,9 +30,6 @@ import {
   expectedRepliesStat,
   positive,
   statRowHtml,
-  times,
-  wholeDollars,
-  expectedReturnAboveOne,
 } from "./subscription-email-format.js";
 
 export interface MonthlyUpdateEmail {
@@ -43,8 +42,6 @@ export interface MonthlyUpdateEmail {
 }
 
 export const MONTHLY_UPDATE_CTA_LABEL = "See your results";
-export const STILL_LEARNING_SENTENCE =
-  "Your return is still learning. It shows once your prospects have had time to answer.";
 export const NOTHING_TO_DO_SENTENCE = "Nothing to do on your side: we keep sending and track every reply.";
 
 /** Was anything lined up or sent in the window? An email about nothing is not sent. */
@@ -76,7 +73,6 @@ export function composeMonthlyUpdateEmail(params: {
     positive(r.sentCount) && (r.sendStatus == null || r.sendStatus === "emails_sent") ? r.sentCount : null;
   const recipients = positive(r.recipientsCount) ? r.recipientsCount : null;
   const emailed = positive(r.recipientsEmailedCount) ? r.recipientsEmailedCount : null;
-  const returnShown = expectedReturnAboveOne(r.expectedRoiMultiple);
   const delivered = r.deliveryRatePct != null && sent !== null ? Math.round(r.deliveryRatePct) : null;
 
   const subject = params.brandName ? `Your month for ${params.brandName}` : "Your month with distribute.you";
@@ -90,8 +86,6 @@ export function composeMonthlyUpdateEmail(params: {
         ? `We sent ${count(sent)} emails to ${count(reached)} decision-makers this month.`
         : `We sent ${count(sent)} emails this month.`
     );
-    // The delivery rate is a cell when the return is not shown; a sentence otherwise.
-    if (returnShown && delivered !== null) lines.push(`${delivered}% were delivered.`);
   } else if (recipients !== null) {
     lines.push(`We lined up ${count(recipients)} decision-makers this month.`);
     lines.push("Their emails go out during each prospect's business hours, for the best reply rate.");
@@ -102,24 +96,11 @@ export function composeMonthlyUpdateEmail(params: {
   if (recipients !== null) cells.push({ value: count(recipients), label: "decision-makers" });
   const replies = expectedRepliesStat(r.expectedPositiveReplies);
   if (replies) cells.push(replies);
-  if (returnShown) {
-    cells.push({ value: times(r.expectedRoiMultiple!), label: "expected return" });
-  } else if (delivered !== null) {
-    cells.push({ value: `${delivered}%`, label: "delivered" });
-  }
+  if (delivered !== null) cells.push({ value: `${delivered}%`, label: "delivered" });
 
-  const finePrint =
-    returnShown && positive(r.lifetimeRevenueUsd)
-      ? `Based on ${r.lifetimeRevenueSource === "offer_stated" ? "your" : "a"} ${wholeDollars(
-          r.lifetimeRevenueUsd
-        )} lifetime revenue per client and our current reply rates.`
-      : returnShown
-      ? "Based on our current reply rates."
-      : replies
-      ? "Expected replies based on our current reply rates."
-      : null;
+  const finePrint = replies ? "Expected replies based on our current reply rates." : null;
 
-  const status = returnShown ? NOTHING_TO_DO_SENTENCE : `${STILL_LEARNING_SENTENCE} ${NOTHING_TO_DO_SENTENCE}`;
+  const status = NOTHING_TO_DO_SENTENCE;
   const ctaLabel = MONTHLY_UPDATE_CTA_LABEL;
 
   const html: string[] = [
