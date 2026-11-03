@@ -164,18 +164,24 @@ describe("a wedged org is owned by the dunning engine", () => {
     expect(await listEpisodes(orgB)).toHaveLength(1);
   });
 
-  it("tells a customer whose card declined ONCE — the episode opens silently", async () => {
+  it("a customer whose card declined is told by lib/reload — the episode opens silently", async () => {
     await seedWedgedOrg();
-    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+    // The bank refused: lib/reload (mocked here) mails "your card was refused"
+    // on every refused attempt (tests/integration/card-refused-email.test.ts).
+    ssMocks.reloadOffSession.mockResolvedValue({
+      status: "failed",
+      reference: "pi_refused",
+      failure_reason: "card_error: insufficient_funds",
+      failure_code: "insufficient_funds",
+    });
 
     const res = await runCampaignReloadSweep(NOW);
 
     expect(res.failed).toBe(1);
     expect(res.episodesOpened).toBe(1);
-    // "We could not charge your card" is the message. Following it seconds later
-    // with "you are out of credit" tells one story twice.
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0][0].eventType).toBe("credits-reload-failed");
+    // Following "your card was refused" seconds later with "you are out of
+    // credit" tells one story twice: the episode sends no T0.
+    expect(sendMock).not.toHaveBeenCalled();
     // The stage is genuinely spent — the customer WAS told about this failure.
     const [ep] = await listEpisodes(orgA);
     expect(ep.t0SentAt).not.toBeNull();

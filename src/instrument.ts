@@ -15,12 +15,11 @@
  *
  * Only templates this service actually sends belong here — one per `eventType`
  * that appears in a `sendEmail` call:
- *   - `credits-reload-failed`      → src/routes/customer_balance.ts
+ *   - `credits-reload-failed`      → src/lib/card-refused-email.ts (every refused charge)
  *   - `brand_daily_budget_changed` → src/lib/brand-budget-notification.ts
  *   - `referral-reward-opened`     → src/lib/referral-notifications.ts
  *   - `referral-credits-granted`   → src/lib/referral-notifications.ts
  *   - `credit-debt-card-required`  → src/lib/unpaid-debt.ts
- *   - `credit-card-unusable`       → src/lib/card-usability.ts
  *   - `unpaid_debt_uncollectable`  → src/lib/unpaid-debt.ts (staff)
  *   - `subscription-monthly-update` → src/lib/subscription-monthly-update.ts
  *   - `subscription-credits-used`  → src/lib/subscription-out-of-credits.ts
@@ -38,7 +37,7 @@ import {
   UNPAID_DEBT_CARD_REQUIRED_EVENT,
   UNPAID_DEBT_STAFF_EVENT,
 } from "./lib/unpaid-debt.js";
-import { CARD_UNUSABLE_EVENT } from "./lib/card-usability.js";
+import { CARD_REFUSED_EVENT } from "./lib/card-refused-email.js";
 import { SUBSCRIPTION_MONTHLY_UPDATE_EVENT } from "./lib/subscription-monthly-update.js";
 import { SUBSCRIPTION_OUT_OF_CREDITS_EVENT } from "./lib/subscription-out-of-credits.js";
 import { MONTHLY_CHARGE_LIMIT_REACHED_EVENT } from "./lib/monthly-charge-limit.js";
@@ -55,11 +54,16 @@ const SERVICE_IDENTITY = "00000000-0000-0000-0000-000000000000";
 
 const TEMPLATES = [
   {
-    name: "credits-reload-failed",
-    subject: "Automatic reload failed",
-    htmlBody: `<p>We attempted to automatically reload your account, but the payment failed. Please update your payment method.</p>
-<p><a href="{{settingsUrl}}">Update payment method</a></p>`,
-    textBody: "We attempted to automatically reload your account, but the payment failed. Please update your payment method. Visit: {{settingsUrl}}",
+    // EVERY refused charge attempt, whichever path asked (owner 2026-11-03,
+    // REFUSED-CARD-EMAIL-EACH-1103): the amount, the bank's reason, one button to
+    // update the card. Composed in code (lib/card-refused-email), wrapped in the
+    // official layout. The name stays `credits-reload-failed` on purpose:
+    // postmark-service bills it to the platform, never to the org it is about.
+    name: CARD_REFUSED_EVENT,
+    subject: "{{subject}}",
+    htmlBody: "{{bodyHtml}}",
+    textBody: "{{bodyText}}",
+    layout: "brand",
   },
   {
     // The informational monthly update: results of the period that just closed,
@@ -90,21 +94,6 @@ const TEMPLATES = [
     htmlBody: "{{bodyHtml}}",
     textBody: "{{bodyText}}",
     layout: "brand",
-  },
-  {
-    // The card is still on file and can never be charged again: the bank called
-    // it lost, stolen, closed, or revoked our authorization.
-    //
-    // Deliberately NOT `credit-debt-card-required`, which says we no longer
-    // have a card on file. Here we do, and a customer told "add a card" while
-    // looking at the card in their settings will conclude the mail is wrong and
-    // ignore it. The action is to REPLACE it.
-    name: CARD_UNUSABLE_EVENT,
-    subject: "Your saved card can no longer be charged",
-    htmlBody: `<p>Your campaigns have stopped. We tried to charge your saved card and your bank refused it permanently, so we will not try that card again.</p>
-<p>Add a different payment method in your billing settings and your campaigns will start again.</p>`,
-    textBody:
-      "Your campaigns have stopped. We tried to charge your saved card and your bank refused it permanently, so we will not try that card again. Add a different payment method in your billing settings and your campaigns will start again.",
   },
   {
     // Staff notification, not a customer email: transactional-email-service

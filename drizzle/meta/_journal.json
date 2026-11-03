@@ -666,6 +666,13 @@
       "when": 1796292000000,
       "tag": "0094_promise_withdrawn",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1796378400000,
+      "tag": "0095_card_refusal_emails",
+      "breakpoints": true
     }
   ]
 }

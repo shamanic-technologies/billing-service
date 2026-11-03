@@ -28,10 +28,7 @@ import { db } from "../../src/db/index.js";
 import { campaignReloadSweepAttempts } from "../../src/db/schema.js";
 import { upsertCampaignAuthorizeCost } from "../../src/lib/campaign-costs.js";
 import { runCampaignReloadSweep } from "../../src/lib/campaign-reload-sweep.js";
-import {
-  isPermanentDecline,
-  CARD_UNUSABLE_EVENT,
-} from "../../src/lib/card-usability.js";
+import { isPermanentDecline } from "../../src/lib/card-usability.js";
 
 const orgA = "00000000-0000-0000-0000-0000000000e1";
 const campaignA = "00000000-0000-0000-0000-0000000000e2";
@@ -122,7 +119,7 @@ describe("a permanently refused card is never presented again", () => {
     }
   });
 
-  it("stops after ONE attempt and tells the customer to replace the card", async () => {
+  it("stops after ONE attempt; the refusal mail (lib/reload) is the only mail", async () => {
     ssMocks.reloadOffSession.mockResolvedValue({
       status: "failed",
       reference: "pi_dead",
@@ -135,12 +132,10 @@ describe("a permanently refused card is never presented again", () => {
     expect(first.failed).toBe(1);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
 
-    // Not the "add a card" mail — the card IS on file, it is just dead, and a
-    // customer looking at it in their settings would read that as wrong.
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect((sendMock.mock.calls[0]?.[0] as { eventType: string }).eventType).toBe(
-      CARD_UNUSABLE_EVENT
-    );
+    // lib/reload (mocked here) mailed "your card was refused ... we will not try
+    // it again" for this refusal (card-refused-email.test.ts). The verdict sends
+    // no second mail, and the episode no "out of credit" one.
+    expect(sendMock).not.toHaveBeenCalled();
 
     const stored = await row();
     expect(stored?.cardUnusableAt).not.toBeNull();
@@ -176,7 +171,7 @@ describe("a permanently refused card is never presented again", () => {
     expect(ayear.scanned).toBe(0);
 
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("keeps retrying a TEMPORARY refusal on the schedule", async () => {

@@ -401,7 +401,6 @@ export async function runMonthEndSweep(
           orgId: account.orgId,
           declineCode: outcome.failure_code as string,
           creditedCents: snapshot.creditedCents,
-          recipientEmail: snapshot.customer?.email ?? null,
           now,
         });
         continue;
