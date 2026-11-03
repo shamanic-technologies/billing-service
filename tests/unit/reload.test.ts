@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as ssClient from "../../src/lib/stripe-service-client.js";
 import { reloadOffSession } from "../../src/lib/reload.js";
 import * as cardCheck from "../../src/lib/postpaid-card-check.js";
+import * as refusedCharge from "../../src/lib/refused-charge.js";
 
 const ORG_ID = "org_test";
 const IDEMPOTENCY_KEY = "ik_test_123";
@@ -31,6 +32,8 @@ describe("reloadOffSession", () => {
       .mockResolvedValue(buildCharge());
     // No live credit-line hold: every charge goes to the card (tests/integration/postpaid-card-hold).
     vi.spyOn(cardCheck, "payByCapturingHold").mockResolvedValue(null);
+    // The refusal is recorded in the DB (tests/integration/instant-stop-on-decline).
+    vi.spyOn(refusedCharge, "recordRefusedCharge").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -145,6 +148,20 @@ describe("reloadOffSession on a refused card", () => {
   beforeEach(() => {
     chargeOrgOffSession = vi.spyOn(ssClient, "chargeOrgOffSession");
     vi.spyOn(cardCheck, "payByCapturingHold").mockResolvedValue(null);
+    recordRefused = vi.spyOn(refusedCharge, "recordRefusedCharge").mockResolvedValue(undefined);
+  });
+
+  let recordRefused: ReturnType<typeof vi.spyOn>;
+
+  it("records the refusal before answering, so the org is blocked at once", async () => {
+    chargeOrgOffSession.mockResolvedValue(
+      buildCharge({
+        status: "failed",
+        failure: { type: "card_error", code: "insufficient_funds", message: "No funds." },
+      } as Partial<ssClient.ChargeResult>)
+    );
+    await reloadOffSession(ORG_ID, 2500, IDEMPOTENCY_KEY);
+    expect(recordRefused).toHaveBeenCalledWith({ orgId: ORG_ID, declineCode: "insufficient_funds" });
   });
 
   afterEach(() => {

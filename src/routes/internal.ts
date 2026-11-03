@@ -41,6 +41,7 @@ import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
 import { cannotSpend, gateBalanceCents, resolveOrgFloor } from "../lib/spend-block.js";
+import { refusalBlockingSpend } from "../lib/refused-charge.js";
 import { fetchOrgActualUsageTotal } from "../lib/transfer-usage.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
@@ -410,6 +411,9 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
     affordable:
       (await isPlatformOrg(orgId)) ||
       ((await getOrgSendingStopped(orgId)) === null &&
+        // A card the bank refused, with no money arrived since, stops every run
+        // at once (lib/refused-charge): the same verdict authorize gives.
+        (await refusalBlockingSpend(orgId, snapshot.creditedCents)) === null &&
         !cannotSpend(gateBalance, lastRequiredCents, floorCents)),
     balanceCents: snapshot.balanceCents,
     lastRequiredCents,
