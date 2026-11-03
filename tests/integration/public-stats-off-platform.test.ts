@@ -148,7 +148,10 @@ describe("GET /public/stats/billing counts off-platform payments as cash, once",
     const months = Object.fromEntries(
       res.body.monthly_growth.map((r: { period: string; first_time_paying_accounts: number }) => [r.period, r.first_time_paying_accounts])
     );
-    expect(months).toEqual({ "2026-08-01": 1, "2026-09-01": 1, "2026-10-01": 0 });
+    // The grant row is written NOW, so the current month carries a bucket too
+    // (first_time 0): pin the dated months, and that no later month adds a payer.
+    expect(months).toMatchObject({ "2026-08-01": 1, "2026-09-01": 1, "2026-10-01": 0 });
+    expect(Object.entries(months).filter(([p, n]) => p > "2026-10-01" && n !== 0)).toEqual([]);
   });
 
   it("another org's grant that is NOT marked stays out of the cash series", async () => {
