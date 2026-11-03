@@ -3,7 +3,6 @@ import { MONTHLY_CHARGE_LIMIT_REACHED, checkMonthlySpendLimit, recordMonthlyLimi
 import crypto from "crypto";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { AuthorizeRequestSchema, UsageApplyRequestSchema } from "../schemas.js";
-import { sendEmail } from "../lib/email-client.js";
 import { resolveRequiredCents } from "../lib/costs-client.js";
 import { findOrCreateAccount } from "../lib/account.js";
 import { traceEvent } from "../lib/trace-event.js";
@@ -22,7 +21,7 @@ import { isPlatformAbsorbedSpend } from "../lib/platform-absorbed.js";
 import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
-import { coalesceReload, consecutiveReloadFailures } from "../lib/reload-coalescer.js";
+import { coalesceReload } from "../lib/reload-coalescer.js";
 import { pgDriverError, errorReason } from "../lib/pg-error.js";
 
 const router = Router();
@@ -370,38 +369,19 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
     } catch (err) {
       console.error("[billing-service] off-session reload failed:", err);
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.reload-errored", level: "error", detail: String(pgDriverError(err)) }, req.headers);
-      // Tell the customer on the FIRST failure of a streak only. A declined
-      // off_session charge arrives here as a THROW (stripe-service answers 402),
-      // so there is no outcome object to read `backoffSkipped` from — the streak
-      // counter is what distinguishes "this is news" from "we already said so".
-      //
-      // This is not merely about duplicate mail. Sending this notification
-      // AUTHORIZES CREDIT on the very org it is about (the email path is
-      // org-billed), so an unguarded send re-enters this handler, fails again,
-      // and sends again. Prod 2026-08-29: 2,939 authorizations in 71 minutes,
-      // 2,938 of them attributed to this exact email, zero to product traffic —
-      // the notification was feeding itself. The org-billing of a platform
-      // lifecycle notification is the root cause and belongs to the email path,
-      // not here; this guard is what stops billing from driving the loop.
-      if (consecutiveReloadFailures(orgId) <= 1) {
-        sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
-      }
+      // No customer mail here: a charge that THREW never got a refusal from the
+      // bank (stripe-service answers a refusal as a settled `failed`), and every
+      // refusal is mailed by lib/reload itself (lib/card-refused-email).
       res.status(502).json({ error: "Reload via stripe-service failed" });
       return;
     }
 
     if (reloadResult.status !== "succeeded") {
       console.warn(`[billing-service] reload status=${reloadResult.status} for org ${orgId}: ${reloadResult.failure_reason ?? ""}`);
-      // A backoff-skipped reload attempted no charge and learned nothing new: the
-      // customer was already mailed when the real failure happened, and the
-      // depletion episode opened then too. Re-sending on every subsequent
-      // authorize is the duplicate-email bug the episode state exists to prevent
-      // (prod 2026-08-29: 61 declines in six hours would have been 61 mails).
-      // Everything else below is unchanged — the episode call is idempotent and
-      // must still run, so an org whose FIRST failure predates this stays covered.
-      if (!reloadResult.backoffSkipped) {
-        sendEmail({ eventType: "credits-reload-failed", orgId, userId, runId, workflowHeaders: wfHeaders });
-      }
+      // The customer was already mailed by lib/reload when the bank refused
+      // (one mail per refused attempt, lib/card-refused-email); a backoff-skipped
+      // reload attempted no charge and mails nothing. The episode call is
+      // idempotent and still runs.
       await openDepletionEpisodeIfDepleted({
         orgId, userId, runId,
         balanceCents: gateBalance,

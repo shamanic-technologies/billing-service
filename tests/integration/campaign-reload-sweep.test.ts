@@ -219,45 +219,27 @@ describe("blocked-campaign reload sweep", () => {
     expect(ssMocks.reloadOffSession).not.toHaveBeenCalled();
   });
 
-  it("tells the customer when the card declines — once per failure streak", async () => {
+  it("leaves the refused-card mail to lib/reload: the sweep itself sends nothing", async () => {
     await seedTrappedOrg();
-    // A declined off_session charge reaches us as a THROW (stripe-service 402).
-    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
+    // The bank refused: lib/reload (mocked here) mails the customer on every
+    // refused attempt (tests/integration/card-refused-email.test.ts).
+    ssMocks.reloadOffSession.mockResolvedValue({
+      status: "failed",
+      reference: "pi_refused",
+      failure_reason: "card_error: insufficient_funds",
+      failure_code: "insufficient_funds",
+    });
 
     const first = await runCampaignReloadSweep(NOW);
 
     expect(first.failed).toBe(1);
     expect(first.charged).toBe(0);
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    const sent = sendMock.mock.calls[0]?.[0] as {
-      eventType: string;
-      orgId: string;
-      recipientEmail?: string;
-      runId: string;
-    };
-    expect(sent.eventType).toBe("credits-reload-failed");
-    expect(sent.orgId).toBe(orgA);
-    expect(sent.recipientEmail).toBe(billingEmail);
-    // A real run, never a minted uuid — the email service records the mail as a
-    // CHILD of it and silently drops a send whose parent does not exist.
-    expect(runsClient.createPlatformRun).toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
 
-    // Second tick, same hour: the next rung is not due, so nothing is charged
-    // and the customer is not told again.
+    // Second tick, same hour: the next rung is not due, so nothing is charged.
     const second = await runCampaignReloadSweep(NOW);
     expect(second.awaitingRetry).toBe(1);
     expect(second.failed).toBe(0);
-    expect(sendMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("stays silent when a run cannot be opened, so the next tick retries", async () => {
-    await seedTrappedOrg();
-    ssMocks.reloadOffSession.mockRejectedValue(new Error("card_declined"));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue(null as never);
-
-    const res = await runCampaignReloadSweep(NOW);
-
-    expect(res.failed).toBe(1);
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -279,8 +261,10 @@ describe("blocked-campaign reload sweep", () => {
     expect(second.awaitingRetry).toBe(1);
     expect(second.failed).toBe(0);
     expect(ssMocks.reloadOffSession).toHaveBeenCalledTimes(1);
-    // And the customer is not told a second time about the same streak.
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    // A charge that THREW never reached the bank: no refused-card mail.
+    expect(
+      sendMock.mock.calls.filter((c) => (c[0] as { eventType: string }).eventType === "credits-reload-failed")
+    ).toHaveLength(0);
   });
 
   it("retries on the schedule — +1d, +3d, +7d, +14d — then stands down", async () => {

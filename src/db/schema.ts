@@ -1386,6 +1386,16 @@ export const ownerAlerts = pgTable("owner_alerts", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// One row per refused charge the customer was mailed about (migration 0095,
+// lib/card-refused-email): keyed on the acquirer's charge reference, so an
+// idempotent replay of the same charge mails nothing.
+export const cardRefusalEmails = pgTable("card_refusal_emails", {
+  chargeKey: text("charge_key").primaryKey(),
+  orgId: uuid("org_id").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // One owner Telegram per client going through the card page (migration 0092,
 // lib/stripe-step-alert): written at the card step, SENT once the budgets the
 // client states right after have landed (due_at, pushed back by each cap write).

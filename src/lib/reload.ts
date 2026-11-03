@@ -35,6 +35,8 @@ import { chargeOrgOffSession } from "./stripe-service-client.js";
 import type { ReloadOutcome } from "./reload-coalescer.js";
 import { chargeReasonLabel, recordChargeSignal } from "./payment-alerts.js";
 import { payByCapturingHold } from "./postpaid-card-check.js";
+import { notifyCardRefused } from "./card-refused-email.js";
+import { isPermanentDecline } from "./card-usability.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -114,6 +116,17 @@ async function chargeNow(
       `Charge refused: ${usd(amountCents)} (${chargeReasonLabel(metadata?.reason)})` +
       (failure?.message ? `: ${failure.message}` : ""),
     dedupKey: `charge-refused:${orgId}:${utcDay()}`,
+  });
+  // The CUSTOMER hears about EVERY refused attempt, by email, whichever path asked
+  // (owner 2026-11-03, lib/card-refused-email). One mail per charge reference, so
+  // an idempotent replay of the same charge mails nothing; fire-and-forget, so the
+  // mail can never delay or change this answer.
+  notifyCardRefused({
+    orgId,
+    amountCents,
+    chargeKey: charge.reference ?? `idempotency:${idempotencyKey}`,
+    bankReason: failure?.message ?? null,
+    permanent: isPermanentDecline(failure?.code),
   });
   return {
     status: "failed",
