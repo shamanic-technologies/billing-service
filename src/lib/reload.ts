@@ -37,6 +37,7 @@ import { chargeReasonLabel, recordChargeSignal } from "./payment-alerts.js";
 import { payByCapturingHold } from "./postpaid-card-check.js";
 import { notifyCardRefused } from "./card-refused-email.js";
 import { isPermanentDecline } from "./card-usability.js";
+import { recordRefusedCharge } from "./refused-charge.js";
 
 const RELOAD_CURRENCY = "usd";
 /** Charge description (min length 1 required by stripe-service). */
@@ -128,6 +129,10 @@ async function chargeNow(
     bankReason: failure?.message ?? null,
     permanent: isPermanentDecline(failure?.code),
   });
+  // The org is blocked from THIS instant (lib/refused-charge): the durable streak
+  // every "can this org be charged?" reader reads is written before we answer,
+  // never left to the hourly sweep (prod 2026-11-03: 34 min of sends on a refused card).
+  await recordRefusedCharge({ orgId, declineCode: failure?.code ?? null });
   return {
     status: "failed",
     reference: charge.reference,

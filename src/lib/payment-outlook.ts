@@ -52,7 +52,8 @@ import { Decimal } from "decimal.js";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { configuredReloadFor, type ConfiguredReload } from "./free-credit-offer.js";
-import { billingAccounts, campaignReloadSweepAttempts } from "../db/schema.js";
+import { billingAccounts } from "../db/schema.js";
+import { openRefusalStreak } from "./refused-charge.js";
 import { computeBalance, computeSettleBalanceCents } from "./balance.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import { addCents, cmpCents, subCents } from "./cents.js";
@@ -303,23 +304,6 @@ export function settlesAtMonthEnd(
   return projected.lessThan(0);
 }
 
-/** The org's open failed-reload streak, if the world has not moved since. */
-async function openStreak(orgId: string, creditedCents: string) {
-  const [row] = await db
-    .select()
-    .from(campaignReloadSweepAttempts)
-    .where(eq(campaignReloadSweepAttempts.orgId, orgId))
-    .limit(1);
-
-  if (!row) return null;
-  if (row.lastOutcome !== "failed") return null;
-  // `credited` rising means money arrived, so the streak is over and any verdict
-  // about the old card is stale — the same test decideAttempt makes, in the same
-  // order, so the two cannot disagree about whether a streak is live.
-  if (cmpCents(row.creditedCentsAtAttempt, creditedCents) !== 0) return null;
-  return row;
-}
-
 /**
  * The inputs the outlook was decided on, for a reader that must project FROM the
  * same decision (lib/charge-schedule) rather than re-derive it and risk a second
@@ -446,7 +430,7 @@ async function decideOutlook(
     resolveSpendBlock(orgId, snapshot),
     fetchRealizedDailyBurn(orgId, now, account.createdAt),
     resolveBudgets(orgId),
-    openStreak(orgId, snapshot.creditedCents),
+    openRefusalStreak(orgId, snapshot.creditedCents),
     computeSettleBalanceCents(orgId, snapshot),
     isPlatformOrg(orgId),
   ]);
@@ -514,31 +498,35 @@ async function decideOutlook(
   // we must be able to collect. A prepaid org spends only what it already paid,
   // so no card, a refused card, an unusable card or an unsupported country never
   // blocks it — they only mean no automatic top-up will happen, and its spend
-  // stops when the balance reaches zero. A live refusal streak still has a real
-  // next attempt, so that date is stated; everything else falls through to the
-  // ordinary floor / month-end projection, whose floor is zero for this org.
+  // stops when the balance reaches zero. A LIVE REFUSAL is the exception (below):
+  // the bank already said no, so the org is blocked until money arrives.
+  // Everything else falls through to the ordinary floor / month-end projection,
+  // whose floor is zero for this org.
   if (paymentMode === "prepaid") {
-    if (
-      !snapshot.hasCardPm ||
-      block.tier === null ||
-      streak?.cardUnusableAt != null
-    ) {
-      return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+    if (streak?.cardUnusableAt != null) {
+      return { ...base, ...noDate, state: "charge_blocked", blockedReason: "card_unusable" };
     }
+    // A live refusal BLOCKS a prepaid org too (owner 2026-11-03,
+    // INSTANT-STOP-ON-DECLINE-1103): from the first refused charge nothing more
+    // is sent on that card, and campaign-service stops on `charge_blocked`.
+    // Money arriving (a top-up) moves credited and ends the streak.
     if (streak && streak.firstFailedAt != null) {
       const dueAt = nextRetryDueAt(streak.attemptCount, streak.firstFailedAt);
       if (dueAt === null) {
-        return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+        return { ...base, ...noDate, state: "charge_blocked", blockedReason: "retries_exhausted" };
       }
       return {
         ...base,
-        state: "will_charge",
-        blockedReason: null,
+        state: "charge_blocked",
+        blockedReason: "card_declined",
         nextChargeAttemptAt: new Date(
           Math.max(dueAt.getTime(), now.getTime())
         ).toISOString(),
         trigger: "retry_rung",
       };
+    }
+    if (!snapshot.hasCardPm || block.tier === null) {
+      return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
     }
   }
 
