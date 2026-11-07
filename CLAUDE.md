@@ -535,9 +535,9 @@ Both are registered by THIS service in `src/instrument.ts` (a template belongs t
 
 **Why (2026-10-01):** distribute.you was a postpaid org on a real card. A $384.16 month-end settle declined on 09-30, the balance kept falling on the credit line and crossed the -$500 floor at 13:45 UTC, the $500 reload declined, and apollo-service was refused on every verification for ~17h (3,279 refusals, newsletter stalled). It was NOT a bad write: credited never moved, usage grew by real spend. A daily-update grant of $1000 on 10-02 06:13 unblocked it by hand.
 
-## A step renamed in the catalogue re-keys the funnel caps (`src/lib/renamed-funnel-ids.ts`, migration 0096, DELETE-POST-PUBLISHED-1107)
+## A step renamed in the catalogue re-keys the funnel caps (migration 0096, DELETE-POST-PUBLISHED-1107)
 
-A funnel id spells its steps, so a step features-service renames (`post_published` -> `threads_post_published`, owner 2026-11-07) re-keys every funnel id holding it while campaign-service re-keys its funnel campaigns in parallel. The cap is stated under BOTH ids (migration copies the row and its history, same values and dates), so a campaign is held to the same cap whichever id it carries, and by one row only. `retireRenamedFunnelCaps` (60 s after boot, then every 15 min) clears the old-id row through the normal clear (a history row) once its twin states the same cap AND no funnel campaign of the org carries the old id; else kept + logged. A next rename = one `RENAMED_STEPS` row + a migration with the same token rule (pinned against each other in `tests/integration/renamed-funnel-caps.test.ts`).
+Done once, by data: migration 0096 stated each cap held under a funnel id spelling the retired `post_published` step again under its `threads_post_published` id (history copied), so the re-keyed funnel campaign stayed capped whichever service deployed first; the old-id row was cleared once no campaign carried it (2026-11-07). The one-shot sweep that cleared it is deleted: a future step rename repeats the pattern as its own migration, never a standing rename table.
 
 ## MONTHLY LIMIT: a SPEND cap, never a charge refusal (`src/lib/monthly-charge-limit.ts`, migration 0085)
 
