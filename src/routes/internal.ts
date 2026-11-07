@@ -54,6 +54,7 @@ import {
   listCreditEvents,
 } from "../lib/credit-events.js";
 import { getPaymentOutlook } from "../lib/payment-outlook.js";
+import { forgetCardFacts, getChargeVerdict } from "../lib/charge-verdict.js";
 import {
   getChargeSchedule,
   DEFAULT_CHARGE_SCHEDULE_HORIZON_DAYS,
@@ -719,6 +720,7 @@ router.post("/internal/payment-methods/lost", async (req, res) => {
       res.status(400).json({ error: "orgId must be a valid UUID" });
       return;
     }
+    forgetCardFacts(orgId);
     const outcome = await flagUncollectableDebt({ orgId });
     res.json({ orgId, state: outcome.state, owed_cents: outcome.owedCents });
   } catch (err) {
@@ -918,6 +920,35 @@ router.get("/internal/accounts/by-org/:orgId/payment-outlook", async (req, res) 
       err
     );
     res.status(502).json({ error: "Failed to read payment outlook" });
+  }
+});
+
+// GET /internal/accounts/by-org/:orgId/charge-verdict
+//
+// The payment-hold verdict ALONE: can billing still charge this org, and if not,
+// why (FLEET-STALL-1107). `chargeBlocked` is exactly the payment outlook's
+// `state === "charge_blocked"` and `blockedReason` carries the same values, from
+// the SAME decision (lib/charge-verdict `chargeBlockFrom`). It skips everything
+// the outlook adds around it (runs-service usage + burn, campaign-service
+// budgets), so it stays fast while the shared Postgres is saturated. Consumer:
+// campaign-service's minute sweep and run gate. Same auth and pure-read posture
+// as the payment outlook.
+router.get("/internal/accounts/by-org/:orgId/charge-verdict", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  try {
+    const verdict = await getChargeVerdict(orgId);
+    if (!verdict) {
+      res.status(404).json({ error: "No billing account for this org" });
+      return;
+    }
+    res.json(verdict);
+  } catch (err) {
+    console.error(`[billing-service] charge-verdict read failed for org ${orgId}:`, err);
+    res.status(502).json({ error: "Failed to read charge verdict" });
   }
 });
 

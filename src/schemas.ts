@@ -1572,6 +1572,23 @@ export const PaymentOutlookResponseSchema = z
   })
   .openapi("PaymentOutlookResponse");
 
+// --- Charge verdict (the payment-hold verdict alone, fast) ---
+
+export const ChargeVerdictResponseSchema = z
+  .object({
+    orgId: zod3Uuid(),
+    paymentMode: PaymentModeSchema,
+    /** Exactly the payment outlook's `state === "charge_blocked"`. */
+    chargeBlocked: z.boolean(),
+    /** Same values as the payment outlook's blockedReason. Null unless chargeBlocked. */
+    blockedReason: PaymentOutlookResponseSchema.shape.blockedReason,
+    /** The next retry rung for card_declined (ISO 8601), else null. */
+    nextChargeAttemptAt: z.string().nullable(),
+    trigger: z.enum(["retry_rung"]).nullable(),
+  })
+  .openapi("ChargeVerdictResponse");
+
+
 // --- Charge schedule (every charge expected over a horizon) ---
 
 export const ExpectedChargeSchema = z
@@ -3259,6 +3276,42 @@ registry.registerPath({
     },
     502: {
       description: "Could not read the org's balance or its realized spend",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/charge-verdict",
+  summary: "Can billing still charge this org, and if not why (fast payment-hold verdict)",
+  description:
+    "The payment outlook's charge_blocked verdict ALONE, from the same decision: chargeBlocked " +
+    "=== (payment-outlook state === charge_blocked), same blockedReason values, same retry date. " +
+    "Reads only billing's own rows (account, platform org, refused-card streak) and the org's " +
+    "card facts (held at most 60 s, dropped when billing learns a card went away), never " +
+    "runs-service or campaign-service, so it stays fast while the shared database is " +
+    "saturated. A refusal billing records is seen on the very next read. For campaign-service's " +
+    "minute sweep and run gate. x-api-key only, orgId in the path. Pure read.",
+  request: {
+    headers: internalHeaders,
+    params: z.object({ orgId: zod3Uuid() }),
+  },
+  responses: {
+    200: {
+      description: "The payment-hold verdict",
+      content: { "application/json": { schema: ChargeVerdictResponseSchema } },
+    },
+    400: {
+      description: "orgId is not a valid UUID",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    404: {
+      description: "No billing account for this org",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "Could not read the org's card facts or its credited total",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
