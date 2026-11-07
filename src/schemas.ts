@@ -4711,8 +4711,8 @@ const VolumeCapViewSchema = z
       "the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a " +
       "declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run " +
       "(email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. " +
-      "unit outcomes_produced: consumed = produced outcomes of the pipe's step (post_published: one Threads thread or " +
-      "X/LinkedIn post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted " +
+      "unit outcomes_produced: consumed = produced outcomes of the pipe's step (threads_post_published: one Threads thread; " +
+      "x_post_published / linkedin_post_published: one post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted " +
       "campaigns in the window. " +
       "A channel with no measure yet answers null + " +
       "volume_not_measured_on_channel. unit null = the funnel is unreadable.",

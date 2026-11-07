@@ -36,6 +36,7 @@ import { warnIfTelegramUnconfigured } from "./lib/telegram-client.js";
 import { ownerAlertActorMiddleware } from "./lib/owner-alerts.js";
 import { legacyOutboundLegKeyLogMiddleware } from "./lib/legacy-leg-key-log.js";
 import { reconcileFunnelCapHistory } from "./lib/sales-funnel-caps.js";
+import { startRenamedFunnelCapRetirement } from "./lib/renamed-funnel-ids.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -114,6 +115,8 @@ if (process.env.NODE_ENV !== "test") {
         startStripeStepAlertScheduler();
         // The by-day history learns the funnel caps stated before it counted them.
         void reconcileFunnelCapHistory();
+        // A cap left on a funnel id a renamed step re-keyed is retired once no campaign carries it.
+        startRenamedFunnelCapRetirement();
       });
     })
     .catch((err) => {
