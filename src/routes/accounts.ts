@@ -1,3 +1,4 @@
+import { forgetCardFacts } from "../lib/charge-verdict.js";
 import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
 import { cardFactsFrom, cardFactsWire } from "../lib/card-facts.js";
 import { Router } from "express";
@@ -612,12 +613,14 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
     try {
       outcome = await removeCardForOrg(orgId);
     } catch (err) {
+      forgetCardFacts(orgId);
       const message = errorReason(err);
       console.error("[billing-service] card removal failed:", message);
       res.status(502).json({ error: "Could not remove the saved card" });
       return;
     }
 
+    forgetCardFacts(orgId);
     if (outcome.detached.length > 0) {
       notifyOwnerBillingEvent({
         orgId,

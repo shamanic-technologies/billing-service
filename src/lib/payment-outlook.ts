@@ -60,6 +60,7 @@ import { addCents, cmpCents, subCents } from "./cents.js";
 import { resolveSpendBlock } from "./spend-block.js";
 import { isPlatformOrg } from "./platform-org.js";
 import { nextRetryDueAt } from "./campaign-reload-sweep.js";
+import { chargeBlockFrom, type ChargeBlockedReason } from "./charge-verdict.js";
 import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
 import { fetchSpendableBudget } from "./campaign-service-client.js";
@@ -88,17 +89,12 @@ export type PaymentOutlookState =
   | "unknown";
 
 /** What stops the charge. Null unless the state is `charge_blocked`. */
-export type PaymentBlockedReason =
-  /** The bank refused, and the spaced retry schedule is still walking. */
-  | "card_declined"
-  /** The issuer called the card lost, stolen or closed — never re-present it. */
-  | "card_unusable"
-  /** Five refusals over a fortnight; the month-end settle still owns the debt. */
-  | "retries_exhausted"
-  /** No chargeable card on file. */
-  | "no_chargeable_card"
-  /** The card's issuing country cannot be charged off-session (e.g. India). */
-  | "card_country_unsupported";
+//   card_declined: the bank refused, and the spaced retry schedule is still walking.
+//   card_unusable: the issuer called the card lost, stolen or closed (never re-present it).
+//   retries_exhausted: every rung used; the month-end settle still owns the debt.
+//   no_chargeable_card: no chargeable card on file.
+//   card_country_unsupported: the issuing country cannot be charged off-session (e.g. India).
+export type PaymentBlockedReason = ChargeBlockedReason;
 
 /** What brings the next charge about. Null when there is no date. */
 export type PaymentChargeTrigger =
@@ -494,103 +490,44 @@ async function decideOutlook(
     };
   }
 
-  // PREPAID: the card rules below exist because a postpaid org spends on credit
-  // we must be able to collect. A prepaid org spends only what it already paid,
-  // so no card, a refused card, an unusable card or an unsupported country never
-  // blocks it — they only mean no automatic top-up will happen, and its spend
-  // stops when the balance reaches zero. A LIVE REFUSAL is the exception (below):
-  // the bank already said no, so the org is blocked until money arrives.
-  // Everything else falls through to the ordinary floor / month-end projection,
-  // whose floor is zero for this org.
-  if (paymentMode === "prepaid") {
-    if (streak?.cardUnusableAt != null) {
-      return { ...base, ...noDate, state: "charge_blocked", blockedReason: "card_unusable" };
-    }
-    // A live refusal BLOCKS a prepaid org too (owner 2026-11-03,
-    // INSTANT-STOP-ON-DECLINE-1103): from the first refused charge nothing more
-    // is sent on that card, and campaign-service stops on `charge_blocked`.
-    // Money arriving (a top-up) moves credited and ends the streak.
-    if (streak && streak.firstFailedAt != null) {
-      const dueAt = nextRetryDueAt(streak.attemptCount, streak.firstFailedAt);
-      if (dueAt === null) {
-        return { ...base, ...noDate, state: "charge_blocked", blockedReason: "retries_exhausted" };
-      }
-      return {
-        ...base,
-        state: "charge_blocked",
-        blockedReason: "card_declined",
-        nextChargeAttemptAt: new Date(
-          Math.max(dueAt.getTime(), now.getTime())
-        ).toISOString(),
-        trigger: "retry_rung",
-      };
-    }
-    if (!snapshot.hasCardPm || block.tier === null) {
-      return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
-    }
-  }
-
-  // No chargeable payment method on file RIGHT NOW: nothing can ever be charged,
-  // so every campaign of this org must stop (campaign-service stops on
-  // `charge_blocked`). Read from the CURRENT state, never from a detach event —
-  // the card-change flow attaches the new card before detaching the old one, so
-  // that customer still reads as holding a card, and adding a card back clears
-  // this on the next read with nothing to reset. It outranks the refused-card
-  // family below because a retry rung for a card that is gone is a date nobody
-  // will act on.
-  if (!snapshot.hasCardPm) {
-    return {
-      ...base,
-      ...noDate,
-      state: "charge_blocked",
-      blockedReason: "no_chargeable_card",
-    };
-  }
-
-  // A card the issuer called lost, stolen or closed may never be re-presented,
-  // at any interval — that outranks every schedule below it.
-  if (streak?.cardUnusableAt != null) {
-    return { ...base, ...noDate, state: "charge_blocked", blockedReason: "card_unusable" };
-  }
-
-  // A live refusal streak: the next rung IS the next attempt, and it is a real
-  // date. Out of rungs, the month-end settle owns what is owed but this org is
-  // blocked, not scheduled.
-  if (streak && streak.firstFailedAt != null) {
-    const dueAt = nextRetryDueAt(streak.attemptCount, streak.firstFailedAt);
-    if (dueAt === null) {
-      return {
-        ...base,
-        ...noDate,
-        state: "charge_blocked",
-        blockedReason: "retries_exhausted",
-      };
-    }
+  // Every `charge_blocked` verdict is decided by ONE function (lib/charge-verdict),
+  // which the fast payment-hold read (`/charge-verdict`) asks alone. In order:
+  // PREPAID is blocked only by a card the bank refused or called dead (owner
+  // 2026-11-03, INSTANT-STOP-ON-DECLINE-1103); otherwise no chargeable card on
+  // file RIGHT NOW (read from the current state, never a detach event: the
+  // card-change flow attaches before it detaches), then a card the issuer called
+  // lost / stolen / closed (never re-presented), then a live refusal streak (its
+  // next rung is a real date; out of rungs = retries_exhausted), then an issuing
+  // country that cannot be charged off-session.
+  const chargeBlock = chargeBlockFrom(
+    {
+      paymentMode,
+      platformOrg,
+      hasCardPm: snapshot.hasCardPm,
+      autoReloadSupported: snapshot.autoReloadSupported,
+      streak,
+    },
+    now
+  );
+  if (chargeBlock) {
     return {
       ...base,
       state: "charge_blocked",
-      blockedReason: "card_declined",
-      nextChargeAttemptAt: new Date(
-        Math.max(dueAt.getTime(), now.getTime())
-      ).toISOString(),
-      trigger: "retry_rung",
+      blockedReason: chargeBlock.blockedReason,
+      nextChargeAttemptAt: chargeBlock.nextChargeAttemptAt,
+      trigger: chargeBlock.trigger,
     };
   }
 
-  // No credit line means nothing can be reloaded, and `resolvePostpaidTier`
-  // grants one only to an org that can actually be charged — so a null tier is
-  // either no configuration, no chargeable card, or a blocked issuing country.
-  // Those are three different sentences to a customer, so they are three reasons
-  // (no chargeable card was answered above).
+  // PREPAID with no card or no armed auto top-up: no automatic charge will ever
+  // happen; spend stops at zero through the affordability check.
+  if (paymentMode === "prepaid" && (!snapshot.hasCardPm || block.tier === null)) {
+    return { ...base, ...noDate, state: "no_autopay", blockedReason: null };
+  }
+
+  // No credit line means nothing can be reloaded (no configuration; no card and
+  // an unsupported country were answered above).
   if (block.tier === null) {
-    if (!snapshot.autoReloadSupported) {
-      return {
-        ...base,
-        ...noDate,
-        state: "charge_blocked",
-        blockedReason: "card_country_unsupported",
-      };
-    }
     // A POSTPAID org with a chargeable card and auto top-up OFF is still
     // collected at month end on what it owes (lib/month-end-sweep sweeps every
     // postpaid org), so when it owes a chargeable amount the month-end settle IS

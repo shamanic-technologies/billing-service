@@ -2457,6 +2457,59 @@
           "runningDailyBudgetCents"
         ]
       },
+      "ChargeVerdictResponse": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentMode": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid",
+              "subscription"
+            ],
+            "description": "How this org pays. postpaid (default for every org): a credit line the balance may run below zero into, a card required, and no chargeable card is charge_blocked. prepaid: spends only money already paid in (floor 0), no card required, never charge_blocked; spend stops at zero through the affordability check. subscription: a monthly Stripe subscription ($99/month, 3-day free trial, card required); each paid invoice is that amount of credit, the trial start grants $99, floor 0, never auto-reloaded. Entered by starting a subscription (POST /v1/accounts/subscription/checkout_session) or by staff."
+          },
+          "chargeBlocked": {
+            "type": "boolean"
+          },
+          "blockedReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "card_declined",
+              "card_unusable",
+              "retries_exhausted",
+              "no_chargeable_card",
+              "card_country_unsupported",
+              null
+            ]
+          },
+          "nextChargeAttemptAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "trigger": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "retry_rung",
+              null
+            ]
+          }
+        },
+        "required": [
+          "orgId",
+          "paymentMode",
+          "chargeBlocked",
+          "blockedReason",
+          "nextChargeAttemptAt",
+          "trigger"
+        ]
+      },
       "CampaignAffordability": {
         "type": "object",
         "properties": {
@@ -9423,6 +9476,73 @@
           },
           "502": {
             "description": "Could not read the org's balance or its realized spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/charge-verdict": {
+      "get": {
+        "summary": "Can billing still charge this org, and if not why (fast payment-hold verdict)",
+        "description": "The payment outlook's charge_blocked verdict ALONE, from the same decision: chargeBlocked === (payment-outlook state === charge_blocked), same blockedReason values, same retry date. Reads only billing's own rows (account, platform org, refused-card streak) and the org's card facts (held at most 60 s, dropped when billing learns a card went away), never runs-service or campaign-service, so it stays fast while the shared database is saturated. A refusal billing records is seen on the very next read. For campaign-service's minute sweep and run gate. x-api-key only, orgId in the path. Pure read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The payment-hold verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChargeVerdictResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a valid UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No billing account for this org",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Could not read the org's card facts or its credited total",
             "content": {
               "application/json": {
                 "schema": {
