@@ -196,7 +196,37 @@ export type RecurringStatusAnswer =
  * unanswerable org into a null daily revenue carrying that reason — never 0,
  * which would read as a customer who stopped spending.
  */
+/**
+ * STALE IF ERROR (MIGRATE-1105 S6, prod 2026-11-08: campaign-service's answer for one org timed out 3 times in 3 h under
+ * box load, each time billing read the funnel's budget consumption as unmeasured and HELD the org's units, Beyond Logic's
+ * cold email included). A failed read serves the org's last good answer while it is younger than this, logged loud:
+ * which campaigns run and recur moves on a start, a stop or an exhausted audience, so a few minutes old names the same
+ * ones. Older (or none) = the named failure, as before: never a guess.
+ */
+export const RECURRING_STATUS_STALE_MAX_MS = 15 * 60_000;
+const lastGoodRecurring = new Map<string, { at: number; campaigns: RecurringCampaignStatus[] }>();
+/** Test seam. */
+export function forgetRecurringStatuses(): void {
+  lastGoodRecurring.clear();
+}
+
 export async function fetchRecurringCampaignStatuses(
+  orgId: string
+): Promise<RecurringStatusAnswer> {
+  const answer = await readRecurringCampaignStatuses(orgId);
+  if (answer.ok) {
+    lastGoodRecurring.set(orgId, { at: Date.now(), campaigns: answer.campaigns });
+    return answer;
+  }
+  const held = lastGoodRecurring.get(orgId);
+  if (answer.reason === "campaign_service_unavailable" && held && Date.now() - held.at < RECURRING_STATUS_STALE_MAX_MS) {
+    console.error(`[billing-service] recurring-status for org=${orgId} unreadable: serving its last good answer, ${Math.round((Date.now() - held.at) / 1000)}s old`);
+    return { ok: true, campaigns: held.campaigns };
+  }
+  return answer;
+}
+
+async function readRecurringCampaignStatuses(
   orgId: string
 ): Promise<RecurringStatusAnswer> {
   const config = getCampaignServiceConfig();
