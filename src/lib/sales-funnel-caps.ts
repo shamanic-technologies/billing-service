@@ -88,6 +88,8 @@ import {
   brandFunnelDailyCentsVia,
   fetchSalesFunnelCampaigns,
   fundingOf,
+  isTargetOnlyCampaign,
+  targetOnlyPipe,
   unitIdsOf,
   type FundedBy,
   type SalesFunnelCampaign,
@@ -546,10 +548,76 @@ type PipesAnswer =
   | { ok: true; funnel: SalesFunnel; pipes: MeasuredPipe[]; sources: SourcesAnswer }
   | { ok: false; reason: ConsumedUnavailableReason; detail: string; funnel: SalesFunnel | null };
 
+/**
+ * PURE: the funnel a TARGET-ONLY campaign (campaign-service #883) of this brand x offer is capped
+ * as, or null when no such campaign carries this funnel id. Its one pipe is its Engine's, proactive
+ * from Start, producing the target: the shared cap path then measures its spend on its unit and its
+ * volume as the target outcomes the unit produced (an item pipe), like any funnel.
+ */
+export function targetOnlyFunnelOf(
+  k: Pick<FunnelCapKey, "brandId" | "offerId" | "salesFunnelId">,
+  campaigns: SalesFunnelCampaign[]
+): SalesFunnel | null {
+  const c = campaigns.find(
+    (c) =>
+      isTargetOnlyCampaign(c) &&
+      c.salesFunnelId === k.salesFunnelId &&
+      c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
+      c.offerId.toLowerCase() === k.offerId.toLowerCase()
+  );
+  if (!c) return null;
+  const target = c.target!;
+  // The unit's own spelling of its pipe (lib/funnel-campaigns `unitPipeOf`), so the two always match.
+  const pipe = c.units[0] ? { featureSlug: c.units[0].featureSlug, legKey: c.units[0].legKey } : targetOnlyPipe(target, null);
+  return {
+    id: c.salesFunnelId,
+    name: c.name ?? null,
+    type: "proactive",
+    pipes: [
+      {
+        pipeId: `${pipe.featureSlug}|${pipe.legKey}`,
+        channelSlug: pipe.featureSlug,
+        legKey: pipe.legKey,
+        strategyId: null,
+        mode: "proactive",
+        toStep: target,
+        runByUs: true,
+      },
+    ],
+    triggerSlug: null,
+  };
+}
+
+/**
+ * The funnel a cap is keyed on: a target-only campaign's own shape (read off campaign-service,
+ * never asked of features-service, which names no funnel after a step key), else features-service's
+ * sales funnel. `campaigns` = the org's funnel campaigns already read (null = unreadable); absent =
+ * read them only when features-service has no such funnel or cannot answer. Throws the catalogue's
+ * error when neither knows the id.
+ */
+export async function capFunnelOf(
+  k: Pick<FunnelCapKey, "orgId" | "brandId" | "offerId" | "salesFunnelId">,
+  campaigns?: SalesFunnelCampaign[] | null
+): Promise<SalesFunnel> {
+  const own = campaigns ? targetOnlyFunnelOf(k, campaigns) : null;
+  if (own) return own;
+  try {
+    return await getSalesFunnel(k.salesFunnelId);
+  } catch (err) {
+    if (campaigns !== undefined) throw err;
+    if (!(err instanceof SalesFunnelNotFoundError) && !(err instanceof SalesFunnelCatalogueUnavailableError)) throw err;
+    const fcs = await fetchSalesFunnelCampaigns(k.orgId);
+    const found = fcs.ok ? targetOnlyFunnelOf(k, fcs.campaigns) : null;
+    if (found) return found;
+    throw err;
+  }
+}
+
 async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
+  const fcs = await fetchSalesFunnelCampaigns(k.orgId);
   let funnel: SalesFunnel;
   try {
-    funnel = await getSalesFunnel(k.salesFunnelId);
+    funnel = await capFunnelOf(k, fcs.ok ? fcs.campaigns : null);
   } catch (err) {
     if (err instanceof SalesFunnelNotFoundError) {
       return { ok: false, reason: "sales_funnel_not_found", detail: err.message, funnel: null };
@@ -566,7 +634,6 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   if (!statuses.ok) {
     return { ok: false, reason: statuses.reason, detail: "campaign-service recurring-status unreadable", funnel };
   }
-  const fcs = await fetchSalesFunnelCampaigns(k.orgId);
   if (!fcs.ok) {
     return { ok: false, reason: fcs.reason, detail: "campaign-service sales-funnel-campaigns unreadable", funnel };
   }
@@ -1292,7 +1359,7 @@ export async function composeSalesFunnelCapsView(
   const row = await getSalesFunnelCaps(k);
   if (!row) {
     // Nothing stated: still name the funnel, its type and its volume unit (the form's labels).
-    const read = await readFunnelSoft(k.salesFunnelId);
+    const read = await readFunnelSoft(k);
     return {
       ...k,
       stated: false,
@@ -1369,10 +1436,10 @@ export async function composeSalesFunnelCampaignCapsView(
 
 /** The funnel read fail-soft: the funnel, or null with the reason it could not be read. */
 async function readFunnelSoft(
-  id: string
+  k: Pick<FunnelCapKey, "orgId" | "brandId" | "offerId" | "salesFunnelId">
 ): Promise<{ funnel: SalesFunnel | null; reason: "sales_funnel_not_found" | "sales_funnel_catalogue_unavailable" | null }> {
   try {
-    return { funnel: await getSalesFunnel(id), reason: null };
+    return { funnel: await capFunnelOf(k), reason: null };
   } catch (err) {
     if (err instanceof SalesFunnelNotFoundError) return { funnel: null, reason: "sales_funnel_not_found" };
     console.error(`[billing-service] sales funnel caps: ${errorReason(err)}`);
@@ -1412,7 +1479,7 @@ const BRAND_LIST_CATALOGUE_WAIT_MS = 3_000;
 export async function statedCapsOf(row: SalesFunnelCapRow) {
   let timer: NodeJS.Timeout | undefined;
   const read = await Promise.race([
-    readFunnelSoft(row.salesFunnelId),
+    readFunnelSoft(row),
     new Promise<{ funnel: null; reason: "sales_funnel_catalogue_unavailable" }>((resolve) => {
       timer = setTimeout(
         () => resolve({ funnel: null, reason: "sales_funnel_catalogue_unavailable" }),
