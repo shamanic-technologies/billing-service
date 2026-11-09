@@ -27,8 +27,8 @@ import { db } from "../db/index.js";
 import { ownerStripeStepAlerts, salesFunnelCaps, type SalesFunnelCapRow } from "../db/schema.js";
 import { currentActor, deliver, type AlertActor } from "./owner-alerts.js";
 import { getMonthlyChargeLimit } from "./monthly-charge-limit.js";
-import { getSalesFunnel, type SalesFunnel } from "./sales-funnel-catalogue.js";
-import { volumeUnitFor, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
+import type { SalesFunnel } from "./sales-funnel-catalogue.js";
+import { capFunnelOf, volumeUnitFor, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
 
 /** Card step to send, when no budget lands meanwhile. */
 export const STRIPE_STEP_SETTLE_MS = 60_000;
@@ -175,17 +175,17 @@ export function composeStripeStepText(input: {
   return lines.join("\n");
 }
 
-async function funnelSoft(id: string): Promise<SalesFunnel | null> {
+async function funnelSoft(row: SalesFunnelCapRow): Promise<SalesFunnel | null> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      getSalesFunnel(id),
+      capFunnelOf(row),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), CATALOGUE_WAIT_MS);
       }),
     ]);
   } catch (err) {
-    console.error(`[billing-service] card step alert: funnel ${id} unreadable:`, err);
+    console.error(`[billing-service] card step alert: funnel ${row.salesFunnelId} unreadable:`, err);
     return null;
   } finally {
     clearTimeout(timer);
@@ -202,7 +202,7 @@ export async function readOrgBudgetLines(orgId: string): Promise<BudgetLine[]> {
   const out: BudgetLine[] = [];
   for (const row of rows) {
     if (row.maxBudgetCents == null && row.maxVolume == null) continue;
-    const funnel = await funnelSoft(row.salesFunnelId);
+    const funnel = await funnelSoft(row);
     const reactive = (funnel?.type ?? row.salesFunnelType) === "reactive";
     out.push({
       funnelName: funnel?.name ?? null,

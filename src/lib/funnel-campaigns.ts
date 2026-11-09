@@ -47,6 +47,8 @@ export interface SalesFunnelCampaign {
   salesFunnelName?: string | null;
   /** The campaign's own name when campaign-service serves one; null/absent otherwise. */
   name?: string | null;
+  /** The outcome the campaign is launched on (campaign-service `target`); null/absent when not served. */
+  target?: string | null;
   status: string;
   units: SalesFunnelUnit[];
 }
@@ -176,12 +178,12 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
       salesFunnelId: String(c.salesFunnelId),
       salesFunnelName: typeof c.salesFunnelName === "string" ? c.salesFunnelName : null,
       name: typeof c.name === "string" && c.name.trim() ? c.name.trim() : null,
+      target: typeof c.target === "string" && c.target ? c.target : null,
       status: String(c.status),
       units: Array.isArray(c.units)
         ? (c.units as Array<Record<string, unknown>>).map((u) => ({
             campaignId: String(u.campaignId),
-            featureSlug: String(u.featureSlug),
-            legKey: String(u.legKey),
+            ...unitPipeOf(c, u),
             status: String(u.status),
           }))
         : [],
@@ -191,6 +193,34 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
     console.error(`[billing-service] campaign-service sales-funnel-campaigns unreachable for org=${orgId}:`, err);
     return { ok: false, reason: "campaign_service_unavailable" };
   }
+}
+
+/**
+ * PURE: a campaign launched on its TARGET alone (campaign-service #883, MIGRATE-1105 S8): no sales
+ * funnel, so campaign-service stores its target as its funnel id (`salesFunnelId === target`; a
+ * real funnel id is a chain of legs, never a bare step key). It owns ONE unit with no channel and
+ * no leg, born on the target's Engine.
+ */
+export function isTargetOnlyCampaign(c: { salesFunnelId?: unknown; target?: unknown }): boolean {
+  return typeof c.target === "string" && c.target.length > 0 && c.salesFunnelId === c.target;
+}
+
+/**
+ * PURE: the pipe a target-only campaign's unit runs, as every cap reads a pipe: its Engine (the
+ * unit's `workflowSlug`, `engine:<target>`) as the channel, from Start to the target as the leg.
+ * One spelling for the unit and the funnel billing caps it as (lib/sales-funnel-caps `targetOnlyFunnelOf`).
+ */
+export function targetOnlyPipe(target: string, workflowSlug: unknown): { featureSlug: string; legKey: string } {
+  return {
+    featureSlug: typeof workflowSlug === "string" && workflowSlug ? workflowSlug : `engine:${target}`,
+    legKey: `start_to_${target}`,
+  };
+}
+
+/** PURE: a served unit's (channel, leg); a channel-less unit of a target-only campaign runs its Engine's pipe. */
+function unitPipeOf(c: Record<string, unknown>, u: Record<string, unknown>): { featureSlug: string; legKey: string } {
+  if (u.featureSlug == null && u.legKey == null && isTargetOnlyCampaign(c)) return targetOnlyPipe(String(c.target), u.workflowSlug);
+  return { featureSlug: String(u.featureSlug), legKey: String(u.legKey) };
 }
 
 /** Every unit campaign id of these funnel campaigns. */
