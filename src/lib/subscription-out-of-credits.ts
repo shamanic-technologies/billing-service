@@ -47,7 +47,7 @@ import { computeBalance } from "./balance.js";
 import { resolveSpendBlock } from "./spend-block.js";
 import { getLiveSubscription, getOrgSendingStopped } from "./subscription.js";
 import { fetchSalesFunnelCampaigns } from "./funnel-campaigns.js";
-import { getSalesFunnel } from "./sales-funnel-catalogue.js";
+import { capFunnelOf } from "./sales-funnel-caps.js";
 import { fetchOrgCustomerOrNull } from "./stripe-service-client.js";
 import { fetchBrandName, fetchOfferNames, fetchOrgIdentity } from "./budget-change-context.js";
 import { createPlatformRun, completePlatformRun } from "./runs-client.js";
@@ -88,9 +88,11 @@ async function stoppedCampaigns(orgId: string): Promise<{ campaigns: StoppedCamp
 
   const kinds = new Map<string, StoppedCampaign["kind"]>();
   await Promise.all(
-    [...new Set(ongoing.map((c) => c.salesFunnelId))].map(async (id) => {
+    [...new Map(ongoing.map((c) => [c.salesFunnelId, c])).values()].map(async (c) => {
+      const id = c.salesFunnelId;
       try {
-        kinds.set(id, (await getSalesFunnel(id)).type);
+        // A target-only campaign (no sales funnel) is typed off its own shape, never asked of features-service.
+        kinds.set(id, (await capFunnelOf({ orgId, brandId: c.brandId, offerId: c.offerId, salesFunnelId: id }, answer.campaigns)).type);
       } catch (err) {
         console.error(`[billing-service] out-of-credits: funnel ${id} type unreadable (listed apart):`, err);
         kinds.set(id, null);

@@ -14,6 +14,7 @@ import { requireOrgHeaders } from "../middleware/auth.js";
 import { InternalSetSalesFunnelCapsRequestSchema, SetSalesFunnelCapsRequestSchema } from "../schemas.js";
 import { parseNonNegativeCents } from "../lib/cents.js";
 import {
+  capFunnelOf,
   composeSalesFunnelCampaignCapsView,
   composeSalesFunnelCapsView,
   listBrandSalesFunnelCaps,
@@ -24,7 +25,6 @@ import {
   type CapPeriod,
   type FunnelCapKey,
 } from "../lib/sales-funnel-caps.js";
-import { getSalesFunnel } from "../lib/sales-funnel-catalogue.js";
 import { errorReason } from "../lib/pg-error.js";
 import { deferStripeStepAlertOnCapWrite } from "../lib/stripe-step-alert.js";
 import { budgetChangeLines, reportBudgetChange, type CapState } from "../lib/account-activity.js";
@@ -116,7 +116,7 @@ function reportCapsWrite(
         const fc = answer.ok ? answer.campaigns.find((c) => c.id.toLowerCase() === campaignId) : undefined;
         return fc?.name ?? fc?.salesFunnelName ?? funnelName;
       }
-      return funnelName ?? (await getSalesFunnel(key.salesFunnelId)).name;
+      return funnelName ?? (await capFunnelOf(key)).name;
     },
   });
 }
@@ -185,7 +185,7 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
   let salesFunnelType: "proactive" | "reactive" | null = null;
   let funnelName: string | null = null;
   try {
-    const funnel = await getSalesFunnel(key.salesFunnelId);
+    const funnel = await capFunnelOf(key);
     salesFunnelType = funnel.type;
     funnelName = funnel.name;
   } catch (err) {
