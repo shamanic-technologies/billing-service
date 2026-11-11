@@ -44,9 +44,9 @@ import { nextPeriodEnd } from "../../src/lib/subscription-schedule.js";
 import { getOrgRevenue } from "../../src/lib/revenue.js";
 import { toSubscriptionRecap, type SubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
 
-const orgId = "00000000-0000-0000-0000-0000000005b1";
-const userId = "00000000-0000-0000-0000-0000000005b9";
-const campaignId = "00000000-0000-0000-0000-0000000005c1";
+const orgId = "00000000-0000-4000-8000-0000000005b1";
+const userId = "00000000-0000-4000-8000-0000000005b9";
+const campaignId = "00000000-0000-4000-8000-0000000005c1";
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
 const headers = getAuthHeaders(orgId, userId);
 const HOUR = 60 * 60 * 1000;
@@ -117,7 +117,7 @@ describe("subscription (billing-owned)", () => {
       spent_cents: usage,
       as_of: "2026-10-01T00:00:00.000Z",
     }));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const costs = await import("../../src/lib/costs-client.js");
     vi.spyOn(costs, "resolveRequiredCents").mockResolvedValue("50.0000000000");

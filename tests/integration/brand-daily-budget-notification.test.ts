@@ -3,11 +3,11 @@ import request from "supertest";
 import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 
-const orgId = "00000000-0000-0000-0000-00000000b201";
-const otherOrgId = "00000000-0000-0000-0000-00000000b202";
-const userId = "00000000-0000-0000-0000-00000000b299";
-const runId = "00000000-0000-0000-0000-00000000baaa";
-const brandId = "00000000-0000-0000-0000-0000000bd601";
+const orgId = "00000000-0000-4000-8000-00000000b201";
+const otherOrgId = "00000000-0000-4000-8000-00000000b202";
+const userId = "00000000-0000-4000-8000-00000000b299";
+const runId = "00000000-0000-4000-8000-00000000baaa";
+const brandId = "00000000-0000-4000-8000-0000000bd601";
 
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
 const internalHeaders = (id: string) => ({ ...apiKeyHeaders, "x-org-id": id });

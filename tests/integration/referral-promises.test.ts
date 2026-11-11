@@ -43,11 +43,11 @@ import {
 import { settleFreeCreditPromises } from "../../src/lib/free-credit-settlement.js";
 import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-sweep.js";
 
-const inviter = "00000000-0000-0000-0000-0000000005a1";
-const invitee = "00000000-0000-0000-0000-0000000005a2";
-const invitee2 = "00000000-0000-0000-0000-0000000005a3";
-const otherInviter = "00000000-0000-0000-0000-0000000005a4";
-const userId = "00000000-0000-0000-0000-0000000005a9";
+const inviter = "00000000-0000-4000-8000-0000000005a1";
+const invitee = "00000000-0000-4000-8000-0000000005a2";
+const invitee2 = "00000000-0000-4000-8000-0000000005a3";
+const otherInviter = "00000000-0000-4000-8000-0000000005a4";
+const userId = "00000000-0000-4000-8000-0000000005a9";
 
 const cents = (n: number) => `${n}.0000000000`;
 const REWARD = CURRENT_REFERRAL_PROMISE_AMOUNT_CENTS;

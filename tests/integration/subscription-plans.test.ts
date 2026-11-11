@@ -27,8 +27,8 @@ import {
 import { getOrgRevenue } from "../../src/lib/revenue.js";
 import { getChargeSchedule } from "../../src/lib/charge-schedule.js";
 
-const orgId = "00000000-0000-0000-0000-0000000006b1";
-const userId = "00000000-0000-0000-0000-0000000006b9";
+const orgId = "00000000-0000-4000-8000-0000000006b1";
+const userId = "00000000-0000-4000-8000-0000000006b9";
 const headers = getAuthHeaders(orgId, userId);
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -118,7 +118,7 @@ describe("plans per brand x offer", () => {
       spent_cents: usage,
       as_of: "2026-10-01T00:00:00.000Z",
     }));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const costs = await import("../../src/lib/costs-client.js");
     vi.spyOn(costs, "resolveRequiredCents").mockResolvedValue("50.0000000000");

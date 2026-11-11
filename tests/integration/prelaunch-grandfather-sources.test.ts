@@ -29,8 +29,8 @@ import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-swee
  * incoherence this shape removes, so the check lives in one place and every caller
  * gets it by construction.
  */
-const orgId = "00000000-0000-0000-0000-0000000000e1";
-const userId = "00000000-0000-0000-0000-0000000000e2";
+const orgId = "00000000-0000-4000-8000-0000000000e1";
+const userId = "00000000-0000-4000-8000-0000000000e2";
 const BEFORE_LAUNCH = new Date(WELCOME_COMPLETION_LAUNCH_AT_MS - 86_400_000);
 
 /** A pre-existing org that has since crossed its $25 trigger. */

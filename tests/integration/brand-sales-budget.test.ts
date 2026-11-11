@@ -13,11 +13,11 @@ import {
   brandDailyBudgets,
 } from "../../src/db/schema.js";
 
-const orgId = "00000000-0000-0000-0000-0000000054a1";
-const otherOrgId = "00000000-0000-0000-0000-0000000054a2";
-const userId = "00000000-0000-0000-0000-0000000054a9";
-const runId = "00000000-0000-0000-0000-0000000054ab";
-const brandId = "00000000-0000-0000-0000-000000054b01";
+const orgId = "00000000-0000-4000-8000-0000000054a1";
+const otherOrgId = "00000000-0000-4000-8000-0000000054a2";
+const userId = "00000000-0000-4000-8000-0000000054a9";
+const runId = "00000000-0000-4000-8000-0000000054ab";
+const brandId = "00000000-0000-4000-8000-000000054b01";
 const OFFER = "aaaaaaaa-1154-4154-8154-aaaaaaaaaaaa";
 const COLD = "sales-cold-email-outreach";
 const LEG_REPLY = "start_to_conversation";

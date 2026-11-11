@@ -30,8 +30,8 @@ import {
 import { nextPeriodEnd } from "../../src/lib/subscription-schedule.js";
 import { getOrgRevenue } from "../../src/lib/revenue.js";
 
-const orgId = "00000000-0000-0000-0000-0000000007b1";
-const userId = "00000000-0000-0000-0000-0000000007b9";
+const orgId = "00000000-0000-4000-8000-0000000007b1";
+const userId = "00000000-0000-4000-8000-0000000007b9";
 const headers = getAuthHeaders(orgId, userId);
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -77,7 +77,7 @@ describe("subscription: start a trialing plan now", () => {
       spent_cents: "1000.0000000000",
       as_of: "2026-10-01T00:00:00.000Z",
     }));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const cs = await import("../../src/lib/campaign-service-client.js");
     vi.spyOn(cs, "fetchSpendableBudget").mockResolvedValue(null);

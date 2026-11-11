@@ -48,9 +48,9 @@ import {
 const FLAT_GIFT_CENTS = 3000;
 const COUPON_ID = "coupon_welcome_30";
 
-const orgId = "00000000-0000-0000-0000-0000000005a1";
-const otherOrgId = "00000000-0000-0000-0000-0000000005a2";
-const userId = "00000000-0000-0000-0000-0000000005a3";
+const orgId = "00000000-0000-4000-8000-0000000005a1";
+const otherOrgId = "00000000-0000-4000-8000-0000000005a2";
+const userId = "00000000-0000-4000-8000-0000000005a3";
 
 const NEVER_PRE_LAUNCH = () => Promise.resolve("0.0000000000");
 const cents = (n: number) => `${n}.0000000000`;

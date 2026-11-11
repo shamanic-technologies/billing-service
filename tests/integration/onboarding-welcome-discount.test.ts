@@ -26,8 +26,8 @@ import { welcomeGiftCouponId } from "../../src/lib/onboarding-welcome-discount.j
 
 const GIFT = 3000;
 const BUDGET = 6800;
-const orgId = "00000000-0000-0000-0000-0000000007a1";
-const userId = "00000000-0000-0000-0000-0000000007a3";
+const orgId = "00000000-0000-4000-8000-0000000007a1";
+const userId = "00000000-0000-4000-8000-0000000007a3";
 const cents = (n: number) => `${n}.0000000000`;
 
 async function signupWithGift(amounts: Array<[string, number]> = [[WELCOME_PROMO_CODE, GIFT]]) {

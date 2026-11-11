@@ -20,8 +20,8 @@ import * as ssClient from "../../src/lib/stripe-service-client.js";
 import * as reload from "../../src/lib/reload.js";
 import { CREDIT_LINE_HOLD_PURPOSE } from "../../src/lib/postpaid-card-check.js";
 
-const orgId = "00000000-0000-0000-0000-0000000008a1";
-const campaignId = "00000000-0000-0000-0000-0000000008c1";
+const orgId = "00000000-0000-4000-8000-0000000008a1";
+const campaignId = "00000000-0000-4000-8000-0000000008c1";
 
 describe("postpaid card check: $50 hold before credit, captured at the step", () => {
   const app = createTestApp();

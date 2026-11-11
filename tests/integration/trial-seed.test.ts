@@ -20,8 +20,8 @@ import { resolveTrialSeedAmountCents } from "../../src/lib/trial-seed.js";
  */
 describe("trial seed → signup", () => {
   const app = createTestApp();
-  const seededOrg = "00000000-0000-0000-0000-0000000000a1";
-  const plainOrg = "00000000-0000-0000-0000-0000000000a2";
+  const seededOrg = "00000000-0000-4000-8000-0000000000a1";
+  const plainOrg = "00000000-0000-4000-8000-0000000000a2";
 
   beforeEach(async () => {
     await cleanTestData();
@@ -224,7 +224,7 @@ describe("trial seed → signup", () => {
   ])(
     "welcome at %i cents → seed %i + welcome %i, totalling exactly the welcome amount",
     async (welcomeCents, expectedSeed, expectedRemainder) => {
-      const orgId = `00000000-0000-0000-0000-0000000${String(welcomeCents).padStart(
+      const orgId = `00000000-0000-4000-8000-0000000${String(welcomeCents).padStart(
         5,
         "0"
       )}`;

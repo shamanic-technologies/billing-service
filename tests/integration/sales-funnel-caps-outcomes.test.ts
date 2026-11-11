@@ -11,10 +11,10 @@ import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import { __resetStepEvidence } from "../../src/lib/sales-funnel-caps.js";
 
-const orgId = "00000000-0000-0000-0000-000000102801";
-const userId = "00000000-0000-0000-0000-000000102809";
-const runId = "00000000-0000-0000-0000-00000010280a";
-const brandId = "00000000-0000-0000-0000-000000102811";
+const orgId = "00000000-0000-4000-8000-000000102801";
+const userId = "00000000-0000-4000-8000-000000102809";
+const runId = "00000000-0000-4000-8000-00000010280a";
+const brandId = "00000000-0000-4000-8000-000000102811";
 const OFFER = "aaaaaaaa-1028-4028-8028-aaaaaaaaaaaa";
 
 const THREADS = "threads-post";

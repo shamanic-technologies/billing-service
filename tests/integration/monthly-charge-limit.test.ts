@@ -38,7 +38,7 @@ import {
 } from "../../src/lib/monthly-charge-limit.js";
 
 const app = createTestApp();
-const orgId = "00000000-0000-0000-0000-0000000000c7";
+const orgId = "00000000-0000-4000-8000-0000000000c7";
 const PATH = "/v1/accounts/monthly_charge_limit";
 const INTERNAL = `/internal/accounts/by-org/${orgId}/monthly-charge-limit`;
 
@@ -53,7 +53,7 @@ const payment = (amount: number, over: Partial<ssClient.OrgPayment> = {}): ssCli
   ...over,
 });
 
-const campaignId = "00000000-0000-0000-0000-0000000000cc";
+const campaignId = "00000000-0000-4000-8000-0000000000cc";
 
 describe("monthly limit: a spend cap, never a charge refusal", () => {
   let payments: ssClient.OrgPayment[];
@@ -106,7 +106,7 @@ describe("monthly limit: a spend cap, never a charge refusal", () => {
     });
     vi.spyOn(ssClient, "chargeOrgOffSession").mockImplementation(charge as never);
     vi.spyOn(ssClient, "fetchOrgCustomerOrNull").mockResolvedValue({ id: "cus_1", email: "owner@client.test" } as never);
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("11111111-1111-1111-1111-111111111111");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("11111111-1111-1111-8111-111111111111");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue();
     vi.spyOn(budgetContext, "fetchOrgIdentity").mockResolvedValue({ externalId: "org_clerk1" } as never);
     vi.spyOn(plans, "fetchOrgBrandIdsOldestFirst").mockResolvedValue(["b1"]);

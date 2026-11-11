@@ -28,8 +28,8 @@ import {
  */
 describe("an org with credit and no Stripe customer", () => {
   const app = createTestApp();
-  const anonOrg = "00000000-0000-0000-0000-0000000000f1";
-  const userId = "00000000-0000-0000-0000-0000000000f9";
+  const anonOrg = "00000000-0000-4000-8000-0000000000f1";
+  const userId = "00000000-0000-4000-8000-0000000000f9";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let setRequired: (cents: string) => void;
   let setUsage: (cents: string) => void;
@@ -111,7 +111,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -131,7 +131,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     // The normal insufficient-credit outcome — NOT a 502, and no reload: a
@@ -150,7 +150,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -252,7 +252,7 @@ describe("an org with credit and no Stripe customer", () => {
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(anonOrg, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(502);

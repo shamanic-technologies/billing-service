@@ -14,10 +14,10 @@ import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import { capOfFunnelCampaign } from "../../src/lib/funnel-campaigns.js";
 
-const orgId = "00000000-0000-0000-0000-0000000083a1";
-const userId = "00000000-0000-0000-0000-0000000083a9";
-const runId = "00000000-0000-0000-0000-0000000083ab";
-const brandId = "00000000-0000-0000-0000-000000083b01";
+const orgId = "00000000-0000-4000-8000-0000000083a1";
+const userId = "00000000-0000-4000-8000-0000000083a9";
+const runId = "00000000-0000-4000-8000-0000000083ab";
+const brandId = "00000000-0000-4000-8000-000000083b01";
 const OFFER = "aaaaaaaa-1183-4183-8183-aaaaaaaaaaaa";
 
 const FOLLOW = "ai-follow-up-email";

@@ -23,10 +23,10 @@ import * as runsClient from "../../src/lib/runs-client.js";
 import * as brandClient from "../../src/lib/brand-service-client.js";
 import { claimReferral } from "../../src/lib/free-credit-promises.js";
 
-const inviter = "00000000-0000-0000-0000-0000000006a1";
-const invitee = "00000000-0000-0000-0000-0000000006a2";
-const invitee2 = "00000000-0000-0000-0000-0000000006a3";
-const userId = "00000000-0000-0000-0000-0000000006a9";
+const inviter = "00000000-0000-4000-8000-0000000006a1";
+const invitee = "00000000-0000-4000-8000-0000000006a2";
+const invitee2 = "00000000-0000-4000-8000-0000000006a3";
+const userId = "00000000-0000-4000-8000-0000000006a9";
 
 const cents = (n: number) => `${n}.0000000000`;
 

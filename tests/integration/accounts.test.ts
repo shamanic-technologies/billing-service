@@ -20,8 +20,8 @@ import { eq } from "drizzle-orm";
 
 describe("Accounts endpoints", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
-  const userId = "00000000-0000-0000-0000-000000000099";
+  const orgId = "00000000-0000-4000-8000-000000000001";
+  const userId = "00000000-0000-4000-8000-000000000099";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;
   let fetchRunsOrgActualUsageTotalSpy: ReturnType<typeof vi.fn>;
@@ -447,7 +447,7 @@ describe("Accounts endpoints", () => {
     it("returns 404 for unknown org", async () => {
       const res = await request(app)
         .get("/v1/accounts/balance")
-        .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"));
+        .set(getAuthHeaders("00000000-0000-4000-8000-999999999999"));
       expect(res.status).toBe(404);
     });
   });
@@ -515,7 +515,7 @@ describe("Accounts endpoints", () => {
     it("returns 404 for unknown org", async () => {
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")
-        .set(getAuthHeaders("00000000-0000-0000-0000-999999999999"))
+        .set(getAuthHeaders("00000000-0000-4000-8000-999999999999"))
         .send({ topup_amount_cents: 2000, topup_threshold_cents: 100 });
       expect(res.status).toBe(404);
     });

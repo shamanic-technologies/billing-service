@@ -8,9 +8,9 @@ import { localPromos, staffDebits } from "../../src/db/schema.js";
 
 describe("Staff debits (POST /v1/credits/debit, GET /v1/credits/debits)", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
-  const orgB = "00000000-0000-0000-0000-000000000002";
-  const userId = "00000000-0000-0000-0000-000000000099";
+  const orgId = "00000000-0000-4000-8000-000000000001";
+  const orgB = "00000000-0000-4000-8000-000000000002";
+  const userId = "00000000-0000-4000-8000-000000000099";
   const staffEmail = "staff@distribute.you";
 
   beforeEach(async () => {
