@@ -22,9 +22,9 @@ import * as ownerAlerts from "../../src/lib/owner-alerts.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { upsertCampaignAuthorizeCost } from "../../src/lib/campaign-costs.js";
 
-const orgId = "00000000-0000-0000-0000-00000000d101";
-const userId = "00000000-0000-0000-0000-000000000099";
-const campaignId = "00000000-0000-0000-0000-00000000dc01";
+const orgId = "00000000-0000-4000-8000-00000000d101";
+const userId = "00000000-0000-4000-8000-000000000099";
+const campaignId = "00000000-0000-4000-8000-00000000dc01";
 
 const authorizeBody = {
   items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }],

@@ -22,8 +22,8 @@ import { runCampaignReloadSweep } from "../../src/lib/campaign-reload-sweep.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 import * as emailClient from "../../src/lib/email-client.js";
 
-const orgId = "00000000-0000-0000-0000-000000001029";
-const campaignId = "00000000-0000-0000-0000-0000000010d9";
+const orgId = "00000000-0000-4000-8000-000000001029";
+const campaignId = "00000000-0000-4000-8000-0000000010d9";
 const NOW = new Date(Date.UTC(2026, 9, 15, 7, 0, 0));
 
 describe("postpaid: charge only what is billed", () => {

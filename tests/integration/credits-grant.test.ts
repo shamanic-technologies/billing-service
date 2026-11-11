@@ -22,7 +22,7 @@ import {
 
 describe("POST /internal/credits/grant", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
+  const orgId = "00000000-0000-4000-8000-000000000001";
   const systemUserId = "00000000-0000-0000-0000-000000000000";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
   let fetchRunsOrgUsageTotalSpy: ReturnType<typeof vi.fn>;

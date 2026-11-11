@@ -19,8 +19,8 @@ import type { StripeCustomer } from "../../src/lib/stripe-service-client.js";
  */
 describe("a new org has no Stripe customer until a Stripe flow needs one", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-0000000000d1";
-  const userId = "00000000-0000-0000-0000-0000000000d9";
+  const orgId = "00000000-0000-4000-8000-0000000000d1";
+  const userId = "00000000-0000-4000-8000-0000000000d9";
   const headers = getAuthHeaders(orgId, userId);
   const serviceHeaders = { "X-API-Key": "test-api-key", "Content-Type": "application/json" };
   const urls = {

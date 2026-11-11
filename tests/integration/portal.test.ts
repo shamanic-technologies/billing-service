@@ -7,7 +7,7 @@ import * as runsClient from "../../src/lib/runs-client.js";
 
 describe("POST /v1/portal-sessions", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
+  const orgId = "00000000-0000-4000-8000-000000000001";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {

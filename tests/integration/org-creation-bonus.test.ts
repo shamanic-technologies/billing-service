@@ -24,8 +24,8 @@ import { sumEntitlementGrantsForOrg } from "../../src/lib/promos.js";
 describe("POST /internal/accounts/by-org/:orgId/org-creation-bonus", () => {
   const app = createTestApp();
   const person = "11111111-1111-4111-8111-1111111111b1";
-  const firstOrg = "00000000-0000-0000-0000-0000000000b1";
-  const secondOrg = "00000000-0000-0000-0000-0000000000b2";
+  const firstOrg = "00000000-0000-4000-8000-0000000000b1";
+  const secondOrg = "00000000-0000-4000-8000-0000000000b2";
   const internal = { "X-API-Key": "test-api-key" };
   const ZERO = "0.0000000000";
   let ssMocks: ReturnType<typeof setupStripeMocks>;

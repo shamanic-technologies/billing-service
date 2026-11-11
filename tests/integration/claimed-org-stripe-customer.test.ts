@@ -20,8 +20,8 @@ import type { StripeCustomer } from "../../src/lib/stripe-service-client.js";
  */
 describe("a claimed org whose billing row exists with no Stripe customer", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-0000000000c1";
-  const userId = "00000000-0000-0000-0000-0000000000c9";
+  const orgId = "00000000-0000-4000-8000-0000000000c1";
+  const userId = "00000000-0000-4000-8000-0000000000c9";
   const headers = getAuthHeaders(orgId, userId);
   const serviceHeaders = { "X-API-Key": "test-api-key", "Content-Type": "application/json" };
   let ssMocks: ReturnType<typeof setupStripeMocks>;

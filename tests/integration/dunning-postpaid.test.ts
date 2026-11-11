@@ -14,9 +14,9 @@ import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 // out-of-credit follow-ups, worded for how it pays (settle the balance due),
 // never "add credit / turn on auto top-up". Prepaid is unchanged.
 
-const orgId = "00000000-0000-0000-0000-00000000d0a1";
-const userId = "00000000-0000-0000-0000-000000000099";
-const campaignId = "00000000-0000-0000-0000-0000000ca0a1";
+const orgId = "00000000-0000-4000-8000-00000000d0a1";
+const userId = "00000000-0000-4000-8000-000000000099";
+const campaignId = "00000000-0000-4000-8000-0000000ca0a1";
 const billingEmail = "founder@postpaid.test";
 const DAY_MS = 24 * 60 * 60 * 1000;
 

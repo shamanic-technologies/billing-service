@@ -23,7 +23,7 @@ import {
 } from "../../src/lib/card-change-settlement.js";
 
 const app = createTestApp();
-const orgId = "00000000-0000-0000-0000-0000000000e1";
+const orgId = "00000000-0000-4000-8000-0000000000e1";
 const REMOVE = "/v1/accounts/saved_payment_method";
 
 describe("a customer can stop us holding their card", () => {
@@ -212,7 +212,7 @@ describe("a customer can stop us holding their card", () => {
   it("404s for an org with no billing account", async () => {
     const res = await request(app)
       .delete(REMOVE)
-      .set(getAuthHeaders("00000000-0000-0000-0000-0000000000e9"));
+      .set(getAuthHeaders("00000000-0000-4000-8000-0000000000e9"));
 
     expect(res.status).toBe(404);
     expect(ssMocks.removeSavedPaymentMethods).not.toHaveBeenCalled();

@@ -35,10 +35,10 @@ import {
   fetchRealizedDailyBurn,
 } from "../../src/lib/realized-burn.js";
 
-const orgId = "00000000-0000-0000-0000-00000000a0d1";
-const userId = "00000000-0000-0000-0000-00000000a0d9";
-const brandId = "00000000-0000-0000-0000-00000000a0b1";
-const campaignId = "00000000-0000-0000-0000-00000000a0c1";
+const orgId = "00000000-0000-4000-8000-00000000a0d1";
+const userId = "00000000-0000-4000-8000-00000000a0d9";
+const brandId = "00000000-0000-4000-8000-00000000a0b1";
+const campaignId = "00000000-0000-4000-8000-00000000a0c1";
 const LAST_DAY = new Date(Date.UTC(2026, 0, 31, SWEEP_HOUR_UTC, 0, 0));
 
 describe("money-path audit 2026-09-29", () => {

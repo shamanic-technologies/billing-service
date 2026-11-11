@@ -47,9 +47,9 @@ import {
 } from "../../src/lib/welcome-completion.js";
 
 const COUPON_ID = "coupon_welcome";
-const newOrgId = "00000000-0000-0000-0000-0000000004a1";
-const oldOrgId = "00000000-0000-0000-0000-0000000004a2";
-const userId = "00000000-0000-0000-0000-0000000004a3";
+const newOrgId = "00000000-0000-4000-8000-0000000004a1";
+const oldOrgId = "00000000-0000-4000-8000-0000000004a2";
+const userId = "00000000-0000-4000-8000-0000000004a3";
 
 const NEVER_PRE_LAUNCH = () => Promise.resolve("0.0000000000");
 

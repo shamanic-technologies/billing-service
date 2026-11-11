@@ -12,9 +12,9 @@ import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sale
 import * as telegram from "../../src/lib/telegram-client.js";
 import { budgetChangeLines } from "../../src/lib/account-activity.js";
 
-const orgId = "00000000-0000-0000-0000-00000000c1a1";
+const orgId = "00000000-0000-4000-8000-00000000c1a1";
 const userId = "6f1c2a3b-4d5e-4f60-8a7b-1c2d3e4f5a6b";
-const brandId = "00000000-0000-0000-0000-00000000c1b1";
+const brandId = "00000000-0000-4000-8000-00000000c1b1";
 const OFFER = "aaaaaaaa-1030-4030-8030-aaaaaaaaaaaa";
 const FUNNEL = "signup_to_paid_client@ai-follow-up-email";
 const FC = "cccccccc-1030-4030-8030-00000000000a";
@@ -24,7 +24,7 @@ const person = {
   "X-API-Key": "test-api-key",
   "x-org-id": orgId,
   "x-user-id": userId,
-  "x-run-id": "00000000-0000-0000-0000-000000000aaa",
+  "x-run-id": "00000000-0000-4000-8000-000000000aaa",
   "x-email": "founder@client.test",
   "Content-Type": "application/json",
 };

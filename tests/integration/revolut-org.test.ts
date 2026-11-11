@@ -11,7 +11,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
  */
 describe("Revolut-declared org: declare + embedded prepaid top-up", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-0000000000a1";
+  const orgId = "00000000-0000-4000-8000-0000000000a1";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {

@@ -27,9 +27,9 @@ describe("welcome once per person", () => {
   const app = createTestApp();
   const person = "11111111-1111-4111-8111-111111111111";
   const otherPerson = "22222222-2222-4222-8222-222222222222";
-  const firstOrg = "00000000-0000-0000-0000-0000000000c1";
-  const secondOrg = "00000000-0000-0000-0000-0000000000c2";
-  const thirdOrg = "00000000-0000-0000-0000-0000000000c3";
+  const firstOrg = "00000000-0000-4000-8000-0000000000c1";
+  const secondOrg = "00000000-0000-4000-8000-0000000000c2";
+  const thirdOrg = "00000000-0000-4000-8000-0000000000c3";
   const WELCOME = 3000;
   const ZERO = "0.0000000000";
   let ssMocks: ReturnType<typeof setupStripeMocks>;

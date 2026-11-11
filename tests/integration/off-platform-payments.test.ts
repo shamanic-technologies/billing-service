@@ -15,8 +15,8 @@ import { localPromos } from "../../src/db/schema.js";
 // Owner 2026-10-11: « revenue is cash the client paid ». A client who pays the owner
 // directly is credited by a staff grant; marked as an off-platform payment it counts
 // as CASH (not a gift) everywhere billing states cash, with the balance unchanged.
-const orgId = "00000000-0000-0000-0000-00000000a11e";
-const userId = "00000000-0000-0000-0000-00000000a11f";
+const orgId = "00000000-0000-4000-8000-00000000a11e";
+const userId = "00000000-0000-4000-8000-00000000a11f";
 const apiKey = { "X-API-Key": "test-api-key" };
 const cashPath = (q = "") => `/internal/accounts/by-org/${orgId}/cash${q}`;
 const reclassifyPath = (id: string) => `/internal/credits/grants/${id}/off-platform-payment`;
@@ -161,7 +161,7 @@ describe("Off-platform payments (staff grant recorded as cash the client paid)",
     const body = { paidAt: "2026-09-28", recordedBy: "kevin@distribute.you", note: "paid" };
     expect((await request(app).post(reclassifyPath(welcome.id)).set(apiKey).send(body)).status).toBe(409);
     expect(
-      (await request(app).post(reclassifyPath("00000000-0000-0000-0000-0000000000ff")).set(apiKey).send(body)).status
+      (await request(app).post(reclassifyPath("00000000-0000-4000-8000-0000000000ff")).set(apiKey).send(body)).status
     ).toBe(404);
     expect((await request(app).post(reclassifyPath("nope")).set(apiKey).send(body)).status).toBe(400);
     expect(

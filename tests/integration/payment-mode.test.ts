@@ -27,8 +27,8 @@ import { billingAccounts } from "../../src/db/schema.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { flagUncollectableDebt } from "../../src/lib/unpaid-debt.js";
 
-const orgId = "00000000-0000-0000-0000-0000000005a1";
-const campaignId = "00000000-0000-0000-0000-0000000005c1";
+const orgId = "00000000-0000-4000-8000-0000000005a1";
+const campaignId = "00000000-0000-4000-8000-0000000005c1";
 const apiKeyHeaders = { "X-API-Key": "test-api-key" };
 
 const outlook = (id: string) => `/internal/accounts/by-org/${id}/payment-outlook`;
@@ -271,7 +271,7 @@ describe("payment mode: prepaid / postpaid", () => {
   });
 
   it("the customer reads and sets it through /v1 (account created on first touch)", async () => {
-    const newOrg = "00000000-0000-0000-0000-0000000005a2";
+    const newOrg = "00000000-0000-4000-8000-0000000005a2";
     const put = await request(app)
       .put("/v1/accounts/payment_mode")
       .set(getAuthHeaders(newOrg))
@@ -292,7 +292,7 @@ describe("payment mode: prepaid / postpaid", () => {
 
   it("internal read 404s for an org with no billing account", async () => {
     const res = await request(app)
-      .get(modePath("00000000-0000-0000-0000-0000000005ff"))
+      .get(modePath("00000000-0000-4000-8000-0000000005ff"))
       .set(apiKeyHeaders);
     expect(res.status).toBe(404);
   });

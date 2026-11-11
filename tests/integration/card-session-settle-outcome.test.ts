@@ -18,7 +18,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import * as runsClient from "../../src/lib/runs-client.js";
 
 const app = createTestApp();
-const orgId = "00000000-0000-0000-0000-0000000000e7";
+const orgId = "00000000-0000-4000-8000-0000000000e7";
 const ROUTES = ["/v1/portal-sessions", "/v1/accounts/card_setup"] as const;
 
 describe("card session reports the settle outcome", () => {

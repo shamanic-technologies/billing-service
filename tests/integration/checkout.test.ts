@@ -9,7 +9,7 @@ import { billingAccounts } from "../../src/db/schema.js";
 
 describe("POST /v1/checkout-sessions", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
+  const orgId = "00000000-0000-4000-8000-000000000001";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {

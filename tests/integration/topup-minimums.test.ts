@@ -18,9 +18,9 @@ import { db } from "../../src/db/index.js";
 import { billingAccounts } from "../../src/db/schema.js";
 import { configuredReloadFor } from "../../src/lib/free-credit-offer.js";
 
-const staffOrg = "00000000-0000-0000-0000-0000000007b1";
-const untouchedOrg = "00000000-0000-0000-0000-0000000007b2";
-const legacyOrg = "00000000-0000-0000-0000-0000000007b3";
+const staffOrg = "00000000-0000-4000-8000-0000000007b1";
+const untouchedOrg = "00000000-0000-4000-8000-0000000007b2";
+const legacyOrg = "00000000-0000-4000-8000-0000000007b3";
 const person = "11111111-1111-4111-8111-1111111117b1";
 const staff = { "x-email": "kevin@distribute.you" };
 
@@ -186,7 +186,7 @@ describe("per-account top-up minimums", () => {
       .set(getAuthHeaders(staffOrg, person))
       .send({ topup_minimum_cents: 1000 });
     expect(noEmail.status).toBe(400);
-    const missing = await setMinimums("00000000-0000-0000-0000-0000000007b9", { topup_minimum_cents: 1000 });
+    const missing = await setMinimums("00000000-0000-4000-8000-0000000007b9", { topup_minimum_cents: 1000 });
     expect(missing.status).toBe(404);
     expect(missing.body.code).toBe("account_not_found");
   });

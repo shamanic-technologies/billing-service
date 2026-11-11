@@ -13,8 +13,8 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
 
 describe("Promotion code endpoints", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
-  const orgId2 = "00000000-0000-0000-0000-000000000002";
+  const orgId = "00000000-0000-4000-8000-000000000001";
+  const orgId2 = "00000000-0000-4000-8000-000000000002";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
