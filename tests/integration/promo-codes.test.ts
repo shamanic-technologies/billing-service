@@ -16,7 +16,7 @@ import {
 // redeem time, so a PATCH here changes what new signups receive.
 describe("GET/PATCH /internal/promo-codes/:code", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
+  const orgId = "00000000-0000-4000-8000-000000000001";
 
   // service-auth only (x-api-key); no org/user identity required.
   function authHeaders() {

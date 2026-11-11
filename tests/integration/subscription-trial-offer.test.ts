@@ -27,8 +27,8 @@ import { startSubscription, grantSubscriptionTrial } from "../../src/lib/subscri
 import { ensureWelcomePromise } from "../../src/lib/free-credit-promises.js";
 import { settleWelcomeCompletion } from "../../src/lib/welcome-completion.js";
 
-const orgId = "00000000-0000-0000-0000-0000000008a1";
-const userId = "00000000-0000-0000-0000-0000000008a9";
+const orgId = "00000000-0000-4000-8000-0000000008a1";
+const userId = "00000000-0000-4000-8000-0000000008a9";
 const headers = getAuthHeaders(orgId, userId);
 const cents = (n: number) => `${n}.0000000000`;
 
@@ -57,7 +57,7 @@ describe("a subscription trial is the org's whole free offer", () => {
     const runsClient = await import("../../src/lib/runs-client.js");
     vi.spyOn(runsClient, "fetchRunsOrgUsageTotal").mockResolvedValue({ spent_cents: cents(0) } as never);
     vi.spyOn(runsClient, "fetchRunsOrgActualUsageTotal").mockResolvedValue({ spent_cents: cents(0) } as never);
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const cs = await import("../../src/lib/campaign-service-client.js");
     vi.spyOn(cs, "fetchSpendableBudget").mockResolvedValue(null);

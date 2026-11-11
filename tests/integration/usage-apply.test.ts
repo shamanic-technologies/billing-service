@@ -7,8 +7,8 @@ import {
   customerWithDefaultPM,
 } from "../helpers/mock-stripe.js";
 
-const orgId = "00000000-0000-0000-0000-00000000b001";
-const userId = "00000000-0000-0000-0000-000000000099";
+const orgId = "00000000-0000-4000-8000-00000000b001";
+const userId = "00000000-0000-4000-8000-000000000099";
 
 describe("POST /v1/customer_balance/usage_apply — proactive topup hint", () => {
   const app = createTestApp();

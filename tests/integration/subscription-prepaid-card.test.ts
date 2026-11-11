@@ -22,8 +22,8 @@ import { localPromos, subscriptions } from "../../src/db/schema.js";
 import { getLiveSubscription, getSubscriptionTrialGrantCents } from "../../src/lib/subscription.js";
 import { toSubscriptionRecap, type SubscriptionRecap } from "../../src/lib/subscription-recap-client.js";
 
-const orgId = "00000000-0000-0000-0000-0000000007b1";
-const userId = "00000000-0000-0000-0000-0000000007b9";
+const orgId = "00000000-0000-4000-8000-0000000007b1";
+const userId = "00000000-0000-4000-8000-0000000007b9";
 const headers = getAuthHeaders(orgId, userId);
 
 function card(acquirer: "revolut" | "stripe", funding: string | null | undefined) {
@@ -86,7 +86,7 @@ describe("subscription free trial refuses prepaid cards", () => {
       spent_cents: usage,
       as_of: "2026-10-01T00:00:00.000Z",
     }));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const costs = await import("../../src/lib/costs-client.js");
     vi.spyOn(costs, "resolveRequiredCents").mockResolvedValue("50.0000000000");

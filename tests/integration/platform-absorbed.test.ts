@@ -13,8 +13,8 @@ import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { PLATFORM_ABSORBS_NO_CAMPAIGN_SINCE_ISO } from "../../src/lib/platform-absorbed.js";
 
-const orgId = "00000000-0000-0000-0000-0000000008a1";
-const campaignId = "00000000-0000-0000-0000-0000000008c1";
+const orgId = "00000000-0000-4000-8000-0000000008a1";
+const campaignId = "00000000-0000-4000-8000-0000000008c1";
 
 describe("platform-absorbed spend: only campaign spend is charged", () => {
   const app = createTestApp();

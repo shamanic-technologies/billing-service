@@ -17,10 +17,10 @@ import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import { __resetFunnelCapAuthorize } from "../../src/lib/funnel-cap-authorize.js";
 
-const orgId = "00000000-0000-0000-0000-0000000086a1";
-const userId = "00000000-0000-0000-0000-0000000086a9";
-const runId = "00000000-0000-0000-0000-0000000086ab";
-const brandId = "00000000-0000-0000-0000-000000086b01";
+const orgId = "00000000-0000-4000-8000-0000000086a1";
+const userId = "00000000-0000-4000-8000-0000000086a9";
+const runId = "00000000-0000-4000-8000-0000000086ab";
+const brandId = "00000000-0000-4000-8000-000000086b01";
 const OFFER = "aaaaaaaa-1186-4186-8186-aaaaaaaaaaaa";
 const FUNNEL = "start_to_paid_client@leads-only";
 const FC = "cccccccc-0000-4000-8000-0000000086c1";
@@ -281,7 +281,7 @@ describe("a funnel max budget does not count the caller's own provisioned hold t
       { runId, campaignId: SOURCE_UNIT },
       { runId, campaignId: TEAM_UNIT, status: "cancelled" },
       { runId, campaignId: TEAM_UNIT, ageMs: 10 * 60_000 },
-      { runId, campaignId: TEAM_UNIT, orgId: "00000000-0000-0000-0000-0000000086ff" },
+      { runId, campaignId: TEAM_UNIT, orgId: "00000000-0000-4000-8000-0000000086ff" },
     ]) {
       await cleanTestData();
       __resetFunnelCapAuthorize();
@@ -309,7 +309,7 @@ describe("a funnel max budget does not count the caller's own provisioned hold t
 
   it("two concurrent runs each with its own hold cannot both slip under", async () => {
     // Cap 350, 226.22 really consumed + two fresh holds of 65.87 = 357.97 measured.
-    const runB = "00000000-0000-0000-0000-0000000086ac";
+    const runB = "00000000-0000-4000-8000-0000000086ac";
     mockUpstreams({
       spent: { [TEAM_UNIT]: "357.9656000000" },
       holds: [

@@ -24,8 +24,8 @@ import {
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { reloadTierFor } from "../../src/lib/topup-tier.js";
 
-const orgId = "00000000-0000-0000-0000-0000000007a1";
-const campaignId = "00000000-0000-0000-0000-0000000007c1";
+const orgId = "00000000-0000-4000-8000-0000000007a1";
+const campaignId = "00000000-0000-4000-8000-0000000007c1";
 
 describe("postpaid arm: card saved, nothing charged, Google-Ads credit line, $100 match", () => {
   const app = createTestApp();

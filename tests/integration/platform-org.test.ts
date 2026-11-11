@@ -30,10 +30,10 @@ import { flagUncollectableDebt } from "../../src/lib/unpaid-debt.js";
 import { resolveSpendBlock } from "../../src/lib/spend-block.js";
 import { computeBalance } from "../../src/lib/balance.js";
 
-const platformOrg = "00000000-0000-0000-0000-0000000001a1";
-const customerOrg = "00000000-0000-0000-0000-0000000001a2";
+const platformOrg = "00000000-0000-4000-8000-0000000001a1";
+const customerOrg = "00000000-0000-4000-8000-0000000001a2";
 const userId = "11111111-1111-4111-8111-111111111111";
-const campaignOf = (org: string) => (org === platformOrg ? "00000000-0000-0000-0000-0000000001b1" : "00000000-0000-0000-0000-0000000001b2");
+const campaignOf = (org: string) => (org === platformOrg ? "00000000-0000-4000-8000-0000000001b1" : "00000000-0000-4000-8000-0000000001b2");
 
 /** $3936.52 paid (≥ $1000 ⇒ -50000 floor), usage puts the balance at -500.15. */
 const PAID = "393652.0000000000";

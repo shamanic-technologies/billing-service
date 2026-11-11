@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isRealOrgId } from "../lib/org-id.js";
 import type { z } from "zod";
 import { autoTopupArmed } from "../lib/topup-tier.js";
 import { getAbsorbedCosts } from "../lib/absorbed-costs.js";
@@ -431,6 +432,10 @@ router.post("/internal/accounts/by-org/:orgId/trial-seed", async (req, res) => {
   const { orgId } = req.params;
   if (!UUID_RE.test(orgId)) {
     res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  if (!isRealOrgId(orgId)) {
+    res.status(400).json({ error: "orgId must be a real org id, never a placeholder" });
     return;
   }
 

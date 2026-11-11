@@ -15,7 +15,7 @@ import { setupStripeMocks } from "../helpers/mock-stripe.js";
  */
 describe("card setup + saved-card confirmation", () => {
   const app = createTestApp();
-  const orgId = "00000000-0000-0000-0000-000000000001";
+  const orgId = "00000000-0000-4000-8000-000000000001";
   let ssMocks: ReturnType<typeof setupStripeMocks>;
 
   beforeEach(async () => {
@@ -115,7 +115,7 @@ describe("card setup + saved-card confirmation", () => {
       .send({});
     expect(bad.status).toBe(400);
 
-    const other = "00000000-0000-0000-0000-0000000000ff";
+    const other = "00000000-0000-4000-8000-0000000000ff";
     const missing = await request(app)
       .post("/v1/accounts/card_setup")
       .set(getAuthHeaders(other))

@@ -12,10 +12,10 @@ import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 
-const orgId = "00000000-0000-0000-0000-000000102901";
-const userId = "00000000-0000-0000-0000-000000102909";
-const runId = "00000000-0000-0000-0000-00000010290a";
-const brandId = "00000000-0000-0000-0000-000000102911";
+const orgId = "00000000-0000-4000-8000-000000102901";
+const userId = "00000000-0000-4000-8000-000000102909";
+const runId = "00000000-0000-4000-8000-00000010290a";
+const brandId = "00000000-0000-4000-8000-000000102911";
 const OFFER = "aaaaaaaa-1029-4029-8029-aaaaaaaaaaaa";
 
 const COLD = "sales-cold-email-outreach";

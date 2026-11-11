@@ -12,8 +12,8 @@ import {
 } from "../helpers/test-db.js";
 import { setupStripeMocks, customerWithDefaultPM } from "../helpers/mock-stripe.js";
 
-const orgId = "00000000-0000-0000-0000-0000000dd001";
-const userId = "00000000-0000-0000-0000-000000000099";
+const orgId = "00000000-0000-4000-8000-0000000dd001";
+const userId = "00000000-0000-4000-8000-000000000099";
 const apiKey = { "X-API-Key": "test-api-key" };
 
 function orgHeaders(email?: string) {
@@ -254,7 +254,7 @@ describe("Usage discount is NOT applied at balance composition (frozen in runs-s
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send({ items: [{ costName: "x", quantity: 1 }] });
 
     expect(res.status).toBe(200);

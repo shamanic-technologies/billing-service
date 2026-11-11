@@ -26,9 +26,9 @@ import {
 } from "../../src/db/schema.js";
 import { resolvePostpaidTier, reloadTierFor } from "../../src/lib/topup-tier.js";
 
-const orgId = "00000000-0000-0000-0000-0000000006a1";
-const secondOrgId = "00000000-0000-0000-0000-0000000006a2";
-const legacyOrgId = "00000000-0000-0000-0000-0000000006a3";
+const orgId = "00000000-0000-4000-8000-0000000006a1";
+const secondOrgId = "00000000-0000-4000-8000-0000000006a2";
+const legacyOrgId = "00000000-0000-4000-8000-0000000006a3";
 const person = "11111111-1111-4111-8111-1111111116a1";
 const internal = { "X-API-Key": "test-api-key" };
 const cents = (n: number) => `${n}.0000000000`;

@@ -20,8 +20,8 @@ import {
   advanceSubscription,
 } from "../../src/lib/subscription.js";
 
-const orgId = "00000000-0000-0000-0000-0000000000b7";
-const userId = "00000000-0000-0000-0000-0000000000b9";
+const orgId = "00000000-0000-4000-8000-0000000000b7";
+const userId = "00000000-0000-4000-8000-0000000000b9";
 const DAY = 24 * 60 * 60 * 1000;
 const app = createTestApp();
 
@@ -62,7 +62,7 @@ describe("owner Telegram per customer billing event", () => {
     const runs = await import("../../src/lib/runs-client.js");
     vi.spyOn(runs, "fetchRunsOrgUsageTotal").mockResolvedValue({ org_id: orgId, spent_cents: "0.0000000000", as_of: "x" } as never);
     vi.spyOn(runs, "fetchRunsOrgActualUsageTotal").mockResolvedValue({ spent_cents: "0.0000000000" } as never);
-    vi.spyOn(runs, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runs, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runs, "completePlatformRun").mockResolvedValue(undefined);
     const email = await import("../../src/lib/email-client.js");
     vi.spyOn(email, "sendEmail").mockImplementation(vi.fn());

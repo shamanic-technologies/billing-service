@@ -32,8 +32,8 @@ import { runWelcomeCompletionSweep } from "../../src/lib/welcome-completion-swee
  */
 const GRANDFATHERED_NOTICE =
   "You get $25 in free credits. $5 now, the rest once your payments reach $25.";
-const orgId = "00000000-0000-0000-0000-0000000000c1";
-const userId = "00000000-0000-0000-0000-0000000000c2";
+const orgId = "00000000-0000-4000-8000-0000000000c1";
+const userId = "00000000-0000-4000-8000-0000000000c2";
 
 /** Every completion row for the org, so tests can assert exactly-once. */
 async function completionRows(org: string) {
@@ -534,7 +534,7 @@ describe("welcome-completion gift ($25 grandfathered offer)", () => {
   });
 
   it("the sweep isolates a per-org failure and keeps going", async () => {
-    const otherOrg = "00000000-0000-0000-0000-0000000000c9";
+    const otherOrg = "00000000-0000-4000-8000-0000000000c9";
     await insertTestAccount({ orgId, welcomeCompletionEligible: true });
     await insertTestAccount({ orgId: otherOrg, welcomeCompletionEligible: true });
     ssMocks.sumSucceededTopupsForOrg.mockImplementation(async (org: string) => {

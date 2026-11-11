@@ -34,9 +34,9 @@ import {
 import { upsertCampaignAuthorizeCost } from "../../src/lib/campaign-costs.js";
 import { getOrgRevenue } from "../../src/lib/revenue.js";
 
-const orgId = "00000000-0000-0000-0000-0000000008b1";
-const userId = "00000000-0000-0000-0000-0000000008b9";
-const campaignId = "00000000-0000-0000-0000-0000000008c1";
+const orgId = "00000000-0000-4000-8000-0000000008b1";
+const userId = "00000000-0000-4000-8000-0000000008b9";
+const campaignId = "00000000-0000-4000-8000-0000000008c1";
 const headers = getAuthHeaders(orgId, userId);
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -80,7 +80,7 @@ describe("subscription: pause and unpause", () => {
       spent_cents: "1000.0000000000",
       as_of: "2026-10-01T00:00:00.000Z",
     }));
-    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-0000-0000-00000000a001");
+    vi.spyOn(runsClient, "createPlatformRun").mockResolvedValue("00000000-0000-4000-8000-00000000a001");
     vi.spyOn(runsClient, "completePlatformRun").mockResolvedValue(undefined);
     const cs = await import("../../src/lib/campaign-service-client.js");
     vi.spyOn(cs, "fetchSpendableBudget").mockResolvedValue(null);

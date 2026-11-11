@@ -26,10 +26,10 @@ import {
   ORG_CREATION_BONUS_CODE,
 } from "../../src/db/schema.js";
 
-const orgId = "00000000-0000-0000-0000-0000000009a1";
-const legacyOrgId = "00000000-0000-0000-0000-0000000009a2";
-const matchOrgId = "00000000-0000-0000-0000-0000000009a3";
-const refereeOrgId = "00000000-0000-0000-0000-0000000009a4";
+const orgId = "00000000-0000-4000-8000-0000000009a1";
+const legacyOrgId = "00000000-0000-4000-8000-0000000009a2";
+const matchOrgId = "00000000-0000-4000-8000-0000000009a3";
+const refereeOrgId = "00000000-0000-4000-8000-0000000009a4";
 const person = "11111111-1111-4111-8111-1111111119a1";
 const internal = { "X-API-Key": "test-api-key" };
 const cents = (n: number) => `${n}.0000000000`;

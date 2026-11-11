@@ -18,8 +18,8 @@ import { billingAccounts } from "../../src/db/schema.js";
 import { _resetCoalescer } from "../../src/lib/reload-coalescer.js";
 import { autoTopupArmed } from "../../src/lib/topup-tier.js";
 
-const orgId = "00000000-0000-0000-0000-000000001021";
-const campaignId = "00000000-0000-0000-0000-0000000010c1";
+const orgId = "00000000-0000-4000-8000-000000001021";
+const campaignId = "00000000-0000-4000-8000-0000000010c1";
 
 describe("postpaid: no off switch on the credit line", () => {
   const app = createTestApp();

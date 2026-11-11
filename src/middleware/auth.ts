@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { isRealOrgId } from "../lib/org-id.js";
 
 export interface WorkflowHeaders {
   campaignId?: string;
@@ -66,6 +67,13 @@ export function requireOrgHeaders(
   if (!UUID_RE.test(orgId)) {
     console.error(`[billing-400] ${req.method} ${req.path}: invalid x-org-id="${orgId}" (not a UUID)`);
     res.status(400).json({ error: "x-org-id must be a valid UUID" });
+    return;
+  }
+  // A placeholder org (nil UUID, 00000000-…-0001) would open a billing account that
+  // every fleet sweep then reads and asks runs-service about (400 Invalid UUID).
+  if (!isRealOrgId(orgId)) {
+    console.error(`[billing-400] ${req.method} ${req.path}: placeholder x-org-id="${orgId}" (not an RFC 9562 UUID)`);
+    res.status(400).json({ error: "x-org-id must be a real org id, never a placeholder" });
     return;
   }
   const userId = req.headers["x-user-id"] as string;

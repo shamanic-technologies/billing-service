@@ -13,8 +13,8 @@ import {
   customerWithDefaultPM,
 } from "../helpers/mock-stripe.js";
 
-const orgId = "00000000-0000-0000-0000-00000000a001";
-const userId = "00000000-0000-0000-0000-000000000099";
+const orgId = "00000000-0000-4000-8000-00000000a001";
+const userId = "00000000-0000-4000-8000-000000000099";
 
 const authorizeBody = {
   items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }],
@@ -62,7 +62,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -79,7 +79,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -101,7 +101,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -127,7 +127,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -152,7 +152,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -178,7 +178,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -194,7 +194,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -212,7 +212,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -227,7 +227,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(502);
@@ -250,7 +250,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -270,7 +270,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(502);
@@ -293,7 +293,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
         })
     );
 
-    const headers = { ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" };
+    const headers = { ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" };
     const results = await Promise.all(
       [0, 1, 2].map(() =>
         request(app)
@@ -329,7 +329,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -359,7 +359,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(200);
@@ -375,7 +375,7 @@ describe("Customer balance authorize — composed paid topups + local − usage"
 
     const res = await request(app)
       .post("/v1/customer_balance/authorize")
-      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-0000-0000-00000000ca01" })
+      .set({ ...getAuthHeaders(orgId, userId), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
       .send(authorizeBody);
 
     expect(res.status).toBe(502);

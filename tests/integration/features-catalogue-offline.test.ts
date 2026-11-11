@@ -17,10 +17,10 @@ import { __resetSalesFunnelCache, getSalesFunnel, SalesFunnelCatalogueUnavailabl
 import { __primeSalesPathTerms, __resetSalesPathTerms, getSalesPathTerms } from "../../src/lib/sales-path-terms.js";
 import { __resetFunnelCapAuthorize } from "../../src/lib/funnel-cap-authorize.js";
 
-const orgId = "00000000-0000-0000-0000-0000000091a1";
-const userId = "00000000-0000-0000-0000-0000000086a9";
-const runId = "00000000-0000-0000-0000-0000000086ab";
-const brandId = "00000000-0000-0000-0000-000000086b01";
+const orgId = "00000000-0000-4000-8000-0000000091a1";
+const userId = "00000000-0000-4000-8000-0000000086a9";
+const runId = "00000000-0000-4000-8000-0000000086ab";
+const brandId = "00000000-0000-4000-8000-000000086b01";
 const OFFER = "aaaaaaaa-1186-4186-8186-aaaaaaaaaaaa";
 const FUNNEL = "start_to_paid_client@leads-only";
 const FC = "cccccccc-0000-4000-8000-0000000086c1";

@@ -22,7 +22,7 @@ import {
 } from "../../src/lib/card-change-settlement.js";
 
 const app = createTestApp();
-const orgId = "00000000-0000-0000-0000-0000000000d1";
+const orgId = "00000000-0000-4000-8000-0000000000d1";
 
 describe("outstanding balance is collected when a card-management session opens", () => {
   let ssMocks: ReturnType<typeof setupStripeMocks>;

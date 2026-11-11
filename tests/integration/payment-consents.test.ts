@@ -17,8 +17,8 @@ import { setupStripeMocks, customerWithEmail } from "../helpers/mock-stripe.js";
 import { db } from "../../src/db/index.js";
 import { paymentConsents } from "../../src/db/schema.js";
 
-const orgId = "00000000-0000-0000-0000-000000000ac1";
-const userId = "00000000-0000-0000-0000-000000000ac9";
+const orgId = "00000000-0000-4000-8000-000000000ac1";
+const userId = "00000000-0000-4000-8000-000000000ac9";
 const headers = { ...getAuthHeaders(orgId, userId), "x-email": "founder@consent.test" };
 
 const STATEMENTS = [
