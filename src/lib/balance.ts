@@ -15,10 +15,8 @@ import {
 } from "./free-credit-offer.js";
 import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "./transfer-usage.js";
 import {
-  fetchOrgCustomerOrNull,
+  fetchOrgPaymentFacts,
   sumSucceededTopupsForOrg,
-  hasChargeablePmForOrg,
-  getOrgCardCountryByOrg,
   isAutoReloadBlockedCountry,
   type StripeCustomer,
 } from "./stripe-service-client.js";
@@ -82,14 +80,19 @@ export interface CreditedCents {
  * Costs one stripe-service read plus one local query; no runs-service hop, so a
  * caller that needs credited but not usage does not pay for usage.
  */
-export async function composeCreditedCents(orgId: string): Promise<CreditedCents> {
+export async function composeCreditedCents(
+  orgId: string,
+  // The paid half when the caller already asked stripe-service for it (computeBalance
+  // reads it inside the org's payment facts). Same figure as sumSucceededTopupsForOrg.
+  paidTopupsCents?: Promise<string>
+): Promise<CreditedCents> {
   // ALWAYS asked, customer or not. stripe-service's payment summary spans every
   // acquirer that has taken money for this org and answers `totals: []` for an
   // org that has paid nothing, so it never needs a Stripe customer to exist. An
   // org paying through Revolut has NO Stripe customer by design, and gating this
   // read on one made its completed top-ups vanish from its balance.
   const [paidTopups, localCredits, advance, trialRepayment] = await Promise.all([
-    sumSucceededTopupsForOrg(orgId),
+    paidTopupsCents ?? sumSucceededTopupsForOrg(orgId),
     sumLocalPromoCreditsForOrg(orgId),
     getOnboardingAdvanceCents(orgId),
     getTrialRepaymentCents(orgId),
@@ -123,15 +126,21 @@ export async function computeBalance(orgId: string): Promise<BalanceSnapshot> {
   // because those reads say so, not because this code assumes it: strictly
   // prepaid, floor "0", credit spendable down to zero.
   //
-  // `fetchOrgCustomerOrNull` returns null ONLY on stripe-service's definite 404.
-  // Any other failure propagates.
-  const [customer, credited, runsUsage, hasCardPm, cardCountry] = await Promise.all([
-    fetchOrgCustomerOrNull(orgId),
-    composeCreditedCents(orgId),
+  // ONE stripe-service request answers the customer, the paid top-ups and the card
+  // (`fetchOrgPaymentFacts`, MON-PAGE-SPEED-2-1112): four requests per balance made a
+  // burst of dashboard pages wait 1.8-3.2 s on stripe-service. Same figures: the
+  // customer is null ONLY on stripe-service's definite "none"; any other failure
+  // propagates.
+  const factsP = fetchOrgPaymentFacts(orgId);
+  const [facts, credited, runsUsage] = await Promise.all([
+    factsP,
+    composeCreditedCents(
+      orgId,
+      factsP.then((f) => f.paidTopupsCents)
+    ),
     fetchOrgUsageTotal(orgId, {}),
-    hasChargeablePmForOrg(orgId),
-    getOrgCardCountryByOrg(orgId),
   ]);
+  const { customer, hasChargeablePm: hasCardPm, cardCountry } = facts;
   const { paidTopupsCents: paidTopups, creditedCents } = credited;
   // runsUsage.spent_cents is already NET of any per-org usage discount (frozen at
   // cost-write in runs-service). Billing subtracts it verbatim — applying a

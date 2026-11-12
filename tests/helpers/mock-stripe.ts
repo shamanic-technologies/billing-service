@@ -40,6 +40,14 @@ export interface StripeServiceMocks {
   getOrgCardCountryByOrg: ReturnType<typeof vi.fn>;
   /** Card display asked of whichever acquirer holds the card (no Stripe customer path). Default null. */
   getOrgCardDisplayByOrg: ReturnType<typeof vi.fn>;
+  /**
+   * The ONE read computeBalance and composeAccountFunds make (MON-PAGE-SPEED-2-1112).
+   * By default it is composed from the single-purpose by-org mocks above
+   * (fetchOrgCustomerOrNull, sumSucceededTopupsForOrg, hasChargeablePmForOrg,
+   * getOrgCardCountryByOrg, getOrgCardDisplayByOrg), exactly as stripe-service
+   * composes its answer, so a suite seeding those drives it with no edit.
+   */
+  fetchOrgPaymentFacts: ReturnType<typeof vi.fn>;
   createCheckoutSession: ReturnType<typeof vi.fn>;
   createPortalSession: ReturnType<typeof vi.fn>;
   getCardSetup: ReturnType<typeof vi.fn>;
@@ -175,6 +183,7 @@ export function setupStripeMocks(): StripeServiceMocks {
     hasChargeablePmForOrg: vi.fn().mockResolvedValue(true),
     getOrgCardCountryByOrg: vi.fn().mockResolvedValue(null),
     getOrgCardDisplayByOrg: vi.fn().mockResolvedValue(null),
+    fetchOrgPaymentFacts: vi.fn(),
     createCheckoutSession: vi.fn().mockResolvedValue({
       url: "https://checkout.stripe.com/pay/cs_mock",
       session_id: "cs_mock",
@@ -243,6 +252,16 @@ export function setupStripeMocks(): StripeServiceMocks {
   mocks.getCustomerByOrgOrNull.mockImplementation((identity: ssClient.IdentityHeaders) =>
     mocks.getCustomerByOrg(identity)
   );
+  mocks.fetchOrgPaymentFacts.mockImplementation(async (orgId: string) => {
+    const [customer, paidTopupsCents, hasChargeablePm, cardCountry, cardDisplay] = await Promise.all([
+      mocks.fetchOrgCustomerOrNull(orgId),
+      mocks.sumSucceededTopupsForOrg(orgId),
+      mocks.hasChargeablePmForOrg(orgId),
+      mocks.getOrgCardCountryByOrg(orgId),
+      mocks.getOrgCardDisplayByOrg(orgId),
+    ]);
+    return { customer, paidTopupsCents, hasChargeablePm, cardCountry, cardDisplay };
+  });
 
   vi.spyOn(ssClient, "ensureCustomer").mockImplementation(mocks.ensureCustomer);
   vi.spyOn(ssClient, "getOrgAcquirer").mockImplementation(mocks.getOrgAcquirer);
@@ -268,6 +287,7 @@ export function setupStripeMocks(): StripeServiceMocks {
   vi.spyOn(ssClient, "hasChargeablePmForOrg").mockImplementation(mocks.hasChargeablePmForOrg);
   vi.spyOn(ssClient, "getOrgCardCountryByOrg").mockImplementation(mocks.getOrgCardCountryByOrg);
   vi.spyOn(ssClient, "getOrgCardDisplayByOrg").mockImplementation(mocks.getOrgCardDisplayByOrg);
+  vi.spyOn(ssClient, "fetchOrgPaymentFacts").mockImplementation(mocks.fetchOrgPaymentFacts);
   vi.spyOn(ssClient, "createCheckoutSession").mockImplementation(mocks.createCheckoutSession);
   vi.spyOn(ssClient, "getCardSetup").mockImplementation(mocks.getCardSetup as never);
   vi.spyOn(ssClient, "getSavedPaymentMethod").mockImplementation(

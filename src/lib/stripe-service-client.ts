@@ -953,6 +953,79 @@ export async function getOrgCardDisplayByOrg(orgId: string): Promise<CardDisplay
 }
 
 /**
+ * Everything a balance needs from stripe-service about one org, in ONE request
+ * (`GET /internal/payment_facts/by-org/{orgId}`, MON-PAGE-SPEED-2-1112).
+ *
+ * The balance used to ask four routes per read (customer, payment summary, card
+ * list, link list); at 40 concurrent dashboard pages that was 160+ requests
+ * through stripe-service's pool of 5 and the runway / accounts reads took 1.8-3.2 s.
+ * stripe-service answers each part with the SAME body its dedicated route serves,
+ * so every figure below is derived exactly as the single-purpose readers above
+ * derive it:
+ *  - `customer`         = `fetchOrgCustomerOrNull` (null = its 404);
+ *  - `paidTopupsCents`  = `sumSucceededTopupsForOrg` (all-time net, every currency);
+ *  - `hasChargeablePm`  = `hasChargeablePmForOrg` (card, else link; no customer = false);
+ *  - `cardCountry` / `cardDisplay` = `getOrgCardCountryByOrg` / `getOrgCardDisplayByOrg`.
+ * Fail-loud: any non-2xx, or a body missing a part, throws (never "no card").
+ */
+export interface OrgPaymentFacts {
+  customer: StripeCustomer | null;
+  paidTopupsCents: string;
+  hasChargeablePm: boolean;
+  cardCountry: string | null;
+  cardDisplay: CardDisplay | null;
+}
+
+interface OrgPaymentFactsBody {
+  object: "org_payment_facts";
+  customer: StripeCustomer | null;
+  payment_summary: StripePaymentSummary;
+  payment_methods: { card: StripePaymentMethodList | null; link: StripePaymentMethodList | null };
+}
+
+export async function fetchOrgPaymentFacts(orgId: string): Promise<OrgPaymentFacts> {
+  const path = `/internal/payment_facts/by-org/${encodeURIComponent(orgId)}`;
+  const body = await call<OrgPaymentFactsBody>("GET", path, {});
+  const pms = body?.payment_methods;
+  if (
+    body?.object !== "org_payment_facts" ||
+    !Array.isArray(body.payment_summary?.totals) ||
+    !pms ||
+    !("card" in pms) ||
+    !("link" in pms)
+  ) {
+    throw new Error(`stripe-service GET ${path} answered an unusable shape`);
+  }
+  let paid = new Decimal(0);
+  for (const row of body.payment_summary.totals) {
+    if (typeof row.amount_net !== "number") {
+      throw new Error(`stripe-service payment summary for org ${orgId} is missing amount_net`);
+    }
+    paid = paid.plus(row.amount_net);
+  }
+  const cards = pms.card;
+  const links = pms.link;
+  const hasChargeablePm =
+    cards === null ? false : cards.data.length > 0 ? true : links !== null && links.data.length > 0;
+  const card = cards?.data[0]?.card;
+  return {
+    customer: body.customer ?? null,
+    paidTopupsCents: paid.toFixed(10),
+    hasChargeablePm,
+    cardCountry: card?.country ?? null,
+    cardDisplay: card
+      ? {
+          country: card.country ?? null,
+          brand: card.brand ?? null,
+          last4: card.last4 ?? null,
+          expMonth: card.exp_month ?? null,
+          expYear: card.exp_year ?? null,
+        }
+      : null,
+  };
+}
+
+/**
  * Take `amount` from the org off-session via the vendor-neutral
  * `POST /internal/charges/by-org/{orgId}` route. X-API-Key only — the org is in
  * the path, NO x-user-id / x-org-id / sentinel, because there is no end user

@@ -19,6 +19,14 @@
  * A cache of campaign-service's answer, never a source of truth: every successful
  * read overwrites the row; a failed read (null) is never stored. Only the runway
  * reads through here; the payment outlook and every money gate stay live.
+ *
+ * Changes on campaign-service's side (a campaign started, paused, stopped) are
+ * PUSHED (MON-PAGE-SPEED-2-1112): campaign-service calls
+ * `POST /internal/spendable-budget-snapshots/invalidate` for the brand, which
+ * stamps `invalidated_at`; a row fetched before that stamp is never served, the
+ * next read asks campaign-service once and stores the answer. `fetched_at` is when
+ * the read STARTED, so a read in flight across an invalidation stores an answer
+ * that is already stale and is never served.
  */
 
 import { and, eq, sql } from "drizzle-orm";
@@ -60,11 +68,13 @@ function refresh(orgId: string, brandId: string, fingerprint: string): Promise<S
   const running = inFlight.get(key);
   if (running) return running;
   const p = (async () => {
+    // When the read STARTED: an invalidation landing while it is in flight is later
+    // than this, so the answer stored below is never served (see invalidate…).
+    const at = new Date();
     const answer = await fetchSpendableBudget(orgId, brandId);
     // null = campaign-service could not answer (fetchSpendableBudget logged why).
     // Never stored: the caller sees the null, a stored answer is never replaced by it.
     if (answer === null) return null;
-    const at = new Date();
     await db
       .insert(campaignSpendableSnapshots)
       .values({ orgId, brandId, body: answer, billingFingerprint: fingerprint, fetchedAt: at })
@@ -97,7 +107,11 @@ export function snapshotSpendableBudgetReader(now: () => number = Date.now): Spe
       .from(campaignSpendableSnapshots)
       .where(and(eq(campaignSpendableSnapshots.orgId, orgId), eq(campaignSpendableSnapshots.brandId, brandId)))
       .limit(1);
-    if (!stored || stored.billingFingerprint !== fingerprint) {
+    if (
+      !stored ||
+      stored.billingFingerprint !== fingerprint ||
+      (stored.invalidatedAt !== null && stored.fetchedAt.getTime() <= stored.invalidatedAt.getTime())
+    ) {
       return refresh(orgId, brandId, fingerprint);
     }
     if (now() - stored.fetchedAt.getTime() >= REFRESH_AFTER_MS) {
@@ -110,4 +124,20 @@ export function snapshotSpendableBudgetReader(now: () => number = Date.now): Spe
     }
     return stored.body as SpendableBudget;
   };
+}
+
+/**
+ * campaign-service's push: the brand's spendable budget may have changed on its
+ * side. Stamps the stored row so it is never served again; the next runway read
+ * asks campaign-service once and stores the new answer. A brand with no stored row
+ * has nothing to invalidate (its next read asks anyway). Returns how many rows
+ * were stamped.
+ */
+export async function invalidateSpendableSnapshot(orgId: string, brandId: string): Promise<number> {
+  const rows = await db
+    .update(campaignSpendableSnapshots)
+    .set({ invalidatedAt: sql`clock_timestamp()` })
+    .where(and(eq(campaignSpendableSnapshots.orgId, orgId), eq(campaignSpendableSnapshots.brandId, brandId)))
+    .returning({ orgId: campaignSpendableSnapshots.orgId });
+  return rows.length;
 }

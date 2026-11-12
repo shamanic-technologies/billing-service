@@ -36,13 +36,10 @@ import {
 } from "../lib/card-change-settlement.js";
 import { removeCardForOrg } from "../lib/card-removal.js";
 import {
+  fetchOrgPaymentFacts,
   getCustomerByOrgOrNull,
-  sumSucceededTopupsForOrg,
   hasAttachedCardPm,
-  hasChargeablePmForOrg,
   getOrgCardCountry,
-  getOrgCardDisplay,
-  getOrgCardDisplayByOrg,
   isAutoReloadBlockedCountry,
   getCardSetup,
   getSavedPaymentMethod,
@@ -126,13 +123,15 @@ async function composeAccountFunds(
   // which answer from whichever acquirer holds the org's card: a Revolut card's
   // brand, last4, expiry and country are served Stripe-shaped there
   // (stripe-service #253). A field the acquirer does not state stays null.
-  const customerP = getCustomerByOrgOrNull(identity);
-  const stripeP = customerP.then((customer) =>
-    Promise.all([
-      sumSucceededTopupsForOrg(orgId),
-      customer ? hasAttachedCardPm(identity, customer.id) : hasChargeablePmForOrg(orgId),
-      customer ? getOrgCardDisplay(identity, customer.id) : getOrgCardDisplayByOrg(orgId),
-    ])
+  //
+  // ONE stripe-service request since MON-PAGE-SPEED-2-1112 (`fetchOrgPaymentFacts`):
+  // the customer, then the paid top-ups and three card lists (two of them asked of
+  // Stripe live on every read) made a burst of dashboard pages wait 2-3 s. The card
+  // facts are the acquirer-neutral ones the balance and every spend gate already
+  // read (stored by stripe-service, refreshed at webhook time), so this page and
+  // the gates can no longer disagree about whether the org holds a card.
+  const stripeP = fetchOrgPaymentFacts(orgId).then(
+    (f) => [f.paidTopupsCents, f.hasChargeablePm, f.cardDisplay] as const
   );
   const [
     [paidTopups, hasCardPm, cardDisplay],
