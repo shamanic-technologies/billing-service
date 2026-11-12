@@ -1356,6 +1356,9 @@ export const campaignSpendableSnapshots = pgTable(
     body: jsonb("body").notNull(),
     billingFingerprint: text("billing_fingerprint").notNull(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+    // Set when campaign-service says the brand's answer may have changed on its side
+    // (migration 0099). A row fetched before it is never served.
+    invalidatedAt: timestamp("invalidated_at", { withTimezone: true }),
   },
   (table) => [primaryKey({ columns: [table.orgId, table.brandId] })]
 );
