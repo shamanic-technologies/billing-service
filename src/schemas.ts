@@ -1938,6 +1938,29 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: "post",
+  path: "/internal/spendable-budget-snapshots/invalidate",
+  summary: "campaign-service's push: these brands' spendable budget may have changed on its side",
+  description:
+    "Service-to-service (X-API-Key). Stamps billing's stored copy of campaign-service's spendable-budget answer for each (org, brand) so it is never served again; the next runway read asks campaign-service once and stores the new answer. A pair with no stored answer is a no-op. `invalidated` counts the stored answers stamped.",
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            brands: z.array(z.object({ orgId: z.string().uuid(), brandId: z.string().uuid() })).min(1).max(500),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: "Stamped", content: { "application/json": { schema: z.object({ invalidated: z.number().int() }) } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
   method: "patch",
   path: "/v1/accounts/auto_topup",
   summary: "Configure auto-topup settings (requires payment method via stripe-service)",

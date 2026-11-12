@@ -694,6 +694,13 @@
       "when": 1796637600000,
       "tag": "0098_campaign_spendable_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1796700000000,
+      "tag": "0099_spendable_snapshot_invalidation",
+      "breakpoints": true
     }
   ]
 }

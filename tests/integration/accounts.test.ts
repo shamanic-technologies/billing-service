@@ -62,7 +62,7 @@ describe("Accounts endpoints", () => {
 
   describe("GET /v1/accounts", () => {
     it("auto-creates a billing account with welcome promo redemption", async () => {
-      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
+      ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -147,7 +147,7 @@ describe("Accounts endpoints", () => {
       await insertTestAccount({ orgId });
       // No default PM set, but a card is attached → has_payment_method must be true.
       ssMocks.getCustomerByOrg.mockResolvedValue(customerWithoutPM());
-      ssMocks.hasAttachedCardPm.mockResolvedValue(true);
+      ssMocks.hasChargeablePmForOrg.mockResolvedValue(true);
 
       const res = await request(app)
         .get("/v1/accounts")
@@ -159,7 +159,7 @@ describe("Accounts endpoints", () => {
 
     it("reports auto_reload_supported=true for a non-blocked card country", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getOrgCardDisplay.mockResolvedValue({
+      ssMocks.getOrgCardDisplayByOrg.mockResolvedValue({
         country: "US",
         brand: "visa",
         last4: "4242",
@@ -179,7 +179,7 @@ describe("Accounts endpoints", () => {
 
     it("surfaces the saved card's brand, last4, and expiry alongside the country", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getOrgCardDisplay.mockResolvedValue({
+      ssMocks.getOrgCardDisplayByOrg.mockResolvedValue({
         country: "US",
         brand: "visa",
         last4: "4242",
@@ -201,7 +201,7 @@ describe("Accounts endpoints", () => {
 
     it("returns null card display fields when the org has no card PM", async () => {
       await insertTestAccount({ orgId });
-      // Default getOrgCardDisplay mock resolves null (link-only / no card).
+      // Default getOrgCardDisplayByOrg mock resolves null (link-only / no card).
       const res = await request(app)
         .get("/v1/accounts")
         .set(getAuthHeaders(orgId));
@@ -218,7 +218,7 @@ describe("Accounts endpoints", () => {
       // Account has full topup config, but the India card can't be charged off_session
       // → auto_reload_supported false, reason set, has_auto_topup forced false.
       await insertTestAccount({ orgId, topupAmountCents: 5000, topupThresholdCents: 1000 });
-      ssMocks.getOrgCardDisplay.mockResolvedValue({
+      ssMocks.getOrgCardDisplayByOrg.mockResolvedValue({
         country: "IN",
         brand: "visa",
         last4: "0002",
@@ -312,7 +312,7 @@ describe("Accounts endpoints", () => {
         amountCents: 500,
         promoCode: "welcome",
       });
-      ssMocks.hasAttachedCardPm.mockResolvedValue(false);
+      ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
       ssMocks.sumSucceededTopupsForOrg.mockResolvedValue("6700.0000000000");
       fetchRunsOrgUsageTotalSpy.mockResolvedValue({
         org_id: orgId,
@@ -362,7 +362,7 @@ describe("Accounts endpoints", () => {
 
     it("returns 502 when stripe-service unavailable", async () => {
       await insertTestAccount({ orgId });
-      ssMocks.getCustomerByOrg.mockRejectedValue(new Error("stripe-service down"));
+      ssMocks.fetchOrgPaymentFacts.mockRejectedValue(new Error("stripe-service down"));
 
       const res = await request(app)
         .get("/v1/accounts")
