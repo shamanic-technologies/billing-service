@@ -96,7 +96,7 @@ describe("hasAttachedCardPm", () => {
     expect(await hasAttachedCardPm({}, "cus_test")).toBe(false);
   });
 
-  it("queries card first, then link as fallback, scoped to the customer", async () => {
+  it("asks card and link at once, card first, both scoped to the customer", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pmListBody([]))));
 
     await hasAttachedCardPm({}, "cus_test");
@@ -109,6 +109,30 @@ describe("hasAttachedCardPm", () => {
     const linkUrl = fetchMock.mock.calls[1]?.[0] as string;
     expect(linkUrl).toContain("customer=cus_test");
     expect(linkUrl).toContain("type=link");
+  });
+
+  it("a card answers true even when the link list fails (the link answer is unread)", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("type=card")
+          ? jsonResponse(pmListBody([{ id: "pm_1", object: "payment_method", type: "card" }]))
+          : new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
+      )
+    );
+
+    expect(await hasAttachedCardPm({}, "cus_test")).toBe(true);
+  });
+
+  it("no card and a failing link list throws (fail-loud)", async () => {
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("type=card")
+          ? jsonResponse(pmListBody([]))
+          : new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })
+      )
+    );
+
+    await expect(hasAttachedCardPm({}, "cus_test")).rejects.toThrow(/failed: 500/);
   });
 
   it("propagates stripe-service errors — never collapses to false (fail-loud)", async () => {
