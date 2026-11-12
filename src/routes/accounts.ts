@@ -25,7 +25,7 @@ import {
   configuredReloadFor,
   TopupBelowMinimumError,
 } from "../lib/free-credit-offer.js";
-import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "../lib/transfer-usage.js";
+import { fetchOrgUsageTotals } from "../lib/transfer-usage.js";
 import { sumEntitlementGrantsForOrg, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
 import { settleFreeCreditPromisesIfPaidMoved } from "../lib/free-credit-settlement.js";
 import { sumOffPlatformPaymentsForOrg } from "../lib/off-platform-payments.js";
@@ -136,15 +136,14 @@ async function composeAccountFunds(
   const [
     [paidTopups, hasCardPm, cardDisplay],
     localCreditsBeforeSettle,
-    runsUsage,
-    actualRunsUsage,
+    usageTotals,
     discountPct,
     offPlatformPaidCents,
   ] = await Promise.all([
     stripeP,
     sumLocalPromoCreditsForOrg(orgId),
-    fetchOrgUsageTotal(orgId, identity),
-    fetchOrgActualUsageTotal(orgId, identity),
+    // Both usage totals in one call: their shared parts are read once (MON-DB-HOT-1112).
+    fetchOrgUsageTotals(orgId, identity),
     getUsageDiscountPct(orgId),
     // Staff grants the client PAID for off-platform (lib/off-platform-payments): cash,
     // not a gift. Only moves cash/paid vs gifted below; credited and balance are the
@@ -173,6 +172,7 @@ async function composeAccountFunds(
   //
   // Four independent reads, all AFTER the settle (same rows as before), asked at
   // once rather than one after the other (MON-PAGE-SPEED-2-1112).
+  const { projected: runsUsage, actual: actualRunsUsage } = usageTotals;
   const [entitlementGrantsCents, advance, trialRepayment, trialAdvance] = await Promise.all([
     sumEntitlementGrantsForOrg(orgId),
     getOnboardingAdvanceCents(orgId),
