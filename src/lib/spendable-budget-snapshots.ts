@@ -34,8 +34,13 @@ import { db } from "../db/index.js";
 import { campaignSpendableSnapshots } from "../db/schema.js";
 import { fetchSpendableBudget, type SpendableBudget } from "./campaign-service-client.js";
 
-/** A stored answer younger than this is served without asking campaign-service again. */
-export const REFRESH_AFTER_MS = 30_000;
+/**
+ * A stored answer younger than this is served without asking campaign-service again.
+ * 10 minutes since campaign-service PUSHES its changes (MON-PAGE-SPEED-2-1112, was 30 s
+ * of polling): this is only the backstop for a push that never arrived, and an older
+ * answer is still served while one refresh runs behind the read.
+ */
+export const REFRESH_AFTER_MS = 10 * 60_000;
 
 /** Reader shape `resolveBudgets` takes (same as `fetchSpendableBudget`). */
 export type SpendableBudgetReader = (orgId: string, brandId: string) => Promise<SpendableBudget | null>;

@@ -162,16 +162,22 @@ async function composeAccountFunds(
   const localCredits = addCents(localCreditsBeforeSettle, settled.grantedCents);
   // What counts toward the org's free-credit offer, read AFTER the settle so a gift
   // that just landed is in it (free_credit_received_cents).
-  const entitlementGrantsCents = await sumEntitlementGrantsForOrg(orgId);
-  const cardCountry = cardDisplay?.country ?? null;
+  //
   // A match_100 org's $30 onboarding advance is repaid by its payments, and shown
-  // as its own line, never as a gift (lib/free-credit-offer).
-  const advance = await getOnboardingAdvanceCents(orgId);
-  // The trial-end subscription payment repays the trial credit: it adds none.
-  const trialRepayment = await getTrialRepaymentCents(orgId);
-  // The trial credit itself is an ADVANCE on the subscription, never free credit:
-  // out of credited_gifted_cents, repaid or not, on its own line.
-  const trialAdvance = await getTrialAdvanceCents(orgId);
+  // as its own line, never as a gift (lib/free-credit-offer). The trial-end
+  // subscription payment repays the trial credit: it adds none. The trial credit
+  // itself is an ADVANCE on the subscription, never free credit: out of
+  // credited_gifted_cents, repaid or not, on its own line.
+  //
+  // Four independent reads, all AFTER the settle (same rows as before), asked at
+  // once rather than one after the other (MON-PAGE-SPEED-2-1112).
+  const [entitlementGrantsCents, advance, trialRepayment, trialAdvance] = await Promise.all([
+    sumEntitlementGrantsForOrg(orgId),
+    getOnboardingAdvanceCents(orgId),
+    getTrialRepaymentCents(orgId),
+    getTrialAdvanceCents(orgId),
+  ]);
+  const cardCountry = cardDisplay?.country ?? null;
   const creditParts = composeCreditedFromParts(paidTopups, localCredits, advance, trialRepayment);
   const creditedCents = creditParts.creditedCents;
   // runs-service usage is already NET of the org's usage discount (frozen at
