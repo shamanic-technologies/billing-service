@@ -63,7 +63,7 @@ import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { chargeBlockFrom, type ChargeBlockedReason } from "./charge-verdict.js";
 import { computeSettleCharge, SWEEP_HOUR_UTC } from "./month-end-sweep.js";
 import { fetchRealizedDailyBurn, type BurnUnavailableReason } from "./realized-burn.js";
-import { fetchSpendableBudget } from "./campaign-service-client.js";
+import { fetchSpendableBudget, type SpendableBudget } from "./campaign-service-client.js";
 import { asPaymentMode, type PaymentMode } from "./payment-mode-types.js";
 import {
   subscriptions,
@@ -186,16 +186,22 @@ export async function fundedBrandIds(orgId: string): Promise<string[]> {
  * the failure mode a null exists to avoid.
  */
 export async function resolveBudgets(
-  orgId: string
+  orgId: string,
+  // How campaign-service's per-brand answer is read: live by default. The runway
+  // passes the snapshot reader (lib/spendable-budget-snapshots), same answer shape.
+  readSpendable: (orgId: string, brandId: string) => Promise<SpendableBudget | null> = fetchSpendableBudget
 ): Promise<{ configuredCents: string; runningCents: string | null }> {
   const brandIds = await fundedBrandIds(orgId);
   if (brandIds.length === 0) return { configuredCents: "0", runningCents: "0" };
 
   const answers = await Promise.all(
-    brandIds.map(async (brandId) => ({
-      sales: await getBrandSalesBudget(orgId, brandId),
-      answer: await fetchSpendableBudget(orgId, brandId),
-    }))
+    brandIds.map(async (brandId) => {
+      const [sales, answer] = await Promise.all([
+        getBrandSalesBudget(orgId, brandId),
+        readSpendable(orgId, brandId),
+      ]);
+      return { sales, answer };
+    })
   );
 
   let configured = "0";
