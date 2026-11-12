@@ -1,4 +1,4 @@
-import { beforeAll, afterAll } from "vitest";
+import { beforeAll, afterAll, beforeEach } from "vitest";
 
 process.env.BILLING_SERVICE_DATABASE_URL =
   process.env.BILLING_SERVICE_DATABASE_URL ||
@@ -437,3 +437,10 @@ beforeAll(async () => {
 });
 
 afterAll(() => console.log("Test suite complete."));
+
+// The account read memoises its free-credit settle per (org, paid sum) for the
+// process lifetime (MON-DB-HOT-1112); every test starts from a clean memo.
+beforeEach(async () => {
+  const { resetSettleMemoForTests } = await import("../src/lib/free-credit-settlement.js");
+  resetSettleMemoForTests();
+});
