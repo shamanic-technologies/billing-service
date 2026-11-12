@@ -27,7 +27,7 @@ import {
 } from "../lib/free-credit-offer.js";
 import { fetchOrgActualUsageTotal, fetchOrgUsageTotal } from "../lib/transfer-usage.js";
 import { sumEntitlementGrantsForOrg, sumLocalPromoCreditsForOrg } from "../lib/promos.js";
-import { settleFreeCreditPromises } from "../lib/free-credit-settlement.js";
+import { settleFreeCreditPromisesIfPaidMoved } from "../lib/free-credit-settlement.js";
 import { sumOffPlatformPaymentsForOrg } from "../lib/off-platform-payments.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import {
@@ -154,11 +154,13 @@ async function composeAccountFunds(
   // Free-credit promises (welcome + referral): paid topups are the trigger for all
   // of them and we already hold the figure, so settle here — the dashboard reads this
   // endpoint right after a payment, which is what makes a gift land in seconds rather
-  // than waiting for the hourly sweep. Every grant condition is derived entirely from
+  // than waiting for the hourly sweep. Only when the paid sum MOVED since this
+  // process last settled the org (MON-DB-HOT-1112): an unchanged sum cannot earn
+  // anything new, and the settle's writes were the slowest step of every read. Every grant condition is derived entirely from
   // Stripe's record of money received, never from anything the caller asserts. Fails
   // loud (→ 502 at the call site). Fold the freshly-granted total in rather than
   // re-querying the ledger.
-  const settled = await settleFreeCreditPromises(orgId, paidTopups);
+  const settled = await settleFreeCreditPromisesIfPaidMoved(orgId, paidTopups);
   const localCredits = addCents(localCreditsBeforeSettle, settled.grantedCents);
   // What counts toward the org's free-credit offer, read AFTER the settle so a gift
   // that just landed is in it (free_credit_received_cents).
