@@ -167,3 +167,49 @@ export async function fetchOrgActualUsageTotal(
     platform_absorbed_cents: absorbed.actualNetCents,
   };
 }
+
+/**
+ * Both totals at once, for a read that needs the two (GET /v1/accounts). Same figures as
+ * `fetchOrgUsageTotal` + `fetchOrgActualUsageTotal`, but the parts they share (transfer
+ * adjustment, staff debits, subscription expiries, the absorbed no-campaign spend) are read
+ * ONCE instead of twice (MON-DB-HOT-1112): at 40 concurrent account reads the doubled
+ * billing queries queued on the connection pool and the absorbed read asked runs-service
+ * twice for one answer.
+ */
+export async function fetchOrgUsageTotals(
+  orgId: string,
+  wfHeaders: Record<string, string>
+): Promise<{
+  projected: RunsOrgUsageTotalResult & StaffDebitsPart;
+  actual: RunsOrgActualUsageTotalResult & StaffDebitsPart;
+}> {
+  const [runs, actualRuns, adj, debits, expired, absorbed] = await Promise.all([
+    fetchRunsOrgUsageTotal(orgId, wfHeaders),
+    fetchRunsOrgActualUsageTotal(orgId, wfHeaders),
+    getTransferUsageAdjustment(orgId),
+    sumStaffDebitsForOrg(orgId),
+    sumSubscriptionExpiriesForOrg(orgId),
+    absorbedFor(orgId, wfHeaders),
+  ]);
+  return {
+    projected: {
+      ...runs,
+      spent_cents: minus(
+        adjusted(adjusted(adjusted(runs.spent_cents, adj.usageCents), debits), expired),
+        absorbed.usageNetCents
+      ),
+      staff_debits_cents: debits,
+      subscription_expired_cents: expired,
+      platform_absorbed_cents: absorbed.usageNetCents,
+    },
+    actual: {
+      spent_cents: minus(
+        adjusted(adjusted(adjusted(actualRuns.spent_cents, adj.actualCents), debits), expired),
+        absorbed.actualNetCents
+      ),
+      staff_debits_cents: debits,
+      subscription_expired_cents: expired,
+      platform_absorbed_cents: absorbed.actualNetCents,
+    },
+  };
+}
