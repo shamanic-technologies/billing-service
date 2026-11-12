@@ -21,6 +21,7 @@ import { Decimal } from "decimal.js";
 import { computeBalance } from "./balance.js";
 import { getPaymentMode } from "./payment-mode.js";
 import { resolveBudgets } from "./payment-outlook.js";
+import { snapshotSpendableBudgetReader } from "./spendable-budget-snapshots.js";
 import type { PaymentMode } from "./payment-mode-types.js";
 
 export type RunwayState = "days" | "depleted" | "no_budget" | "budget_unavailable" | "not_prepaid";
@@ -86,19 +87,30 @@ export function decideRunway(input: {
 
 /** Null when the org has no billing account. Pure read. Fail-loud on stripe/runs. */
 export async function getRunway(orgId: string, now: Date = new Date()): Promise<Runway | null> {
+  // Latency (MON-PAGE-SPEED-1111): this read sits on every dashboard page, so the
+  // balance (stripe-service + runs-service) starts with the payment-mode read
+  // instead of behind it, and campaign-service's per-brand answer comes from the
+  // snapshot reader (lib/spendable-budget-snapshots): served from the last read,
+  // refreshed behind it, never once billing's own budget rows changed.
+  const balanceP = computeBalance(orgId);
+  // Not awaited when the org has no account: keep that rejection off the process.
+  balanceP.catch(() => undefined);
   const paymentMode = await getPaymentMode(orgId);
   if (paymentMode === null) return null;
   if (paymentMode !== "prepaid") {
     return decideRunway({
       orgId,
       paymentMode,
-      balanceCents: (await computeBalance(orgId)).balanceCents,
+      balanceCents: (await balanceP).balanceCents,
       dailyBudgetCents: null,
       configuredDailyBudgetCents: "0",
       now,
     });
   }
-  const [snapshot, budgets] = await Promise.all([computeBalance(orgId), resolveBudgets(orgId)]);
+  const [snapshot, budgets] = await Promise.all([
+    balanceP,
+    resolveBudgets(orgId, snapshotSpendableBudgetReader()),
+  ]);
   return decideRunway({
     orgId,
     paymentMode,

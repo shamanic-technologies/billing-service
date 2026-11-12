@@ -29,6 +29,7 @@ import {
   paymentConsents,
   paymentAlerts,
   featuresCatalogueSnapshots,
+  campaignSpendableSnapshots,
   paymentAlertSignals,
   ownerAlerts,
   ownerStripeStepAlerts,
@@ -75,6 +76,7 @@ export async function cleanTestData() {
   await db.delete(paymentConsents);
   await db.delete(paymentAlerts);
   await db.delete(featuresCatalogueSnapshots);
+  await db.delete(campaignSpendableSnapshots);
   await db.delete(paymentAlertSignals);
   await db.delete(ownerAlerts);
   await db.delete(ownerStripeStepAlerts);

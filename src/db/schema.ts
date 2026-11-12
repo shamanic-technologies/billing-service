@@ -1345,6 +1345,21 @@ export const featuresCatalogueSnapshots = pgTable("features_catalogue_snapshots"
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// The last campaign-service spendable-budget answer per (org, brand) (migration
+// 0098, lib/spendable-budget-snapshots): the runway serves it at once and refreshes
+// it behind the read; never served once billing's own budget rows changed.
+export const campaignSpendableSnapshots = pgTable(
+  "campaign_spendable_snapshots",
+  {
+    orgId: uuid("org_id").notNull(),
+    brandId: uuid("brand_id").notNull(),
+    body: jsonb("body").notNull(),
+    billingFingerprint: text("billing_fingerprint").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.orgId, table.brandId] })]
+);
+
 // Owner Telegram alert per succeeded payment (migration 0072, lib/payment-alerts).
 // The primary key is the exactly-once guarantee: claimed before any send.
 export const paymentAlerts = pgTable("payment_alerts", {

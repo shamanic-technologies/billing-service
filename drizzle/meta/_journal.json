@@ -687,6 +687,13 @@
       "when": 1796551200000,
       "tag": "0097_placeholder_org_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1796637600000,
+      "tag": "0098_campaign_spendable_snapshots",
+      "breakpoints": true
     }
   ]
 }

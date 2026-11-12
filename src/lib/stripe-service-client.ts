@@ -618,9 +618,16 @@ export async function hasAttachedCardPm(
   identity: IdentityHeaders,
   customerId: string
 ): Promise<boolean> {
-  const cards = await listPaymentMethods(identity, { customer: customerId, type: "card" });
+  // Both lists asked at once (MON-PAGE-SPEED-1111: chained, an org with no card
+  // waited two stripe-service round trips on every /v1/accounts read). The link
+  // answer is read only when there is no card, exactly as before; when it is not
+  // read its rejection is kept off the process, and when it is read it throws.
+  const cardsP = listPaymentMethods(identity, { customer: customerId, type: "card" });
+  const linksP = listPaymentMethods(identity, { customer: customerId, type: "link" });
+  linksP.catch(() => undefined);
+  const cards = await cardsP;
   if (cards.data.length > 0) return true;
-  const links = await listPaymentMethods(identity, { customer: customerId, type: "link" });
+  const links = await linksP;
   return links.data.length > 0;
 }
 
