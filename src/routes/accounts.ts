@@ -225,6 +225,36 @@ async function composeAccountFunds(
   };
 }
 
+/**
+ * The org's funds for a plain READ (GET /v1/accounts, GET /v1/accounts/balance), shared by
+ * every read of the same org that arrives while one is already composing them
+ * (MON-DB-HOT-1112). A dashboard page fires several account reads at once; each composed
+ * the same answer on its own (stripe-service payment facts, runs-service usage, ~12 billing
+ * queries), and 40 at once queued behind stripe-service's and billing's small connection
+ * pools: 111 ms alone, 1.4 s p50 at 40 concurrent. Joining the read already in flight
+ * answers them all with the figures of that same moment.
+ *
+ * In flight ONLY: nothing is kept once the compose settles, so no read is ever older than a
+ * compose that started before it arrived. Never used after a write (the write routes call
+ * composeAccountFunds themselves). The figures are org-level; the caller identity only
+ * attributes the runs-service reads. A failure fails every joined read (502), and the next
+ * read composes afresh.
+ */
+const fundsInFlight = new Map<string, ReturnType<typeof composeAccountFunds>>();
+
+function composeAccountFundsShared(
+  orgId: string,
+  identity: Record<string, string>
+): ReturnType<typeof composeAccountFunds> {
+  const pending = fundsInFlight.get(orgId);
+  if (pending) return pending;
+  const p = composeAccountFunds(orgId, identity).finally(() => {
+    fundsInFlight.delete(orgId);
+  });
+  fundsInFlight.set(orgId, p);
+  return p;
+}
+
 function buildAccountResponse(
   account: typeof billingAccounts.$inferSelect,
   funds: {
@@ -406,7 +436,7 @@ router.get("/v1/accounts", requireOrgHeaders, async (req, res) => {
 
     let funds;
     try {
-      funds = await composeAccountFunds(orgId, identity);
+      funds = await composeAccountFundsShared(orgId, identity);
     } catch (err) {
       console.error("[billing-service] Failed to compose account funds:", err);
       res.status(502).json({ error: "Failed to compose account funds" });
@@ -441,7 +471,7 @@ router.get("/v1/accounts/balance", requireOrgHeaders, async (req, res) => {
 
     let funds;
     try {
-      funds = await composeAccountFunds(orgId, identity);
+      funds = await composeAccountFundsShared(orgId, identity);
     } catch (err) {
       console.error("[billing-service] Failed to compose account funds:", err);
       res.status(502).json({ error: "Failed to compose account funds" });
