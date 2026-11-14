@@ -157,6 +157,13 @@ export type SalesFunnelTypeUnavailableReason =
 export const ITEM_TASKS: Readonly<Record<string, { serviceName: string; taskName: string }>> = {
   "sales-cold-email-outreach": { serviceName: "instantly-service", taskName: "email-send-step-1" },
   "feedback-request-cold-email-outreach": { serviceName: "instantly-service", taskName: "email-send-step-1" },
+  // AI Follow-up Email (features-service #1573, proactive from lead_found): writes ONE email to
+  // ONE named person and sends it through email-gateway's broadcast send, which instantly-service
+  // records as one `email-send-step-1` run on the unit campaign. One run = one first contact.
+  // Without this entry a followed-plan funnel containing this pipe reads
+  // `volume_not_measured_on_channel` and campaign-service holds every unit as
+  // `budgets_unreadable` (prod 2026-11-14, MON-BUDGETS-UNREADABLE-1114).
+  "ai-follow-up-email": { serviceName: "instantly-service", taskName: "email-send-step-1" },
 };
 
 /**
