@@ -188,6 +188,18 @@ describe("itemTaskOf: a pipe's volume measure, declared by step or trigger, neve
     ).toBe(REACTIVE_ITEM_TASKS["ai-meeting-booking"]);
   });
 
+  it("ai-follow-up-email is measured as a proactive first-contact pipe (MON-BUDGETS-UNREADABLE-1114)", () => {
+    // The channel is served proactive by the catalogue; its volume measure must be in ITEM_TASKS
+    // so a followed-plan funnel containing it does not read volume_not_measured_on_channel.
+    expect(ITEM_TASKS["ai-follow-up-email"]).toEqual({
+      serviceName: "instantly-service",
+      taskName: "email-send-step-1",
+    });
+    expect(itemTaskOf({ channelSlug: "ai-follow-up-email", toStep: "conversation" }, ITEM_TASKS, null)).toBe(
+      ITEM_TASKS["ai-follow-up-email"]
+    );
+  });
+
   it("no measure (null, never a guess): a step and a trigger no run is declared for, or nothing served", () => {
     expect(itemTaskOf({ channelSlug: "ai-instant-call", toStep: "meeting_booked" }, REACTIVE_ITEM_TASKS, "form_submitted")).toBeNull();
     expect(itemTaskOf({ channelSlug: "google-ads", toStep: "website_visit" }, ITEM_TASKS, null)).toBeNull();
