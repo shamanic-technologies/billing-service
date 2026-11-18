@@ -249,12 +249,9 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     expect(status.body.state).toBe("awaiting_payment");
   });
 
-  it("auto top-up cannot be switched off while prepaid; its amounts can change", async () => {
+  it("auto top-up amounts can change, and it switches off like any prepaid org's", async () => {
     await mark();
     await request(app).post("/v1/accounts/prepaid_checkout").set(getAuthHeaders(orgId, person)).send(checkoutBody);
-    const off = await request(app).delete("/v1/accounts/auto_topup").set(getAuthHeaders(orgId, person));
-    expect(off.status).toBe(409);
-    expect(off.body.code).toBe("auto_topup_required");
 
     const change = await request(app)
       .patch("/v1/accounts/auto_topup")
@@ -263,6 +260,11 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     expect(change.status).toBe(200);
     const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
     expect(account).toMatchObject({ topupAmountCents: 2000, topupThresholdCents: 0 });
+
+    const off = await request(app).delete("/v1/accounts/auto_topup").set(getAuthHeaders(orgId, person));
+    expect(off.status).toBe(200);
+    const [after] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
+    expect(after).toMatchObject({ topupAmountCents: null });
   });
 
   it("other orgs can still switch auto top-up off (unchanged)", async () => {
