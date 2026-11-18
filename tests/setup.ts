@@ -152,6 +152,20 @@ beforeAll(async () => {
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
+  // answer_passes (REPLY-NO-BALANCE-1118, migration 0101).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "answer_passes" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "org_id" uuid NOT NULL,
+      "campaign_id" uuid NOT NULL,
+      "run_id" uuid NOT NULL,
+      "brand_id" uuid,
+      "lead_id" uuid,
+      "granted_at" timestamp with time zone DEFAULT now() NOT NULL,
+      "expires_at" timestamp with time zone NOT NULL
+    )
+  `;
+
   // campaign_authorize_costs (per-campaign affordability estimate, migration 0021).
   await sql`
     CREATE TABLE IF NOT EXISTS "campaign_authorize_costs" (

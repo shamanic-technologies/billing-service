@@ -10,6 +10,7 @@ import {
   InternalAccountTeardownResponseSchema,
   OnDemandChargeRequestSchema,
   TransferBrandRequestSchema,
+  AnswerPassRequestSchema,
 } from "../schemas.js";
 import {
   billingAccounts,
@@ -43,6 +44,7 @@ import { computeBalance } from "../lib/balance.js";
 import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
 import { cannotSpend, gateBalanceCents, resolveOrgFloor } from "../lib/spend-block.js";
 import { refusalBlockingSpend } from "../lib/refused-charge.js";
+import { grantAnswerPass } from "../lib/answer-pass.js";
 import { fetchOrgActualUsageTotal } from "../lib/transfer-usage.js";
 import { getUsageDiscountPct } from "../lib/usage-discount.js";
 import { isDepleted, subCents } from "../lib/cents.js";
@@ -309,6 +311,22 @@ router.post("/internal/transfer-brand", async (req, res) => {
   }
 
   res.json({ updatedTables: result.updatedTables, balanceAdjustment: result.balanceAdjustment });
+});
+
+// POST /internal/answer-passes (REPLY-NO-BALANCE-1118)
+//
+// campaign-service admitted a run that carries ONE person waiting on our answer, whatever the
+// org's balance: while the pass is live, authorize grants this campaign's spends the balance
+// alone would refuse (lib/answer-pass). Append-only, idempotent enough (two passes for one run
+// only extend nothing: the latest expiry stands).
+router.post("/internal/answer-passes", async (req, res) => {
+  const parsed = AnswerPassRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.message });
+    return;
+  }
+  const pass = await grantAnswerPass(parsed.data);
+  res.status(201).json({ id: pass.id, expiresAt: pass.expiresAt.toISOString() });
 });
 
 // GET /internal/campaigns/:campaignId/affordability
