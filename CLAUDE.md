@@ -776,6 +776,8 @@ Two things made it invisible. The per-minute time bucket in `reloadIdempotencyKe
   "card_last4": "4242",                      // saved card last 4 digits (display-only, NOT the full PAN); null when no card PM
   "card_exp_month": 8,                       // saved card expiry month 1–12 (display-only); null when no card PM
   "card_exp_year": 2027,                     // saved card expiry year (display-only); null when no card PM
+  "payment_method_type": "card",             // what a charge takes, charge order (card, else link): "card" | "link" | ...; null when none. Link-only org: "link" + card_* null
+  "link_email": null,                        // Link wallet's own email (pm.link.email, never billing_details.email) when payment_method_type is "link"; else null
   "created_at": "...",
   "updated_at": "..."
 }

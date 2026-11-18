@@ -273,6 +273,36 @@
             "type": "string",
             "nullable": true
           },
+          "card_brand": {
+            "type": "string",
+            "nullable": true,
+            "description": "Saved card network (display-only, e.g. \"visa\"); null when the chargeable method is not a card or there is none."
+          },
+          "card_last4": {
+            "type": "string",
+            "nullable": true,
+            "description": "Saved card last 4 digits (display-only, never the full PAN); null when not a card or none."
+          },
+          "card_exp_month": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Saved card expiry month; null when not a card or none."
+          },
+          "card_exp_year": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Saved card expiry year; null when not a card or none."
+          },
+          "payment_method_type": {
+            "type": "string",
+            "nullable": true,
+            "description": "Stripe type of the saved method a charge would take (\"card\", \"link\", ...), picked like the charge: first card, else first Link wallet. null when the org holds no chargeable method."
+          },
+          "link_email": {
+            "type": "string",
+            "nullable": true,
+            "description": "Email of the Link wallet a charge would take (the wallet's own address, never the billing-details email), when payment_method_type is \"link\"; null otherwise."
+          },
           "created_at": {
             "type": "string"
           },
@@ -315,6 +345,12 @@
           "auto_reload_supported",
           "auto_reload_unsupported_reason",
           "card_country",
+          "card_brand",
+          "card_last4",
+          "card_exp_month",
+          "card_exp_year",
+          "payment_method_type",
+          "link_email",
           "created_at",
           "updated_at"
         ]
