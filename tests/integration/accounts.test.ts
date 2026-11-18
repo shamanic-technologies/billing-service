@@ -499,16 +499,16 @@ describe("Accounts endpoints", () => {
       expect(res.body.error).toContain("Auto-reload is unavailable");
     });
 
-    it("requires an explicit auto-topup threshold", async () => {
+    it("requires an amount; the threshold is optional and ignored ($0 for everyone)", async () => {
       await insertTestAccount({ orgId });
 
       const res = await request(app)
         .patch("/v1/accounts/auto_topup")
         .set(getAuthHeaders(orgId))
-        .send({ topup_amount_cents: 5000 });
+        .send({ topup_threshold_cents: 500 });
 
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain("topup_threshold_cents");
+      expect(res.body.error).toContain("topup_amount_cents");
       expect(ssMocks.getCustomerByOrg).not.toHaveBeenCalled();
     });
 

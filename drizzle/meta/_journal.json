@@ -701,6 +701,13 @@
       "when": 1796700000000,
       "tag": "0099_spendable_snapshot_invalidation",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1796786400000,
+      "tag": "0100_reload_threshold_zero",
+      "breakpoints": true
     }
   ]
 }

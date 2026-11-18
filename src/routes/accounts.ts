@@ -4,7 +4,7 @@ import { cardFactsFrom, cardFactsWire } from "../lib/card-facts.js";
 import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { AGENT_API_FREE_CREDIT_OFFER, billingAccounts } from "../db/schema.js";
+import { AGENT_API_FREE_CREDIT_OFFER, billingAccounts, RELOAD_THRESHOLD_CENTS } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
@@ -687,20 +687,22 @@ router.delete("/v1/accounts/saved_payment_method", requireOrgHeaders, async (req
 function notifyAutoTopupChange(
   orgId: string,
   before: { topupAmountCents: number | null; topupThresholdCents: number | null },
-  amount: number,
-  threshold: number
+  amount: number
 ): void {
-  const now = `${usd(amount)} when the balance falls below ${usd(threshold)}`;
+  // The threshold is $0 for everyone (owner 2026-11-18): only the amount is news.
   if (before.topupAmountCents == null) {
-    notifyOwnerBillingEvent({ orgId, emoji: "⚙️", text: `Automatic reload turned ON: ${now}` });
+    notifyOwnerBillingEvent({
+      orgId,
+      emoji: "⚙️",
+      text: `Automatic reload turned ON: adds ${usd(amount)} when the balance reaches $0`,
+    });
     return;
   }
-  if (before.topupAmountCents === amount && before.topupThresholdCents === threshold) return;
-  const was = `${usd(before.topupAmountCents)} below ${usd(before.topupThresholdCents ?? 0)}`;
+  if (before.topupAmountCents === amount) return;
   notifyOwnerBillingEvent({
     orgId,
     emoji: "⚙️",
-    text: `Automatic reload changed: ${was} → ${usd(amount)} below ${usd(threshold)}`,
+    text: `Automatic reload changed: adds ${usd(before.topupAmountCents)} → ${usd(amount)} when the balance reaches $0`,
   });
 }
 
@@ -745,21 +747,20 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       return;
     }
 
-    // "We match your first $100" orgs reload at least $100, and never let the
-    // threshold sit below $5 (lib/free-credit-offer). Legacy orgs: unchanged.
+    // A reload adds at least the org's reload minimum (lib/free-credit-offer:
+    // $100 match_100, $10 at-cost / agent); the threshold is $0 for everyone.
     // A POSTPAID org has NO auto top-up (owner 2026-10-21: « l'autotopup n'a aucun
     // sens en post paid »): it is charged at the credit-line steps and at month end.
     if (account.paymentMode === "postpaid") {
       res.status(409).json(POSTPAID_NO_AUTO_TOPUP);
       return;
     }
-    const { topup_amount_cents, topup_threshold_cents } = parsed.data;
+    const { topup_amount_cents } = parsed.data;
+    // The threshold is $0 for everyone and editable nowhere (owner 2026-11-18): a
+    // sent topup_threshold_cents is accepted and ignored.
+    const topup_threshold_cents = RELOAD_THRESHOLD_CENTS;
     try {
-      assertAutoTopupMinimums(
-        topupMinimumsFor(account),
-        topup_amount_cents,
-        topup_threshold_cents
-      );
+      assertAutoTopupMinimums(topupMinimumsFor(account), topup_amount_cents);
     } catch (err) {
       if (err instanceof TopupBelowMinimumError) {
         res.status(400).json({
@@ -865,7 +866,7 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       })
       .where(eq(billingAccounts.orgId, orgId))
       .returning();
-    notifyAutoTopupChange(orgId, account, topup_amount_cents, topup_threshold_cents);
+    notifyAutoTopupChange(orgId, account, topup_amount_cents);
 
     let funds;
     try {

@@ -225,7 +225,8 @@ export const UsageApplyResponseSchema = z
 export const UpdateAutoTopupRequestSchema = z
   .object({
     topup_amount_cents: z.number().int().positive(),
-    topup_threshold_cents: z.number().int().min(0),
+    /** Ignored: the reload threshold is $0 for everyone and editable nowhere (owner 2026-11-18). Accepted so older callers keep working. */
+    topup_threshold_cents: z.number().int().min(0).optional(),
   })
   .openapi("UpdateAutoTopupRequest");
 
@@ -260,7 +261,7 @@ export const CreatePrepaidCheckoutRequestSchema = z
     topup_amount_cents: z.number().int().min(50).openapi({ example: 1000 }),
     /** What each automatic reload ADDS. Absent = the org's default (GET /v1/accounts/reload_rules, $10 today); below its minimum = 400 `reload_below_minimum`. */
     auto_topup_amount_cents: z.number().int().min(50).optional().openapi({ example: 1000 }),
-    /** Reload when the next run would take the balance below this. Absent = the org's default ($5 today); below its minimum = 400 `topup_threshold_below_minimum`. */
+    /** Ignored: the reload threshold is $0 for everyone and editable nowhere (owner 2026-11-18). Accepted so older callers keep working. */
     auto_topup_threshold_cents: z.number().int().min(0).optional().openapi({ example: 500 }),
     success_url: z.string().url(),
     cancel_url: z.string().url(),
@@ -1977,7 +1978,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Payment method required or invalid request. A match_100 org (free_credit_offer) is refused below its minimums with `code` + `minimum_cents`: `topup_below_minimum` (topup_amount_cents < 10000) or `topup_threshold_below_minimum` (topup_threshold_cents < 500). A POSTPAID org has no auto top-up: 409 `postpaid_no_auto_topup`. Staff can set other minimums per org (`PUT /v1/accounts/topup_minimums`); `minimum_cents` names the one in force. For a PREPAID match_100 org the stated amount and threshold are binding: it reloads topup_amount_cents when the next run would take its balance below topup_threshold_cents, and the account read serves both back unchanged.",
+        "Payment method required or invalid request. An amount below the org's reload minimum (GET /v1/accounts/reload_rules: $100 match_100, $10 at-cost / agent) is refused 400 `topup_below_minimum` + `minimum_cents`. topup_threshold_cents is optional and IGNORED: the threshold is $0 for everyone, editable nowhere (owner 2026-11-18). A POSTPAID org has no auto top-up: 409 `postpaid_no_auto_topup`. Staff can set another top-up minimum per org (`PUT /v1/accounts/topup_minimums`). For a PREPAID org with its own reload (match_100, at-cost, agent) the stated amount binds: it reloads topup_amount_cents when the next run would take its balance below $0.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
@@ -2212,9 +2213,9 @@ registry.registerPath({
   path: "/v1/accounts/prepaid_checkout",
   summary: "One call: prepay + saved card + auto top-up (mandatory for agent/API orgs, optional for every new dashboard org)",
   description:
-    "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents. The reload rules live in billing (GET /v1/accounts/reload_rules): an absent reload amount/threshold is the org's default (+$10 below $5 today), a stated one below the org's minimums is refused 400 (`reload_below_minimum` | `topup_threshold_below_minimum`, + `minimum_cents`), and so is a first payment under one reload (`topup_below_minimum`). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
+    "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed: each reload adds auto_topup_amount_cents when the next spend would take the balance below $0 (the threshold is $0 for everyone; a sent auto_topup_threshold_cents is ignored). The reload rules live in billing (GET /v1/accounts/reload_rules): an absent reload amount is the org's default ($10 today), a stated one below the org's minimum is refused 400 `reload_below_minimum` + `minimum_cents`, and so is a first payment under one reload (`topup_below_minimum`). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
     "This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. For such an org the reload is OPTIONAL: it may switch it off later (DELETE /v1/accounts/auto_topup) and back on (PATCH). Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). " +
-    "Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $10 -> about $15. " +
+    "Worked example: pay $10 -> balance $10; spend reaches $0 -> card charged $10 -> balance $10. " +
     "A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). " +
     "409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
   request: {
@@ -2254,7 +2255,7 @@ for (const [path, headers, summary] of [
     path,
     summary,
     description:
-      "RELOAD-RULE-ONE-HOME-1118. Owner rule 2026-11-11: « +10 dès qu'on arrive sous $5 »: each automatic reload ADDS at least $10, whatever the threshold, below at least $5. Callers (dashboard, Sophie, the API) show and validate these figures, or send no reload amount and get the default; they never hold a copy. An org with no billing account yet reads a new org's rules. Example: pay $10, spend to $4.90, card charged $10, balance $14.90.",
+      "RELOAD-RULE-ONE-HOME-1118. Each automatic reload ADDS at least $10 (owner 2026-11-11), and fires at $0 for everyone (owner 2026-11-18: threshold $0, editable nowhere; reload_threshold_* are always 0). Callers (dashboard, Sophie, the API) show and validate these figures, or send no reload amount and get the default; they never hold a copy. An org with no billing account yet reads a new org's rules. Example: pay $10, spend to $0, card charged $10, balance $10.",
     request: headers
       ? { headers }
       : { params: z.object({ orgId: zod3Uuid() }) },
@@ -5142,11 +5143,11 @@ export const TopupMinimumsResponseSchema = z
   .openapi("TopupMinimumsResponse");
 
 const topupMinimumsDescription =
-  "The smallest top-up (checkout, on-demand charge, auto-reload amount) and the smallest " +
-  "auto-reload threshold this org may set. Default = its offer (match_100: $100 top-up, $5 " +
-  "threshold; every other offer: none). Staff can replace either for ONE org; a value below " +
-  "the minimum is refused 400 with `code` (topup_below_minimum | topup_threshold_below_minimum) " +
-  "and `minimum_cents`. An org staff never set reads exactly its offer default.";
+  "The smallest top-up (checkout, on-demand charge, auto-reload amount) this org may set. " +
+  "Default = its offer (match_100: $100; every other offer: none). Staff can replace it for ONE " +
+  "org; a value below it is refused 400 `topup_below_minimum` + `minimum_cents`. The reload " +
+  "threshold is $0 for everyone and editable nowhere (owner 2026-11-18): reload_threshold_minimum_cents " +
+  "always reads 0 (or null for an offer with no reload of its own) and a stated one is ignored.";
 
 const topupMinimumsResponses = {
   200: { description: "Minimums in force", content: { "application/json": { schema: TopupMinimumsResponseSchema } } },

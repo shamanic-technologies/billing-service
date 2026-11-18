@@ -153,7 +153,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
       payment_mode: "prepaid",
       free_credit_offer: "agent_api",
       topup_amount_cents: 1000,
-      auto_topup: { amount_cents: 1500, threshold_cents: 500 },
+      auto_topup: { amount_cents: 1500, threshold_cents: 0 },
     });
     const body = ss.createCheckoutSession.mock.calls[0][1];
     expect(body.mode).toBe("payment");
@@ -162,7 +162,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     expect(body.discounts).toBeUndefined();
 
     const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
-    expect(account).toMatchObject({ paymentMode: "prepaid", topupAmountCents: 1500, topupThresholdCents: 500 });
+    expect(account).toMatchObject({ paymentMode: "prepaid", topupAmountCents: 1500, topupThresholdCents: 0 });
   });
 
   it("an org with NO account calling the checkout is created as agent_api, never with the $30 advance", async () => {
@@ -175,7 +175,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
     expect(await promoRows(unmarkedOrgId)).toHaveLength(0);
   });
 
-  it("after paying $10: balance is exactly $10, and falling under $5 reloads exactly $15", async () => {
+  it("after paying $10: balance is exactly $10; reaching $0 reloads exactly the $15 it chose", async () => {
     await mark();
     await request(app).post("/v1/accounts/prepaid_checkout").set(getAuthHeaders(orgId, person)).send(checkoutBody);
     ss.sumSucceededTopupsForOrg.mockResolvedValue(cents(1000));
@@ -193,12 +193,20 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
       payment_mode: "prepaid",
       paid_cents: cents(1000),
       balance_cents: cents(1000),
-      auto_topup: { enabled: true, amount_cents: 1500, threshold_cents: 500 },
+      auto_topup: { enabled: true, amount_cents: 1500, threshold_cents: 0 },
       card: { saved: true, reloadable: true, not_reloadable_reason: null },
     });
 
-    // $6 spent: balance $4 < $5 → one $15 reload.
+    // $6 spent: balance $4, still above $0 → no reload (threshold $0 for everyone).
     usage.mockResolvedValue({ spent_cents: cents(600) });
+    const early = await request(app)
+      .post("/v1/customer_balance/authorize")
+      .set({ ...getAuthHeaders(orgId, person), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
+      .send({ items: [{ costName: "anthropic-sonnet-4-5-tokens-input", quantity: 1000 }], description: "agent spend" });
+    expect(early.status).toBe(200);
+    expect(ss.reloadOffSession).not.toHaveBeenCalled();
+    // $10 spent: the next spend would take the balance below $0 → one $15 reload, before any refusal.
+    usage.mockResolvedValue({ spent_cents: cents(1000) });
     const auth = await request(app)
       .post("/v1/customer_balance/authorize")
       .set({ ...getAuthHeaders(orgId, person), "x-campaign-id": "00000000-0000-4000-8000-00000000ca01" })
@@ -254,7 +262,7 @@ describe("Agent/API orgs: prepaid with mandatory auto top-up, no free credit", (
       .send({ topup_amount_cents: 2000, topup_threshold_cents: 700 });
     expect(change.status).toBe(200);
     const [account] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, orgId));
-    expect(account).toMatchObject({ topupAmountCents: 2000, topupThresholdCents: 700 });
+    expect(account).toMatchObject({ topupAmountCents: 2000, topupThresholdCents: 0 });
   });
 
   it("other orgs can still switch auto top-up off (unchanged)", async () => {

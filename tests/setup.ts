@@ -26,7 +26,7 @@ beforeAll(async () => {
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
       "org_id" uuid NOT NULL,
       "topup_amount_cents" integer,
-      "topup_threshold_cents" integer DEFAULT 200,
+      "topup_threshold_cents" integer DEFAULT 0,
       "created_at" timestamp with time zone DEFAULT now() NOT NULL,
       "updated_at" timestamp with time zone DEFAULT now() NOT NULL
     )
