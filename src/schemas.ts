@@ -258,10 +258,10 @@ export const CreatePrepaidCheckoutRequestSchema = z
   .object({
     /** Charged now on the hosted page, credited exactly (no free credit is added). */
     topup_amount_cents: z.number().int().min(50).openapi({ example: 1000 }),
-    /** What each automatic reload charges. */
-    auto_topup_amount_cents: z.number().int().min(50).openapi({ example: 1500 }),
-    /** Reload when the next run would take the balance below this. */
-    auto_topup_threshold_cents: z.number().int().min(0).openapi({ example: 500 }),
+    /** What each automatic reload ADDS. Absent = the org's default (GET /v1/accounts/reload_rules, $10 today); below its minimum = 400 `reload_below_minimum`. */
+    auto_topup_amount_cents: z.number().int().min(50).optional().openapi({ example: 1000 }),
+    /** Reload when the next run would take the balance below this. Absent = the org's default ($5 today); below its minimum = 400 `topup_threshold_below_minimum`. */
+    auto_topup_threshold_cents: z.number().int().min(0).optional().openapi({ example: 500 }),
     success_url: z.string().url(),
     cancel_url: z.string().url(),
     /** The consent statements the person accepted. Optional; stored when present. */
@@ -2212,9 +2212,9 @@ registry.registerPath({
   path: "/v1/accounts/prepaid_checkout",
   summary: "One call: prepay + saved card + auto top-up (mandatory for agent/API orgs, optional for every new dashboard org)",
   description:
-    "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
+    "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents. The reload rules live in billing (GET /v1/accounts/reload_rules): an absent reload amount/threshold is the org's default (+$10 below $5 today), a stated one below the org's minimums is refused 400 (`reload_below_minimum` | `topup_threshold_below_minimum`, + `minimum_cents`), and so is a first payment under one reload (`topup_below_minimum`). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. " +
     "This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. For such an org the reload is OPTIONAL: it may switch it off later (DELETE /v1/accounts/auto_topup) and back on (PATCH). Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). " +
-    "Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. " +
+    "Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $10 -> about $15. " +
     "A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). " +
     "409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
   request: {
@@ -2228,6 +2228,42 @@ registry.registerPath({
     502: { description: "stripe-service unavailable", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
+
+export const ReloadRulesResponseSchema = z
+  .object({
+    org_id: zod3Uuid(),
+    /** Smallest first prepaid payment (one reload at least). */
+    first_topup_minimum_cents: z.number().int(),
+    /** Smallest amount one automatic reload adds. */
+    reload_amount_minimum_cents: z.number().int(),
+    /** Smallest "reload below X" threshold. */
+    reload_threshold_minimum_cents: z.number().int(),
+    /** What a reload adds when the caller states none. */
+    default_reload_amount_cents: z.number().int(),
+    /** The threshold used when the caller states none. */
+    default_reload_threshold_cents: z.number().int(),
+  })
+  .openapi("ReloadRulesResponse");
+
+for (const [path, headers, summary] of [
+  ["/v1/accounts/reload_rules", protectedHeaders, "The org's prepaid reload rules (the one home of these figures)"],
+  ["/internal/accounts/by-org/{orgId}/reload-rules", undefined, "The org's prepaid reload rules, service read"],
+] as const) {
+  registry.registerPath({
+    method: "get",
+    path,
+    summary,
+    description:
+      "RELOAD-RULE-ONE-HOME-1118. Owner rule 2026-11-11: « +10 dès qu'on arrive sous $5 »: each automatic reload ADDS at least $10, whatever the threshold, below at least $5. Callers (dashboard, Sophie, the API) show and validate these figures, or send no reload amount and get the default; they never hold a copy. An org with no billing account yet reads a new org's rules. Example: pay $10, spend to $4.90, card charged $10, balance $14.90.",
+    request: headers
+      ? { headers }
+      : { params: z.object({ orgId: zod3Uuid() }) },
+    responses: {
+      200: { description: "Reload rules", content: { "application/json": { schema: ReloadRulesResponseSchema } } },
+      400: { description: "Invalid org id", content: { "application/json": { schema: ErrorResponseSchema } } },
+    },
+  });
+}
 
 registry.registerPath({
   method: "get",
