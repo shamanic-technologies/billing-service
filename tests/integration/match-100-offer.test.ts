@@ -229,7 +229,7 @@ describe("We match your first $100", () => {
     expect(res.body).toMatchObject({ code: "topup_below_minimum", minimum_cents: 10000 });
   });
 
-  it("auto-reload: $99 amount and $4 threshold refused, $100 / $5 armed and served back (prepaid)", async () => {
+  it("auto-reload: $99 refused, $100 armed at $0 whatever threshold is sent (prepaid)", async () => {
     await account(orgId);
     await db
       .update(billingAccounts)
@@ -246,17 +246,11 @@ describe("We match your first $100", () => {
     expect(lowAmount.status).toBe(400);
     expect(lowAmount.body).toMatchObject({ code: "topup_below_minimum", minimum_cents: 10000 });
 
-    const lowThreshold = await patch(10000, 400);
-    expect(lowThreshold.status).toBe(400);
-    expect(lowThreshold.body).toMatchObject({
-      code: "topup_threshold_below_minimum",
-      minimum_cents: 500,
-    });
-
-    const ok = await patch(10000, 500);
+    // The threshold is $0 for everyone (owner 2026-11-18): a sent one is ignored.
+    const ok = await patch(10000, 400);
     expect(ok.status).toBe(200);
     expect(ok.body.topup_amount_cents).toBe(10000);
-    expect(ok.body.topup_threshold_cents).toBe(500);
+    expect(ok.body.topup_threshold_cents).toBe(0);
     expect(ok.body.has_auto_topup).toBe(true);
   });
 

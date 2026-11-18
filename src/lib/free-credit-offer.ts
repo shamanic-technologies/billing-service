@@ -12,11 +12,10 @@ import {
   AT_COST_ONBOARDING_ADVANCE_CENTS,
   LEGACY_FREE_CREDIT_OFFER,
   MATCH_FREE_CREDIT_OFFER,
-  MATCH_MIN_RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
   PLATFORM_USER_ID,
   PREPAID_MIN_RELOAD_CENTS,
-  PREPAID_MIN_RELOAD_THRESHOLD_CENTS,
+  RELOAD_THRESHOLD_CENTS,
   SUBSCRIPTION_TRIAL_CODE,
   type FreeCreditOfferKind,
 } from "../db/schema.js";
@@ -170,14 +169,14 @@ export function offerDefaultTopupMinimums(offer: FreeCreditOfferKind): TopupMini
   if (offer === MATCH_FREE_CREDIT_OFFER) {
     return {
       topupMinimumCents: MATCH_MIN_TOPUP_CENTS,
-      reloadThresholdMinimumCents: MATCH_MIN_RELOAD_THRESHOLD_CENTS,
+      reloadThresholdMinimumCents: RELOAD_THRESHOLD_CENTS,
       reloadAmountMinimumCents: MATCH_MIN_TOPUP_CENTS,
     };
   }
   if (offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER) {
     return {
       topupMinimumCents: null,
-      reloadThresholdMinimumCents: PREPAID_MIN_RELOAD_THRESHOLD_CENTS,
+      reloadThresholdMinimumCents: RELOAD_THRESHOLD_CENTS,
       reloadAmountMinimumCents: PREPAID_MIN_RELOAD_CENTS,
     };
   }
@@ -188,8 +187,8 @@ export function topupMinimumsFor(account: TopupMinimumsSource): TopupMinimums {
   const defaults = offerDefaultTopupMinimums(asFreeCreditOffer(account.freeCreditOffer));
   return {
     topupMinimumCents: account.topupMinimumCents ?? defaults.topupMinimumCents,
-    reloadThresholdMinimumCents:
-      account.reloadThresholdMinimumCents ?? defaults.reloadThresholdMinimumCents,
+    // Fixed for everyone (owner 2026-11-18): a stored staff override is no longer read.
+    reloadThresholdMinimumCents: defaults.reloadThresholdMinimumCents,
     reloadAmountMinimumCents: account.topupMinimumCents ?? defaults.reloadAmountMinimumCents,
   };
 }
@@ -210,8 +209,7 @@ export interface ReloadRules {
 
 export function reloadRulesFor(minimums: TopupMinimums): ReloadRules {
   const reloadAmountMinimumCents = minimums.reloadAmountMinimumCents ?? PREPAID_MIN_RELOAD_CENTS;
-  const reloadThresholdMinimumCents =
-    minimums.reloadThresholdMinimumCents ?? PREPAID_MIN_RELOAD_THRESHOLD_CENTS;
+  const reloadThresholdMinimumCents = RELOAD_THRESHOLD_CENTS;
   return {
     firstTopupMinimumCents: minimums.topupMinimumCents ?? reloadAmountMinimumCents,
     reloadAmountMinimumCents,
@@ -247,18 +245,10 @@ export function assertTopupMinimum(minimums: TopupMinimums, amountCents: number)
 }
 
 /** Refuse an auto-topup configuration below the org's minimums. */
-export function assertAutoTopupMinimums(
-  minimums: TopupMinimums,
-  amountCents: number,
-  thresholdCents: number
-): void {
+export function assertAutoTopupMinimums(minimums: TopupMinimums, amountCents: number): void {
   const reloadMin = minimums.reloadAmountMinimumCents;
   if (reloadMin != null && amountCents < reloadMin) {
     throw new TopupBelowMinimumError("topup_below_minimum", reloadMin);
-  }
-  const min = minimums.reloadThresholdMinimumCents;
-  if (min != null && thresholdCents < min) {
-    throw new TopupBelowMinimumError("topup_threshold_below_minimum", min);
   }
 }
 
@@ -292,7 +282,8 @@ export function configuredReloadFor(account: TopupMinimumsSource & {
   const minimums = topupMinimumsFor(account);
   return {
     amountCents: Math.max(account.topupAmountCents, minimums.reloadAmountMinimumCents ?? 0),
-    thresholdCents: Math.max(account.topupThresholdCents, minimums.reloadThresholdMinimumCents ?? 0),
+    // $0 for everyone, whatever is stored (owner 2026-11-18).
+    thresholdCents: RELOAD_THRESHOLD_CENTS,
   };
 }
 
