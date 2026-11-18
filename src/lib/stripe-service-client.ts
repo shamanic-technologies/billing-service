@@ -175,6 +175,13 @@ export interface StripePaymentMethod {
     exp_month?: number | null;
     exp_year?: number | null;
   } | null;
+  /**
+   * Link wallet detail (present when type === "link"): `email` is the address the
+   * customer's Link wallet is registered to, the one thing that names WHICH wallet
+   * we charge. Never confuse it with `billing_details.email` (a form field that can
+   * hold a stale or staff address). Null/absent for non-link PMs.
+   */
+  link?: { email?: string | null } | null;
 }
 
 export interface StripePaymentMethodList {
@@ -974,6 +981,32 @@ export interface OrgPaymentFacts {
   hasChargeablePm: boolean;
   cardCountry: string | null;
   cardDisplay: CardDisplay | null;
+  /**
+   * The Stripe type ("card", "link", ...) of the method a charge would take,
+   * picked with stripe-service's charge precedence: first `card`, else first
+   * `link` (the same order as `hasChargeablePm`). Null when none is chargeable.
+   */
+  paymentMethodType: string | null;
+  /** The Link wallet email (`pm.link.email`) when that method is Link, else null. */
+  linkEmail: string | null;
+}
+
+/**
+ * WHAT a charge would take, whatever its type: first card, else first link (the
+ * order stripe-service charges in). `cards === null` = no customer anywhere = none.
+ * The Link email is the wallet's own (`link.email`), never `billing_details.email`.
+ */
+export function chargeableMethodOf(
+  cards: StripePaymentMethodList | null,
+  links: StripePaymentMethodList | null
+): { paymentMethodType: string | null; linkEmail: string | null } {
+  if (cards === null) return { paymentMethodType: null, linkEmail: null };
+  const pm = cards.data[0] ?? links?.data[0];
+  if (!pm) return { paymentMethodType: null, linkEmail: null };
+  return {
+    paymentMethodType: pm.type,
+    linkEmail: pm.type === "link" ? pm.link?.email ?? null : null,
+  };
 }
 
 interface OrgPaymentFactsBody {
@@ -1022,6 +1055,7 @@ export async function fetchOrgPaymentFacts(orgId: string): Promise<OrgPaymentFac
           expYear: card.exp_year ?? null,
         }
       : null,
+    ...chargeableMethodOf(cards, links),
   };
 }
 

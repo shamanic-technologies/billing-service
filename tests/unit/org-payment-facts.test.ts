@@ -52,6 +52,61 @@ describe("fetchOrgPaymentFacts", () => {
       hasChargeablePm: true,
       cardCountry: "IN",
       cardDisplay: { country: "IN", brand: "visa", last4: "4242", expMonth: 8, expYear: 2030 },
+      paymentMethodType: "card",
+      linkEmail: null,
+    });
+  });
+
+  // BILLING-LINK-PAYMENT-METHOD-1118: the read names WHAT a charge takes, whatever its type.
+  it("card AND link saved: the card wins (charge order), no link email", async () => {
+    answer({
+      object: "org_payment_facts",
+      customer: null,
+      payment_summary: summary([]),
+      payment_methods: {
+        card: list([{ id: "pm_c", type: "card", card: { brand: "visa", last4: "4242" } }]),
+        link: list([{ id: "pm_l", type: "link", link: { email: "wallet@x.co" } }]),
+      },
+    });
+    expect(await fetchOrgPaymentFacts(ORG)).toMatchObject({ paymentMethodType: "card", linkEmail: null });
+  });
+
+  it("link only: type link + the WALLET email, never billing_details.email", async () => {
+    answer({
+      object: "org_payment_facts",
+      customer: null,
+      payment_summary: summary([]),
+      payment_methods: {
+        card: list([]),
+        link: list([
+          {
+            id: "pm_1UcrYq",
+            type: "link",
+            link: { email: "ethan@example.com" },
+            billing_details: { email: "staff@distribute.you", name: null },
+          },
+        ]),
+      },
+    });
+    expect(await fetchOrgPaymentFacts(ORG)).toMatchObject({
+      hasChargeablePm: true,
+      cardDisplay: null,
+      paymentMethodType: "link",
+      linkEmail: "ethan@example.com",
+    });
+  });
+
+  it("no method at all: both null", async () => {
+    answer({
+      object: "org_payment_facts",
+      customer: null,
+      payment_summary: summary([]),
+      payment_methods: { card: list([]), link: list([]) },
+    });
+    expect(await fetchOrgPaymentFacts(ORG)).toMatchObject({
+      hasChargeablePm: false,
+      paymentMethodType: null,
+      linkEmail: null,
     });
   });
 
@@ -73,7 +128,11 @@ describe("fetchOrgPaymentFacts", () => {
       payment_summary: summary([]),
       payment_methods: { card: null, link: list([{ id: "pm_l", type: "link" }]) },
     });
-    expect((await fetchOrgPaymentFacts(ORG)).hasChargeablePm).toBe(false);
+    expect(await fetchOrgPaymentFacts(ORG)).toMatchObject({
+      hasChargeablePm: false,
+      paymentMethodType: null,
+      linkEmail: null,
+    });
   });
 
   it("fails loud: a non-2xx, a missing part, or a total without amount_net", async () => {

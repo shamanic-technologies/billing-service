@@ -100,6 +100,8 @@ async function composeAccountFunds(
   cardLast4: string | null;
   cardExpMonth: number | null;
   cardExpYear: number | null;
+  paymentMethodType: string | null;
+  linkEmail: string | null;
   autoReloadSupported: boolean;
 }> {
   // An org with NO Stripe customer is an ordinary state, not a failure: an org
@@ -131,10 +133,16 @@ async function composeAccountFunds(
   // read (stored by stripe-service, refreshed at webhook time), so this page and
   // the gates can no longer disagree about whether the org holds a card.
   const stripeP = fetchOrgPaymentFacts(orgId).then(
-    (f) => [f.paidTopupsCents, f.hasChargeablePm, f.cardDisplay] as const
+    (f) =>
+      [
+        f.paidTopupsCents,
+        f.hasChargeablePm,
+        f.cardDisplay,
+        { paymentMethodType: f.paymentMethodType, linkEmail: f.linkEmail },
+      ] as const
   );
   const [
-    [paidTopups, hasCardPm, cardDisplay],
+    [paidTopups, hasCardPm, cardDisplay, chargeable],
     localCreditsBeforeSettle,
     usageTotals,
     discountPct,
@@ -221,6 +229,8 @@ async function composeAccountFunds(
     cardLast4: cardDisplay?.last4 ?? null,
     cardExpMonth: cardDisplay?.expMonth ?? null,
     cardExpYear: cardDisplay?.expYear ?? null,
+    paymentMethodType: chargeable.paymentMethodType,
+    linkEmail: chargeable.linkEmail,
     autoReloadSupported: !isAutoReloadBlockedCountry(cardCountry),
   };
 }
@@ -279,6 +289,8 @@ function buildAccountResponse(
     cardLast4: string | null;
     cardExpMonth: number | null;
     cardExpYear: number | null;
+    paymentMethodType: string | null;
+    linkEmail: string | null;
     autoReloadSupported: boolean;
   }
 ) {
@@ -397,6 +409,11 @@ function buildAccountResponse(
     card_last4: funds.cardLast4,
     card_exp_month: funds.cardExpMonth,
     card_exp_year: funds.cardExpYear,
+    // WHAT a charge takes, whatever its type (BILLING-LINK-PAYMENT-METHOD-1118): a
+    // Link-only org has no card fields above, so the page names the wallet instead
+    // of a bare "Card connected". Same precedence as the charge: card, else link.
+    payment_method_type: funds.paymentMethodType,
+    link_email: funds.linkEmail,
     // POSTPAID (owner 2026-10-21): no auto top-up, no "Add credit". Its credit line
     // (how far below $0 it may go before the card is charged), the step it is
     // charged by, and what it owes right now (the whole amount POST
