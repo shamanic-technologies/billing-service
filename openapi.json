@@ -906,7 +906,7 @@
           "auto_topup_amount_cents": {
             "type": "integer",
             "minimum": 50,
-            "example": 1500
+            "example": 1000
           },
           "auto_topup_threshold_cents": {
             "type": "integer",
@@ -927,10 +927,40 @@
         },
         "required": [
           "topup_amount_cents",
-          "auto_topup_amount_cents",
-          "auto_topup_threshold_cents",
           "success_url",
           "cancel_url"
+        ]
+      },
+      "ReloadRulesResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "first_topup_minimum_cents": {
+            "type": "integer"
+          },
+          "reload_amount_minimum_cents": {
+            "type": "integer"
+          },
+          "reload_threshold_minimum_cents": {
+            "type": "integer"
+          },
+          "default_reload_amount_cents": {
+            "type": "integer"
+          },
+          "default_reload_threshold_cents": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "org_id",
+          "first_topup_minimum_cents",
+          "reload_amount_minimum_cents",
+          "reload_threshold_minimum_cents",
+          "default_reload_amount_cents",
+          "default_reload_threshold_cents"
         ]
       },
       "PrepaidStatusResponse": {
@@ -6852,7 +6882,7 @@
     "/v1/accounts/prepaid_checkout": {
       "post": {
         "summary": "One call: prepay + saved card + auto top-up (mandatory for agent/API orgs, optional for every new dashboard org)",
-        "description": "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents (stored as given, no minimum applied here: customer minimums are the caller's validation). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. For such an org the reload is OPTIONAL: it may switch it off later (DELETE /v1/accounts/auto_topup) and back on (PATCH). Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $15 -> about $20. A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). 409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
+        "description": "Returns a hosted payment page that charges topup_amount_cents and saves the card for off-session reuse. The org is set PREPAID and auto top-up is armed with auto_topup_amount_cents below auto_topup_threshold_cents. The reload rules live in billing (GET /v1/accounts/reload_rules): an absent reload amount/threshold is the org's default (+$10 below $5 today), a stated one below the org's minimums is refused 400 (`reload_below_minimum` | `topup_threshold_below_minimum`, + `minimum_cents`), and so is a first payment under one reload (`topup_below_minimum`). The reload can only fire once a chargeable card exists, i.e. once this page is paid, so balance, card and auto top-up land together. No free credit is ever added: an org with no billing account yet is created as `agent_api` (no welcome, no advance, no match, no trial). No subscription on this path. This is ALSO the dashboard checkout of every org created since 2026-10-29 (free_credit_offer `prepaid_at_cost`): the first top-up and the automatic reload in one step. For such an org the reload is OPTIONAL: it may switch it off later (DELETE /v1/accounts/auto_topup) and back on (PATCH). Its $5 onboarding advance is repaid by this payment (pay $10 -> credited $10, never $15). Worked example: pay $10 -> balance $10; balance falls under $5 -> card charged $10 -> about $15. A card that cannot be recharged off-session is NOT refused (the payment already happened): it is FLAGGED by GET /v1/accounts/prepaid_status (`state: card_not_reloadable` + reason). 409 `subscription_mode` for a subscription org; 409 with a payment-mode refusal `code` + `owed_cents` when a postpaid org owes money that could not be collected first.",
         "parameters": [
           {
             "schema": {
@@ -6983,6 +7013,161 @@
           },
           "502": {
             "description": "stripe-service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/reload_rules": {
+      "get": {
+        "summary": "The org's prepaid reload rules (the one home of these figures)",
+        "description": "RELOAD-RULE-ONE-HOME-1118. Owner rule 2026-11-11: « +10 dès qu'on arrive sous $5 »: each automatic reload ADDS at least $10, whatever the threshold, below at least $5. Callers (dashboard, Sophie, the API) show and validate these figures, or send no reload amount and get the default; they never hold a copy. An org with no billing account yet reads a new org's rules. Example: pay $10, spend to $4.90, card charged $10, balance $14.90.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reload rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadRulesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid org id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/reload-rules": {
+      "get": {
+        "summary": "The org's prepaid reload rules, service read",
+        "description": "RELOAD-RULE-ONE-HOME-1118. Owner rule 2026-11-11: « +10 dès qu'on arrive sous $5 »: each automatic reload ADDS at least $10, whatever the threshold, below at least $5. Callers (dashboard, Sophie, the API) show and validate these figures, or send no reload amount and get the default; they never hold a copy. An org with no billing account yet reads a new org's rules. Example: pay $10, spend to $4.90, card charged $10, balance $14.90.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reload rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReloadRulesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid org id",
             "content": {
               "application/json": {
                 "schema": {

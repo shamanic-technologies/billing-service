@@ -15,6 +15,8 @@ import {
   MATCH_MIN_RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
   PLATFORM_USER_ID,
+  PREPAID_MIN_RELOAD_CENTS,
+  PREPAID_MIN_RELOAD_THRESHOLD_CENTS,
   SUBSCRIPTION_TRIAL_CODE,
   type FreeCreditOfferKind,
 } from "../db/schema.js";
@@ -148,6 +150,13 @@ export async function isMatchOfferOrg(orgId: string): Promise<boolean> {
 export interface TopupMinimums {
   topupMinimumCents: number | null;
   reloadThresholdMinimumCents: number | null;
+  /**
+   * Smallest automatic reload AMOUNT (RELOAD-RULE-ONE-HOME-1118). match_100: its
+   * top-up minimum ($100); at-cost + agent/API: $10 (« +10 dès qu'on arrive sous
+   * $5 »); legacy: none (its reload is the derived ladder). A staff
+   * `topup_minimum_cents` for the org replaces it too.
+   */
+  reloadAmountMinimumCents: number | null;
 }
 
 /** The account fields the minimums are read from. */
@@ -158,9 +167,21 @@ export interface TopupMinimumsSource {
 }
 
 export function offerDefaultTopupMinimums(offer: FreeCreditOfferKind): TopupMinimums {
-  return offer === MATCH_FREE_CREDIT_OFFER
-    ? { topupMinimumCents: MATCH_MIN_TOPUP_CENTS, reloadThresholdMinimumCents: MATCH_MIN_RELOAD_THRESHOLD_CENTS }
-    : { topupMinimumCents: null, reloadThresholdMinimumCents: null };
+  if (offer === MATCH_FREE_CREDIT_OFFER) {
+    return {
+      topupMinimumCents: MATCH_MIN_TOPUP_CENTS,
+      reloadThresholdMinimumCents: MATCH_MIN_RELOAD_THRESHOLD_CENTS,
+      reloadAmountMinimumCents: MATCH_MIN_TOPUP_CENTS,
+    };
+  }
+  if (offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER) {
+    return {
+      topupMinimumCents: null,
+      reloadThresholdMinimumCents: PREPAID_MIN_RELOAD_THRESHOLD_CENTS,
+      reloadAmountMinimumCents: PREPAID_MIN_RELOAD_CENTS,
+    };
+  }
+  return { topupMinimumCents: null, reloadThresholdMinimumCents: null, reloadAmountMinimumCents: null };
 }
 
 export function topupMinimumsFor(account: TopupMinimumsSource): TopupMinimums {
@@ -169,6 +190,34 @@ export function topupMinimumsFor(account: TopupMinimumsSource): TopupMinimums {
     topupMinimumCents: account.topupMinimumCents ?? defaults.topupMinimumCents,
     reloadThresholdMinimumCents:
       account.reloadThresholdMinimumCents ?? defaults.reloadThresholdMinimumCents,
+    reloadAmountMinimumCents: account.topupMinimumCents ?? defaults.reloadAmountMinimumCents,
+  };
+}
+
+/**
+ * The org's reload rules, ready for a caller (RELOAD-RULE-ONE-HOME-1118): the
+ * minimums in force and the reload a caller gets when it states none (the owner's
+ * rule: add the minimum, below the minimum threshold). The first prepaid payment is
+ * at least one reload. Every number a caller shows or validates comes from here.
+ */
+export interface ReloadRules {
+  firstTopupMinimumCents: number;
+  reloadAmountMinimumCents: number;
+  reloadThresholdMinimumCents: number;
+  defaultReloadAmountCents: number;
+  defaultReloadThresholdCents: number;
+}
+
+export function reloadRulesFor(minimums: TopupMinimums): ReloadRules {
+  const reloadAmountMinimumCents = minimums.reloadAmountMinimumCents ?? PREPAID_MIN_RELOAD_CENTS;
+  const reloadThresholdMinimumCents =
+    minimums.reloadThresholdMinimumCents ?? PREPAID_MIN_RELOAD_THRESHOLD_CENTS;
+  return {
+    firstTopupMinimumCents: minimums.topupMinimumCents ?? reloadAmountMinimumCents,
+    reloadAmountMinimumCents,
+    reloadThresholdMinimumCents,
+    defaultReloadAmountCents: reloadAmountMinimumCents,
+    defaultReloadThresholdCents: reloadThresholdMinimumCents,
   };
 }
 
@@ -203,7 +252,10 @@ export function assertAutoTopupMinimums(
   amountCents: number,
   thresholdCents: number
 ): void {
-  assertTopupMinimum(minimums, amountCents);
+  const reloadMin = minimums.reloadAmountMinimumCents;
+  if (reloadMin != null && amountCents < reloadMin) {
+    throw new TopupBelowMinimumError("topup_below_minimum", reloadMin);
+  }
   const min = minimums.reloadThresholdMinimumCents;
   if (min != null && thresholdCents < min) {
     throw new TopupBelowMinimumError("topup_threshold_below_minimum", min);
@@ -227,17 +279,19 @@ export function configuredReloadFor(account: TopupMinimumsSource & {
 }): ConfiguredReload | null {
   const offer = asFreeCreditOffer(account.freeCreditOffer);
   if (account.topupAmountCents == null || account.topupThresholdCents == null) return null;
-  // An agent/API org reloads EXACTLY what it chose (pay $10, reload $15 below $5).
-  // Its minimums are the agent-facing API's (owner: customer minimums are a front
-  // validation), so nothing is clamped here.
-  // The at-cost offer is the same model (owner 2026-10-29: « comme via API »).
-  if (offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER) {
-    return { amountCents: account.topupAmountCents, thresholdCents: account.topupThresholdCents };
+  // An agent/API or at-cost org reloads what it chose (owner 2026-10-29: « comme
+  // via API »), never below its minimums (owner 2026-11-11: « +10 dès qu'on arrive
+  // sous $5 »): a value stored below them is read at the minimum.
+  if (
+    offer !== AGENT_API_FREE_CREDIT_OFFER &&
+    offer !== AT_COST_FREE_CREDIT_OFFER &&
+    offer !== MATCH_FREE_CREDIT_OFFER
+  ) {
+    return null;
   }
-  if (offer !== MATCH_FREE_CREDIT_OFFER) return null;
   const minimums = topupMinimumsFor(account);
   return {
-    amountCents: Math.max(account.topupAmountCents, minimums.topupMinimumCents ?? 0),
+    amountCents: Math.max(account.topupAmountCents, minimums.reloadAmountMinimumCents ?? 0),
     thresholdCents: Math.max(account.topupThresholdCents, minimums.reloadThresholdMinimumCents ?? 0),
   };
 }
