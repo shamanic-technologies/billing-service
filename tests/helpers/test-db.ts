@@ -9,6 +9,7 @@ import {
   monthlyChargeLimitRefusals,
   creditDepletionEpisodes,
   campaignAuthorizeCosts,
+  answerPasses,
   campaignReloadSweepAttempts,
   brandDailyBudgets,
   brandDailyBudgetChanges,
@@ -90,6 +91,7 @@ export async function cleanTestData() {
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignReloadSweepAttempts);
   await db.delete(campaignAuthorizeCosts);
+  await db.delete(answerPasses);
   await db.delete(brandDailyBudgetChanges);
   await db.delete(brandSalesBudgetChanges);
   await db.delete(brandSalesBudgets);

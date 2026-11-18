@@ -1240,6 +1240,23 @@ export const CampaignAffordabilitySchema = z
   })
   .openapi("CampaignAffordability");
 
+// --- Answer passes (REPLY-NO-BALANCE-1118) ---
+
+export const AnswerPassRequestSchema = z
+  .object({
+    orgId: zod3Uuid(),
+    campaignId: zod3Uuid(),
+    /** The campaign run campaign-service admitted because it answers a person waiting on us. */
+    runId: zod3Uuid(),
+    brandId: zod3Uuid().nullish(),
+    leadId: zod3Uuid().nullish(),
+  })
+  .openapi("AnswerPassRequest");
+
+export const AnswerPassResponseSchema = z
+  .object({ id: z.string(), expiresAt: z.string() })
+  .openapi("AnswerPassResponse");
+
 // --- Brand daily budget (per-brand spend ceiling / pacing) ---
 
 export const SetBrandDailyBudgetRequestSchema = z
@@ -3391,6 +3408,25 @@ registry.registerPath({
       description: "Could not read the org's card facts or its credited total",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/answer-passes",
+  summary: "A run answering a person who wrote to us: its campaign's spends pass an empty balance",
+  description:
+    "REPLY-NO-BALANCE-1118. campaign-service admitted a run that carries ONE person waiting on our answer although the " +
+    "org's balance could not afford it. For 30 minutes, POST /v1/customer_balance/authorize grants this campaign's spends " +
+    "that only the balance would refuse (no reload possible); the spend lands on the balance. Max budget, monthly limit, " +
+    "paused plan and refused card still refuse first.",
+  request: {
+    headers: internalHeaders,
+    body: { content: { "application/json": { schema: AnswerPassRequestSchema } } },
+  },
+  responses: {
+    201: { description: "Pass granted", content: { "application/json": { schema: AnswerPassResponseSchema } } },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
   },
 });
 

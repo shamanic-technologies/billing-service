@@ -710,6 +710,21 @@ export const campaignAuthorizeCosts = pgTable("campaign_authorize_costs", {
     .defaultNow(),
 });
 
+// answer_passes (REPLY-NO-BALANCE-1118): campaign-service admitted a run that carries ONE
+// person waiting on our answer although the org's balance could not afford it. While a pass
+// of the campaign is live, authorize grants that campaign's spends the balance alone would
+// refuse (lib/answer-pass.ts). Append-only, one row per admitted run, never written by hand.
+export const answerPasses = pgTable("answer_passes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid("org_id").notNull(),
+  campaignId: uuid("campaign_id").notNull(),
+  runId: uuid("run_id").notNull(),
+  brandId: uuid("brand_id"),
+  leadId: uuid("lead_id"),
+  grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
 // campaign_reload_sweep_attempts: one row per org the blocked-campaign reload
 // sweep has already presented a card for, keyed on the CREDITED total it saw.
 //
