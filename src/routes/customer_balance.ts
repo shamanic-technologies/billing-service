@@ -18,6 +18,7 @@ import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
 import { isPlatformAbsorbedSpend } from "../lib/platform-absorbed.js";
+import { liveAnswerPass } from "../lib/answer-pass.js";
 import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
 import { reloadOffSession } from "../lib/reload.js";
@@ -281,6 +282,23 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
         required_cents: requiredCents,
       });
       return;
+    }
+
+    // A spend of a run that ANSWERS a person who wrote to us is never refused by the balance
+    // alone (lib/answer-pass, REPLY-NO-BALANCE-1118): campaign-service admitted the run and holds
+    // a live pass on the campaign. Only when no reload can lift the balance (a reload-capable org
+    // reloads as usual). No episode, no email: the spend lands on the balance like any spend.
+    if (!(autoTopupArmed(account) && snapshot.hasCardPm && snapshot.autoReloadSupported)) {
+      const pass = await liveAnswerPass(orgId, wf.campaignId);
+      if (pass) {
+        traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "answer_owed", answer_pass_id: pass.id, answer_run_id: pass.runId, balance_cents: snapshot.balanceCents, required_cents: requiredCents, threshold_cents: thresholdCents } }, req.headers);
+        res.json({
+          sufficient: true,
+          balance_cents: snapshot.balanceCents,
+          required_cents: requiredCents,
+        });
+        return;
+      }
     }
 
     if (!autoTopupArmed(account)) {
