@@ -79,8 +79,8 @@ export const FLAT_THIRTY_FREE_CREDIT_PAID_TRIGGER_CENTS = 3000;
  *   ONE `org_creation_bonus` row (its live price, $30), granted at creation whatever
  *   path created the org; the per-person welcome is never granted to it and never
  *   zeroes its offer; the $70 remainder lands at $100 paid; top-ups are at least
- *   MATCH_MIN_TOPUP_CENTS and the auto-reload threshold at least
- *   MATCH_MIN_RELOAD_THRESHOLD_CENTS. See lib/free-credit-offer.
+ *   MATCH_MIN_TOPUP_CENTS (reload threshold: RELOAD_THRESHOLD_CENTS, $0 for
+ *   everyone). See lib/free-credit-offer.
  */
 export const LEGACY_FREE_CREDIT_OFFER = "legacy";
 export const MATCH_FREE_CREDIT_OFFER = "match_100";
@@ -122,18 +122,23 @@ export type FreeCreditOfferKind =
 
 /** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
 export const MATCH_MIN_TOPUP_CENTS = 10000;
-/** Smallest "reload when the balance falls below X" a match_100 org may configure. */
-export const MATCH_MIN_RELOAD_THRESHOLD_CENTS = 500;
 /**
- * The owner's prepaid reload rule (2026-11-11: « +10 dès qu'on arrive sous $5 »),
- * for the at-cost and agent/API offers: each automatic reload ADDS at least $10,
- * whatever the threshold (never "threshold + $10"), and fires below at least $5.
- * Pay $10, spend down to $4.90, card charged $10, balance $14.90. billing-service is
- * the ONE home of these figures (RELOAD-RULE-ONE-HOME-1118): callers read them at
- * `GET /v1/accounts/reload_rules` or send nothing and get the default, never a copy.
+ * The owner's prepaid reload rule, for the at-cost and agent/API offers: each
+ * automatic reload ADDS at least $10 (2026-11-11: « +10 … »; never "threshold +
+ * $10"). billing-service is the ONE home of these figures (RELOAD-RULE-ONE-HOME-1118):
+ * callers read them at `GET /v1/accounts/reload_rules` or send nothing and get the
+ * default, never a copy.
  */
 export const PREPAID_MIN_RELOAD_CENTS = 1000;
-export const PREPAID_MIN_RELOAD_THRESHOLD_CENTS = 500;
+/**
+ * The reload threshold is $0 for EVERY org and editable nowhere (owner 2026-11-18:
+ * « enelveant definitivement le seuil de $5. On mets $0 pour tout le monde. On ne
+ * permet as de changer cette valeur nulle part »). Pay $10, spend to $0, card
+ * charged $10, balance $10: the reload fires when the next spend would take the
+ * balance below $0, before that spend is refused. A threshold a caller sends is
+ * ignored; migration 0100 moved every stored row to 0.
+ */
+export const RELOAD_THRESHOLD_CENTS = 0;
 
 /**
  * What every account that existed before migration 0032 carries, permanently.
@@ -151,7 +156,7 @@ export const billingAccounts = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull(),
     topupAmountCents: integer("topup_amount_cents"),
-    topupThresholdCents: integer("topup_threshold_cents").default(200),
+    topupThresholdCents: integer("topup_threshold_cents").default(0),
     // Whether this org can still earn the welcome-COMPLETION gift (the second
     // half of the "$25 in free credits" promise — see lib/welcome-completion).
     // TRUE by default, and TRUE for every org today; it flips to FALSE only for an

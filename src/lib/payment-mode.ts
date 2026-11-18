@@ -43,7 +43,7 @@ import {
   billingAccounts,
   MATCH_FREE_CREDIT_OFFER,
   AT_COST_FREE_CREDIT_OFFER,
-  MATCH_MIN_RELOAD_THRESHOLD_CENTS,
+  RELOAD_THRESHOLD_CENTS,
   MATCH_MIN_TOPUP_CENTS,
   subscriptions,
 } from "../db/schema.js";
@@ -374,9 +374,7 @@ export async function setPaymentMode(
       patch.topupAmountCents = match
         ? (minimums.topupMinimumCents ?? MATCH_MIN_TOPUP_CENTS)
         : tierFor("0").amountCents;
-      patch.topupThresholdCents = match
-        ? (minimums.reloadThresholdMinimumCents ?? MATCH_MIN_RELOAD_THRESHOLD_CENTS)
-        : 0;
+      patch.topupThresholdCents = RELOAD_THRESHOLD_CENTS;
     }
   }
 

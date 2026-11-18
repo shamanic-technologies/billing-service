@@ -88,8 +88,8 @@ describe("owner Telegram per customer billing event", () => {
     const m = messages();
     expect(m).toHaveLength(3);
     expect(m[0]).toContain("<b>Legistai</b> (legistai.com)");
-    expect(m[0]).toContain("Automatic reload turned ON: $100.00 when the balance falls below $5.00");
-    expect(m[1]).toContain("Automatic reload changed: $100.00 below $5.00 → $200.00 below $10.00");
+    expect(m[0]).toContain("Automatic reload turned ON: adds $100.00 when the balance reaches $0");
+    expect(m[1]).toContain("Automatic reload changed: adds $100.00 → $200.00 when the balance reaches $0");
     expect(m[2]).toContain("Automatic reload turned OFF");
   });
 

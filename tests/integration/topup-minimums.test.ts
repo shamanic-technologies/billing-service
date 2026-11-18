@@ -78,7 +78,7 @@ describe("per-account top-up minimums", () => {
     expect(read.body).toMatchObject({
       free_credit_offer: "match_100",
       topup_minimum_cents: 10000,
-      reload_threshold_minimum_cents: 500,
+      reload_threshold_minimum_cents: 0,
       topup_minimum_source: "offer_default",
       reload_threshold_minimum_source: "offer_default",
       set_by: null,
@@ -88,14 +88,14 @@ describe("per-account top-up minimums", () => {
     expect(low.body).toMatchObject({ code: "topup_below_minimum", minimum_cents: 10000 });
   });
 
-  it("staff sets $10: a $10 checkout and a $10 auto-reload at a $10 threshold pass, $9 is refused naming $10", async () => {
+  it("staff sets $10: a $10 checkout and a $10 auto-reload pass (threshold $0 whatever is sent), $9 is refused naming $10", async () => {
     await touch(staffOrg);
     const set = await setMinimums(staffOrg, { topup_minimum_cents: 1000 });
     expect(set.status).toBe(200);
     expect(set.body).toMatchObject({
       topup_minimum_cents: 1000,
       topup_minimum_source: "account",
-      reload_threshold_minimum_cents: 500,
+      reload_threshold_minimum_cents: 0,
       reload_threshold_minimum_source: "offer_default",
       offer_default_topup_minimum_cents: 10000,
       set_by: "kevin@distribute.you",
@@ -123,7 +123,7 @@ describe("per-account top-up minimums", () => {
     const ok = await autoTopup(staffOrg, 1000, 1000);
     expect(ok.status).toBe(200);
     expect(ok.body.topup_amount_cents).toBe(1000);
-    expect(ok.body.topup_threshold_cents).toBe(1000);
+    expect(ok.body.topup_threshold_cents).toBe(0);
   });
 
   it("the stored reload binds at the staff minimum, never clamped back up to $100", async () => {
@@ -132,31 +132,34 @@ describe("per-account top-up minimums", () => {
     const [row] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, staffOrg));
     expect(configuredReloadFor({ ...row, topupAmountCents: 1000, topupThresholdCents: 1000 })).toEqual({
       amountCents: 1000,
-      thresholdCents: 1000,
+      thresholdCents: 0,
     });
-    // Untouched match org: still clamped to $100 / $5.
+    // Untouched match org: amount still clamped to $100; threshold $0 for everyone.
     await touch(untouchedOrg);
     const [plain] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, untouchedOrg));
     expect(configuredReloadFor({ ...plain, topupAmountCents: 1000, topupThresholdCents: 100 })).toEqual({
       amountCents: 10000,
-      thresholdCents: 500,
+      thresholdCents: 0,
     });
   });
 
-  it("the threshold minimum is its own setting; null puts a minimum back on the offer default", async () => {
+  it("a staff threshold minimum is ignored ($0 for everyone, owner 2026-11-18); null puts the top-up minimum back on the offer default", async () => {
     await touch(staffOrg);
-    await setMinimums(staffOrg, { topup_minimum_cents: 1000, reload_threshold_minimum_cents: 1000 });
+    const set = await setMinimums(staffOrg, { topup_minimum_cents: 1000, reload_threshold_minimum_cents: 1000 });
+    expect(set.body).toMatchObject({ reload_threshold_minimum_cents: 0, reload_threshold_minimum_source: "offer_default" });
+    const [stored] = await db.select().from(billingAccounts).where(eq(billingAccounts.orgId, staffOrg));
+    expect(stored.reloadThresholdMinimumCents).toBeNull();
     await db.update(billingAccounts).set({ paymentMode: "prepaid" }).where(eq(billingAccounts.orgId, staffOrg));
     ssMocks.hasAttachedCardPm.mockResolvedValue(true);
-    const low = await autoTopup(staffOrg, 1000, 900);
-    expect(low.status).toBe(400);
-    expect(low.body).toMatchObject({ code: "topup_threshold_below_minimum", minimum_cents: 1000 });
+    const ok = await autoTopup(staffOrg, 1000, 900);
+    expect(ok.status).toBe(200);
+    expect(ok.body.topup_threshold_cents).toBe(0);
 
     const back = await setMinimums(staffOrg, { topup_minimum_cents: null });
     expect(back.body).toMatchObject({
       topup_minimum_cents: 10000,
       topup_minimum_source: "offer_default",
-      reload_threshold_minimum_cents: 1000,
+      reload_threshold_minimum_cents: 0,
     });
     expect((await checkout(staffOrg, 1000)).body.code).toBe("topup_below_minimum");
   });

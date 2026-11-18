@@ -52,8 +52,7 @@ async function read(orgId: string, res: Response): Promise<void> {
     topup_minimum_cents: effective.topupMinimumCents,
     reload_threshold_minimum_cents: effective.reloadThresholdMinimumCents,
     topup_minimum_source: account.topupMinimumCents != null ? "account" : "offer_default",
-    reload_threshold_minimum_source:
-      account.reloadThresholdMinimumCents != null ? "account" : "offer_default",
+    reload_threshold_minimum_source: "offer_default",
     offer_default_topup_minimum_cents: defaults.topupMinimumCents,
     offer_default_reload_threshold_minimum_cents: defaults.reloadThresholdMinimumCents,
     set_by: account.topupMinimumsSetBy,
@@ -75,7 +74,9 @@ async function set(orgId: string, setBy: string | null, req: Request, res: Respo
   };
   if (body.topup_minimum_cents !== undefined) patch.topupMinimumCents = body.topup_minimum_cents;
   if (body.reload_threshold_minimum_cents !== undefined) {
-    patch.reloadThresholdMinimumCents = body.reload_threshold_minimum_cents;
+    // The threshold is $0 for everyone and editable nowhere (owner 2026-11-18): a
+    // stated value is ignored and any stored override cleared.
+    patch.reloadThresholdMinimumCents = null;
   }
   const updated = await db
     .update(billingAccounts)

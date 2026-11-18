@@ -86,7 +86,6 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
     const {
       topup_amount_cents: topupAmountCents,
       auto_topup_amount_cents: statedReloadAmountCents,
-      auto_topup_threshold_cents: statedReloadThresholdCents,
       success_url,
       cancel_url,
       consent,
@@ -109,8 +108,9 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
     // minimums is refused, and so is a first payment under one reload.
     const rules = reloadRulesFor(topupMinimumsFor(account));
     const reloadAmountCents = statedReloadAmountCents ?? rules.defaultReloadAmountCents;
-    const reloadThresholdCents = statedReloadThresholdCents ?? rules.defaultReloadThresholdCents;
-    const refusal = reloadRuleRefusal(rules, topupAmountCents, reloadAmountCents, reloadThresholdCents);
+    // The threshold is $0 for everyone (owner 2026-11-18): a sent one is ignored.
+    const reloadThresholdCents = rules.defaultReloadThresholdCents;
+    const refusal = reloadRuleRefusal(rules, topupAmountCents, reloadAmountCents);
     if (refusal) {
       res.status(400).json(refusal);
       return;
@@ -189,7 +189,7 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
     notifyOwnerBillingEvent({
       orgId,
       emoji: "🤖",
-      text: `Prepaid checkout opened: ${usd(topupAmountCents)} now, automatic reload ${usd(reloadAmountCents)} below ${usd(reloadThresholdCents)}`,
+      text: `Prepaid checkout opened: ${usd(topupAmountCents)} now, automatic reload adds ${usd(reloadAmountCents)} when the balance reaches $0`,
     });
 
     traceEvent(runId, { service: "billing-service", event: "prepaid_checkout.done", data: { session_id: session.session_id ?? session.id } }, req.headers);
@@ -221,8 +221,7 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
 function reloadRuleRefusal(
   rules: ReloadRules,
   topupCents: number,
-  reloadCents: number,
-  thresholdCents: number
+  reloadCents: number
 ): { error: string; code: string; minimum_cents: number } | null {
   if (topupCents < rules.firstTopupMinimumCents) {
     const e = new TopupBelowMinimumError("topup_below_minimum", rules.firstTopupMinimumCents);
@@ -234,10 +233,6 @@ function reloadRuleRefusal(
       code: "reload_below_minimum",
       minimum_cents: rules.reloadAmountMinimumCents,
     };
-  }
-  if (thresholdCents < rules.reloadThresholdMinimumCents) {
-    const e = new TopupBelowMinimumError("topup_threshold_below_minimum", rules.reloadThresholdMinimumCents);
-    return { error: e.message, code: e.code, minimum_cents: e.minimumCents };
   }
   return null;
 }
