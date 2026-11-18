@@ -4,7 +4,7 @@ import { cardFactsFrom, cardFactsWire } from "../lib/card-facts.js";
 import { Router, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { AGENT_API_FREE_CREDIT_OFFER, billingAccounts, RELOAD_THRESHOLD_CENTS } from "../db/schema.js";
+import { billingAccounts, RELOAD_THRESHOLD_CENTS } from "../db/schema.js";
 import { requireOrgHeaders, getWorkflowHeaders, forwardWorkflowHeaders } from "../middleware/auth.js";
 import { CardSetupRequestSchema, UpdateAutoTopupRequestSchema } from "../schemas.js";
 import { findOrCreateAccount, ensureOrgStripeCustomer } from "../lib/account.js";
@@ -738,7 +738,7 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
     }
 
     // A reload amount of 0 switches automatic top-up OFF, exactly as DELETE does
-    // (owner 2026-11-18): same refusals (auto_topup_required, postpaid), same row.
+    // (owner 2026-11-18): same refusal (postpaid), same row.
     if (parsed.data.topup_amount_cents === 0) {
       await disarmAutoTopup(account, orgId, identity, res);
       return;
@@ -903,19 +903,10 @@ async function disarmAutoTopup(
   identity: ReturnType<typeof buildIdentity>,
   res: Response,
 ): Promise<void> {
-  // An org opened through the API pays PREPAID with a MANDATORY auto top-up
-  // (owner 2026-10-12: « Autotopup is mandatory for prepaid because otherwise
-  // their service would stop »). Its amounts can change (PATCH), not switch off.
-  // An at-cost org (prepaid_at_cost) is NOT held to it: its reload is optional,
-  // ticked by default (owner 2026-10-29: « Top up should be optional, but checked
-  // by default »), so it switches off here and back on with PATCH.
-  if (account.freeCreditOffer === AGENT_API_FREE_CREDIT_OFFER && account.paymentMode === "prepaid") {
-    res.status(409).json({
-      error: "Automatic top-up is required for this prepaid organization; change its amounts instead.",
-      code: "auto_topup_required",
-    });
-    return;
-  }
+  // Every prepaid org may switch its auto top-up off, an org opened through the API
+  // included (owner 2026-11-18: « Accepte une valeur $0, ca enleve lauto top up »,
+  // RELOAD-ZERO-OFF-1118). This replaces the agent_api 409 `auto_topup_required` of
+  // 2026-10-12: the client turned it off on Billing and was told it stays on.
 
   // A POSTPAID org has no auto top-up to switch off: it is charged as it spends.
   // Its brakes are the monthly limit, removing the card, or switching to prepaid.

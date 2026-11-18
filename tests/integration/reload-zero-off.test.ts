@@ -77,7 +77,7 @@ describe("A $0 reload amount switches automatic top-up off", () => {
     expect(await row()).toMatchObject({ topupAmountCents: 1500 });
   });
 
-  it("an org whose offer requires auto top-up still refuses: 409 auto_topup_required, nothing written", async () => {
+  it("an org opened through the API switches off too (owner 2026-11-18)", async () => {
     await insertTestAccount({
       orgId,
       freeCreditOffer: "agent_api",
@@ -86,9 +86,9 @@ describe("A $0 reload amount switches automatic top-up off", () => {
       topupThresholdCents: 0,
     } as never);
     const res = await patch({ topup_amount_cents: 0 });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("auto_topup_required");
-    expect(await row()).toMatchObject({ topupAmountCents: 2000 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ has_auto_topup: false });
+    expect(await row()).toMatchObject({ topupAmountCents: null });
   });
 
   it("a postpaid org answers as DELETE does: 409 postpaid_no_auto_topup", async () => {
