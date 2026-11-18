@@ -224,7 +224,8 @@ export const UsageApplyResponseSchema = z
 
 export const UpdateAutoTopupRequestSchema = z
   .object({
-    topup_amount_cents: z.number().int().positive(),
+    /** What each automatic reload adds, in cents. 0 switches automatic top-up OFF (same as DELETE /v1/accounts/auto_topup). Between 1 and the reload minimum is refused. */
+    topup_amount_cents: z.number().int().min(0),
     /** Ignored: the reload threshold is $0 for everyone and editable nowhere (owner 2026-11-18). Accepted so older callers keep working. */
     topup_threshold_cents: z.number().int().min(0).optional(),
   })
@@ -1964,7 +1965,7 @@ registry.registerPath({
 registry.registerPath({
   method: "patch",
   path: "/v1/accounts/auto_topup",
-  summary: "Configure auto-topup settings (requires payment method via stripe-service)",
+  summary: "Configure auto-topup settings (requires payment method via stripe-service); an amount of 0 turns automatic top-up off",
   request: {
     headers: protectedHeaders,
     body: {
@@ -1978,7 +1979,7 @@ registry.registerPath({
     },
     400: {
       description:
-        "Payment method required or invalid request. An amount below the org's reload minimum (GET /v1/accounts/reload_rules: $100 match_100, $10 at-cost / agent) is refused 400 `topup_below_minimum` + `minimum_cents`. topup_threshold_cents is optional and IGNORED: the threshold is $0 for everyone, editable nowhere (owner 2026-11-18). A POSTPAID org has no auto top-up: 409 `postpaid_no_auto_topup`. Staff can set another top-up minimum per org (`PUT /v1/accounts/topup_minimums`). For a PREPAID org with its own reload (match_100, at-cost, agent) the stated amount binds: it reloads topup_amount_cents when the next run would take its balance below $0.",
+        "Payment method required or invalid request. topup_amount_cents 0 switches automatic top-up OFF, exactly as DELETE /v1/accounts/auto_topup (same 409 `auto_topup_required` for an agent/API prepaid org, same 409 `postpaid_no_auto_topup`); the 200 reads the account with auto top-up off. An amount above 0 and below the org's reload minimum (GET /v1/accounts/reload_rules: $100 match_100, $10 at-cost / agent) is refused 400 `topup_below_minimum` + `minimum_cents`. topup_threshold_cents is optional and IGNORED: the threshold is $0 for everyone, editable nowhere (owner 2026-11-18). A POSTPAID org has no auto top-up: 409 `postpaid_no_auto_topup`. Staff can set another top-up minimum per org (`PUT /v1/accounts/topup_minimums`). For a PREPAID org with its own reload (match_100, at-cost, agent) the stated amount binds: it reloads topup_amount_cents when the next run would take its balance below $0.",
       content: { "application/json": { schema: ErrorResponseSchema } },
     },
     404: {
