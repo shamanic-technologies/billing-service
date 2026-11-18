@@ -197,11 +197,41 @@ describe("Accounts endpoints", () => {
       expect(res.body.card_exp_month).toBe(8);
       expect(res.body.card_exp_year).toBe(2027);
       expect(res.body.card_country).toBe("US");
+      expect(res.body.payment_method_type).toBe("card");
+      expect(res.body.link_email).toBeNull();
+    });
+
+    it("link-only org: names the Link wallet, card fields stay null (BILLING-LINK-PAYMENT-METHOD-1118)", async () => {
+      await insertTestAccount({ orgId });
+      ssMocks.fetchOrgPaymentFacts.mockResolvedValue({
+        customer: null,
+        paidTopupsCents: "0.0000000000",
+        hasChargeablePm: true,
+        cardCountry: null,
+        cardDisplay: null,
+        paymentMethodType: "link",
+        linkEmail: "ethan@example.com",
+      });
+
+      const res = await request(app)
+        .get("/v1/accounts")
+        .set(getAuthHeaders(orgId));
+
+      expect(res.status).toBe(200);
+      expect(res.body.has_payment_method).toBe(true);
+      expect(res.body.payment_method_type).toBe("link");
+      expect(res.body.link_email).toBe("ethan@example.com");
+      expect(res.body.card_brand).toBeNull();
+      expect(res.body.card_last4).toBeNull();
+      expect(res.body.card_exp_month).toBeNull();
+      expect(res.body.card_exp_year).toBeNull();
+      expect(res.body.card_country).toBeNull();
     });
 
     it("returns null card display fields when the org has no card PM", async () => {
       await insertTestAccount({ orgId });
-      // Default getOrgCardDisplayByOrg mock resolves null (link-only / no card).
+      // Default getOrgCardDisplayByOrg mock resolves null; no chargeable method at all.
+      ssMocks.hasChargeablePmForOrg.mockResolvedValue(false);
       const res = await request(app)
         .get("/v1/accounts")
         .set(getAuthHeaders(orgId));
@@ -212,6 +242,8 @@ describe("Accounts endpoints", () => {
       expect(res.body.card_exp_month).toBeNull();
       expect(res.body.card_exp_year).toBeNull();
       expect(res.body.card_country).toBeNull();
+      expect(res.body.payment_method_type).toBeNull();
+      expect(res.body.link_email).toBeNull();
     });
 
     it("reports auto_reload_supported=false + reason for an India-issued card", async () => {

@@ -156,6 +156,22 @@ export const BillingAccountSchema = z
     auto_reload_unsupported_reason: z.string().nullable(),
     /** ISO-3166-1 alpha-2 issuing country of the card the reload would charge; null when no card PM. */
     card_country: z.string().nullable(),
+    card_brand: z.string().nullable().openapi({
+      description: "Saved card network (display-only, e.g. \"visa\"); null when the chargeable method is not a card or there is none.",
+    }),
+    card_last4: z.string().nullable().openapi({
+      description: "Saved card last 4 digits (display-only, never the full PAN); null when not a card or none.",
+    }),
+    card_exp_month: z.number().int().nullable().openapi({ description: "Saved card expiry month; null when not a card or none." }),
+    card_exp_year: z.number().int().nullable().openapi({ description: "Saved card expiry year; null when not a card or none." }),
+    payment_method_type: z.string().nullable().openapi({
+      description:
+        "Stripe type of the saved method a charge would take (\"card\", \"link\", ...), picked like the charge: first card, else first Link wallet. null when the org holds no chargeable method.",
+    }),
+    link_email: z.string().nullable().openapi({
+      description:
+        "Email of the Link wallet a charge would take (the wallet's own address, never the billing-details email), when payment_method_type is \"link\"; null otherwise.",
+    }),
     created_at: z.string(),
     updated_at: z.string(),
   })

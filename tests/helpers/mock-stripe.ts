@@ -260,7 +260,10 @@ export function setupStripeMocks(): StripeServiceMocks {
       mocks.getOrgCardCountryByOrg(orgId),
       mocks.getOrgCardDisplayByOrg(orgId),
     ]);
-    return { customer, paidTopupsCents, hasChargeablePm, cardCountry, cardDisplay };
+    // Charge precedence (card, else link): a test needing a Link wallet's email
+    // overrides fetchOrgPaymentFacts directly.
+    const paymentMethodType = cardDisplay ? "card" : hasChargeablePm ? "link" : null;
+    return { customer, paidTopupsCents, hasChargeablePm, cardCountry, cardDisplay, paymentMethodType, linkEmail: null };
   });
 
   vi.spyOn(ssClient, "ensureCustomer").mockImplementation(mocks.ensureCustomer);
