@@ -1,7 +1,7 @@
 import { forgetCardFacts } from "../lib/charge-verdict.js";
 import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
 import { cardFactsFrom, cardFactsWire } from "../lib/card-facts.js";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { AGENT_API_FREE_CREDIT_OFFER, billingAccounts, RELOAD_THRESHOLD_CENTS } from "../db/schema.js";
@@ -737,6 +737,13 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
       return;
     }
 
+    // A reload amount of 0 switches automatic top-up OFF, exactly as DELETE does
+    // (owner 2026-11-18): same refusals (auto_topup_required, postpaid), same row.
+    if (parsed.data.topup_amount_cents === 0) {
+      await disarmAutoTopup(account, orgId, identity, res);
+      return;
+    }
+
     // A SUBSCRIPTION org is never reloaded (owner rule: when credit runs out,
     // sending stops). Its money is the monthly invoice — lib/subscription.
     if (account.paymentMode === "subscription") {
@@ -884,6 +891,64 @@ router.patch("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   }
 });
 
+/**
+ * Switch automatic top-up OFF (RELOAD-ZERO-OFF-1118). One home for the off switch:
+ * DELETE /v1/accounts/auto_topup and a PATCH stating a reload amount of 0 (owner
+ * 2026-11-18: « Accepte une valeur $0, ca enleve lauto top up ») both land here, so
+ * the same rules refuse the same orgs and the same row is written.
+ */
+async function disarmAutoTopup(
+  account: typeof billingAccounts.$inferSelect,
+  orgId: string,
+  identity: ReturnType<typeof buildIdentity>,
+  res: Response,
+): Promise<void> {
+  // An org opened through the API pays PREPAID with a MANDATORY auto top-up
+  // (owner 2026-10-12: « Autotopup is mandatory for prepaid because otherwise
+  // their service would stop »). Its amounts can change (PATCH), not switch off.
+  // An at-cost org (prepaid_at_cost) is NOT held to it: its reload is optional,
+  // ticked by default (owner 2026-10-29: « Top up should be optional, but checked
+  // by default »), so it switches off here and back on with PATCH.
+  if (account.freeCreditOffer === AGENT_API_FREE_CREDIT_OFFER && account.paymentMode === "prepaid") {
+    res.status(409).json({
+      error: "Automatic top-up is required for this prepaid organization; change its amounts instead.",
+      code: "auto_topup_required",
+    });
+    return;
+  }
+
+  // A POSTPAID org has no auto top-up to switch off: it is charged as it spends.
+  // Its brakes are the monthly limit, removing the card, or switching to prepaid.
+  if (account.paymentMode === "postpaid") {
+    res.status(409).json(POSTPAID_NO_AUTO_TOPUP);
+    return;
+  }
+
+  const [updated] = await db
+    .update(billingAccounts)
+    .set({
+      topupAmountCents: null,
+      topupThresholdCents: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(billingAccounts.orgId, orgId))
+    .returning();
+  if (account.topupAmountCents != null) {
+    notifyOwnerBillingEvent({ orgId, emoji: "⚙️", text: "Automatic reload turned OFF" });
+  }
+
+  let funds;
+  try {
+    funds = await composeAccountFunds(orgId, identity);
+  } catch (err) {
+    console.error("[billing-service] Failed to compose account funds:", err);
+    res.status(502).json({ error: "Failed to compose account funds" });
+    return;
+  }
+
+  res.json(buildAccountResponse(updated, funds));
+}
+
 router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => {
   try {
     const orgId = req.headers["x-org-id"] as string;
@@ -903,50 +968,7 @@ router.delete("/v1/accounts/auto_topup", requireOrgHeaders, async (req, res) => 
       return;
     }
 
-    // An org opened through the API pays PREPAID with a MANDATORY auto top-up
-    // (owner 2026-10-12: « Autotopup is mandatory for prepaid because otherwise
-    // their service would stop »). Its amounts can change (PATCH), not switch off.
-    // An at-cost org (prepaid_at_cost) is NOT held to it: its reload is optional,
-    // ticked by default (owner 2026-10-29: « Top up should be optional, but checked
-    // by default »), so it switches off here and back on with PATCH.
-    if (account.freeCreditOffer === AGENT_API_FREE_CREDIT_OFFER && account.paymentMode === "prepaid") {
-      res.status(409).json({
-        error: "Automatic top-up is required for this prepaid organization; change its amounts instead.",
-        code: "auto_topup_required",
-      });
-      return;
-    }
-
-    // A POSTPAID org has no auto top-up to switch off: it is charged as it spends.
-    // Its brakes are the monthly limit, removing the card, or switching to prepaid.
-    if (account.paymentMode === "postpaid") {
-      res.status(409).json(POSTPAID_NO_AUTO_TOPUP);
-      return;
-    }
-
-    const [updated] = await db
-      .update(billingAccounts)
-      .set({
-        topupAmountCents: null,
-        topupThresholdCents: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(billingAccounts.orgId, orgId))
-      .returning();
-    if (account.topupAmountCents != null) {
-      notifyOwnerBillingEvent({ orgId, emoji: "⚙️", text: "Automatic reload turned OFF" });
-    }
-
-    let funds;
-    try {
-      funds = await composeAccountFunds(orgId, identity);
-    } catch (err) {
-      console.error("[billing-service] Failed to compose account funds:", err);
-      res.status(502).json({ error: "Failed to compose account funds" });
-      return;
-    }
-
-    res.json(buildAccountResponse(updated, funds));
+    await disarmAutoTopup(account, orgId, identity, res);
   } catch (err) {
     console.error("[billing-service] Error disabling auto-topup:", err);
     res.status(500).json({ error: "Internal server error" });
