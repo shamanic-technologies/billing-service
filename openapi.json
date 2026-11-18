@@ -196,7 +196,7 @@
               "agent_api",
               "prepaid_at_cost"
             ],
-            "description": "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with mandatory auto top-up. `legacy` = every older org, unchanged."
+            "description": "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with auto top-up armed at checkout (the org may switch it off, owner 2026-11-18). `legacy` = every older org, unchanged."
           },
           "free_credit_entitlement_cents": {
             "type": "integer",

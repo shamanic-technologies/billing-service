@@ -288,7 +288,7 @@ Owner 2026-10-06 (shipped 0066/0067, reverted by 0068, re-shipped by 0069 on the
 - **Account read (Need 6)**: `credited_advance_cents`, `free_credit_offer`, `free_credit_entitlement_cents`, `free_credit_received_cents`, `free_credit_pending_cents`, `free_credit_paid_trigger_cents`, `free_credit_remaining_to_pay_cents`.
 - Tests: `tests/integration/match-100-offer.test.ts`. Suites written against the pre-0066 fresh account call `useLegacyOfferDefaults()` (test-db) in `beforeAll` and `restoreCurrentOfferDefaults()` in `afterAll`; `insertTestAccount` defaults to `legacy`.
 
-## Orgs opened by AI agents through the API: no free credit, prepaid + MANDATORY auto top-up (`src/lib/agent-api-org.ts`, `src/lib/prepaid-status.ts`, `src/routes/prepaid_checkout.ts`)
+## Orgs opened by AI agents through the API: no free credit, prepaid + auto top-up ARMED at checkout, switchable off since 2026-11-18 (`src/lib/agent-api-org.ts`, `src/lib/prepaid-status.ts`, `src/routes/prepaid_checkout.ts`)
 
 Owner 2026-10-12: « no free credits nor free trial with them to avoid free riders. Everything needs to be paid upfront. Autotopup is mandatory for prepaid because otherwise their service would stop. » / « for the API, lets rather only allow prepaid with mandatory auto topup, no subscription ». Example: pay $10 → balance $10, auto top-up $15 below $5; balance < $5 → card charged $15 → ~$20.
 
