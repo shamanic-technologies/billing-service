@@ -17,6 +17,13 @@ import { recordCheckoutOpened } from "../lib/payment-alerts.js";
 import { notifyOwnerBillingEvent, usd } from "../lib/owner-alerts.js";
 import { resolvePrepaidStatus } from "../lib/prepaid-status.js";
 import { traceEvent } from "../lib/trace-event.js";
+import {
+  getOrgTopupMinimums,
+  reloadRulesFor,
+  topupMinimumsFor,
+  TopupBelowMinimumError,
+  type ReloadRules,
+} from "../lib/free-credit-offer.js";
 
 const router = Router();
 
@@ -78,14 +85,13 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
     }
     const {
       topup_amount_cents: topupAmountCents,
-      auto_topup_amount_cents: reloadAmountCents,
-      auto_topup_threshold_cents: reloadThresholdCents,
+      auto_topup_amount_cents: statedReloadAmountCents,
+      auto_topup_threshold_cents: statedReloadThresholdCents,
       success_url,
       cancel_url,
       consent,
     } = parsed.data;
 
-    traceEvent(runId, { service: "billing-service", event: "prepaid_checkout.start", data: { topupAmountCents, reloadAmountCents, reloadThresholdCents } }, req.headers);
 
     // An org with no billing account yet is created WITHOUT any free credit: this
     // path is the API's, and a default (at-cost) account would hand it a $5
@@ -97,6 +103,19 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
       .where(eq(billingAccounts.orgId, orgId))
       .limit(1);
     if (!account) account = (await markAgentApiOrg(orgId)).account;
+
+    // The reload rules live HERE, never in a caller (RELOAD-RULE-ONE-HOME-1118): an
+    // absent reload is the owner's default (+$10 below $5), a stated one below the
+    // minimums is refused, and so is a first payment under one reload.
+    const rules = reloadRulesFor(topupMinimumsFor(account));
+    const reloadAmountCents = statedReloadAmountCents ?? rules.defaultReloadAmountCents;
+    const reloadThresholdCents = statedReloadThresholdCents ?? rules.defaultReloadThresholdCents;
+    const refusal = reloadRuleRefusal(rules, topupAmountCents, reloadAmountCents, reloadThresholdCents);
+    if (refusal) {
+      res.status(400).json(refusal);
+      return;
+    }
+    traceEvent(runId, { service: "billing-service", event: "prepaid_checkout.start", data: { topupAmountCents, reloadAmountCents, reloadThresholdCents } }, req.headers);
 
     if (account.paymentMode === "subscription") {
       res.status(409).json({
@@ -196,6 +215,71 @@ router.post("/v1/accounts/prepaid_checkout", requireOrgHeaders, async (req, res)
   } catch (err) {
     console.error("[billing-service] Error creating prepaid checkout:", err);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+function reloadRuleRefusal(
+  rules: ReloadRules,
+  topupCents: number,
+  reloadCents: number,
+  thresholdCents: number
+): { error: string; code: string; minimum_cents: number } | null {
+  if (topupCents < rules.firstTopupMinimumCents) {
+    const e = new TopupBelowMinimumError("topup_below_minimum", rules.firstTopupMinimumCents);
+    return { error: e.message, code: e.code, minimum_cents: e.minimumCents };
+  }
+  if (reloadCents < rules.reloadAmountMinimumCents) {
+    return {
+      error: `An automatic reload must add at least $${(rules.reloadAmountMinimumCents / 100).toFixed(2)}`,
+      code: "reload_below_minimum",
+      minimum_cents: rules.reloadAmountMinimumCents,
+    };
+  }
+  if (thresholdCents < rules.reloadThresholdMinimumCents) {
+    const e = new TopupBelowMinimumError("topup_threshold_below_minimum", rules.reloadThresholdMinimumCents);
+    return { error: e.message, code: e.code, minimum_cents: e.minimumCents };
+  }
+  return null;
+}
+
+function reloadRulesBody(orgId: string, rules: ReloadRules) {
+  return {
+    org_id: orgId,
+    first_topup_minimum_cents: rules.firstTopupMinimumCents,
+    reload_amount_minimum_cents: rules.reloadAmountMinimumCents,
+    reload_threshold_minimum_cents: rules.reloadThresholdMinimumCents,
+    default_reload_amount_cents: rules.defaultReloadAmountCents,
+    default_reload_threshold_cents: rules.defaultReloadThresholdCents,
+  };
+}
+
+// GET /v1/accounts/reload_rules  (+ /internal/accounts/by-org/:orgId/reload-rules)
+//
+// The ONE home of the prepaid reload figures (RELOAD-RULE-ONE-HOME-1118): the first
+// payment minimum, the smallest reload amount + threshold, and the reload a caller
+// gets when it states none. Callers show and validate THESE, never a constant of
+// their own. Pure read; an org with no billing account yet reads a new org's rules.
+router.get("/v1/accounts/reload_rules", requireOrgHeaders, async (req, res) => {
+  const orgId = req.headers["x-org-id"] as string;
+  try {
+    res.json(reloadRulesBody(orgId, reloadRulesFor(await getOrgTopupMinimums(orgId))));
+  } catch (err) {
+    console.error(`[billing-service] reload rules failed for org ${orgId}:`, err);
+    res.status(500).json({ error: "Failed to read the reload rules" });
+  }
+});
+
+router.get("/internal/accounts/by-org/:orgId/reload-rules", async (req, res) => {
+  const { orgId } = req.params;
+  if (!UUID_RE.test(orgId)) {
+    res.status(400).json({ error: "orgId must be a valid UUID" });
+    return;
+  }
+  try {
+    res.json(reloadRulesBody(orgId, reloadRulesFor(await getOrgTopupMinimums(orgId))));
+  } catch (err) {
+    console.error(`[billing-service] reload rules failed for org ${orgId}:`, err);
+    res.status(500).json({ error: "Failed to read the reload rules" });
   }
 });
 

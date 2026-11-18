@@ -124,6 +124,16 @@ export type FreeCreditOfferKind =
 export const MATCH_MIN_TOPUP_CENTS = 10000;
 /** Smallest "reload when the balance falls below X" a match_100 org may configure. */
 export const MATCH_MIN_RELOAD_THRESHOLD_CENTS = 500;
+/**
+ * The owner's prepaid reload rule (2026-11-11: « +10 dès qu'on arrive sous $5 »),
+ * for the at-cost and agent/API offers: each automatic reload ADDS at least $10,
+ * whatever the threshold (never "threshold + $10"), and fires below at least $5.
+ * Pay $10, spend down to $4.90, card charged $10, balance $14.90. billing-service is
+ * the ONE home of these figures (RELOAD-RULE-ONE-HOME-1118): callers read them at
+ * `GET /v1/accounts/reload_rules` or send nothing and get the default, never a copy.
+ */
+export const PREPAID_MIN_RELOAD_CENTS = 1000;
+export const PREPAID_MIN_RELOAD_THRESHOLD_CENTS = 500;
 
 /**
  * What every account that existed before migration 0032 carries, permanently.
