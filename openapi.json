@@ -4957,6 +4957,89 @@
           }
         ]
       },
+      "SalesFunnelCampaignCapChanges": {
+        "type": "object",
+        "properties": {
+          "salesFunnelCampaignId": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "sales_funnel_campaign",
+                    "sales_funnel"
+                  ],
+                  "description": "Which cap the row set: the funnel campaign's own, or the funnel-wide one it is held to without its own."
+                },
+                "maxBudget": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "amountCents": {
+                      "type": "string"
+                    },
+                    "period": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "amountCents",
+                    "period"
+                  ],
+                  "description": "The max budget after this change (decimal USD cents); null = none / cleared."
+                },
+                "maxVolume": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "period": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "count",
+                    "period"
+                  ],
+                  "description": "The max volume after this change; null = none / cleared."
+                },
+                "changedByUserId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "x-user-id of the write; null = a service write naming no person."
+                },
+                "changedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "scope",
+                "maxBudget",
+                "maxVolume",
+                "changedByUserId",
+                "changedAt"
+              ]
+            }
+          }
+        },
+        "required": [
+          "salesFunnelCampaignId",
+          "changes"
+        ]
+      },
       "BrandSalesFunnelCaps": {
         "type": "object",
         "properties": {
@@ -14690,6 +14773,92 @@
           },
           "400": {
             "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/cap-changes": {
+      "get": {
+        "summary": "Every change of the caps ONE sales funnel campaign is held to, oldest first",
+        "description": "CAMPAIGN-CHANGE-LOG-1119. x-api-key + x-org-id. The append-only journal of every state / clear of the funnel campaign's own cap AND the funnel-wide cap (its own brand, offer, funnel), as written. A row's previous state is the row before it in the same `scope`; none = no cap stated before it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCapChanges"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
             "content": {
               "application/json": {
                 "schema": {
