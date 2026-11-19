@@ -18,6 +18,7 @@ import {
   composeSalesFunnelCampaignCapsView,
   composeSalesFunnelCapsView,
   listBrandSalesFunnelCaps,
+  listSalesFunnelCampaignCapChanges,
   setSalesFunnelCaps,
   statedCapsOf,
   SalesFunnelCatalogueUnavailableError,
@@ -259,6 +260,15 @@ router.get(`/internal${CAMPAIGN_PATH}`, handle(async (req, res) => {
   const key = campaignKeyOf(req, res, orgId);
   if (!key) return;
   res.json(await composeSalesFunnelCampaignCapsView(key));
+}));
+
+/** CAMPAIGN-CHANGE-LOG-1119: every change of the caps this funnel campaign is held to (its own + the funnel-wide), oldest first. */
+router.get(`/internal${CAMPAIGN_PATH.replace(/\/caps$/, "/cap-changes")}`, handle(async (req, res) => {
+  const orgId = internalOrgId(req, res);
+  if (!orgId) return;
+  const key = campaignKeyOf(req, res, orgId);
+  if (!key) return;
+  res.json({ salesFunnelCampaignId: key.salesFunnelCampaignId, changes: await listSalesFunnelCampaignCapChanges(key) });
 }));
 
 router.get(`/v1${CAMPAIGN_PATH}`, requireOrgHeaders, handle(async (req, res) => {
