@@ -73,7 +73,7 @@
  */
 
 import { Decimal } from "decimal.js";
-import { and, asc, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   salesFunnelCapChanges,
@@ -361,6 +361,35 @@ export async function listBrandSalesFunnelCaps(
     .from(salesFunnelCaps)
     .where(where)
     .orderBy(asc(salesFunnelCaps.offerId), asc(salesFunnelCaps.salesFunnelId));
+}
+
+/**
+ * CAMPAIGN-CHANGE-LOG-1119: every state / clear ever written of the caps ONE funnel campaign is held to (its own cap
+ * and the funnel-wide one), oldest first, read off the append-only `sales_funnel_cap_changes` journal. `scope` says
+ * which cap each row set; a reader takes a row's previous state from the row before it in the SAME scope.
+ */
+export async function listSalesFunnelCampaignCapChanges(k: FunnelCapKey & { salesFunnelCampaignId: string }) {
+  const rows = await db
+    .select()
+    .from(salesFunnelCapChanges)
+    .where(
+      and(
+        eq(salesFunnelCapChanges.orgId, k.orgId),
+        eq(salesFunnelCapChanges.brandId, k.brandId),
+        eq(salesFunnelCapChanges.offerId, k.offerId),
+        eq(salesFunnelCapChanges.salesFunnelId, k.salesFunnelId),
+        or(isNull(salesFunnelCapChanges.salesFunnelCampaignId), eq(salesFunnelCapChanges.salesFunnelCampaignId, k.salesFunnelCampaignId))
+      )
+    )
+    .orderBy(asc(salesFunnelCapChanges.changedAt), asc(salesFunnelCapChanges.id));
+  return rows.map((r) => ({
+    id: String(r.id),
+    scope: r.salesFunnelCampaignId ? ("sales_funnel_campaign" as const) : ("sales_funnel" as const),
+    maxBudget: r.maxBudgetCents != null ? { amountCents: r.maxBudgetCents, period: r.maxBudgetPeriod } : null,
+    maxVolume: r.maxVolume != null ? { count: r.maxVolume, period: r.maxVolumePeriod } : null,
+    changedByUserId: r.changedByUserId ?? null,
+    changedAt: r.changedAt.toISOString(),
+  }));
 }
 
 export async function setSalesFunnelCaps(

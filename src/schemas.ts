@@ -5095,6 +5095,37 @@ registry.registerPath({
   },
 });
 
+export const SalesFunnelCampaignCapChangesSchema = z
+  .object({
+    salesFunnelCampaignId: z.string(),
+    changes: z.array(
+      z.object({
+        id: z.string(),
+        scope: z.enum(["sales_funnel_campaign", "sales_funnel"]).openapi({ description: "Which cap the row set: the funnel campaign's own, or the funnel-wide one it is held to without its own." }),
+        maxBudget: z.object({ amountCents: z.string(), period: z.string().nullable() }).nullable().openapi({ description: "The max budget after this change (decimal USD cents); null = none / cleared." }),
+        maxVolume: z.object({ count: z.number().int(), period: z.string().nullable() }).nullable().openapi({ description: "The max volume after this change; null = none / cleared." }),
+        changedByUserId: z.string().nullable().openapi({ description: "x-user-id of the write; null = a service write naming no person." }),
+        changedAt: z.string(),
+      })
+    ),
+  })
+  .openapi("SalesFunnelCampaignCapChanges");
+
+registry.registerPath({
+  method: "get",
+  path: `/internal${funnelCampaignCapsPath.replace(/\/caps$/, "/cap-changes")}`,
+  summary: "Every change of the caps ONE sales funnel campaign is held to, oldest first",
+  description:
+    "CAMPAIGN-CHANGE-LOG-1119. x-api-key + x-org-id. The append-only journal of every state / clear of the funnel " +
+    "campaign's own cap AND the funnel-wide cap (its own brand, offer, funnel), as written. A row's previous state is the " +
+    "row before it in the same `scope`; none = no cap stated before it.",
+  request: { headers: internalOrgHeaders, params: funnelCampaignCapParams },
+  responses: {
+    200: { description: "Changes", content: { "application/json": { schema: SalesFunnelCampaignCapChangesSchema } } },
+    400: funnelCapsError("Invalid ids or x-org-id"),
+  },
+});
+
 registry.registerPath({
   method: "get",
   path: `/v1${funnelCampaignCapsPath}`,
