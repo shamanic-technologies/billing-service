@@ -26,6 +26,10 @@ const CAMPAIGN_THREADS = "22222222-0000-4000-8000-000000000001";
 const CAMPAIGN_TEAM = "22222222-0000-4000-8000-000000000002";
 const CAMPAIGN_OTHER = "22222222-0000-4000-8000-000000000003";
 const CAMPAIGN_ADS = "22222222-0000-4000-8000-000000000004";
+// An outcome nobody ever made yet (DISTRY-CALL-IS-CAMPAIGN-1121): measured 0, never held.
+const NEWSLETTER = "newsletter-engine";
+const NEW_FUNNEL = "start_to_newsletter_drafted@newsletter-engine";
+const CAMPAIGN_NEW = "22222222-0000-4000-8000-000000000005";
 
 const app = createTestApp();
 const auth = getAuthHeaders(orgId, userId, runId);
@@ -72,7 +76,22 @@ const funnelDetail = (id: string) =>
             { legKey: "website_visit_to_paid_client", toStep: "paid_client", pipe: null },
           ],
         }
-      : null;
+      : id === NEW_FUNNEL
+        ? {
+            object: "sales_funnel",
+            id,
+            name: "Newsletter",
+            type: "proactive",
+            legs: [
+              {
+                legKey: "start_to_newsletter_drafted",
+                toStep: "newsletter_drafted",
+                channels: [{ id: NEWSLETTER, name: "Newsletter", runByUs: true }],
+                pipe: { id: `${NEWSLETTER}|start_to_newsletter_drafted`, mode: "proactive" },
+              },
+            ],
+          }
+        : null;
 
 const campaign = (id: string, featureSlug: string, legKey: string) => ({
   campaignId: id,
@@ -90,16 +109,16 @@ const campaign = (id: string, featureSlug: string, legKey: string) => ({
   recurring: true,
 });
 
-const occurrence = (campaignId: string | null, quantity = "1.000000") => ({
+const occurrence = (campaignId: string | null, quantity = "1.000000", outcomeKey = "post_published") => ({
   id: crypto.randomUUID(),
   runId: crypto.randomUUID(),
   direction: "produced",
-  outcomeKey: "post_published",
+  outcomeKey,
   quantity,
   tags: { brandIds: [brandId], campaignId, workflowSlug: null, featureSlug: null, audienceId: null },
 });
 
-function mockUpstreams(opts: { published: number; runsStatus?: number }) {
+function mockUpstreams(opts: { published: number; runsStatus?: number; drafted?: number }) {
   const calls: { occurrences: URLSearchParams[]; evidence: URLSearchParams[]; runOutcomes: number } = {
     occurrences: [],
     evidence: [],
@@ -135,6 +154,15 @@ function mockUpstreams(opts: { published: number; runsStatus?: number }) {
             status: "ongoing",
             units: [{ campaignId: CAMPAIGN_ADS, featureSlug: "google-ads", legKey: "start_to_website_visit", status: "ongoing" }],
           },
+          {
+            id: "fc-new",
+            orgId,
+            brandId,
+            offerId: OFFER,
+            salesFunnelId: NEW_FUNNEL,
+            status: "ongoing",
+            units: [{ campaignId: CAMPAIGN_NEW, featureSlug: NEWSLETTER, legKey: "start_to_newsletter_drafted", status: "ongoing" }],
+          },
         ],
       });
     }
@@ -144,6 +172,7 @@ function mockUpstreams(opts: { published: number; runsStatus?: number }) {
           campaign(CAMPAIGN_THREADS, THREADS, "start_to_post_published"),
           campaign(CAMPAIGN_TEAM, TEAM, "post_published_to_paid_client"),
           campaign(CAMPAIGN_ADS, "google-ads", "start_to_website_visit"),
+          campaign(CAMPAIGN_NEW, NEWSLETTER, "start_to_newsletter_drafted"),
         ],
       });
     }
@@ -154,12 +183,21 @@ function mockUpstreams(opts: { published: number; runsStatus?: number }) {
       if (!url.searchParams.get("orgId")) {
         calls.evidence.push(url.searchParams);
         const step = url.searchParams.get("outcomeKey");
+        if (step === "newsletter_drafted") {
+          // Nothing ever drafted: an EMPTY ledger. After the first Unit: on the unit's run.
+          const drafted = Array.from({ length: opts.drafted ?? 0 }, () => occurrence(CAMPAIGN_NEW, "1.000000", "newsletter_drafted"));
+          return Response.json({ occurrences: drafted, nextCursor: null });
+        }
         return Response.json({
           occurrences: [occurrence(null), ...(step === "post_published" ? [occurrence(CAMPAIGN_OTHER)] : [])],
           nextCursor: null,
         });
       }
       calls.occurrences.push(url.searchParams);
+      if (url.searchParams.get("outcomeKey") === "newsletter_drafted") {
+        const drafted = Array.from({ length: opts.drafted ?? 0 }, () => occurrence(CAMPAIGN_NEW, "1.000000", "newsletter_drafted"));
+        return Response.json({ occurrences: drafted, nextCursor: null });
+      }
       // Two pages: this unit's publications, plus another campaign's and an org-less
       // publication (social-service daily comments) that are never this funnel's.
       const mine = Array.from({ length: opts.published }, () => occurrence(CAMPAIGN_THREADS));
@@ -275,5 +313,26 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
       consumedUnavailableDetail: "no website_visit outcome was ever declared on a campaign's run",
     });
     expect(calls.occurrences).toHaveLength(0);
+  });
+
+  it("max volume 1 one-off on an outcome never made yet: consumed 0, not reached, funded; reached after one Unit", async () => {
+    mockUpstreams({ published: 0, drafted: 0 });
+    expect((await put(NEW_FUNNEL, { maxBudget: null, maxVolume: { count: 1, period: "one_off" } })).status).toBe(200);
+    const before = await read(NEW_FUNNEL);
+    expect(before.status).toBe(200);
+    expect(before.body.funded).toBe(true);
+    expect(before.body.maxVolume).toMatchObject({
+      count: 1,
+      unit: "outcomes_produced",
+      consumed: 0,
+      remaining: 1,
+      reached: false,
+      consumedUnavailableReason: null,
+    });
+
+    vi.restoreAllMocks();
+    mockUpstreams({ published: 0, drafted: 1 });
+    const after = await read(NEW_FUNNEL);
+    expect(after.body.maxVolume).toMatchObject({ consumed: 1, remaining: 0, reached: true, consumedUnavailableReason: null });
   });
 });
