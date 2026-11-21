@@ -13,6 +13,7 @@ import { cleanTestData, insertTestAccount, closeDb } from "../helpers/test-db.js
 import { setupStripeMocks } from "../helpers/mock-stripe.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
+import { __primeOutcomeSteps, __resetOutcomeSteps } from "../../src/lib/outcome-steps.js";
 import { __resetStepEvidence } from "../../src/lib/sales-funnel-caps.js";
 import { __resetFunnelCapAuthorize } from "../../src/lib/funnel-cap-authorize.js";
 
@@ -119,6 +120,8 @@ describe("caps of a campaign naming no offer, and the same with an offer", () =>
     __resetStepEvidence();
     __resetFunnelCapAuthorize();
     __primeSalesPathTerms([], { sourceLegKey: "start_to_lead_found", origins: [], originsByChannel: {} } as never);
+    // Its target is about an OBJECT: it counts the outcomes it produced (OUTREACH-3WAYS-1121 leaves it unchanged).
+    __primeOutcomeSteps([{ key: "newsletter_drafted", lifecycleRung: "none", subjectKind: "object" }, { key: "message_sent", lifecycleRung: "contacted", subjectKind: "person" }]);
     const ss = setupStripeMocks();
     ss.sumSucceededTopupsForOrg.mockResolvedValue("100000.0000000000");
     const costsClient = await import("../../src/lib/costs-client.js");
@@ -134,6 +137,7 @@ describe("caps of a campaign naming no offer, and the same with an offer", () =>
   afterEach(() => {
     vi.restoreAllMocks();
     __resetSalesPathTerms();
+    __resetOutcomeSteps();
   });
   afterAll(async () => {
     for (const k of ["FEATURES_SERVICE_API_KEY", "CAMPAIGN_SERVICE_URL", "CAMPAIGN_SERVICE_API_KEY"]) {

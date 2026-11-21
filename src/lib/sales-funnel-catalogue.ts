@@ -59,6 +59,12 @@ export interface SalesFunnelPipe {
    * absent = not served.
    */
   runByUs?: boolean | null;
+  /**
+   * true on the one pipe of a campaign launched on its TARGET alone (campaign-service #883):
+   * its Engine, from Start to the target (lib/sales-funnel-caps `targetOnlyFunnelOf`). Absent on
+   * every features-service funnel's pipe.
+   */
+  targetOnly?: true;
 }
 
 /**
