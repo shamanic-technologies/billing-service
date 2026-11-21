@@ -1011,14 +1011,22 @@ const declaredOnCampaignRuns = new Set<string>();
 const EVIDENCE_PAGES = 5;
 
 /**
- * Does the producer of `outcomeKey` declare it on CAMPAIGN runs? Read off the ledger itself
- * (fleet-wide, any org): at least one produced occurrence on a run carrying a campaign id.
- * No evidence = a producer that never declares on a campaign's run, so a count on the unit
- * would read 0 forever and never hold it: the caller answers not measured (fail-closed).
+ * What the ledger shows about the producer of `outcomeKey` (fleet-wide, any org):
+ * - `on_campaign_runs`: at least one produced occurrence on a run carrying a campaign id;
+ * - `never_declared`: NO produced occurrence at all, anywhere. Nobody made this outcome yet,
+ *   so a count on the unit is POSITIVELY 0: the campaign may start and make the first Unit
+ *   (DISTRY-CALL-IS-CAMPAIGN-1121: a max volume on a brand-new outcome must not hold forever);
+ * - `off_campaign_runs`: occurrences exist, none on a campaign's run. Its producer declares
+ *   on another run, so a count on the unit would read 0 forever and never hold it: the
+ *   caller answers not measured (fail-closed).
+ * Only `on_campaign_runs` is cached: a never-declared step is re-asked until it is seen.
  */
-async function stepDeclaredOnCampaignRuns(outcomeKey: string, orgId: string): Promise<boolean> {
-  if (declaredOnCampaignRuns.has(outcomeKey)) return true;
+type StepEvidence = "on_campaign_runs" | "never_declared" | "off_campaign_runs";
+
+async function stepEvidence(outcomeKey: string, orgId: string): Promise<StepEvidence> {
+  if (declaredOnCampaignRuns.has(outcomeKey)) return "on_campaign_runs";
   let cursor: string | null = null;
+  let seenAny = false;
   for (let page = 0; page < EVIDENCE_PAGES; page += 1) {
     const params = new URLSearchParams({ outcomeKey, direction: "produced", limit: String(OUTCOME_PAGE) });
     if (cursor) params.set("cursor", cursor);
@@ -1028,14 +1036,15 @@ async function stepDeclaredOnCampaignRuns(outcomeKey: string, orgId: string): Pr
       params
     );
     if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
+    if (body.occurrences.length > 0) seenAny = true;
     if (body.occurrences.some((o) => o.tags?.campaignId)) {
       declaredOnCampaignRuns.add(outcomeKey);
-      return true;
+      return "on_campaign_runs";
     }
     cursor = body.nextCursor ?? null;
-    if (!cursor) return false;
+    if (!cursor) break;
   }
-  return false;
+  return seenAny || cursor ? "off_campaign_runs" : "never_declared";
 }
 
 /** Test hook: forget what the ledger showed. */
@@ -1059,7 +1068,7 @@ async function measureItemOutcomes(
   }
   try {
     const undeclared: string[] = [];
-    for (const step of byStep.keys()) if (!(await stepDeclaredOnCampaignRuns(step, k.orgId))) undeclared.push(step);
+    for (const step of byStep.keys()) if ((await stepEvidence(step, k.orgId)) === "off_campaign_runs") undeclared.push(step);
     if (undeclared.length > 0) {
       return {
         consumed: null,
