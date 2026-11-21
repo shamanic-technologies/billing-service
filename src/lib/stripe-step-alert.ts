@@ -28,7 +28,8 @@ import { ownerStripeStepAlerts, salesFunnelCaps, type SalesFunnelCapRow } from "
 import { currentActor, deliver, type AlertActor } from "./owner-alerts.js";
 import { getMonthlyChargeLimit } from "./monthly-charge-limit.js";
 import type { SalesFunnel } from "./sales-funnel-catalogue.js";
-import { capFunnelOf, volumeUnitFor, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
+import { capFunnelOf, capVolumeCountOf, type CapPeriod, type VolumeUnit } from "./sales-funnel-caps.js";
+import { fetchSalesFunnelCampaigns, type SalesFunnelCampaign } from "./funnel-campaigns.js";
 
 /** Card step to send, when no budget lands meanwhile. */
 export const STRIPE_STEP_SETTLE_MS = 60_000;
@@ -112,7 +113,8 @@ export interface BudgetLine {
   triggerName: string | null;
   amountCents: string | null;
   period: CapPeriod | null;
-  volume: { count: number; period: CapPeriod; unit: VolumeUnit | null } | null;
+  /** `outcome` = the campaign target its own cap counts (`meeting_booked`); null otherwise. */
+  volume: { count: number; period: CapPeriod; unit: VolumeUnit | null; outcome?: string | null } | null;
 }
 
 const PER: Record<CapPeriod, string> = { monthly: "/month", weekly: "/week", daily: "/day", one_off: " one time" };
@@ -139,7 +141,11 @@ function budgetLineText(b: BudgetLine): string {
   const parts: string[] = [];
   if (b.amountCents != null && b.period) parts.push(`${dollars(b.amountCents)}${PER[b.period]}`);
   if (b.volume) {
-    const unit = b.volume.unit ? ` ${UNIT_WORDS[b.volume.unit]}` : "";
+    const unit = b.volume.outcome
+      ? ` ${b.volume.outcome.replace(/_/g, " ")}`
+      : b.volume.unit
+        ? ` ${UNIT_WORDS[b.volume.unit]}`
+        : "";
     parts.push(`up to ${b.volume.count.toLocaleString("en-US")}${unit}${PER[b.volume.period]}`);
   }
   return `• ${label}: ${parts.join(", ")}`;
@@ -200,6 +206,7 @@ export async function readOrgBudgetLines(orgId: string): Promise<BudgetLine[]> {
     .where(eq(salesFunnelCaps.orgId, orgId))
     .orderBy(salesFunnelCaps.createdAt);
   const out: BudgetLine[] = [];
+  let campaigns: SalesFunnelCampaign[] | null | undefined;
   for (const row of rows) {
     if (row.maxBudgetCents == null && row.maxVolume == null) continue;
     const funnel = await funnelSoft(row);
@@ -211,7 +218,14 @@ export async function readOrgBudgetLines(orgId: string): Promise<BudgetLine[]> {
       period: (row.maxBudgetPeriod as CapPeriod | null) ?? null,
       volume:
         row.maxVolume != null && row.maxVolumePeriod
-          ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: funnel ? await volumeUnitFor(funnel) : null }
+          ? await (async () => {
+              if (row.salesFunnelCampaignId && campaigns === undefined) {
+                const fcs = await fetchSalesFunnelCampaigns(orgId);
+                campaigns = fcs.ok ? fcs.campaigns : null;
+              }
+              const c = await capVolumeCountOf(row, funnel, campaigns ?? null);
+              return { count: row.maxVolume!, period: row.maxVolumePeriod as CapPeriod, unit: c.unit, outcome: c.outcome };
+            })()
           : null,
     });
   }

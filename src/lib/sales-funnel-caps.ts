@@ -50,6 +50,11 @@
  *     NEW people its units contacted in the window, off the ledger's contact outcomes
  *     (`measureFirstContacts`, OUTREACH-3WAYS-1121). A target about an object keeps
  *     `outcomes_produced`.
+ *   - A funnel campaign holding its OWN cap whose TARGET (campaign-service `target`) is a step
+ *     one of its pipes we run produces AFTER an earlier pipe of ours reached the person (Meeting
+ *     booked after the cold email) counts `outcomes_produced` = Units of that target, the served
+ *     `outcome` names it (`measureTargetOutcomes`, ONE-CAMPAIGN-VOLUME-1122). A target that IS
+ *     the first contact's own step (a follow-up's Paid client) keeps the unit above.
  * - ONE funnel CAMPAIGN may hold its own cap (`salesFunnelCampaignId`, migration
  *   0083): consumption is then counted on that campaign's units only.
  *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
@@ -165,6 +170,72 @@ export async function volumeUnitFor(funnel: Pick<SalesFunnel, "pipes">): Promise
     console.error(`[billing-service] sales funnel caps: volume unit without sourcing terms: ${errorReason(err)}`);
     return volumeUnitOf(funnel);
   }
+}
+
+/**
+ * PURE (ONE-CAMPAIGN-VOLUME-1122): whether a campaign's TARGET is an outcome reached AFTER the
+ * first contact, so its max volume counts Units of that target (owner 2026-11-22: « un volume
+ * d'outcome par jour / week ou mois »). True when one of the funnel's OWN pipes we run produces the
+ * target AND an EARLIER pipe of the funnel we run reaches people (not a lead source): Meeting booked
+ * by AI meeting booking after the cold email. A target produced by the first contact itself (a
+ * follow-up email's Paid client), by nobody we run (the customer's team), or a target-only
+ * campaign's own pipe is false: those keep their unit. Read off the funnel's order, no step key.
+ */
+export function targetReachedAfterFirstContact(
+  pipes: Array<Pick<SalesFunnelPipe, "channelSlug" | "legKey" | "toStep" | "runByUs" | "targetOnly"> & { outsideFunnel?: true }>,
+  target: string,
+  isSource: (p: Pick<SalesFunnelPipe, "channelSlug" | "legKey">) => boolean
+): boolean {
+  const own = pipes.filter((p) => !p.outsideFunnel && !p.targetOnly);
+  const at = own.findIndex((p) => p.toStep === target && p.runByUs !== false);
+  if (at <= 0) return false;
+  return own.slice(0, at).some((q) => q.runByUs !== false && !isSource(q));
+}
+
+/**
+ * The outcome a campaign's own max volume counts, when it counts its TARGET (see
+ * `targetReachedAfterFirstContact`); null otherwise (no target, or a target that keeps the
+ * funnel's unit). Throws when the sourcing terms cannot be read.
+ */
+export async function countedTargetOf(
+  pipes: Parameters<typeof targetReachedAfterFirstContact>[0],
+  target: string | null
+): Promise<string | null> {
+  if (!target) return null;
+  // Cheap pure pass first: no catalogue read for a campaign whose target cannot qualify.
+  if (!targetReachedAfterFirstContact(pipes, target, () => false)) return null;
+  const terms = await getSalesPathTerms();
+  return targetReachedAfterFirstContact(pipes, target, (p) => terms.isSourceItem(p.channelSlug, p.legKey)) ? target : null;
+}
+
+/** What a cap's max volume counts: the unit, and the outcome when it counts a campaign's target. */
+export interface CapVolumeCount {
+  unit: VolumeUnit | null;
+  /** The outcome counted (the campaign's target, `meeting_booked`); null when the unit says it all. */
+  outcome: string | null;
+}
+
+/**
+ * The volume count of a stated cap without measurement (brand list, owner alert): a funnel
+ * campaign's own cap counting its target reads `outcomes_produced` + that outcome; else the
+ * funnel's unit. `campaigns` = the org's funnel campaigns (null = unreadable: the funnel's unit).
+ */
+export async function capVolumeCountOf(
+  row: Pick<SalesFunnelCapRow, "salesFunnelCampaignId">,
+  funnel: SalesFunnel | null,
+  campaigns: SalesFunnelCampaign[] | null
+): Promise<CapVolumeCount> {
+  if (!funnel) return { unit: null, outcome: null };
+  if (row.salesFunnelCampaignId && campaigns) {
+    const target = campaigns.find((c) => c.id === row.salesFunnelCampaignId)?.target ?? null;
+    try {
+      const counted = await countedTargetOf(funnel.pipes, target);
+      if (counted) return { unit: "outcomes_produced", outcome: counted };
+    } catch (err) {
+      console.error(`[billing-service] sales funnel caps: campaign target count without sourcing terms: ${errorReason(err)}`);
+    }
+  }
+  return { unit: await volumeUnitFor(funnel), outcome: null };
 }
 
 export type SalesFunnelTypeUnavailableReason =
@@ -610,7 +681,14 @@ type SourcesAnswer =
   | { ok: false; reason: ConsumedUnavailableReason; detail: string };
 
 type PipesAnswer =
-  | { ok: true; funnel: SalesFunnel; pipes: MeasuredPipe[]; sources: SourcesAnswer }
+  | {
+      ok: true;
+      funnel: SalesFunnel;
+      pipes: MeasuredPipe[];
+      sources: SourcesAnswer;
+      /** The held campaign's target on a funnel campaign's own cap; null on the funnel-wide cap. */
+      target: string | null;
+    }
   | { ok: false; reason: ConsumedUnavailableReason; detail: string; funnel: SalesFunnel | null };
 
 /**
@@ -766,7 +844,8 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
     pipes = [...funnelPipes, ...extra.pipes];
   }
   const sources = await feedingSources(pipes, ofOffer, unitIdsOf(fcs.campaigns));
-  return { ok: true, funnel, pipes, sources };
+  const target = k.salesFunnelCampaignId ? (held[0].target ?? null) : null;
+  return { ok: true, funnel, pipes, sources, target };
 }
 
 /**
@@ -1085,7 +1164,29 @@ async function measureItemOutcomes(
   }
 }
 
-type ContactOccurrence = { subjectService?: string; subjectId?: string; declaredAt?: string; tags?: { campaignId?: string | null } };
+type ContactOccurrence = {
+  subjectService?: string;
+  subjectId?: string;
+  declaredAt?: string;
+  quantity?: string;
+  tags?: { campaignId?: string | null };
+};
+
+/** Every produced occurrence of `outcomeKey` matching `params`, on any run (cursor walk). */
+async function occurrencesWhere(orgId: string, outcomeKey: string, params: Record<string, string>): Promise<ContactOccurrence[]> {
+  const out: ContactOccurrence[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; ; page += 1) {
+    if (page >= MAX_OUTCOME_PAGES) throw new Error(`runs-service outcome ${outcomeKey} walk exceeded ${MAX_OUTCOME_PAGES} pages`);
+    const q = new URLSearchParams({ ...params, outcomeKey, direction: "produced", limit: String(OUTCOME_PAGE) });
+    if (cursor) q.set("cursor", cursor);
+    const body = await readJson<{ occurrences?: ContactOccurrence[]; nextCursor?: string | null }>("/internal/outcome-occurrences", orgId, q);
+    if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
+    out.push(...body.occurrences);
+    cursor = body.nextCursor ?? null;
+    if (!cursor) return out;
+  }
+}
 
 /** Every produced occurrence of `outcomeKey` matching `params` on these campaigns (cursor walk). */
 async function contactOccurrences(
@@ -1095,21 +1196,12 @@ async function contactOccurrences(
   params: Record<string, string>
 ): Promise<ContactOccurrence[]> {
   const out: ContactOccurrence[] = [];
-  let cursor: string | null = null;
-  for (let page = 0; ; page += 1) {
-    if (page >= MAX_OUTCOME_PAGES) throw new Error(`runs-service outcome ${outcomeKey} walk exceeded ${MAX_OUTCOME_PAGES} pages`);
-    const q = new URLSearchParams({ ...params, outcomeKey, direction: "produced", limit: String(OUTCOME_PAGE) });
-    if (cursor) q.set("cursor", cursor);
-    const body = await readJson<{ occurrences?: ContactOccurrence[]; nextCursor?: string | null }>("/internal/outcome-occurrences", orgId, q);
-    if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
-    for (const o of body.occurrences) {
-      if (!o.tags?.campaignId || !campaignIds.has(o.tags.campaignId)) continue;
-      if (!o.subjectService || !o.subjectId) throw new Error("runs-service /internal/outcome-occurrences stated no subject");
-      out.push(o);
-    }
-    cursor = body.nextCursor ?? null;
-    if (!cursor) return out;
+  for (const o of await occurrencesWhere(orgId, outcomeKey, params)) {
+    if (!o.tags?.campaignId || !campaignIds.has(o.tags.campaignId)) continue;
+    if (!o.subjectService || !o.subjectId) throw new Error("runs-service /internal/outcome-occurrences stated no subject");
+    out.push(o);
   }
+  return out;
 }
 
 const SUBJECT_BATCH = 500;
@@ -1172,6 +1264,79 @@ async function measureFirstContacts(
   }
 }
 
+/**
+ * The Units of a campaign's TARGET reached in the window (ONE-CAMPAIGN-VOLUME-1122, owner
+ * 2026-11-22: « 10 meetings booked per week »), off runs-service's ledger. A Unit counts when it is
+ * declared on a run of the campaign's own units, OR when its person (the occurrence's subject) was
+ * reached by one of those units (the catalogue's contact family, `contactKeys`) before the Unit was
+ * declared: a meeting is booked weeks after the first email and its producer declares it on its own
+ * run (prod 2026-11-22: 241 Meeting booked, all on lead-service runs with no campaign). Counted by
+ * the Unit's declaration time, so the campaign keeps spending (within its max budget) while it has
+ * booked fewer than its volume: a delay never holds it.
+ */
+async function measureTargetOutcomes(
+  k: FunnelCapKey,
+  row: SalesFunnelCapRow,
+  pipes: MeasuredPipe[],
+  target: string,
+  now: Date
+): Promise<Measured<number>> {
+  const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
+  const ids = new Set(pipes.filter((p) => p.runByUs !== false).flatMap((p) => p.campaignIds));
+  try {
+    if (ids.size === 0) return { consumed: 0, reason: null, detail: null };
+    const quantityOf = (o: ContactOccurrence) => {
+      if (o.quantity == null) throw new Error("runs-service /internal/outcome-occurrences stated no quantity");
+      return new Decimal(o.quantity);
+    };
+    let total = new Decimal(0);
+    const viaPerson: ContactOccurrence[] = [];
+    for (const o of await occurrencesWhere(k.orgId, target, { orgId: k.orgId, declaredAfter: w.start.toISOString() })) {
+      if (o.tags?.campaignId && ids.has(o.tags.campaignId)) total = total.plus(quantityOf(o));
+      else if (o.subjectService && o.subjectId) viaPerson.push(o);
+    }
+    if (viaPerson.length > 0) {
+      const { contactKeys } = await getOutcomeSteps();
+      if (contactKeys.length === 0) {
+        return { consumed: null, reason: "volume_not_measured_on_channel", detail: "the outcome catalogue names no first-contact outcome" };
+      }
+      // The first time the campaign's units reached each person.
+      const firstReached = new Map<string, number>();
+      const bySvc = new Map<string, Set<string>>();
+      for (const o of viaPerson) bySvc.set(o.subjectService!, (bySvc.get(o.subjectService!) ?? new Set()).add(o.subjectId!));
+      for (const [service, set] of bySvc) {
+        const subjects = [...set];
+        for (let i = 0; i < subjects.length; i += SUBJECT_BATCH) {
+          const batch = subjects.slice(i, i + SUBJECT_BATCH);
+          for (const key of contactKeys) {
+            for (const c of await contactOccurrences(k.orgId, ids, key, { subjectService: service, subjectIds: batch.join(",") })) {
+              const at = c.declaredAt ? Date.parse(c.declaredAt) : NaN;
+              if (Number.isNaN(at)) throw new Error("runs-service /internal/outcome-occurrences stated no declaredAt");
+              const s = `${c.subjectService}\u0000${c.subjectId}`;
+              const known = firstReached.get(s);
+              if (known === undefined || at < known) firstReached.set(s, at);
+            }
+          }
+        }
+      }
+      for (const o of viaPerson) {
+        const reached = firstReached.get(`${o.subjectService}\u0000${o.subjectId}`);
+        const at = o.declaredAt ? Date.parse(o.declaredAt) : NaN;
+        if (Number.isNaN(at)) throw new Error("runs-service /internal/outcome-occurrences stated no declaredAt");
+        if (reached !== undefined && reached <= at) total = total.plus(quantityOf(o));
+      }
+    }
+    return { consumed: total.floor().toNumber(), reason: null, detail: null };
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: ${target} of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
+    return {
+      consumed: null,
+      reason: err instanceof OutcomeStepsUnavailableError ? "sales_funnel_catalogue_unavailable" : "runs_service_unavailable",
+      detail: errorReason(err),
+    };
+  }
+}
+
 // ── The served view ───────────────────────────────────────────────────────────
 
 interface Measured<T> {
@@ -1210,6 +1375,11 @@ export interface VolumeCapView {
   period: CapPeriod;
   /** What the count counts; null only when the funnel is unreadable. */
   unit: VolumeUnit | null;
+  /**
+   * With unit `outcomes_produced` on a funnel campaign's own cap counting its TARGET: that outcome
+   * (`meeting_booked`), so « 3 of 10 meetings booked this week » can be printed. null otherwise.
+   */
+  outcome: string | null;
   periodStart: string;
   periodEnd: string | null;
   consumed: number | null;
@@ -1378,14 +1548,15 @@ function budgetView(row: SalesFunnelCapRow, now: Date, m: Measured<string>): Bud
   };
 }
 
-function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>, unit: VolumeUnit | null): VolumeCapView | null {
+function volumeView(row: SalesFunnelCapRow, now: Date, m: Measured<number>, count: CapVolumeCount): VolumeCapView | null {
   if (row.maxVolume == null || row.maxVolumePeriod == null || row.maxVolumeSince == null) return null;
   const period = row.maxVolumePeriod as CapPeriod;
   const w = periodWindow(period, row.maxVolumeSince, now);
   return {
     count: row.maxVolume,
     period,
-    unit,
+    unit: count.unit,
+    outcome: count.outcome,
     periodStart: w.start.toISOString(),
     periodEnd: w.end ? w.end.toISOString() : null,
     consumed: m.consumed,
@@ -1417,13 +1588,21 @@ async function measureBudget(
   }
 }
 
+type CountedTarget = { ok: true; target: string | null } | { ok: false; detail: string };
+
 async function measureVolume(
   k: FunnelCapKey,
   row: SalesFunnelCapRow,
   pipes: MeasuredPipe[],
   triggerSlug: string | null,
-  now: Date
+  now: Date,
+  countedTarget: CountedTarget = { ok: true, target: null }
 ): Promise<Measured<number>> {
+  // A funnel campaign whose own cap counts its TARGET (reached after the first contact).
+  if (!countedTarget.ok) {
+    return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: countedTarget.detail };
+  }
+  if (countedTarget.target) return measureTargetOutcomes(k, row, pipes, countedTarget.target, now);
   // A campaign launched on its TARGET alone that reaches people: the new people it first contacts.
   let reachesPeople: boolean | null;
   try {
@@ -1547,6 +1726,15 @@ export async function composeSalesFunnelCapsView(
   const answer = await measuredPipes(k);
   let budget: Measured<string> = NOT_MEASURED();
   let volume: Measured<number> = NOT_MEASURED();
+  let counted: CountedTarget = { ok: true, target: null };
+  if (answer.ok && answer.target) {
+    try {
+      counted = { ok: true, target: await countedTargetOf(answer.pipes, answer.target) };
+    } catch (err) {
+      console.error(`[billing-service] sales funnel caps: campaign target count without sourcing terms: ${errorReason(err)}`);
+      counted = { ok: false, detail: errorReason(err) };
+    }
+  }
   if (!answer.ok) {
     budget = { consumed: null, reason: answer.reason, detail: answer.detail };
     volume = { consumed: null, reason: answer.reason, detail: answer.detail };
@@ -1554,19 +1742,27 @@ export async function composeSalesFunnelCapsView(
     [budget, volume] = await Promise.all([
       row.maxBudgetCents != null ? measureBudget(k, row, answer.pipes, answer.sources, now) : Promise.resolve(NOT_MEASURED<string>()),
       row.maxVolume != null
-        ? measureVolume(k, row, answer.pipes, answer.funnel?.triggerSlug ?? null, now)
+        ? measureVolume(k, row, answer.pipes, answer.funnel?.triggerSlug ?? null, now, counted)
         : Promise.resolve(NOT_MEASURED<number>()),
     ]);
   }
   // The unit follows every pipe measured (a followed plan's pipes included), so it and the count agree.
-  const unit = answer.ok ? await volumeUnitFor({ pipes: answer.pipes }) : answer.funnel ? await volumeUnitFor(answer.funnel) : null;
+  const unit: VolumeUnit | null =
+    counted.ok && counted.target
+      ? "outcomes_produced"
+      : answer.ok
+        ? await volumeUnitFor({ pipes: answer.pipes })
+        : answer.funnel
+          ? await volumeUnitFor(answer.funnel)
+          : null;
+  const outcome = counted.ok ? counted.target : null;
   return {
     ...k,
     stated: true,
     ...fundingOf(row),
     updatedAt: row.updatedAt.toISOString(),
     maxBudget: budgetView(row, now, budget),
-    maxVolume: volumeView(row, now, volume, unit),
+    maxVolume: volumeView(row, now, volume, { unit, outcome }),
     ...funnelIdentity(answer.funnel, answer.ok ? null : answer.reason, unit),
     pipes: answer.ok ? answer.pipes : null,
     sources: answer.ok && answer.sources.ok ? answer.sources.sources : null,
@@ -1647,7 +1843,7 @@ export function funnelIdentity(funnel: SalesFunnel | null, readReason: string | 
 const BRAND_LIST_CATALOGUE_WAIT_MS = 3_000;
 
 /** The stated caps of a row, without measurement (the brand list), plus the funnel's relayed type + unit. */
-export async function statedCapsOf(row: SalesFunnelCapRow) {
+export async function statedCapsOf(row: SalesFunnelCapRow, campaigns: SalesFunnelCampaign[] | null = null) {
   let timer: NodeJS.Timeout | undefined;
   const read = await Promise.race([
     readFunnelSoft(row),
@@ -1659,7 +1855,8 @@ export async function statedCapsOf(row: SalesFunnelCapRow) {
     }),
   ]);
   clearTimeout(timer);
-  const identity = funnelIdentity(read.funnel, read.reason, read.funnel ? await volumeUnitFor(read.funnel) : null);
+  const volumeCount = await capVolumeCountOf(row, read.funnel, campaigns);
+  const identity = funnelIdentity(read.funnel, read.reason, volumeCount.unit);
   return {
     offerId: row.offerId,
     salesFunnelId: row.salesFunnelId,
@@ -1675,7 +1872,7 @@ export async function statedCapsOf(row: SalesFunnelCapRow) {
         : null,
     maxVolume:
       row.maxVolume != null
-        ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: identity.volumeUnit }
+        ? { count: row.maxVolume, period: row.maxVolumePeriod as CapPeriod, unit: identity.volumeUnit, outcome: volumeCount.outcome }
         : null,
     updatedAt: row.updatedAt.toISOString(),
   };

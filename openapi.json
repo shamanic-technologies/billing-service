@@ -4725,6 +4725,11 @@
           "unit": {
             "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
           },
+          "outcome": {
+            "type": "string",
+            "nullable": true,
+            "description": "With unit outcomes_produced on a funnel campaign's own cap counting its TARGET: that outcome (`meeting_booked`), so the page prints « 3 of 10 meetings booked this week ». null otherwise."
+          },
           "periodStart": {
             "type": "string"
           },
@@ -4756,6 +4761,7 @@
           "count",
           "period",
           "unit",
+          "outcome",
           "periodStart",
           "periodEnd",
           "consumed",
@@ -4764,7 +4770,7 @@
           "consumedUnavailableReason",
           "consumedUnavailableDetail"
         ],
-        "description": "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run (email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. unit outcomes_produced: consumed = produced outcomes of the pipe's step (threads_post_published: one Threads thread; x_post_published / linkedin_post_published: one post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted campaigns in the window. A channel with no measure yet answers null + volume_not_measured_on_channel. unit null = the funnel is unreadable."
+        "description": "unit first_contacts: consumed = first contacts the funnel's PROACTIVE pipes made in the window (cold email: the first email of each prospect's sequence, completed or in flight). unit prospects_handled (all pipes reactive): consumed = prospects the FIRST reactive pipe took on (AI meeting booking: workflow runs that called the LLM; AI Follow-up Email: each email sent to one person). Any channel whose leg PRODUCES a step with a declared run (email_sent: one email sent), or whose reactive funnel fires on a trigger with a declared run (email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. unit outcomes_produced: consumed = produced outcomes of the pipe's step (threads_post_published: one Threads thread; x_post_published / linkedin_post_published: one post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted campaigns in the window. A funnel campaign's own cap counting its TARGET (`outcome`, reached after the first contact): consumed = Units of that target declared in the window on runs of its units OR on a person one of its units reached before (a meeting is declared by its own producer weeks after the first email); 0 until the first lands, so a delay never holds the campaign (its max budget still binds). A channel with no measure yet answers null + volume_not_measured_on_channel. unit null = the funnel is unreadable."
       },
       "SalesFunnelVolumeUnit": {
         "type": "string",
@@ -4775,7 +4781,7 @@
           "outcomes_produced",
           null
         ],
-        "description": "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step). outcomes_produced: every proactive pipe starts at Start and makes its own item (a Threads post, a daily video): each outcome of its leg's step declared on its campaigns' runs."
+        "description": "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step). outcomes_produced: every proactive pipe starts at Start and makes its own item (a Threads post, a daily video): each outcome of its leg's step declared on its campaigns' runs; OR a funnel campaign's own cap whose target (campaign-service `target`) is reached after the first contact (Meeting booked after the cold email): each Unit of that target, named by `outcome`."
       },
       "SalesFunnelType": {
         "type": "string",
@@ -5136,12 +5142,18 @@
               },
               "unit": {
                 "$ref": "#/components/schemas/SalesFunnelVolumeUnit"
+              },
+              "outcome": {
+                "type": "string",
+                "nullable": true,
+                "description": "With unit outcomes_produced on a funnel campaign's own cap counting its TARGET: that outcome (`meeting_booked`), so the page prints « 3 of 10 meetings booked this week ». null otherwise."
               }
             },
             "required": [
               "count",
               "period",
-              "unit"
+              "unit",
+              "outcome"
             ]
           },
           "updatedAt": {
