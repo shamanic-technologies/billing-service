@@ -3512,7 +3512,10 @@ registry.registerPath({
     "Σ rows net = total_revenue_cents. as_of = the instant of the read. Exact decimal cents text. " +
     "AGENCY money (completed Revolut payment requests staff send by hand, and their refunds) is served " +
     "APART in agency_gross_cents / agency_net_cents (+ totals), never inside gross/net nor " +
-    "/public/stats/billing; revenue with agency = gross + agency_gross. A staff-recorded attribution " +
+    "/public/stats/billing; revenue with agency = gross + agency_gross. A payment staff classified as " +
+    "agency (Stripe payment link, direct payment...) is served in the agency fields too; the moved amount " +
+    "is total_saas_reclassified_to_agency_gross_cents / _net_cents, so total_gross_cents + it == " +
+    "/public/stats/billing total_paid_cents (net: total_revenue_cents). A staff-recorded attribution " +
     "(stripe-service) moves an org-less payment to its org's row; totals unchanged. " +
     "502 when stripe-service cannot be read or a sum does not reconcile.",
   request: { headers: internalHeaders },
@@ -3527,6 +3530,8 @@ registry.registerPath({
             total_net_cents: CentsStringSchema,
             total_agency_gross_cents: CentsStringSchema,
             total_agency_net_cents: CentsStringSchema,
+            total_saas_reclassified_to_agency_gross_cents: CentsStringSchema,
+            total_saas_reclassified_to_agency_net_cents: CentsStringSchema,
             rows: z.array(
               z.object({
                 org_id: zod3Uuid().nullable(),
