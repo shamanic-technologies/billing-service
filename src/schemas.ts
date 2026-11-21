@@ -4058,7 +4058,7 @@ export const RevenueSalesFunnelLineSchema = z
   .object({
     salesFunnelCampaignId: z.string(),
     brandId: z.string(),
-    offerId: z.string(),
+    offerId: z.string().nullable(),
     salesFunnelId: z.string(),
     status: z.string(),
     unitCampaignIds: z.array(z.string()),
@@ -4921,7 +4921,7 @@ export const SalesFunnelCapsSchema = z
   .object({
     orgId: zod3Uuid(),
     brandId: zod3Uuid(),
-    offerId: zod3Uuid(),
+    offerId: zod3Uuid().nullable().openapi({ description: "null = a campaign naming no offer (the offer-less route)." }),
     salesFunnelId: z.string(),
     stated: z.boolean(),
     funded: z.boolean().openapi({
@@ -4943,7 +4943,7 @@ export const SalesFunnelCapsSchema = z
 
 const StatedSalesFunnelCapsSchema = z
   .object({
-    offerId: zod3Uuid(),
+    offerId: zod3Uuid().nullable().openapi({ description: "null = a campaign naming no offer." }),
     salesFunnelId: z.string(),
     salesFunnelCampaignId: z.string().optional().openapi({
       description: "Present only on ONE funnel campaign's cap: campaign-service's funnel campaign id. Absent = the funnel-wide cap.",
@@ -4985,7 +4985,23 @@ const funnelCapsError = (description: string) => ({
   content: { "application/json": { schema: ErrorResponseSchema } },
 });
 
-registry.registerPath({
+/**
+ * DISTRY-CALL-IS-CAMPAIGN-1121: a campaign may name NO offer. Every funnel caps route is served
+ * twice: under `/offers/{offerId}` (a campaign naming an offer, unchanged) and without the offer
+ * segment (a campaign naming none; its caps answer `offerId: null`). Same body, same answer.
+ */
+function registerFunnelCapPath(def: Parameters<typeof registry.registerPath>[0]): void {
+  registry.registerPath(def);
+  const params = def.request?.params as z.ZodObject<z.ZodRawShape> | undefined;
+  registry.registerPath({
+    ...def,
+    path: def.path.replace("/offers/{offerId}", ""),
+    summary: `${def.summary ?? ""} (campaign naming no offer)`,
+    request: { ...def.request, params: params ? params.omit({ offerId: true }) : undefined },
+  });
+}
+
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCapsPath}`,
   summary: "Read a sales funnel's MAX BUDGET / MAX VOLUME and what it consumed this period",
@@ -5000,7 +5016,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/v1${funnelCapsPath}`,
   summary: "Read this sales funnel's caps and what it consumed this period (dashboard)",
@@ -5011,7 +5027,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "put",
   path: `/v1${funnelCapsPath}`,
   summary: "State a sales funnel's MAX BUDGET and MAX VOLUME",
@@ -5031,7 +5047,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "put",
   path: `/internal${funnelCapsPath}`,
   summary: "State a sales funnel's caps as a service (campaign-service)",
@@ -5050,7 +5066,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "delete",
   path: `/v1${funnelCapsPath}`,
   summary: "Clear both caps of a sales funnel",
@@ -5078,7 +5094,7 @@ const funnelCampaignCapParams = funnelCapParams.extend({
 const funnelCampaignCapsPath = "/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps";
 const funnelCampaignCapsJson = { "application/json": { schema: SalesFunnelCampaignCapsSchema } };
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCampaignCapsPath}`,
   summary: "Read the caps ONE sales funnel campaign is held to, and what it consumed this period",
@@ -5111,7 +5127,7 @@ export const SalesFunnelCampaignCapChangesSchema = z
   })
   .openapi("SalesFunnelCampaignCapChanges");
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCampaignCapsPath.replace(/\/caps$/, "/cap-changes")}`,
   summary: "Every change of the caps ONE sales funnel campaign is held to, oldest first",
@@ -5126,7 +5142,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/v1${funnelCampaignCapsPath}`,
   summary: "Read the caps one sales funnel campaign is held to (dashboard)",
@@ -5141,7 +5157,7 @@ for (const [prefix, headers, body] of [
   ["/internal", internalOrgHeaders, SetSalesFunnelCapsRequestSchema],
   ["/v1", protectedHeaders, SetSalesFunnelCapsRequestSchema],
 ] as const) {
-  registry.registerPath({
+  registerFunnelCapPath({
     method: "put",
     path: `${prefix}${funnelCampaignCapsPath}`,
     summary: "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME",
@@ -5156,7 +5172,7 @@ for (const [prefix, headers, body] of [
       502: funnelCapsError("sales_funnel_catalogue_unavailable"),
     },
   });
-  registry.registerPath({
+  registerFunnelCapPath({
     method: "delete",
     path: `${prefix}${funnelCampaignCapsPath}`,
     summary: "Clear one sales funnel campaign's own caps (it falls back to the funnel-wide cap)",
@@ -5174,7 +5190,7 @@ registry.registerPath({
   method: "get",
   path: "/internal/brands/{brandId}/sales-funnel-caps",
   summary: "Every sales funnel of a brand with a stated cap (no measurement)",
-  description: "x-api-key + x-org-id. Optional offerId narrows to one offer. Read one funnel's caps for its consumption.",
+  description: "x-api-key + x-org-id. Optional offerId narrows to one offer; without it, offer-less caps (offerId null) are listed too. Read one funnel's caps for its consumption.",
   request: { headers: internalOrgHeaders, params: brandIdParam, query: brandFunnelCapsQuery },
   responses: {
     200: { description: "Stated caps", content: { "application/json": { schema: BrandSalesFunnelCapsSchema } } },

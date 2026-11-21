@@ -41,7 +41,8 @@ export interface SalesFunnelUnit {
 export interface SalesFunnelCampaign {
   id: string;
   brandId: string;
-  offerId: string;
+  /** null = a campaign naming no offer (DISTRY-CALL-IS-CAMPAIGN-1121). */
+  offerId: string | null;
   salesFunnelId: string;
   /** features-service's name of the funnel, as campaign-service stored it; null when absent. */
   salesFunnelName?: string | null;
@@ -128,6 +129,15 @@ export function brandFunnelDailyCents(caps: SalesFunnelCapRow[]): string | null 
 }
 
 /**
+ * PURE: two offer ids name the same offer, NULL included (a campaign naming no offer,
+ * DISTRY-CALL-IS-CAMPAIGN-1121, matches only a cap naming none).
+ */
+export function sameOffer(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
  * The cap a funnel campaign is held to: its OWN cap (migration 0083) when stated,
  * else its funnel's funnel-wide cap (same org, brand, offer, funnel), else null.
  */
@@ -138,7 +148,7 @@ export function capOfFunnelCampaign(
   const ofFunnel = caps.filter(
     (c) =>
       c.brandId.toLowerCase() === fc.brandId.toLowerCase() &&
-      c.offerId.toLowerCase() === fc.offerId.toLowerCase() &&
+      sameOffer(c.offerId, fc.offerId) &&
       c.salesFunnelId === fc.salesFunnelId
   );
   return ofFunnel.find((c) => c.salesFunnelCampaignId === fc.id) ?? ofFunnel.find((c) => c.salesFunnelCampaignId == null) ?? null;
@@ -174,7 +184,7 @@ export async function fetchSalesFunnelCampaigns(orgId: string): Promise<SalesFun
     const campaigns = (body.salesFunnelCampaigns as Array<Record<string, unknown>>).map((c) => ({
       id: String(c.id),
       brandId: String(c.brandId),
-      offerId: String(c.offerId),
+      offerId: typeof c.offerId === "string" && c.offerId ? c.offerId : null,
       salesFunnelId: String(c.salesFunnelId),
       salesFunnelName: typeof c.salesFunnelName === "string" ? c.salesFunnelName : null,
       name: typeof c.name === "string" && c.name.trim() ? c.name.trim() : null,
