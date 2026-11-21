@@ -18,6 +18,12 @@ import type { FleetOffPlatformPayment } from "./off-platform-payments.js";
  *   Σ rows gross == total_gross_cents == /public/stats/billing total_paid_cents
  *   Σ rows net   == total_net_cents   == /public/stats/billing total_revenue_cents
  * Both identities are CHECKED here; a mismatch throws (the route answers 502).
+ *
+ * AGENCY money (owner's 3rd series « revenue avec agency ») is served APART, never
+ * inside gross/net: `agency_gross_cents` / `agency_net_cents` = completed Revolut
+ * payment requests (payment links staff send by hand) and their refunds, as
+ * stripe-service serves them (v0.59.19). It never feeds /public/stats/billing nor any
+ * org credit. Off-platform payments are SaaS cash (they credit the org), never agency.
  */
 
 /** One (org, day) row as stripe-service serves it, in billing's words. */
@@ -26,12 +32,16 @@ export interface StripeCashDayRow {
   day: string;
   grossCents: string;
   netCents: string;
+  agencyGrossCents: string;
+  agencyNetCents: string;
 }
 
 export interface StripeCashByOrgDay {
   asOf: string;
   totalGrossCents: string;
   totalNetCents: string;
+  totalAgencyGrossCents: string;
+  totalAgencyNetCents: string;
   rows: StripeCashDayRow[];
 }
 
@@ -40,12 +50,16 @@ export interface CashByOrgDayRow {
   day: string;
   gross_cents: string;
   net_cents: string;
+  agency_gross_cents: string;
+  agency_net_cents: string;
 }
 
 export interface CashByOrgDay {
   as_of: string;
   total_gross_cents: string;
   total_net_cents: string;
+  total_agency_gross_cents: string;
+  total_agency_net_cents: string;
   rows: CashByOrgDayRow[];
 }
 
@@ -67,7 +81,14 @@ export function foldCashByOrgDay(
     const key = keyOf(orgId, day);
     let row = byKey.get(key);
     if (!row) {
-      row = { org_id: orgId, day, gross_cents: ZERO_CENTS, net_cents: ZERO_CENTS };
+      row = {
+        org_id: orgId,
+        day,
+        gross_cents: ZERO_CENTS,
+        net_cents: ZERO_CENTS,
+        agency_gross_cents: ZERO_CENTS,
+        agency_net_cents: ZERO_CENTS,
+      };
       byKey.set(key, row);
     }
     return row;
@@ -78,6 +99,8 @@ export function foldCashByOrgDay(
     const row = rowFor(r.orgId, r.day);
     row.gross_cents = addCents(row.gross_cents, r.grossCents);
     row.net_cents = addCents(row.net_cents, r.netCents);
+    row.agency_gross_cents = addCents(row.agency_gross_cents, r.agencyGrossCents);
+    row.agency_net_cents = addCents(row.agency_net_cents, r.agencyNetCents);
   }
 
   let totalGross = addCents(ZERO_CENTS, stripe.totalGrossCents);
@@ -96,14 +119,31 @@ export function foldCashByOrgDay(
 
   let sumGross = ZERO_CENTS;
   let sumNet = ZERO_CENTS;
+  let sumAgencyGross = ZERO_CENTS;
+  let sumAgencyNet = ZERO_CENTS;
   for (const row of rows) {
     if (cmpCents(row.net_cents, row.gross_cents) > 0) {
       throw new Error(
         `cash row org ${row.org_id ?? "null"} day ${row.day}: net ${row.net_cents} above gross ${row.gross_cents}`
       );
     }
+    if (cmpCents(row.agency_net_cents, row.agency_gross_cents) > 0) {
+      throw new Error(
+        `cash row org ${row.org_id ?? "null"} day ${row.day}: agency net ${row.agency_net_cents} above agency gross ${row.agency_gross_cents}`
+      );
+    }
     sumGross = addCents(sumGross, row.gross_cents);
     sumNet = addCents(sumNet, row.net_cents);
+    sumAgencyGross = addCents(sumAgencyGross, row.agency_gross_cents);
+    sumAgencyNet = addCents(sumAgencyNet, row.agency_net_cents);
+  }
+  const totalAgencyGross = addCents(ZERO_CENTS, stripe.totalAgencyGrossCents);
+  const totalAgencyNet = addCents(ZERO_CENTS, stripe.totalAgencyNetCents);
+  if (cmpCents(sumAgencyGross, totalAgencyGross) !== 0) {
+    throw new Error(`cash rows agency gross ${sumAgencyGross} != total agency gross ${totalAgencyGross}`);
+  }
+  if (cmpCents(sumAgencyNet, totalAgencyNet) !== 0) {
+    throw new Error(`cash rows agency net ${sumAgencyNet} != total agency net ${totalAgencyNet}`);
   }
   if (cmpCents(sumGross, totalGross) !== 0) {
     throw new Error(`cash rows gross ${sumGross} != total gross ${totalGross}`);
@@ -112,5 +152,12 @@ export function foldCashByOrgDay(
     throw new Error(`cash rows net ${sumNet} != total net ${totalNet}`);
   }
 
-  return { as_of: stripe.asOf, total_gross_cents: totalGross, total_net_cents: totalNet, rows };
+  return {
+    as_of: stripe.asOf,
+    total_gross_cents: totalGross,
+    total_net_cents: totalNet,
+    total_agency_gross_cents: totalAgencyGross,
+    total_agency_net_cents: totalAgencyNet,
+    rows,
+  };
 }
