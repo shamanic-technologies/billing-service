@@ -23,6 +23,8 @@ describe("GET /internal/cash/by-org-day", () => {
       totalNetCents: "2000",
         totalAgencyGrossCents: "0",
         totalAgencyNetCents: "0",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
       rows: [
         { orgId: acme, day: "2026-11-17", grossCents: "2500", netCents: "2500", agencyGrossCents: "0", agencyNetCents: "0" },
         { orgId: acme, day: "2026-11-18", grossCents: "0", netCents: "-500", agencyGrossCents: "0", agencyNetCents: "0" },

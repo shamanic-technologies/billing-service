@@ -13,6 +13,8 @@ describe("foldCashByOrgDay", () => {
         totalNetCents: "12000",
         totalAgencyGrossCents: "0",
         totalAgencyNetCents: "0",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
         rows: [
           { orgId: ORG_A, day: "2026-11-01", grossCents: "10000", netCents: "10000", agencyGrossCents: "0", agencyNetCents: "0" },
           // refund of an earlier payment, dated on the refund's own day
@@ -42,6 +44,8 @@ describe("foldCashByOrgDay", () => {
         totalNetCents: "100",
         totalAgencyGrossCents: "0",
         totalAgencyNetCents: "0",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
         rows: [{ orgId: ORG_A, day: "2026-11-01", grossCents: "100", netCents: "100", agencyGrossCents: "0", agencyNetCents: "0" }],
       },
       [{ orgId: ORG_A, paidAt: new Date("2026-11-01T00:00:00Z"), amountCents: "50" }]
@@ -59,6 +63,8 @@ describe("foldCashByOrgDay", () => {
           totalNetCents: "100",
         totalAgencyGrossCents: "0",
         totalAgencyNetCents: "0",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
           rows: [{ orgId: ORG_A, day: "2026-11-01", grossCents: "100", netCents: "100", agencyGrossCents: "0", agencyNetCents: "0" }],
         },
         []
@@ -75,6 +81,8 @@ describe("foldCashByOrgDay", () => {
           totalNetCents: "200",
         totalAgencyGrossCents: "0",
         totalAgencyNetCents: "0",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
           rows: [{ orgId: ORG_A, day: "2026-11-01", grossCents: "100", netCents: "200", agencyGrossCents: "0", agencyNetCents: "0" }],
         },
         []
@@ -92,6 +100,8 @@ describe("foldCashByOrgDay agency money", () => {
         totalNetCents: "115015",
         totalAgencyGrossCents: "325000",
         totalAgencyNetCents: "325000",
+        saasReclassifiedToAgencyGrossCents: "0",
+        saasReclassifiedToAgencyNetCents: "0",
         rows: [
           { orgId: null, day: "2026-09-09", grossCents: "0", netCents: "0", agencyGrossCents: "200000", agencyNetCents: "200000" },
           { orgId: "91e76989-71ba-420d-ba73-bb3961430aa7", day: "2026-10-11", grossCents: "115015", netCents: "115015", agencyGrossCents: "125000", agencyNetCents: "125000" },
@@ -101,6 +111,7 @@ describe("foldCashByOrgDay agency money", () => {
     );
     expect(out.total_gross_cents).toBe("115015.0000000000");
     expect(out.total_agency_gross_cents).toBe("325000.0000000000");
+    expect(out.total_saas_reclassified_to_agency_gross_cents).toBe("0.0000000000");
     expect(out.rows[0]).toEqual({
       org_id: null,
       day: "2026-09-09",
@@ -120,10 +131,32 @@ describe("foldCashByOrgDay agency money", () => {
           totalNetCents: "0",
           totalAgencyGrossCents: "1",
           totalAgencyNetCents: "0",
+          saasReclassifiedToAgencyGrossCents: "0",
+          saasReclassifiedToAgencyNetCents: "0",
           rows: [{ orgId: null, day: "2026-09-09", grossCents: "0", netCents: "0", agencyGrossCents: "0", agencyNetCents: "0" }],
         },
         []
       )
     ).toThrow(/agency gross/);
+  });
+});
+
+describe("foldCashByOrgDay reclassified agency money", () => {
+  it("relays the SaaS amount moved to agency so gross + moved == the public total paid", () => {
+    const out = foldCashByOrgDay(
+      {
+        asOf: "x",
+        totalGrossCents: "0",
+        totalNetCents: "0",
+        totalAgencyGrossCents: "30000",
+        totalAgencyNetCents: "30000",
+        saasReclassifiedToAgencyGrossCents: "30000",
+        saasReclassifiedToAgencyNetCents: "30000",
+        rows: [{ orgId: "fc6e51c1-cd58-478f-a981-bf74d12ec974", day: "2026-07-03", grossCents: "0", netCents: "0", agencyGrossCents: "30000", agencyNetCents: "30000" }],
+      },
+      []
+    );
+    expect(out.total_saas_reclassified_to_agency_gross_cents).toBe("30000.0000000000");
+    expect(out.total_saas_reclassified_to_agency_net_cents).toBe("30000.0000000000");
   });
 });

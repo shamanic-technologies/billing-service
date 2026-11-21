@@ -24,6 +24,12 @@ import type { FleetOffPlatformPayment } from "./off-platform-payments.js";
  * payment requests (payment links staff send by hand) and their refunds, as
  * stripe-service serves them (v0.59.19). It never feeds /public/stats/billing nor any
  * org credit. Off-platform payments are SaaS cash (they credit the org), never agency.
+ *
+ * A payment staff CLASSIFIED as agency (owner's words, stripe-service
+ * `payment_agency_classifications`, v0.59.20) is served in the agency fields too, and
+ * the amount moved is served as `total_saas_reclassified_to_agency_*`, so
+ * total_gross_cents + total_saas_reclassified_to_agency_gross_cents still equals
+ * /public/stats/billing total_paid_cents (which keeps counting it).
  */
 
 /** One (org, day) row as stripe-service serves it, in billing's words. */
@@ -42,6 +48,9 @@ export interface StripeCashByOrgDay {
   totalNetCents: string;
   totalAgencyGrossCents: string;
   totalAgencyNetCents: string;
+  /** SaaS money a staff classification serves as agency instead (stripe-service v0.59.20). */
+  saasReclassifiedToAgencyGrossCents: string;
+  saasReclassifiedToAgencyNetCents: string;
   rows: StripeCashDayRow[];
 }
 
@@ -60,6 +69,9 @@ export interface CashByOrgDay {
   total_net_cents: string;
   total_agency_gross_cents: string;
   total_agency_net_cents: string;
+  /** total_gross_cents + this == /public/stats/billing total_paid_cents (net: total_revenue_cents). */
+  total_saas_reclassified_to_agency_gross_cents: string;
+  total_saas_reclassified_to_agency_net_cents: string;
   rows: CashByOrgDayRow[];
 }
 
@@ -158,6 +170,8 @@ export function foldCashByOrgDay(
     total_net_cents: totalNet,
     total_agency_gross_cents: totalAgencyGross,
     total_agency_net_cents: totalAgencyNet,
+    total_saas_reclassified_to_agency_gross_cents: addCents(ZERO_CENTS, stripe.saasReclassifiedToAgencyGrossCents),
+    total_saas_reclassified_to_agency_net_cents: addCents(ZERO_CENTS, stripe.saasReclassifiedToAgencyNetCents),
     rows,
   };
 }
