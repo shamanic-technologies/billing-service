@@ -97,7 +97,7 @@ import {
 } from "./funnel-campaigns.js";
 import { getBrandDailyBudget, getLegacyBrandDailyBudget } from "./brand-budgets.js";
 import { brandDailyBudgetChanges } from "../db/schema.js";
-import { recurringDailyCentsOf } from "./funnel-campaigns.js";
+import { recurringDailyCentsOf, sameOffer } from "./funnel-campaigns.js";
 import { cmpCents } from "./cents.js";
 import {
   getSalesFunnel,
@@ -282,7 +282,8 @@ export type ConsumedUnavailableReason =
 export interface FunnelCapKey {
   orgId: string;
   brandId: string;
-  offerId: string;
+  /** null = a campaign naming no offer (DISTRY-CALL-IS-CAMPAIGN-1121, migration 0102). */
+  offerId: string | null;
   salesFunnelId: string;
   /**
    * campaign-service's funnel campaign id when the cap is ONE funnel campaign's
@@ -331,11 +332,15 @@ export function periodWindow(
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
+/** SQL: the column names this offer, NULL (no offer) included. */
+const offerIs = (col: typeof salesFunnelCaps.offerId | typeof salesFunnelCapChanges.offerId, offerId: string | null) =>
+  offerId ? eq(col, offerId) : isNull(col);
+
 const keyWhere = (k: FunnelCapKey) =>
   and(
     eq(salesFunnelCaps.orgId, k.orgId),
     eq(salesFunnelCaps.brandId, k.brandId),
-    eq(salesFunnelCaps.offerId, k.offerId),
+    offerIs(salesFunnelCaps.offerId, k.offerId),
     eq(salesFunnelCaps.salesFunnelId, k.salesFunnelId),
     k.salesFunnelCampaignId
       ? eq(salesFunnelCaps.salesFunnelCampaignId, k.salesFunnelCampaignId)
@@ -376,7 +381,7 @@ export async function listSalesFunnelCampaignCapChanges(k: FunnelCapKey & { sale
       and(
         eq(salesFunnelCapChanges.orgId, k.orgId),
         eq(salesFunnelCapChanges.brandId, k.brandId),
-        eq(salesFunnelCapChanges.offerId, k.offerId),
+        offerIs(salesFunnelCapChanges.offerId, k.offerId),
         eq(salesFunnelCapChanges.salesFunnelId, k.salesFunnelId),
         or(isNull(salesFunnelCapChanges.salesFunnelCampaignId), eq(salesFunnelCapChanges.salesFunnelCampaignId, k.salesFunnelCampaignId))
       )
@@ -599,7 +604,7 @@ export function targetOnlyFunnelOf(
       isTargetOnlyCampaign(c) &&
       c.salesFunnelId === k.salesFunnelId &&
       c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
-      c.offerId.toLowerCase() === k.offerId.toLowerCase()
+      sameOffer(c.offerId, k.offerId)
   );
   if (!c) return null;
   const target = c.target!;
@@ -681,7 +686,7 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   const ofFunnel = fcs.campaigns.filter(
     (c) =>
       c.brandId.toLowerCase() === k.brandId.toLowerCase() &&
-      c.offerId.toLowerCase() === k.offerId.toLowerCase() &&
+      sameOffer(c.offerId, k.offerId) &&
       c.salesFunnelId === k.salesFunnelId
   );
   let held: SalesFunnelCampaign[];
@@ -705,7 +710,7 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
             and(
               eq(salesFunnelCaps.orgId, k.orgId),
               eq(salesFunnelCaps.brandId, k.brandId),
-              eq(salesFunnelCaps.offerId, k.offerId),
+              offerIs(salesFunnelCaps.offerId, k.offerId),
               eq(salesFunnelCaps.salesFunnelId, k.salesFunnelId),
               isNotNull(salesFunnelCaps.salesFunnelCampaignId)
             )
@@ -715,7 +720,7 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
     held = ofFunnel.filter((c) => !ownCaps.has(c.id));
   }
   const onPipe = held.flatMap((c) => c.units);
-  const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && c.offerId === k.offerId);
+  const ofOffer = statuses.campaigns.filter((c) => c.brandId === k.brandId && sameOffer(c.offerId, k.offerId));
   const onFunnelPipe = (u: SalesFunnelUnit, p: SalesFunnelPipe) =>
     u.featureSlug === p.channelSlug && sameLeg(p.channelSlug, u.legKey, p.legKey);
   const funnelPipes: MeasuredPipe[] = funnel.pipes.map((p) => ({

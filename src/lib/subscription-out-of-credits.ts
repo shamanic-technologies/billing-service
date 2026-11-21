@@ -112,7 +112,7 @@ async function stoppedCampaigns(orgId: string): Promise<{ campaigns: StoppedCamp
   }
   const campaigns = ongoing.map((c) => {
     const base = c.salesFunnelName?.trim() || "Unnamed campaign";
-    const offer = offerNames.get(c.brandId)?.get(c.offerId.toLowerCase());
+    const offer = offerNames.get(c.brandId)?.get((c.offerId ?? "").toLowerCase());
     const name = (counts.get(c.salesFunnelName ?? "") ?? 0) > 1 && offer ? `${base} (${offer})` : base;
     return { name, kind: kinds.get(c.salesFunnelId) ?? null };
   });
