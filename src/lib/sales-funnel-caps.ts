@@ -45,6 +45,11 @@
  *     source): the produced outcomes of its leg's step declared on runs-service's ledger
  *     on runs of the counted campaigns, once the ledger shows that step's producer
  *     declares it on campaign runs at all (THREADS-CAMPAIGN-1028).
+ *   - A campaign launched on its TARGET alone whose target is about a PERSON (catalogue
+ *     `subjectKind`: Paid client, Positive reply) counts `first_contacts` = the distinct
+ *     NEW people its units contacted in the window, off the ledger's contact outcomes
+ *     (`measureFirstContacts`, OUTREACH-3WAYS-1121). A target about an object keeps
+ *     `outcomes_produced`.
  * - ONE funnel CAMPAIGN may hold its own cap (`salesFunnelCampaignId`, migration
  *   0083): consumption is then counted on that campaign's units only.
  *   The unit follows what billing MEASURES (the pipe modes it reads to measure),
@@ -84,6 +89,7 @@ import { readJson } from "./runs-org-read.js";
 import { fetchRecurringCampaignStatuses } from "./campaign-service-client.js";
 import { canonicalLegKey, sameLeg } from "./leg-identity.js";
 import { getSalesPathTerms, type SalesPathTerms } from "./sales-path-terms.js";
+import { getOutcomeSteps, OutcomeStepsUnavailableError } from "./outcome-steps.js";
 import {
   brandFunnelDailyCentsVia,
   fetchSalesFunnelCampaigns,
@@ -131,8 +137,26 @@ export function volumeUnitOf(
   return isSource && proactive.every((p) => isItemPipe(p) && !isSource(p)) ? "outcomes_produced" : "first_contacts";
 }
 
+/**
+ * A campaign launched on its TARGET alone whose target is about a PERSON (features-service's
+ * outcome catalogue `subjectKind`: Paid client, Positive reply, Meeting booked) REACHES PEOPLE:
+ * its max volume is the new people it first contacts (OUTREACH-3WAYS-1121). A target about an
+ * object (a post, a backlink) is not: it counts the outcomes it produced, as before. null = not
+ * a target-only campaign. Throws when the catalogue cannot be read.
+ */
+async function targetReachesPeople(pipes: Pick<SalesFunnelPipe, "targetOnly" | "toStep">[]): Promise<boolean | null> {
+  const target = pipes.find((p) => p.targetOnly && p.toStep);
+  if (!target) return null;
+  return (await getOutcomeSteps()).subjectKindOf(target.toStep!) === "person";
+}
+
 /** The funnel's unit, its lead sources read off the sourcing terms (unreadable = today's unit). */
 export async function volumeUnitFor(funnel: Pick<SalesFunnel, "pipes">): Promise<VolumeUnit> {
+  try {
+    if (await targetReachesPeople(funnel.pipes)) return "first_contacts";
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: volume unit without the outcome catalogue: ${errorReason(err)}`);
+  }
   if (!funnel.pipes.some((p) => isOurProactivePipe(p) && isItemPipe(p))) return volumeUnitOf(funnel);
   try {
     const terms = await getSalesPathTerms();
@@ -623,6 +647,7 @@ export function targetOnlyFunnelOf(
         mode: "proactive",
         toStep: target,
         runByUs: true,
+        targetOnly: true,
       },
     ],
     triggerSlug: null,
@@ -986,14 +1011,22 @@ const declaredOnCampaignRuns = new Set<string>();
 const EVIDENCE_PAGES = 5;
 
 /**
- * Does the producer of `outcomeKey` declare it on CAMPAIGN runs? Read off the ledger itself
- * (fleet-wide, any org): at least one produced occurrence on a run carrying a campaign id.
- * No evidence = a producer that never declares on a campaign's run, so a count on the unit
- * would read 0 forever and never hold it: the caller answers not measured (fail-closed).
+ * What the ledger shows about the producer of `outcomeKey` (fleet-wide, any org):
+ * - `on_campaign_runs`: at least one produced occurrence on a run carrying a campaign id;
+ * - `never_declared`: NO produced occurrence at all, anywhere. Nobody made this outcome yet,
+ *   so a count on the unit is POSITIVELY 0: the campaign may start and make the first Unit
+ *   (DISTRY-CALL-IS-CAMPAIGN-1121: a max volume on a brand-new outcome must not hold forever);
+ * - `off_campaign_runs`: occurrences exist, none on a campaign's run. Its producer declares
+ *   on another run, so a count on the unit would read 0 forever and never hold it: the
+ *   caller answers not measured (fail-closed).
+ * Only `on_campaign_runs` is cached: a never-declared step is re-asked until it is seen.
  */
-async function stepDeclaredOnCampaignRuns(outcomeKey: string, orgId: string): Promise<boolean> {
-  if (declaredOnCampaignRuns.has(outcomeKey)) return true;
+type StepEvidence = "on_campaign_runs" | "never_declared" | "off_campaign_runs";
+
+async function stepEvidence(outcomeKey: string, orgId: string): Promise<StepEvidence> {
+  if (declaredOnCampaignRuns.has(outcomeKey)) return "on_campaign_runs";
   let cursor: string | null = null;
+  let seenAny = false;
   for (let page = 0; page < EVIDENCE_PAGES; page += 1) {
     const params = new URLSearchParams({ outcomeKey, direction: "produced", limit: String(OUTCOME_PAGE) });
     if (cursor) params.set("cursor", cursor);
@@ -1003,14 +1036,15 @@ async function stepDeclaredOnCampaignRuns(outcomeKey: string, orgId: string): Pr
       params
     );
     if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
+    if (body.occurrences.length > 0) seenAny = true;
     if (body.occurrences.some((o) => o.tags?.campaignId)) {
       declaredOnCampaignRuns.add(outcomeKey);
-      return true;
+      return "on_campaign_runs";
     }
     cursor = body.nextCursor ?? null;
-    if (!cursor) return false;
+    if (!cursor) break;
   }
-  return false;
+  return seenAny || cursor ? "off_campaign_runs" : "never_declared";
 }
 
 /** Test hook: forget what the ledger showed. */
@@ -1034,7 +1068,7 @@ async function measureItemOutcomes(
   }
   try {
     const undeclared: string[] = [];
-    for (const step of byStep.keys()) if (!(await stepDeclaredOnCampaignRuns(step, k.orgId))) undeclared.push(step);
+    for (const step of byStep.keys()) if ((await stepEvidence(step, k.orgId)) === "off_campaign_runs") undeclared.push(step);
     if (undeclared.length > 0) {
       return {
         consumed: null,
@@ -1048,6 +1082,93 @@ async function measureItemOutcomes(
   } catch (err) {
     console.error(`[billing-service] sales funnel caps: outcomes of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
     return { consumed: null, reason: "runs_service_unavailable", detail: errorReason(err) };
+  }
+}
+
+type ContactOccurrence = { subjectService?: string; subjectId?: string; declaredAt?: string; tags?: { campaignId?: string | null } };
+
+/** Every produced occurrence of `outcomeKey` matching `params` on these campaigns (cursor walk). */
+async function contactOccurrences(
+  orgId: string,
+  campaignIds: Set<string>,
+  outcomeKey: string,
+  params: Record<string, string>
+): Promise<ContactOccurrence[]> {
+  const out: ContactOccurrence[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; ; page += 1) {
+    if (page >= MAX_OUTCOME_PAGES) throw new Error(`runs-service outcome ${outcomeKey} walk exceeded ${MAX_OUTCOME_PAGES} pages`);
+    const q = new URLSearchParams({ ...params, outcomeKey, direction: "produced", limit: String(OUTCOME_PAGE) });
+    if (cursor) q.set("cursor", cursor);
+    const body = await readJson<{ occurrences?: ContactOccurrence[]; nextCursor?: string | null }>("/internal/outcome-occurrences", orgId, q);
+    if (!Array.isArray(body.occurrences)) throw new Error("runs-service /internal/outcome-occurrences returned no occurrences array");
+    for (const o of body.occurrences) {
+      if (!o.tags?.campaignId || !campaignIds.has(o.tags.campaignId)) continue;
+      if (!o.subjectService || !o.subjectId) throw new Error("runs-service /internal/outcome-occurrences stated no subject");
+      out.push(o);
+    }
+    cursor = body.nextCursor ?? null;
+    if (!cursor) return out;
+  }
+}
+
+const SUBJECT_BATCH = 500;
+
+/**
+ * The NEW people a target-only campaign first contacted in the window (OUTREACH-3WAYS-1121,
+ * owner: "at most N new people a day"). A contact = a produced outcome of the catalogue's
+ * contact family (`OutcomeSteps.contactKeys`: Message sent, WhatsApp message sent, and the queue
+ * decision before a send, Email queued) on any unit the cap holds. A person counts once, on the
+ * window of the FIRST contact the campaign ever made to them: a second email, a follow-up or an
+ * answer to the same person is never a new person. Read off runs-service's ledger (the sender's
+ * own declaration). The queue decision is what makes it HOLD: a throttled mailbox sends hours
+ * after the run that decided it, and campaign-service dispatches the next run in between.
+ */
+async function measureFirstContacts(
+  k: FunnelCapKey,
+  row: SalesFunnelCapRow,
+  pipes: MeasuredPipe[],
+  now: Date
+): Promise<Measured<number>> {
+  const w = periodWindow(row.maxVolumePeriod as CapPeriod, row.maxVolumeSince!, now);
+  const ids = new Set(pipes.filter((p) => p.runByUs !== false).flatMap((p) => p.campaignIds));
+  try {
+    const { contactKeys } = await getOutcomeSteps();
+    if (contactKeys.length === 0) {
+      return { consumed: null, reason: "volume_not_measured_on_channel", detail: "the outcome catalogue names no first-contact outcome" };
+    }
+    if (ids.size === 0) return { consumed: 0, reason: null, detail: null };
+    // People contacted in the window, by subject.
+    const inWindow = new Map<string, { service: string; id: string }>();
+    for (const key of contactKeys) {
+      for (const o of await contactOccurrences(k.orgId, ids, key, { orgId: k.orgId, declaredAfter: w.start.toISOString() })) {
+        inWindow.set(`${o.subjectService}\u0000${o.subjectId}`, { service: o.subjectService!, id: o.subjectId! });
+      }
+    }
+    // Minus those the campaign had already contacted before the window.
+    const bySvc = new Map<string, string[]>();
+    for (const s of inWindow.values()) bySvc.set(s.service, [...(bySvc.get(s.service) ?? []), s.id]);
+    for (const [service, subjects] of bySvc) {
+      for (let i = 0; i < subjects.length; i += SUBJECT_BATCH) {
+        const batch = subjects.slice(i, i + SUBJECT_BATCH);
+        for (const key of contactKeys) {
+          const before = await contactOccurrences(k.orgId, ids, key, {
+            subjectService: service,
+            subjectIds: batch.join(","),
+            declaredBefore: w.start.toISOString(),
+          });
+          for (const o of before) inWindow.delete(`${o.subjectService}\u0000${o.subjectId}`);
+        }
+      }
+    }
+    return { consumed: inWindow.size, reason: null, detail: null };
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: first contacts of ${k.salesFunnelId} unreadable: ${errorReason(err)}`);
+    return {
+      consumed: null,
+      reason: err instanceof OutcomeStepsUnavailableError ? "sales_funnel_catalogue_unavailable" : "runs_service_unavailable",
+      detail: errorReason(err),
+    };
   }
 }
 
@@ -1303,6 +1424,15 @@ async function measureVolume(
   triggerSlug: string | null,
   now: Date
 ): Promise<Measured<number>> {
+  // A campaign launched on its TARGET alone that reaches people: the new people it first contacts.
+  let reachesPeople: boolean | null;
+  try {
+    reachesPeople = await targetReachesPeople(pipes);
+  } catch (err) {
+    console.error(`[billing-service] sales funnel caps: outcome catalogue unreadable: ${errorReason(err)}`);
+    return { consumed: null, reason: "sales_funnel_catalogue_unavailable", detail: errorReason(err) };
+  }
+  if (reachesPeople) return measureFirstContacts(k, row, pipes, now);
   // first_contacts: the proactive pipes we run; prospects_handled (all reactive): the reactive ones.
   let proactive = pipes.filter(isOurProactivePipe);
   // ITEM pipes (a Threads post, a daily video): their item IS their leg's outcome, counted on
