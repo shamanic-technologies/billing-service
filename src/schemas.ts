@@ -3499,6 +3499,49 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/internal/cash/by-org-day",
+  summary: "Cash per org per UTC day, gross and net, fleet-wide since inception (staff SaaS revenue)",
+  description:
+    "Callable with the service x-api-key ONLY (no org / user / run identity). Owner 2026-11-21: " +
+    "gross cash is the headline, net below. One row per (org, UTC day) with money: gross_cents = " +
+    "payments received that day (every acquirer, stripe-service direct payments, off-platform " +
+    "payments on their paid day) BEFORE returns; net_cents = gross minus refunds / lost disputes that " +
+    "HAPPENED that day (a return is dated on its own day, so a row can be gross 0 with a negative net). " +
+    "net_cents <= gross_cents on every row. org_id null = money no org could be resolved for. " +
+    "total_gross_cents = Σ rows gross = GET /public/stats/billing total_paid_cents; total_net_cents = " +
+    "Σ rows net = total_revenue_cents. as_of = the instant of the read. Exact decimal cents text. " +
+    "502 when stripe-service cannot be read or a sum does not reconcile.",
+  request: { headers: internalHeaders },
+  responses: {
+    200: {
+      description: "Cash per org per UTC day",
+      content: {
+        "application/json": {
+          schema: z.object({
+            as_of: z.string(),
+            total_gross_cents: CentsStringSchema,
+            total_net_cents: CentsStringSchema,
+            rows: z.array(
+              z.object({
+                org_id: zod3Uuid().nullable(),
+                day: z.string(),
+                gross_cents: CentsStringSchema,
+                net_cents: CentsStringSchema,
+              })
+            ),
+          }),
+        },
+      },
+    },
+    502: {
+      description: "stripe-service unreadable, or rows do not sum to the totals",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/accounts/by-org/{orgId}/cash",
   summary: "Cash an org paid vs credit it received without paying (staff revenue reads)",
   description:

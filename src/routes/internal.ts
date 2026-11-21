@@ -42,6 +42,9 @@ import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
 import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
+import { foldCashByOrgDay } from "../lib/cash-by-org-day.js";
+import { listAllOffPlatformPayments } from "../lib/off-platform-payments.js";
+import { getFleetCashByOrgDay } from "../lib/stripe-service-client.js";
 import { cannotSpend, gateBalanceCents, resolveOrgFloor } from "../lib/spend-block.js";
 import { refusalBlockingSpend } from "../lib/refused-charge.js";
 import { grantAnswerPass } from "../lib/answer-pass.js";
@@ -689,6 +692,24 @@ router.get("/internal/accounts/by-org/:orgId/cash", async (req, res) => {
   } catch (err) {
     console.error(`[billing-service] internal cash-by-org: read failed for org ${orgId}:`, err);
     res.status(502).json({ error: "Failed to read the org's cash" });
+  }
+});
+
+/**
+ * Cash per org per UTC day, gross and net, fleet-wide (SAAS-CASH-1121, staff SaaS
+ * revenue page). x-api-key only. stripe-service rows + billing's off-platform payments;
+ * sums reconcile with GET /public/stats/billing or 502. See lib/cash-by-org-day.
+ */
+router.get("/internal/cash/by-org-day", async (_req, res) => {
+  try {
+    const [stripe, offPlatform] = await Promise.all([
+      getFleetCashByOrgDay(),
+      listAllOffPlatformPayments(),
+    ]);
+    res.json(foldCashByOrgDay(stripe, offPlatform));
+  } catch (err) {
+    console.error("[billing-service] internal cash by org-day: read failed:", err);
+    res.status(502).json({ error: "Failed to read cash by org and day" });
   }
 });
 
