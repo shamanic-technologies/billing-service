@@ -11,6 +11,7 @@ import { createTestApp, getAuthHeaders } from "../helpers/test-app.js";
 import { cleanTestData, closeDb } from "../helpers/test-db.js";
 import { __resetSalesFunnelCache } from "../../src/lib/sales-funnel-catalogue.js";
 import { __primeSalesPathTerms, __resetSalesPathTerms } from "../../src/lib/sales-path-terms.js";
+import { __primeOutcomeSteps, __resetOutcomeSteps } from "../../src/lib/outcome-steps.js";
 import { __resetStepEvidence } from "../../src/lib/sales-funnel-caps.js";
 
 const orgId = "00000000-0000-4000-8000-000000110501";
@@ -138,10 +139,13 @@ describe("sales funnel caps: a campaign launched on its target alone", () => {
     __resetSalesFunnelCache();
     __resetStepEvidence();
     __primeSalesPathTerms([], { sourceLegKey: "start_to_lead_found", origins: [], originsByChannel: {} } as never);
+    // Its target is about an OBJECT: it counts the outcomes it produced (OUTREACH-3WAYS-1121 leaves it unchanged).
+    __primeOutcomeSteps([{ key: "backlink_earned", lifecycleRung: "none", subjectKind: "object" }, { key: "message_sent", lifecycleRung: "contacted", subjectKind: "person" }]);
   });
   afterEach(() => {
     vi.restoreAllMocks();
     __resetSalesPathTerms();
+    __resetOutcomeSteps();
   });
   afterAll(async () => {
     for (const k of ["FEATURES_SERVICE_API_KEY", "CAMPAIGN_SERVICE_URL", "CAMPAIGN_SERVICE_API_KEY"]) {
