@@ -4899,8 +4899,18 @@ const VolumeUnitSchema = z
       "What a max volume counts. first_contacts: the funnel has a proactive pipe (each first contact it makes). " +
       "prospects_handled: every pipe is reactive (each prospect a reactive pipe takes on once they reached its start step). " +
       "outcomes_produced: every proactive pipe starts at Start and makes its own item (a Threads post, a daily video): " +
-      "each outcome of its leg's step declared on its campaigns' runs.",
+      "each outcome of its leg's step declared on its campaigns' runs; OR a funnel campaign's own cap whose target " +
+      "(campaign-service `target`) is reached after the first contact (Meeting booked after the cold email): each Unit " +
+      "of that target, named by `outcome`.",
   });
+
+const VolumeOutcomeSchema = z
+  .string()
+  .nullable()
+  .describe(
+    "With unit outcomes_produced on a funnel campaign's own cap counting its TARGET: that outcome (`meeting_booked`), " +
+      "so the page prints \u00ab 3 of 10 meetings booked this week \u00bb. null otherwise."
+  );
 
 const SalesFunnelTypeSchema = z.enum(["proactive", "reactive"]).openapi("SalesFunnelType", {
   description:
@@ -4917,6 +4927,7 @@ const VolumeCapViewSchema = z
     count: z.number().int(),
     period: CapPeriodSchema,
     unit: VolumeUnitSchema.nullable(),
+    outcome: VolumeOutcomeSchema,
     periodStart: z.string(),
     periodEnd: z.string().nullable(),
     consumed: z.number().int().nullable(),
@@ -4935,7 +4946,10 @@ const VolumeCapViewSchema = z
       "(email_pushed_via_api: one email sent, Email Sending), is measured by that run, no per-channel entry. " +
       "unit outcomes_produced: consumed = produced outcomes of the pipe's step (threads_post_published: one Threads thread; " +
       "x_post_published / linkedin_post_published: one post; industry_update_video: one video) declared on runs-service's ledger on runs of the counted " +
-      "campaigns in the window. " +
+      "campaigns in the window. A funnel campaign's own cap counting its TARGET (`outcome`, reached after the first " +
+      "contact): consumed = Units of that target declared in the window on runs of its units OR on a person one of its " +
+      "units reached before (a meeting is declared by its own producer weeks after the first email); 0 until the first " +
+      "lands, so a delay never holds the campaign (its max budget still binds). " +
       "A channel with no measure yet answers null + " +
       "volume_not_measured_on_channel. unit null = the funnel is unreadable.",
   });
@@ -5012,7 +5026,7 @@ const StatedSalesFunnelCapsSchema = z
     }),
     fundedBy: z.enum(["max_budget", "max_volume", "both"]).nullable().openapi({ description: "Which stated cap funds the funnel; null when not funded." }),
     maxBudget: z.object({ amountCents: CentsStringSchema, period: CapPeriodSchema, dailyBudgetCents: CentsStringSchema }).nullable(),
-    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: VolumeUnitSchema.nullable() }).nullable(),
+    maxVolume: z.object({ count: z.number().int(), period: CapPeriodSchema, unit: VolumeUnitSchema.nullable(), outcome: VolumeOutcomeSchema }).nullable(),
     updatedAt: z.string(),
   })
   .openapi("StatedSalesFunnelCaps");
