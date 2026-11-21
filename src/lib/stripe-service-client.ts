@@ -1125,7 +1125,7 @@ export interface OrgPayment {
 export async function getFleetCashByOrgDay(): Promise<StripeCashByOrgDay> {
   const res = await call<{
     as_of?: unknown;
-    totals?: { gross_cents?: unknown; net_cents?: unknown };
+    totals?: { gross_cents?: unknown; net_cents?: unknown; agency_gross_cents?: unknown; agency_net_cents?: unknown };
     rows?: unknown;
   }>("GET", "/internal/cash/by_org_day", {});
   const str = (v: unknown, what: string): string => {
@@ -1140,7 +1140,9 @@ export async function getFleetCashByOrgDay(): Promise<StripeCashByOrgDay> {
     asOf: res.as_of,
     totalGrossCents: str(res.totals?.gross_cents, "totals.gross_cents"),
     totalNetCents: str(res.totals?.net_cents, "totals.net_cents"),
-    rows: res.rows.map((r: { org_id?: unknown; day?: unknown; gross_cents?: unknown; net_cents?: unknown }, i) => {
+    totalAgencyGrossCents: str(res.totals?.agency_gross_cents, "totals.agency_gross_cents"),
+    totalAgencyNetCents: str(res.totals?.agency_net_cents, "totals.agency_net_cents"),
+    rows: res.rows.map((r: { org_id?: unknown; day?: unknown; gross_cents?: unknown; net_cents?: unknown; agency_gross_cents?: unknown; agency_net_cents?: unknown }, i) => {
       if (r.org_id !== null && typeof r.org_id !== "string") {
         throw new Error(`stripe-service cash by org-day: rows[${i}].org_id is neither a string nor null`);
       }
@@ -1150,6 +1152,8 @@ export async function getFleetCashByOrgDay(): Promise<StripeCashByOrgDay> {
         day: r.day,
         grossCents: str(r.gross_cents, `rows[${i}].gross_cents`),
         netCents: str(r.net_cents, `rows[${i}].net_cents`),
+        agencyGrossCents: str(r.agency_gross_cents, `rows[${i}].agency_gross_cents`),
+        agencyNetCents: str(r.agency_net_cents, `rows[${i}].agency_net_cents`),
       };
     }),
   };
