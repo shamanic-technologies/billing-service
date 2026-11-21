@@ -1,3 +1,4 @@
+import type { StripeCashByOrgDay } from "./cash-by-org-day.js";
 /**
  * HTTP client for stripe-service.
  *
@@ -1112,6 +1113,46 @@ export interface OrgPayment {
   status: "succeeded" | "failed" | "pending";
   /** Unix seconds. */
   created: number;
+}
+
+/**
+ * `GET /internal/cash/by_org_day` (stripe-service v0.59.18) — every org's money per UTC
+ * day since inception, every acquirer + direct payments: gross, returned (dated on the
+ * return's own day), net. Totals equal /public/stats/billing total_paid_cents (gross) and
+ * total_net_cents (net). Fail loud on any missing field: a cash read we could not parse is
+ * never served as zero.
+ */
+export async function getFleetCashByOrgDay(): Promise<StripeCashByOrgDay> {
+  const res = await call<{
+    as_of?: unknown;
+    totals?: { gross_cents?: unknown; net_cents?: unknown };
+    rows?: unknown;
+  }>("GET", "/internal/cash/by_org_day", {});
+  const str = (v: unknown, what: string): string => {
+    if (typeof v !== "string" || !/^-?\d+(\.\d+)?$/.test(v)) {
+      throw new Error(`stripe-service cash by org-day: ${what} is not a cents string`);
+    }
+    return v;
+  };
+  if (typeof res?.as_of !== "string") throw new Error("stripe-service cash by org-day has no as_of");
+  if (!Array.isArray(res.rows)) throw new Error("stripe-service cash by org-day has no rows array");
+  return {
+    asOf: res.as_of,
+    totalGrossCents: str(res.totals?.gross_cents, "totals.gross_cents"),
+    totalNetCents: str(res.totals?.net_cents, "totals.net_cents"),
+    rows: res.rows.map((r: { org_id?: unknown; day?: unknown; gross_cents?: unknown; net_cents?: unknown }, i) => {
+      if (r.org_id !== null && typeof r.org_id !== "string") {
+        throw new Error(`stripe-service cash by org-day: rows[${i}].org_id is neither a string nor null`);
+      }
+      if (typeof r.day !== "string") throw new Error(`stripe-service cash by org-day: rows[${i}].day missing`);
+      return {
+        orgId: r.org_id,
+        day: r.day,
+        grossCents: str(r.gross_cents, `rows[${i}].gross_cents`),
+        netCents: str(r.net_cents, `rows[${i}].net_cents`),
+      };
+    }),
+  };
 }
 
 export async function listOrgPayments(orgId: string): Promise<OrgPayment[]> {
