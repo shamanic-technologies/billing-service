@@ -3667,7 +3667,8 @@
             "type": "string"
           },
           "offerId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "salesFunnelId": {
             "type": "string"
@@ -4531,7 +4532,9 @@
           },
           "offerId": {
             "type": "string",
-            "format": "uuid"
+            "nullable": true,
+            "format": "uuid",
+            "description": "null = a campaign naming no offer (the offer-less route)."
           },
           "salesFunnelId": {
             "type": "string"
@@ -5069,7 +5072,9 @@
         "properties": {
           "offerId": {
             "type": "string",
-            "format": "uuid"
+            "nullable": true,
+            "format": "uuid",
+            "description": "null = a campaign naming no offer."
           },
           "salesFunnelId": {
             "type": "string"
@@ -10146,6 +10151,89 @@
         }
       }
     },
+    "/internal/cash/by-org-day": {
+      "get": {
+        "summary": "Cash per org per UTC day, gross and net, fleet-wide since inception (staff SaaS revenue)",
+        "description": "Callable with the service x-api-key ONLY (no org / user / run identity). Owner 2026-11-21: gross cash is the headline, net below. One row per (org, UTC day) with money: gross_cents = payments received that day (every acquirer, stripe-service direct payments, off-platform payments on their paid day) BEFORE returns; net_cents = gross minus refunds / lost disputes that HAPPENED that day (a return is dated on its own day, so a row can be gross 0 with a negative net). net_cents <= gross_cents on every row. org_id null = money no org could be resolved for. total_gross_cents = Σ rows gross = GET /public/stats/billing total_paid_cents; total_net_cents = Σ rows net = total_revenue_cents. as_of = the instant of the read. Exact decimal cents text. 502 when stripe-service cannot be read or a sum does not reconcile.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cash per org per UTC day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "as_of": {
+                      "type": "string"
+                    },
+                    "total_gross_cents": {
+                      "type": "string"
+                    },
+                    "total_net_cents": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "org_id": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "uuid"
+                          },
+                          "day": {
+                            "type": "string"
+                          },
+                          "gross_cents": {
+                            "type": "string"
+                          },
+                          "net_cents": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "org_id",
+                          "day",
+                          "gross_cents",
+                          "net_cents"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "as_of",
+                    "total_gross_cents",
+                    "total_net_cents",
+                    "rows"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service unreadable, or rows do not sum to the totals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/accounts/by-org/{orgId}/cash": {
       "get": {
         "summary": "Cash an org paid vs credit it received without paying (staff revenue reads)",
@@ -14046,6 +14134,165 @@
         }
       }
     },
+    "/internal/brands/{brandId}/sales-funnels/{salesFunnelId}/caps": {
+      "get": {
+        "summary": "Read a sales funnel's MAX BUDGET / MAX VOLUME and what it consumed this period (campaign naming no offer)",
+        "description": "campaign-service reads this to decide whether to STOP the funnel's pipes (x-api-key + x-org-id). Each cap carries its window, consumed, remaining and reached; nothing stated answers stated:false with both caps null. A measurement that fails answers null + a reason, the caps are still served.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State a sales funnel's caps as a service (campaign-service) (campaign naming no offer)",
+        "description": "x-api-key + x-org-id (x-user-id optional, recorded). Same body as the /v1 PUT. Answers the read's shape.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/caps": {
       "get": {
         "summary": "Read this sales funnel's caps and what it consumed this period (dashboard)",
@@ -14502,6 +14749,435 @@
         }
       }
     },
+    "/v1/brands/{brandId}/sales-funnels/{salesFunnelId}/caps": {
+      "get": {
+        "summary": "Read this sales funnel's caps and what it consumed this period (dashboard) (campaign naming no offer)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State a sales funnel's MAX BUDGET and MAX VOLUME (campaign naming no offer)",
+        "description": "Both caps in one write (object = state, null = clear). The funnel must exist in features-service's catalogue. Charges nothing; the per-campaign ceilings are not touched. Answers the read's shape.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear both caps of a sales funnel (campaign naming no offer)",
+        "description": "Idempotent: a funnel with nothing stated answers stated:false.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps": {
       "get": {
         "summary": "Read the caps ONE sales funnel campaign is held to, and what it consumed this period",
@@ -14784,6 +15460,261 @@
         }
       }
     },
+    "/internal/brands/{brandId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps": {
+      "get": {
+        "summary": "Read the caps ONE sales funnel campaign is held to, and what it consumed this period (campaign naming no offer)",
+        "description": "campaign-service reads this per funnel campaign (x-api-key + x-org-id). Several funnel campaigns may share one funnel (each naming different people); each may hold its own MAX BUDGET / MAX VOLUME, consumed on its own units only. Without its own cap it is held to the funnel-wide cap (capScope sales_funnel). Same fields as the funnel read (funded, fundedBy, maxBudget, maxVolume with consumed / remaining / reached). A funnel campaign campaign-service does not state on this brand, offer and funnel answers consumed null + sales_funnel_campaign_not_found.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME (campaign naming no offer)",
+        "description": "Same body as the funnel PUT. The funnel must exist in features-service's catalogue; the funnel campaign need not exist yet. Charges nothing. Answers the campaign read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear one sales funnel campaign's own caps (it falls back to the funnel-wide cap) (campaign naming no offer)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/cap-changes": {
       "get": {
         "summary": "Every change of the caps ONE sales funnel campaign is held to, oldest first",
@@ -14805,6 +15736,83 @@
             },
             "required": true,
             "name": "offerId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCapChanges"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/brands/{brandId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/cap-changes": {
+      "get": {
+        "summary": "Every change of the caps ONE sales funnel campaign is held to, oldest first (campaign naming no offer)",
+        "description": "CAMPAIGN-CHANGE-LOG-1119. x-api-key + x-org-id. The append-only journal of every state / clear of the funnel campaign's own cap AND the funnel-wide cap (its own brand, offer, funnel), as written. A row's previous state is the row before it in the same `scope`; none = no cap stated before it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
             "in": "path"
           },
           {
@@ -15358,10 +16366,471 @@
         }
       }
     },
+    "/v1/brands/{brandId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps": {
+      "get": {
+        "summary": "Read the caps one sales funnel campaign is held to (dashboard) (campaign naming no offer)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME (campaign naming no offer)",
+        "description": "Same body as the funnel PUT. The funnel must exist in features-service's catalogue; the funnel campaign need not exist yet. Charges nothing. Answers the campaign read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSalesFunnelCapsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "sales_funnel_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "sales_funnel_catalogue_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear one sales funnel campaign's own caps (it falls back to the funnel-wide cap) (campaign naming no offer)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "brandId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client"
+            },
+            "required": true,
+            "description": "features-service's sales funnel id (its combinationKey), URL-encoded, e.g. lead_found_to_website_visit@sales-cold-email-outreach+website_visit_to_purchase+purchase_to_paid_client",
+            "name": "salesFunnelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "campaign-service's sales funnel campaign id"
+            },
+            "required": true,
+            "description": "campaign-service's sales funnel campaign id",
+            "name": "salesFunnelCampaignId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesFunnelCampaignCaps"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/brands/{brandId}/sales-funnel-caps": {
       "get": {
         "summary": "Every sales funnel of a brand with a stated cap (no measurement)",
-        "description": "x-api-key + x-org-id. Optional offerId narrows to one offer. Read one funnel's caps for its consumption.",
+        "description": "x-api-key + x-org-id. Optional offerId narrows to one offer; without it, offer-less caps (offerId null) are listed too. Read one funnel's caps for its consumption.",
         "parameters": [
           {
             "schema": {

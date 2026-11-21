@@ -715,6 +715,13 @@
       "when": 1796872800000,
       "tag": "0101_answer_passes",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1796959200000,
+      "tag": "0102_sales_funnel_caps_offer_optional",
+      "breakpoints": true
     }
   ]
 }

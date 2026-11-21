@@ -3499,6 +3499,49 @@ registry.registerPath({
 
 registry.registerPath({
   method: "get",
+  path: "/internal/cash/by-org-day",
+  summary: "Cash per org per UTC day, gross and net, fleet-wide since inception (staff SaaS revenue)",
+  description:
+    "Callable with the service x-api-key ONLY (no org / user / run identity). Owner 2026-11-21: " +
+    "gross cash is the headline, net below. One row per (org, UTC day) with money: gross_cents = " +
+    "payments received that day (every acquirer, stripe-service direct payments, off-platform " +
+    "payments on their paid day) BEFORE returns; net_cents = gross minus refunds / lost disputes that " +
+    "HAPPENED that day (a return is dated on its own day, so a row can be gross 0 with a negative net). " +
+    "net_cents <= gross_cents on every row. org_id null = money no org could be resolved for. " +
+    "total_gross_cents = Σ rows gross = GET /public/stats/billing total_paid_cents; total_net_cents = " +
+    "Σ rows net = total_revenue_cents. as_of = the instant of the read. Exact decimal cents text. " +
+    "502 when stripe-service cannot be read or a sum does not reconcile.",
+  request: { headers: internalHeaders },
+  responses: {
+    200: {
+      description: "Cash per org per UTC day",
+      content: {
+        "application/json": {
+          schema: z.object({
+            as_of: z.string(),
+            total_gross_cents: CentsStringSchema,
+            total_net_cents: CentsStringSchema,
+            rows: z.array(
+              z.object({
+                org_id: zod3Uuid().nullable(),
+                day: z.string(),
+                gross_cents: CentsStringSchema,
+                net_cents: CentsStringSchema,
+              })
+            ),
+          }),
+        },
+      },
+    },
+    502: {
+      description: "stripe-service unreadable, or rows do not sum to the totals",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/internal/accounts/by-org/{orgId}/cash",
   summary: "Cash an org paid vs credit it received without paying (staff revenue reads)",
   description:
@@ -4058,7 +4101,7 @@ export const RevenueSalesFunnelLineSchema = z
   .object({
     salesFunnelCampaignId: z.string(),
     brandId: z.string(),
-    offerId: z.string(),
+    offerId: z.string().nullable(),
     salesFunnelId: z.string(),
     status: z.string(),
     unitCampaignIds: z.array(z.string()),
@@ -4921,7 +4964,7 @@ export const SalesFunnelCapsSchema = z
   .object({
     orgId: zod3Uuid(),
     brandId: zod3Uuid(),
-    offerId: zod3Uuid(),
+    offerId: zod3Uuid().nullable().openapi({ description: "null = a campaign naming no offer (the offer-less route)." }),
     salesFunnelId: z.string(),
     stated: z.boolean(),
     funded: z.boolean().openapi({
@@ -4943,7 +4986,7 @@ export const SalesFunnelCapsSchema = z
 
 const StatedSalesFunnelCapsSchema = z
   .object({
-    offerId: zod3Uuid(),
+    offerId: zod3Uuid().nullable().openapi({ description: "null = a campaign naming no offer." }),
     salesFunnelId: z.string(),
     salesFunnelCampaignId: z.string().optional().openapi({
       description: "Present only on ONE funnel campaign's cap: campaign-service's funnel campaign id. Absent = the funnel-wide cap.",
@@ -4985,7 +5028,23 @@ const funnelCapsError = (description: string) => ({
   content: { "application/json": { schema: ErrorResponseSchema } },
 });
 
-registry.registerPath({
+/**
+ * DISTRY-CALL-IS-CAMPAIGN-1121: a campaign may name NO offer. Every funnel caps route is served
+ * twice: under `/offers/{offerId}` (a campaign naming an offer, unchanged) and without the offer
+ * segment (a campaign naming none; its caps answer `offerId: null`). Same body, same answer.
+ */
+function registerFunnelCapPath(def: Parameters<typeof registry.registerPath>[0]): void {
+  registry.registerPath(def);
+  const params = def.request?.params as z.ZodObject<z.ZodRawShape> | undefined;
+  registry.registerPath({
+    ...def,
+    path: def.path.replace("/offers/{offerId}", ""),
+    summary: `${def.summary ?? ""} (campaign naming no offer)`,
+    request: { ...def.request, params: params ? params.omit({ offerId: true }) : undefined },
+  });
+}
+
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCapsPath}`,
   summary: "Read a sales funnel's MAX BUDGET / MAX VOLUME and what it consumed this period",
@@ -5000,7 +5059,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/v1${funnelCapsPath}`,
   summary: "Read this sales funnel's caps and what it consumed this period (dashboard)",
@@ -5011,7 +5070,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "put",
   path: `/v1${funnelCapsPath}`,
   summary: "State a sales funnel's MAX BUDGET and MAX VOLUME",
@@ -5031,7 +5090,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "put",
   path: `/internal${funnelCapsPath}`,
   summary: "State a sales funnel's caps as a service (campaign-service)",
@@ -5050,7 +5109,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "delete",
   path: `/v1${funnelCapsPath}`,
   summary: "Clear both caps of a sales funnel",
@@ -5078,7 +5137,7 @@ const funnelCampaignCapParams = funnelCapParams.extend({
 const funnelCampaignCapsPath = "/brands/{brandId}/offers/{offerId}/sales-funnels/{salesFunnelId}/campaigns/{salesFunnelCampaignId}/caps";
 const funnelCampaignCapsJson = { "application/json": { schema: SalesFunnelCampaignCapsSchema } };
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCampaignCapsPath}`,
   summary: "Read the caps ONE sales funnel campaign is held to, and what it consumed this period",
@@ -5111,7 +5170,7 @@ export const SalesFunnelCampaignCapChangesSchema = z
   })
   .openapi("SalesFunnelCampaignCapChanges");
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/internal${funnelCampaignCapsPath.replace(/\/caps$/, "/cap-changes")}`,
   summary: "Every change of the caps ONE sales funnel campaign is held to, oldest first",
@@ -5126,7 +5185,7 @@ registry.registerPath({
   },
 });
 
-registry.registerPath({
+registerFunnelCapPath({
   method: "get",
   path: `/v1${funnelCampaignCapsPath}`,
   summary: "Read the caps one sales funnel campaign is held to (dashboard)",
@@ -5141,7 +5200,7 @@ for (const [prefix, headers, body] of [
   ["/internal", internalOrgHeaders, SetSalesFunnelCapsRequestSchema],
   ["/v1", protectedHeaders, SetSalesFunnelCapsRequestSchema],
 ] as const) {
-  registry.registerPath({
+  registerFunnelCapPath({
     method: "put",
     path: `${prefix}${funnelCampaignCapsPath}`,
     summary: "State ONE sales funnel campaign's own MAX BUDGET and MAX VOLUME",
@@ -5156,7 +5215,7 @@ for (const [prefix, headers, body] of [
       502: funnelCapsError("sales_funnel_catalogue_unavailable"),
     },
   });
-  registry.registerPath({
+  registerFunnelCapPath({
     method: "delete",
     path: `${prefix}${funnelCampaignCapsPath}`,
     summary: "Clear one sales funnel campaign's own caps (it falls back to the funnel-wide cap)",
@@ -5174,7 +5233,7 @@ registry.registerPath({
   method: "get",
   path: "/internal/brands/{brandId}/sales-funnel-caps",
   summary: "Every sales funnel of a brand with a stated cap (no measurement)",
-  description: "x-api-key + x-org-id. Optional offerId narrows to one offer. Read one funnel's caps for its consumption.",
+  description: "x-api-key + x-org-id. Optional offerId narrows to one offer; without it, offer-less caps (offerId null) are listed too. Read one funnel's caps for its consumption.",
   request: { headers: internalOrgHeaders, params: brandIdParam, query: brandFunnelCapsQuery },
   responses: {
     200: { description: "Stated caps", content: { "application/json": { schema: BrandSalesFunnelCapsSchema } } },
