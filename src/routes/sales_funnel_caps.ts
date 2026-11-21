@@ -334,7 +334,11 @@ async function respondBrandList(req: Request, res: Response, orgId: string) {
     return;
   }
   const rows = await listBrandSalesFunnelCaps(orgId, brandId, (offerId as string | undefined) ?? null);
-  res.json({ orgId, brandId, caps: await Promise.all(rows.map(statedCapsOf)) });
+  // A funnel campaign's own cap may count its target (ONE-CAMPAIGN-VOLUME-1122): read the
+  // campaigns once, only when such a row is listed (null = unreadable: the funnel's unit).
+  const fcs = rows.some((r) => r.salesFunnelCampaignId) ? await fetchSalesFunnelCampaigns(orgId) : null;
+  const campaigns = fcs?.ok ? fcs.campaigns : null;
+  res.json({ orgId, brandId, caps: await Promise.all(rows.map((r) => statedCapsOf(r, campaigns))) });
 }
 
 router.get("/internal/brands/:brandId/sales-funnel-caps", handle(async (req, res) => {

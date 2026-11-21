@@ -870,7 +870,7 @@ describe("sales funnel caps", () => {
         funded: true,
         fundedBy: "max_volume",
         maxBudget: null,
-        maxVolume: { count: 3, period: "daily", unit: "first_contacts" },
+        maxVolume: { count: 3, period: "daily", unit: "first_contacts", outcome: null },
         updatedAt: expect.any(String),
       },
     ]);
