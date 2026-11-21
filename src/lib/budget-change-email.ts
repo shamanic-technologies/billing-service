@@ -102,7 +102,8 @@ export interface BudgetChangeEmailInput {
 /** A running sales funnel campaign funded by a MAX VOLUME alone (no $ ceiling). */
 export interface FunnelVolumeOnly {
   name: string;
-  offerId: string;
+  /** null = a campaign naming no offer. */
+  offerId: string | null;
   count: number;
   period: "one_off" | "daily" | "weekly" | "monthly";
 }
@@ -111,7 +112,8 @@ export interface FunnelVolumeOnly {
 export interface FunnelSpend {
   /** features-service's funnel name (`Victory`), else its id. */
   name: string;
-  offerId: string;
+  /** null = a campaign naming no offer. */
+  offerId: string | null;
   /** The cap per day (weekly / 7, monthly / 30). */
   dailyBudgetCents: string;
   /** The cap as stated, for the words (`$70/week`). */

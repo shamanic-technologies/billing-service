@@ -225,7 +225,8 @@ export interface RevenueBrandLine {
 export interface RevenueSalesFunnelLine {
   salesFunnelCampaignId: string;
   brandId: string;
-  offerId: string;
+  /** null = a campaign naming no offer. */
+  offerId: string | null;
   salesFunnelId: string;
   status: string;
   unitCampaignIds: string[];

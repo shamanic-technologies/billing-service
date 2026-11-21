@@ -181,7 +181,7 @@ function consumedForSpend(m: TimedMeasure, hold: OwnHold | null): string | null 
 }
 
 const capId = (r: SalesFunnelCapRow) =>
-  [r.orgId, r.brandId, r.offerId, r.salesFunnelId, r.salesFunnelCampaignId ?? ""].join("|").toLowerCase();
+  [r.orgId, r.brandId, r.offerId ?? "", r.salesFunnelId, r.salesFunnelCampaignId ?? ""].join("|").toLowerCase();
 
 const hasBudget = (r: SalesFunnelCapRow) => r.maxBudgetCents != null && r.maxBudgetPeriod != null && r.maxBudgetSince != null;
 
@@ -231,7 +231,7 @@ const sameId = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 export function capsHoldingCampaign(
   campaignId: string,
   caps: SalesFunnelCapRow[],
-  fcs: Array<{ id: string; brandId: string; offerId: string; salesFunnelId: string; units: Array<{ campaignId: string }> }>,
+  fcs: Array<{ id: string; brandId: string; offerId: string | null; salesFunnelId: string; units: Array<{ campaignId: string }> }>,
   sourceMeasures: Array<{ row: SalesFunnelCapRow; sourceCampaignIds: string[] | null }>
 ): { unit: boolean; caps: SalesFunnelCapRow[] } {
   const fc = fcs.find((c) => c.units.some((u) => sameId(u.campaignId, campaignId)));

@@ -928,7 +928,8 @@ export const salesFunnelCaps = pgTable(
   {
     orgId: uuid("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
-    offerId: uuid("offer_id").notNull(),
+    // NULL = a campaign naming no offer (migration 0102).
+    offerId: uuid("offer_id"),
     salesFunnelId: text("sales_funnel_id").notNull(),
     // numeric(22,10), migration 0079: a monthly / one-off cap outgrows the
     // daily ceilings' numeric(16,10) ($9,999.99).
@@ -972,7 +973,8 @@ export const salesFunnelCapChanges = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     orgId: uuid("org_id").notNull(),
     brandId: uuid("brand_id").notNull(),
-    offerId: uuid("offer_id").notNull(),
+    // NULL = a campaign naming no offer (migration 0102).
+    offerId: uuid("offer_id"),
     salesFunnelId: text("sales_funnel_id").notNull(),
     // numeric(22,10), migration 0079: a monthly / one-off cap outgrows the
     // daily ceilings' numeric(16,10) ($9,999.99).
