@@ -21,9 +21,11 @@ describe("GET /internal/cash/by-org-day", () => {
       asOf: "2026-11-21T14:05:29.000Z",
       totalGrossCents: "2500",
       totalNetCents: "2000",
+        totalAgencyGrossCents: "0",
+        totalAgencyNetCents: "0",
       rows: [
-        { orgId: acme, day: "2026-11-17", grossCents: "2500", netCents: "2500" },
-        { orgId: acme, day: "2026-11-18", grossCents: "0", netCents: "-500" },
+        { orgId: acme, day: "2026-11-17", grossCents: "2500", netCents: "2500", agencyGrossCents: "0", agencyNetCents: "0" },
+        { orgId: acme, day: "2026-11-18", grossCents: "0", netCents: "-500", agencyGrossCents: "0", agencyNetCents: "0" },
       ],
     });
   });
@@ -54,9 +56,9 @@ describe("GET /internal/cash/by-org-day", () => {
     expect(res.body.total_gross_cents).toBe("22500.0000000000");
     expect(res.body.total_net_cents).toBe("22000.0000000000");
     expect(res.body.rows).toEqual([
-      { org_id: olive, day: "2026-09-28", gross_cents: "20000.0000000000", net_cents: "20000.0000000000" },
-      { org_id: acme, day: "2026-11-17", gross_cents: "2500.0000000000", net_cents: "2500.0000000000" },
-      { org_id: acme, day: "2026-11-18", gross_cents: "0.0000000000", net_cents: "-500.0000000000" },
+      { org_id: olive, day: "2026-09-28", gross_cents: "20000.0000000000", net_cents: "20000.0000000000", agency_gross_cents: "0.0000000000", agency_net_cents: "0.0000000000" },
+      { org_id: acme, day: "2026-11-17", gross_cents: "2500.0000000000", net_cents: "2500.0000000000", agency_gross_cents: "0.0000000000", agency_net_cents: "0.0000000000" },
+      { org_id: acme, day: "2026-11-18", gross_cents: "0.0000000000", net_cents: "-500.0000000000", agency_gross_cents: "0.0000000000", agency_net_cents: "0.0000000000" },
     ]);
   });
 
