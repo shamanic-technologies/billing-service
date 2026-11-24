@@ -188,7 +188,7 @@ describe("sales funnel caps: a target-only campaign that reaches people counts f
       sent("lead-d", OTHER), // another campaign's send
       sent("lead-e", null),
     ]);
-    expect((await put({ maxBudget: null, maxVolume: { count: 2, period: "daily" } })).status).toBe(200);
+    expect((await put({ maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 2, period: "daily" } })).status).toBe(200);
     const r = await read();
     expect(r.status).toBe(200);
     expect(r.body.volumeUnit).toBe("first_contacts");
@@ -216,19 +216,19 @@ describe("sales funnel caps: a target-only campaign that reaches people counts f
       sent("lead-q2", UNIT, today(), "message_sent"),
       sent("lead-found-only", UNIT, today(), "lead_found"),
     ]);
-    await put({ maxBudget: null, maxVolume: { count: 2, period: "daily" } });
+    await put({ maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 2, period: "daily" } });
     expect((await read()).body.maxVolume).toMatchObject({ unit: "first_contacts", consumed: 2, remaining: 0, reached: true });
   });
 
   it("one new person: 1 of 2, not reached (campaign-service keeps contacting)", async () => {
     mockUpstreams([sent("lead-a", UNIT), sent("lead-a", UNIT)]);
-    await put({ maxBudget: null, maxVolume: { count: 2, period: "daily" } });
+    await put({ maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 2, period: "daily" } });
     expect((await read()).body.maxVolume).toMatchObject({ unit: "first_contacts", consumed: 1, remaining: 1, reached: false });
   });
 
   it("a WhatsApp first message is a new person too; nothing sent yet reads 0, never unmeasured", async () => {
     mockUpstreams([sent("person-w", UNIT, today(), "whatsapp_message_sent", "crm-service")]);
-    await put({ maxBudget: null, maxVolume: { count: 2, period: "daily" } });
+    await put({ maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 2, period: "daily" } });
     expect((await read()).body.maxVolume).toMatchObject({ consumed: 1, reached: false });
 
     vi.restoreAllMocks();
@@ -239,7 +239,7 @@ describe("sales funnel caps: a target-only campaign that reaches people counts f
   it("the outcome catalogue never read and features-service down: unmeasured (campaign-service holds), never 0", async () => {
     __resetOutcomeSteps();
     const calls = mockUpstreams([sent("lead-a", UNIT)]);
-    await put({ maxBudget: null, maxVolume: { count: 2, period: "daily" } });
+    await put({ maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 2, period: "daily" } });
     const r = await read();
     expect(calls.steps).toBeGreaterThan(0);
     expect(r.body.maxVolume).toMatchObject({ consumed: null, reached: null, consumedUnavailableReason: "sales_funnel_catalogue_unavailable" });

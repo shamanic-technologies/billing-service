@@ -4841,6 +4841,7 @@ export const SetSalesFunnelCapsRequestSchema = z
   .openapi("SetSalesFunnelCapsRequest", {
     description:
       "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. " +
+      "A max volume is never stated alone: it needs a max budget beside it (400 `max_budget_required_with_max_volume`, owner 2026-11-24); a max budget alone is valid. " +
       "A cap restated in the same period keeps its window start (a one_off cap keeps counting).",
   });
 

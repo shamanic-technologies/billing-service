@@ -189,7 +189,7 @@ describe("sales funnel caps: a campaign launched on its target alone", () => {
 
   it("a max volume counts the target outcomes the unit produced", async () => {
     const calls = mockUpstreams({ earned: 2 });
-    expect((await put(TARGET, { maxBudget: null, maxVolume: { count: 3, period: "daily" } })).status).toBe(200);
+    expect((await put(TARGET, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 3, period: "daily" } })).status).toBe(200);
     const r = await read(TARGET);
     expect(r.body.volumeUnit).toBe("outcomes_produced");
     expect(r.body.maxVolume).toMatchObject({ unit: "outcomes_produced", consumed: 2, remaining: 1, reached: false });

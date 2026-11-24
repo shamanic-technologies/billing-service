@@ -355,6 +355,15 @@ function mockUpstreams(
 
 const put = (body: unknown, funnel = FUNNEL, offer = OFFER) =>
   request(app).put(`/v1${capsPath(funnel, offer)}`).set(auth).send(body as object);
+// A max volume is never stated alone since 2026-11-24 (VOL-NEEDS-USD-1124): a volume test
+// states a max budget far above anything the mocks spend, so it never binds.
+const NEVER_BINDS = { amountCents: 500000, period: "daily" } as const;
+// A volume-only row can only predate the rule: written straight into the table.
+const insertVolumeOnly = (count: number, funnel = FUNNEL, offer = OFFER) =>
+  db.insert(salesFunnelCaps).values({
+    orgId, brandId, offerId: offer, salesFunnelId: funnel,
+    maxVolume: count, maxVolumePeriod: "daily", maxVolumeSince: new Date(),
+  });
 const readInternal = (funnel = FUNNEL, org = orgId) =>
   request(app).get(`/internal${capsPath(funnel)}`).set(internal(org));
 
@@ -555,29 +564,41 @@ describe("sales funnel caps", () => {
 
   it("either cap can be unset; only the stated one is measured", async () => {
     const calls = mockUpstreams();
-    await put({ maxBudget: null, maxVolume: { count: 10, period: "daily" } });
+    // A volume-only row (stored before 2026-11-24): the budget is not measured.
+    await insertVolumeOnly(10);
     const b = (await readInternal()).body;
     expect(b.maxBudget).toBeNull();
     expect(b.maxVolume.count).toBe(10);
     expect(calls.costs).toHaveLength(0);
+    // A budget-only cap: the volume is not measured.
+    await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: null });
+    const outcomesBefore = calls.outcomes.length;
+    const budgetOnly = (await readInternal()).body;
+    expect(budgetOnly.maxVolume).toBeNull();
+    expect(budgetOnly.maxBudget.amountCents).toBe("5000.0000000000");
+    expect(calls.outcomes).toHaveLength(outcomesBefore);
   });
 
-  it("funding (owner rule 2026-10-11): a max budget AND/OR a max volume funds the funnel; neither, or a stated 0, does not", async () => {
+  it("funding (owner rule 2026-11-24): a max budget funds the funnel, alone or with a max volume; a max volume alone, nothing, or a stated 0 does not", async () => {
     mockUpstreams();
     const funding = async () => {
       const b = (await readInternal()).body;
       return [b.funded, b.fundedBy];
     };
     expect(await funding()).toEqual([false, null]);
-    await put({ maxBudget: null, maxVolume: { count: 10, period: "daily" } });
-    expect(await funding()).toEqual([true, "max_volume"]);
+    // A max volume alone is refused at the write, and a stored one reads not funded.
+    expect((await put({ maxBudget: null, maxVolume: { count: 10, period: "daily" } })).status).toBe(400);
+    expect(await funding()).toEqual([false, null]);
+    await insertVolumeOnly(10);
+    expect((await readInternal()).body.maxVolume.count).toBe(10);
+    expect(await funding()).toEqual([false, null]);
     await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: null });
     expect(await funding()).toEqual([true, "max_budget"]);
     await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: { count: 10, period: "daily" } });
     expect(await funding()).toEqual([true, "both"]);
     await put({ maxBudget: { amountCents: 0, period: "daily" }, maxVolume: { count: 10, period: "daily" } });
     expect(await funding()).toEqual([false, null]);
-    await put({ maxBudget: null, maxVolume: { count: 0, period: "daily" } });
+    await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: { count: 0, period: "daily" } });
     expect(await funding()).toEqual([false, null]);
     await put({ maxBudget: null, maxVolume: null });
     expect(await funding()).toEqual([false, null]);
@@ -726,7 +747,7 @@ describe("sales funnel caps", () => {
 
   it("volume on a proactive channel with no first-contact measure is null with a reason, never 0", async () => {
     mockUpstreams();
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
+    await put({ maxBudget: NEVER_BINDS, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
     const res = await readInternal(ADS_FUNNEL);
     expect(res.body.maxVolume).toMatchObject({
       consumed: null,
@@ -802,7 +823,7 @@ describe("sales funnel caps", () => {
 
   it("Email Sending moved to start_to_conversation: still one email sent per push, read off the funnel's trigger", async () => {
     const calls = mockUpstreams();
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, EMAIL_SENDING_MOVED_FUNNEL);
+    await put({ maxBudget: NEVER_BINDS, maxVolume: { count: 5, period: "daily" } }, EMAIL_SENDING_MOVED_FUNNEL);
     const read = await readInternal(EMAIL_SENDING_MOVED_FUNNEL);
     expect(read.body.maxVolume).toMatchObject({ consumed: 36, reached: true, consumedUnavailableReason: null });
     const outcomes = calls.outcomes.at(-1)!;
@@ -812,7 +833,7 @@ describe("sales funnel caps", () => {
 
   it("a reactive first pipe with no channel entry, no declared step and no declared trigger stays null + reason (fail-closed kept)", async () => {
     mockUpstreams();
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, UNDECLARED_REACTIVE_FUNNEL);
+    await put({ maxBudget: NEVER_BINDS, maxVolume: { count: 5, period: "daily" } }, UNDECLARED_REACTIVE_FUNNEL);
     const read = await readInternal(UNDECLARED_REACTIVE_FUNNEL);
     expect(read.body.maxVolume).toMatchObject({
       consumed: null,
@@ -851,7 +872,7 @@ describe("sales funnel caps", () => {
   it("is org-scoped, and the brand list names every stated funnel (optionally one offer)", async () => {
     mockUpstreams();
     await put({ maxBudget: { amountCents: 5000, period: "weekly" }, maxVolume: null });
-    await put({ maxBudget: null, maxVolume: { count: 3, period: "daily" } }, ADS_FUNNEL, OTHER_OFFER);
+    await put({ maxBudget: NEVER_BINDS, maxVolume: { count: 3, period: "daily" } }, ADS_FUNNEL, OTHER_OFFER);
     expect((await readInternal(FUNNEL, otherOrgId)).body.stated).toBe(false);
 
     const list = await request(app).get(`/internal/brands/${brandId}/sales-funnel-caps`).set(internal(orgId));
@@ -868,8 +889,8 @@ describe("sales funnel caps", () => {
         salesFunnelType: null,
         salesFunnelTypeUnavailableReason: "type_not_served_by_features_service",
         funded: true,
-        fundedBy: "max_volume",
-        maxBudget: null,
+        fundedBy: "both",
+        maxBudget: expect.objectContaining({ amountCents: "500000.0000000000", period: "daily" }),
         maxVolume: { count: 3, period: "daily", unit: "first_contacts", outcome: null },
         updatedAt: expect.any(String),
       },
@@ -886,9 +907,10 @@ describe("sales funnel caps", () => {
     const before = await brandTotal();
     expect(before.dailyBudgetCents).toBe("700.0000000000");
 
-    // A one_off budget and a volume-only cap: not recurring money, the brand reads exactly as before.
+    // A one_off budget and a volume-only cap (a row stored before 2026-11-24): not recurring
+    // money, the brand reads exactly as before.
     await put({ maxBudget: { amountCents: 100000, period: "one_off" }, maxVolume: null });
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
+    await insertVolumeOnly(5, ADS_FUNNEL);
     expect(await brandTotal()).toEqual(before);
 
     // $70 a week = $10 a day on top of the brand scalar.
@@ -909,9 +931,9 @@ describe("sales funnel caps", () => {
     expect(scalar.status).toBe(200);
     expect(await history()).toEqual(["800.0000000000"]);
 
-    // One_off and volume-only caps do not move the daily figure: nothing journaled.
+    // A one_off budget, with or without a max volume, does not move the daily figure: nothing journaled.
     await put({ maxBudget: { amountCents: 100000, period: "one_off" }, maxVolume: null });
-    await put({ maxBudget: null, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
+    await put({ maxBudget: { amountCents: 100000, period: "one_off" }, maxVolume: { count: 5, period: "daily" } }, ADS_FUNNEL);
     expect(await history()).toEqual(["800.0000000000"]);
 
     // $70 a week = $10 a day: the figure moves to 1700 and is journaled.
