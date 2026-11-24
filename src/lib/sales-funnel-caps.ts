@@ -1642,6 +1642,13 @@ async function measureVolume(
       return { consumed: null, reason: "sourcing_catalogue_unavailable", detail: errorReason(err) };
     }
     proactive = proactive.filter((p) => !terms.isSourceItem(p.channelSlug, p.legKey));
+    // An ITEM pipe (a Threads post) contacts nobody either: beside a pipe that DOES reach
+    // people (a followed plan's cold email), the first contacts are that pipe's, and the item
+    // pipe is not asked for a first-contact measure it can never have (THREADS-POSTS-CAP-1124:
+    // "Threads Posts" + its plan's cold email read volume_not_measured_on_channel, and the
+    // 1-a-day cap stopped nothing while the plan's sourcing spent $8.12 in a morning).
+    const contacting = proactive.filter((p) => !isItemPipe(p));
+    if (contacting.length > 0) proactive = contacting;
     if (proactive.length === 0) {
       return {
         consumed: null,
