@@ -128,7 +128,9 @@ function mockUpstreams(units: Unit[], firstEmails: number) {
   return calls;
 }
 
-const VOLUME_ONLY = { maxBudget: null, maxVolume: { count: 1, period: "daily" } };
+// A max volume is never stated alone since 2026-11-24 (VOL-NEEDS-USD-1124): the max budget
+// beside it is far above anything spent here, so only the 1-a-day volume binds.
+const ONE_A_DAY = { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 1, period: "daily" } };
 
 describe("sales funnel caps: an item pipe beside a plan pipe that reaches people", () => {
   const savedEnv = { ...process.env };
@@ -169,7 +171,7 @@ describe("sales funnel caps: an item pipe beside a plan pipe that reaches people
       ],
       1
     );
-    expect((await request(app).put(`/v1${capsPath}`).set(auth).send(VOLUME_ONLY)).status).toBe(200);
+    expect((await request(app).put(`/v1${capsPath}`).set(auth).send(ONE_A_DAY)).status).toBe(200);
     const res = await request(app).get(`/internal${capsPath}`).set(internal);
     expect(res.status).toBe(200);
     expect(res.body.maxVolume).toMatchObject({
@@ -188,7 +190,7 @@ describe("sales funnel caps: an item pipe beside a plan pipe that reaches people
       [unit(U_THREADS, THREADS, "start_to_threads_post_published"), unit(U_TEAM, TEAM, "threads_post_published_to_paid_client")],
       0
     );
-    await request(app).put(`/v1${capsPath}`).set(auth).send(VOLUME_ONLY);
+    await request(app).put(`/v1${capsPath}`).set(auth).send(ONE_A_DAY);
     const res = await request(app).get(`/internal${capsPath}`).set(internal);
     expect(res.status).toBe(200);
     expect(res.body.maxVolume.unit).toBe("outcomes_produced");

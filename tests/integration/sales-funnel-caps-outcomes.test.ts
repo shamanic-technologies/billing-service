@@ -250,12 +250,14 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
 
   it("5 per day, 3 threads published today on the unit: consumed 3, not reached", async () => {
     const calls = mockUpstreams({ published: 3 });
-    expect((await put(THREADS_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } })).status).toBe(200);
+    expect((await put(THREADS_FUNNEL, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 5, period: "daily" } })).status).toBe(200);
 
     const res = await read(THREADS_FUNNEL);
     expect(res.status).toBe(200);
     expect(res.body.volumeUnit).toBe("outcomes_produced");
-    expect(res.body.maxBudget).toBeNull();
+    // The max budget beside it (required since 2026-11-24) is far above the spend: never the binding cap.
+    expect(res.body.maxBudget.amountCents).toBe("500000.0000000000");
+    expect(res.body.maxBudget.reached).not.toBe(true);
     expect(res.body.maxVolume).toMatchObject({
       count: 5,
       period: "daily",
@@ -279,21 +281,21 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
 
   it("5 threads published today: reached, remaining 0", async () => {
     mockUpstreams({ published: 5 });
-    await put(THREADS_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
+    await put(THREADS_FUNNEL, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 5, period: "daily" } });
     const res = await read(THREADS_FUNNEL);
     expect(res.body.maxVolume).toMatchObject({ consumed: 5, remaining: 0, reached: true, consumedUnavailableReason: null });
   });
 
   it("the ledger unreadable: null + runs_service_unavailable, never 0", async () => {
     mockUpstreams({ published: 5, runsStatus: 503 });
-    await put(THREADS_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
+    await put(THREADS_FUNNEL, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 5, period: "daily" } });
     const res = await read(THREADS_FUNNEL);
     expect(res.body.maxVolume).toMatchObject({ consumed: null, reached: null, consumedUnavailableReason: "runs_service_unavailable" });
   });
 
   it("the evidence is read once: the ledger showed the producer declares the step on campaign runs", async () => {
     const calls = mockUpstreams({ published: 1 });
-    await put(THREADS_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
+    await put(THREADS_FUNNEL, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 5, period: "daily" } });
     await read(THREADS_FUNNEL);
     await read(THREADS_FUNNEL);
     expect(calls.evidence).toHaveLength(1);
@@ -303,7 +305,7 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
 
   it("a Start pipe whose step no producer ever declared on a campaign's run stays unmeasured (fail-closed)", async () => {
     const calls = mockUpstreams({ published: 5 });
-    await put(UNDECLARED_FUNNEL, { maxBudget: null, maxVolume: { count: 5, period: "daily" } });
+    await put(UNDECLARED_FUNNEL, { maxBudget: { amountCents: 500000, period: "daily" }, maxVolume: { count: 5, period: "daily" } });
     const res = await read(UNDECLARED_FUNNEL);
     expect(res.body.volumeUnit).toBe("outcomes_produced");
     expect(res.body.maxVolume).toMatchObject({
@@ -317,7 +319,7 @@ describe("sales funnel caps: outcome pipes (Threads)", () => {
 
   it("max volume 1 one-off on an outcome never made yet: consumed 0, not reached, funded; reached after one Unit", async () => {
     mockUpstreams({ published: 0, drafted: 0 });
-    expect((await put(NEW_FUNNEL, { maxBudget: null, maxVolume: { count: 1, period: "one_off" } })).status).toBe(200);
+    expect((await put(NEW_FUNNEL, { maxBudget: { amountCents: 500000, period: "one_off" }, maxVolume: { count: 1, period: "one_off" } })).status).toBe(200);
     const before = await read(NEW_FUNNEL);
     expect(before.status).toBe(200);
     expect(before.body.funded).toBe(true);

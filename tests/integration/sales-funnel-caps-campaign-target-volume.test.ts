@@ -307,7 +307,7 @@ describe("sales funnel caps: a funnel campaign counts Units of its target", () =
 
   it("a follow-up whose target is reached by its own first contact keeps its unit (Copilot « max volume 1 »)", async () => {
     mockUpstreams([occ("paid_client", "ann", U_FOLLOW)]);
-    expect((await put({ maxBudget: null, maxVolume: { count: 1, period: "one_off" } }, FOLLOW_UP_FUNNEL, FC_FOLLOW)).status).toBe(200);
+    expect((await put({ maxBudget: { amountCents: 500000, period: "one_off" }, maxVolume: { count: 1, period: "one_off" } }, FOLLOW_UP_FUNNEL, FC_FOLLOW)).status).toBe(200);
     const r = await read(FOLLOW_UP_FUNNEL, FC_FOLLOW);
     expect(r.body.volumeUnit).toBe("prospects_handled");
     expect(r.body.maxVolume.unit).toBe("prospects_handled");

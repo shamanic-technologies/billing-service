@@ -173,6 +173,17 @@ async function putCaps(req: Request, res: Response, key: FunnelCapKey, internal:
     return;
   }
   const body = parsed.data as { maxBudget: { amountCents: string | number; period: CapPeriod } | null; maxVolume: { count: number; period: CapPeriod } | null };
+  // Owner 2026-11-24 (THREADS-POSTS-CAP-1124, « Option B -> ajoute aussi un max en $ »): a max
+  // volume is never stated alone; a max $ beside it is the safety when the volume cannot be
+  // counted (a 1-a-day cap spent $8.12 in a morning). Replaces « max $ ET/OU max volume » of
+  // 2026-10-11 on the volume side. A max $ alone stays valid.
+  if (body.maxVolume && !body.maxBudget) {
+    res.status(400).json({
+      error: "maxBudget: a max volume needs a max budget in $ beside it",
+      reason: "max_budget_required_with_max_volume",
+    });
+    return;
+  }
   let amountCents: string | null = null;
   if (body.maxBudget) {
     try {
