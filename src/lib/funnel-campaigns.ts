@@ -36,6 +36,11 @@ export interface SalesFunnelUnit {
   featureSlug: string;
   legKey: string;
   status: string;
+  /**
+   * The unit runs its campaign's TARGET Engine: served with no channel and no leg
+   * (PLAN-RECURSIVE-PER-ENGINE-1124), spelled as `targetOnlyPipe`. Absent on every other unit.
+   */
+  targetEngine?: true;
 }
 
 export interface SalesFunnelCampaign {
@@ -232,9 +237,19 @@ export function targetOnlyPipe(target: string, workflowSlug: unknown): { feature
   };
 }
 
-/** PURE: a served unit's (channel, leg); a channel-less unit of a target-only campaign runs its Engine's pipe. */
-function unitPipeOf(c: Record<string, unknown>, u: Record<string, unknown>): { featureSlug: string; legKey: string } {
-  if (u.featureSlug == null && u.legKey == null && isTargetOnlyCampaign(c)) return targetOnlyPipe(String(c.target), u.workflowSlug);
+/**
+ * PURE: a served unit's (channel, leg). A unit with no channel and no leg runs its campaign's
+ * TARGET Engine (PLAN-RECURSIVE-PER-ENGINE-1124), whatever the campaign's funnel id: a target-only
+ * campaign's one unit, or a funnel campaign moved onto its Target's Engine. Keyed on the unit's
+ * shape only.
+ */
+export function unitPipeOf(
+  c: Record<string, unknown>,
+  u: Record<string, unknown>
+): { featureSlug: string; legKey: string; targetEngine?: true } {
+  if (u.featureSlug == null && u.legKey == null && typeof c.target === "string" && c.target) {
+    return { ...targetOnlyPipe(c.target, u.workflowSlug), targetEngine: true };
+  }
   return { featureSlug: String(u.featureSlug), legKey: String(u.legKey) };
 }
 

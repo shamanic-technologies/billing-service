@@ -837,15 +837,56 @@ async function measuredPipes(k: FunnelCapKey): Promise<PipesAnswer> {
   // units on pipes its own funnel does not list. They are still the campaign's spend and
   // volume, held to the same cap: measured as pipes of their own, never uncounted.
   const outside = onPipe.filter((u) => !funnel.pipes.some((p) => onFunnelPipe(u, p)));
-  let pipes = funnelPipes;
-  if (outside.length > 0) {
-    const extra = await planPipesOf(outside);
+  // A unit running its campaign's TARGET Engine (no channel, no leg: PLAN-RECURSIVE-PER-ENGINE-1124)
+  // is capped as a target-only campaign's unit wherever it sits: never asked of the channel catalogue.
+  const engineUnits = outside.filter((u) => u.targetEngine);
+  const planUnits = outside.filter((u) => !u.targetEngine);
+  let pipes = [...funnelPipes, ...targetEnginePipesOf(engineUnits, held)];
+  if (planUnits.length > 0) {
+    const extra = await planPipesOf(planUnits);
     if (!extra.ok) return { ok: false, reason: extra.reason, detail: extra.detail, funnel };
-    pipes = [...funnelPipes, ...extra.pipes];
+    pipes = [...pipes, ...extra.pipes];
   }
   const sources = await feedingSources(pipes, ofOffer, unitIdsOf(fcs.campaigns));
   const target = k.salesFunnelCampaignId ? (held[0].target ?? null) : null;
   return { ok: true, funnel, pipes, sources, target };
+}
+
+/**
+ * PURE: the pipes of units running their campaign's TARGET Engine outside the cap's funnel, one
+ * per (Engine, target): the same pipe `targetOnlyFunnelOf` caps a target-only campaign on
+ * (proactive from Start, producing the target, run by us), so spend and volume are measured
+ * exactly as for that campaign.
+ */
+export function targetEnginePipesOf(units: SalesFunnelUnit[], campaigns: SalesFunnelCampaign[]): MeasuredPipe[] {
+  const targetOf = new Map(campaigns.flatMap((c) => c.units.map((u) => [u.campaignId, c.target] as const)));
+  const byPipe = new Map<string, MeasuredPipe>();
+  for (const u of units) {
+    const target = targetOf.get(u.campaignId);
+    if (!target) continue;
+    const pipeId = `${u.featureSlug}|${u.legKey}`;
+    const known = byPipe.get(pipeId);
+    if (known) {
+      known.campaignIds.push(u.campaignId);
+      continue;
+    }
+    byPipe.set(pipeId, {
+      pipeId,
+      channelSlug: u.featureSlug,
+      legKey: u.legKey,
+      strategyId: null,
+      mode: "proactive",
+      toStep: target,
+      runByUs: true,
+      targetOnly: true,
+      outsideFunnel: true,
+      fromStep: null,
+      campaignIds: [u.campaignId],
+    });
+  }
+  const pipes = [...byPipe.values()];
+  for (const p of pipes) p.campaignIds.sort();
+  return pipes.sort((a, b) => a.pipeId.localeCompare(b.pipeId));
 }
 
 /**
