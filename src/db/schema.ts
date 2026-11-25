@@ -114,11 +114,21 @@ export const AGENT_API_FREE_CREDIT_OFFER = "agent_api";
 export const AT_COST_FREE_CREDIT_OFFER = "prepaid_at_cost";
 /** The onboarding advance of an at-cost org ($5), repaid by its first payment. */
 export const AT_COST_ONBOARDING_ADVANCE_CENTS = 500;
+/**
+ * The SOLO-FOUNDER plan (owner 2026-11-25, SOLO-PLAN-1125, lib/solo-plan): written only
+ * when a caller ENROLS an org (never a column default, so no existing or new account
+ * changes by itself). No onboarding advance, no free money. Free tier: the org brings
+ * its own keys and we accept a DEBT of at most $2 on ours (« ce n'est pas du crédit
+ * donné, c'est une dette de crédit qu'on accepte jusqu'à -$2 »); paid: $99/month of
+ * credit on our keys, +$100 layers, 3-day trial capped at $10 behind a $99 card hold.
+ */
+export const SOLO_FOUNDER_OFFER = "solo_founder";
 export type FreeCreditOfferKind =
   | typeof LEGACY_FREE_CREDIT_OFFER
   | typeof MATCH_FREE_CREDIT_OFFER
   | typeof AGENT_API_FREE_CREDIT_OFFER
-  | typeof AT_COST_FREE_CREDIT_OFFER;
+  | typeof AT_COST_FREE_CREDIT_OFFER
+  | typeof SOLO_FOUNDER_OFFER;
 
 /** Smallest top-up (checkout, on-demand charge, auto-reload amount) a match_100 org may make. */
 export const MATCH_MIN_TOPUP_CENTS = 10000;
@@ -1309,6 +1319,59 @@ export const subscriptionCreditExpiries = pgTable(
   },
   (table) => [unique("subscription_credit_expiries_sub_boundary").on(table.subscriptionId, table.boundaryAt)]
 );
+
+// --- SOLO-FOUNDER plan (migration 0103, lib/solo-plan) ---
+
+export const soloPlans = pgTable("solo_plans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid("org_id").notNull().unique("solo_plans_org_unique"),
+  /** free | trialing | active | past_due */
+  status: text("status").notNull().default("free"),
+  monthlyAmountCents: integer("monthly_amount_cents").notNull().default(9900),
+  trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  /** Spendable balance the trial may not go below: balance at trial start minus $10. */
+  trialFloorCents: numeric("trial_floor_cents", { precision: 16, scale: 10 }),
+  trialHoldId: text("trial_hold_id"),
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true }),
+  currentPeriodEnd: timestamp("current_period_end", { withTimezone: true }),
+  renewalAnchorAt: timestamp("renewal_anchor_at", { withTimezone: true }),
+  startRequestedAt: timestamp("start_requested_at", { withTimezone: true }),
+  pendingChangeAt: timestamp("pending_change_at", { withTimezone: true }),
+  startedByUserId: uuid("started_by_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type SoloPlan = typeof soloPlans.$inferSelect;
+
+export const soloPlanCharges = pgTable(
+  "solo_plan_charges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    planId: uuid("plan_id").notNull(),
+    orgId: uuid("org_id").notNull(),
+    /** trial_conversion | renewal | layer | first_month */
+    kind: text("kind").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    monthlyAmountCents: integer("monthly_amount_cents").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    unspentDiscountCents: integer("unspent_discount_cents").notNull().default(0),
+    /** pending | paid | failed */
+    status: text("status").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    firstFailedAt: timestamp("first_failed_at", { withTimezone: true }),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    reference: text("reference"),
+    failureCode: text("failure_code"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("solo_plan_charges_period_kind").on(table.planId, table.periodStart, table.kind),
+    index("idx_solo_plan_charges_org").on(table.orgId),
+  ]
+);
+export type SoloPlanCharge = typeof soloPlanCharges.$inferSelect;
 
 // One auto-upgrade attempt of a subscription (migration 0081). At most one
 // `pending` (claimed, charge in flight) per plan: partial unique index.

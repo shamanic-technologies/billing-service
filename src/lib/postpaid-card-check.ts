@@ -72,7 +72,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function placeHoldRetryingPending(
+export async function placeHoldRetryingPending(
   orgId: string,
   amountCents: number,
   idempotencyKey: string,

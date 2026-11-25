@@ -49,9 +49,10 @@
  */
 
 import { Decimal } from "decimal.js";
+import { getSoloPlan } from "./solo-plan.js";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/index.js";
-import { billingAccounts, brandDailyBudgets, type Subscription } from "../db/schema.js";
+import { billingAccounts, brandDailyBudgets, type SoloPlan, type Subscription } from "../db/schema.js";
 import { getBrandSalesBudget } from "./brand-sales-budget.js";
 import {
   fetchRecurringCampaignStatuses,
@@ -107,7 +108,12 @@ export type RevenueClassReason =
   | "subscription_paused"
   | "subscription_payment_failed"
   | "subscription_ended"
-  | "subscription_not_started";
+  | "subscription_not_started"
+  /** The solo-founder plan (lib/solo-plan): its plan is its revenue, like a subscription. */
+  | "solo_plan"
+  | "solo_plan_trialing"
+  | "solo_plan_free"
+  | "solo_plan_payment_failed";
 
 export type DailyBudgetUnknownReason =
   | RecurringStatusUnavailableReason
@@ -590,19 +596,21 @@ export async function getOrgRevenue(
   cashHorizonDays: number = DEFAULT_CASH_HORIZON_DAYS,
   now: Date = new Date()
 ): Promise<OrgRevenue | null> {
-  const [resolved, proactive] = await Promise.all([
+  const [resolved, proactive, soloPlan] = await Promise.all([
     resolvePaymentOutlook(orgId, now),
     getProactiveBudget(orgId),
+    getSoloPlan(orgId),
   ]);
   if (!resolved) return null;
-  return composeOrgRevenue(resolved, proactive, cashHorizonDays, now);
+  return composeOrgRevenue(resolved, proactive, cashHorizonDays, now, soloPlan);
 }
 
 export function composeOrgRevenue(
   resolved: NonNullable<Awaited<ReturnType<typeof resolvePaymentOutlook>>>,
   proactive: ProactiveBudget,
   cashHorizonDays: number,
-  now: Date
+  now: Date,
+  soloPlan: SoloPlan | null = null
 ): OrgRevenue {
   const { outlook, inputs } = resolved;
   const payingPlans = inputs.subscriptions.filter(
@@ -628,6 +636,21 @@ export function composeOrgRevenue(
       : null,
   });
 
+  // The solo-founder plan (lib/solo-plan): like a subscription, its revenue is the
+  // plan we collect every month, recurring only while ACTIVE (a trial has not paid).
+  if (soloPlan) {
+    cls.revenueClass = soloPlan.status === "active" ? "recurring" : "none";
+    cls.reason =
+      soloPlan.status === "active"
+        ? "solo_plan"
+        : soloPlan.status === "trialing"
+          ? "solo_plan_trialing"
+          : soloPlan.status === "past_due"
+            ? "solo_plan_payment_failed"
+            : "solo_plan_free";
+  }
+  const soloMonthly = soloPlan && soloPlan.status === "active" ? soloPlan.monthlyAmountCents : null;
+
   const pace = proactive.dailyBudgetCents;
   // A subscription's day is worth its plans / 30, whatever its campaigns spend:
   // the sum of every PAYING plan (active, no cancel pending, not paused).
@@ -637,7 +660,9 @@ export function composeOrgRevenue(
   const drr =
     cls.revenueClass !== "recurring"
       ? fixed(new Decimal(0))
-      : outlook.paymentMode === "subscription" && subscriptionPlan !== null
+      : soloMonthly !== null
+        ? fixed(new Decimal(soloMonthly).dividedBy(MRR_DAYS))
+        : outlook.paymentMode === "subscription" && subscriptionPlan !== null
         ? fixed(new Decimal(subscriptionPlan).dividedBy(MRR_DAYS))
         : pace;
 
@@ -674,7 +699,9 @@ export function composeOrgRevenue(
   // A subscription's MRR IS its plan, exactly (plan / 30 × 30 would lose a cent
   // to rounding).
   const mrr =
-    cls.revenueClass === "recurring" && outlook.paymentMode === "subscription" && subscriptionPlan !== null
+    soloMonthly !== null
+      ? fixed(new Decimal(soloMonthly))
+      : cls.revenueClass === "recurring" && outlook.paymentMode === "subscription" && subscriptionPlan !== null
       ? fixed(new Decimal(subscriptionPlan))
       : times(drr, MRR_DAYS);
   return {
