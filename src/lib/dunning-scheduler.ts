@@ -15,6 +15,7 @@ import { runWelcomeCompletionSweep } from "./welcome-completion-sweep.js";
 import { runUnpaidDebtScan } from "./unpaid-debt.js";
 import { runCampaignReloadSweep } from "./campaign-reload-sweep.js";
 import { runSubscriptionSweep } from "./subscription.js";
+import { runSoloPlanSweep } from "./solo-plan.js";
 import { notifySubscriptionMonthlyUpdateIfDue } from "./subscription-monthly-update.js";
 
 // Hourly heartbeat. The follow-up windows (+3d / +10d) are far coarser, so this
@@ -126,6 +127,17 @@ export function startDunningScheduler(): void {
         }
       } catch (err) {
         console.error("[billing-service] subscription sweep failed:", err);
+      }
+
+      // Solo-founder plans (lib/solo-plan): start a plan whose card landed, convert
+      // ended trials, renew ended cycles, retry refused charges. Isolated.
+      try {
+        const solo = await runSoloPlanSweep(new Date());
+        if (solo.checked > 0) {
+          console.log(`[billing-service] solo plan sweep: checked=${solo.checked} failed=${solo.failed}`);
+        }
+      } catch (err) {
+        console.error("[billing-service] solo plan sweep failed:", err);
       }
     } finally {
       timer = setTimeout(tick, TICK_INTERVAL_MS);

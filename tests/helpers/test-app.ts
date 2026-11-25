@@ -16,6 +16,7 @@ import usageDiscountRoutes from "../../src/routes/usage_discount.js";
 import freeCreditPromisesRoutes from "../../src/routes/free_credit_promises.js";
 import paymentModeRoutes from "../../src/routes/payment_mode.js";
 import subscriptionRoutes from "../../src/routes/subscription.js";
+import soloPlanRoutes from "../../src/routes/solo_plan.js";
 import acquirerRoutes from "../../src/routes/acquirer.js";
 import monthlyChargeLimitRoutes from "../../src/routes/monthly_charge_limit.js";
 import topupMinimumsRoutes from "../../src/routes/topup_minimums.js";
@@ -44,6 +45,7 @@ export function createTestApp() {
   app.use(freeCreditPromisesRoutes);
   app.use(paymentModeRoutes);
   app.use(subscriptionRoutes);
+  app.use(soloPlanRoutes);
   app.use(acquirerRoutes);
   app.use(monthlyChargeLimitRoutes);
   app.use(topupMinimumsRoutes);

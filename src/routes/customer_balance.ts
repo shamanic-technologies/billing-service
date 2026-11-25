@@ -18,6 +18,7 @@ import { upsertCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { openDepletionEpisodeIfDepleted } from "../lib/dunning.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
 import { isPlatformAbsorbedSpend } from "../lib/platform-absorbed.js";
+import { getSoloPlanOfOrg, soloSpendVerdict } from "../lib/solo-plan.js";
 import { liveAnswerPass } from "../lib/answer-pass.js";
 import { checkFunnelCapsForSpend } from "../lib/funnel-cap-authorize.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
@@ -123,6 +124,35 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       return;
     }
 
+    // An org on the SOLO-FOUNDER plan (lib/solo-plan) is decided by its plan alone:
+    // free = a debt of at most $2 on our keys and no campaign; trial = $10 of spend;
+    // paid = the cycle's credit. No reload, no episode. A person waiting on our
+    // answer is never blocked by an empty balance (live answer pass). A campaign the
+    // plan allows still goes through the funnel max budget and the monthly limit.
+    const soloPlan = await getSoloPlanOfOrg(orgId, account.freeCreditOffer);
+    if (soloPlan) {
+      const verdict = soloSpendVerdict(soloPlan, snapshot.balanceCents, requiredCents, !!wf.campaignId);
+      const pass = verdict.allowed ? null : await liveAnswerPass(orgId, wf.campaignId);
+      if (!verdict.allowed && !pass) {
+        traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: `solo_plan_${verdict.reason}`, balance_cents: snapshot.balanceCents, required_cents: requiredCents, floor_cents: verdict.floorCents } }, req.headers);
+        res.json({
+          sufficient: false,
+          balance_cents: snapshot.balanceCents,
+          required_cents: requiredCents,
+        });
+        return;
+      }
+      if (!wf.campaignId) {
+        traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "solo_plan", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+        res.json({
+          sufficient: true,
+          balance_cents: snapshot.balanceCents,
+          required_cents: requiredCents,
+        });
+        return;
+      }
+    }
+
     // Spend with no campaign (Copilot chat, onboarding, A/B work) is the
     // platform's cost (lib/platform-absorbed): always sufficient, never a reload,
     // never a depletion episode, whatever the balance. It is still declared to
@@ -187,6 +217,17 @@ router.post("/v1/customer_balance/authorize", requireOrgHeaders, async (req, res
       traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: false, reason: MONTHLY_CHARGE_LIMIT_REACHED, spent_cents: spendLimit.spentCents, limit_cents: spendLimit.limitCents, required_cents: requiredCents } }, req.headers);
       res.json({
         sufficient: false,
+        balance_cents: snapshot.balanceCents,
+        required_cents: requiredCents,
+      });
+      return;
+    }
+
+    // The solo-founder plan already allowed this campaign spend (above).
+    if (soloPlan) {
+      traceEvent(runId, { service: "billing-service", event: "customer_balance.authorize.done", data: { sufficient: true, reason: "solo_plan", balance_cents: snapshot.balanceCents, required_cents: requiredCents } }, req.headers);
+      res.json({
+        sufficient: true,
         balance_cents: snapshot.balanceCents,
         required_cents: requiredCents,
       });

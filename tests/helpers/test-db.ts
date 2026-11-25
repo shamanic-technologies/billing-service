@@ -27,6 +27,8 @@ import {
   subscriptionCreditExpiries,
   platformOrgs,
   subscriptionAutoUpgrades,
+  soloPlanCharges,
+  soloPlans,
   paymentConsents,
   paymentAlerts,
   featuresCatalogueSnapshots,
@@ -74,6 +76,8 @@ export async function cleanTestData() {
   // Keep 0057's seeded row; drop any a test added.
   await db.delete(platformOrgs).where(notInArray(platformOrgs.orgId, [SEEDED_PLATFORM_ORG_ID]));
   await db.delete(subscriptionAutoUpgrades);
+  await db.delete(soloPlanCharges);
+  await db.delete(soloPlans);
   await db.delete(paymentConsents);
   await db.delete(paymentAlerts);
   await db.delete(featuresCatalogueSnapshots);
