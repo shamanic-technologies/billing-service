@@ -36,6 +36,11 @@ export interface SalesFunnelUnit {
   featureSlug: string;
   legKey: string;
   status: string;
+  /**
+   * The unit runs its campaign's TARGET Engine: served with no channel and no leg
+   * (PLAN-RECURSIVE-PER-ENGINE-1124), spelled as `targetOnlyPipe`. Absent on every other unit.
+   */
+  targetEngine?: true;
 }
 
 export interface SalesFunnelCampaign {
@@ -83,8 +88,9 @@ export type FundedBy = "max_budget" | "max_volume" | "both";
  * 2026-10-11: "Pour créer une campaign il FAUT une contrainte qui doit être SOIT
  * un max $ ET/OU un max volume." Funded = at least one cap stated and every
  * stated cap above 0 (a $0 max budget spends nothing, a max volume of 0 touches
- * nobody). A volume-only funnel is funded: it spends from the org's balance
- * (every balance / payment hold still applies) until its max volume is reached.
+ * nobody). Since 2026-11-24 a max volume needs a max budget beside it: a
+ * volume-only funnel is NOT funded (THREADS-POSTS-CAP-1124, its 1-a-day cap could not be
+ * counted and its sourcing spent $8.12 in a morning).
  * Nothing stated = not funded (no constraint, no spend). This is the ONE answer;
  * readers (campaign-service, the dashboard) read it, never re-derive it.
  */
@@ -95,6 +101,10 @@ export function fundingOf(
   const volume = row?.maxVolume != null ? row.maxVolume > 0 : null;
   if (budget === null && volume === null) return { funded: false, fundedBy: null };
   if (budget === false || volume === false) return { funded: false, fundedBy: null };
+  // Owner 2026-11-24 (« Option B -> ajoute aussi un max en $ »): a max volume alone no
+  // longer funds a campaign; the max $ beside it is the safety when the volume cannot be
+  // counted. Every stored volume-only row was given its $ max the same day.
+  if (budget === null) return { funded: false, fundedBy: null };
   return { funded: true, fundedBy: budget && volume ? "both" : budget ? "max_budget" : "max_volume" };
 }
 
@@ -227,9 +237,19 @@ export function targetOnlyPipe(target: string, workflowSlug: unknown): { feature
   };
 }
 
-/** PURE: a served unit's (channel, leg); a channel-less unit of a target-only campaign runs its Engine's pipe. */
-function unitPipeOf(c: Record<string, unknown>, u: Record<string, unknown>): { featureSlug: string; legKey: string } {
-  if (u.featureSlug == null && u.legKey == null && isTargetOnlyCampaign(c)) return targetOnlyPipe(String(c.target), u.workflowSlug);
+/**
+ * PURE: a served unit's (channel, leg). A unit with no channel and no leg runs its campaign's
+ * TARGET Engine (PLAN-RECURSIVE-PER-ENGINE-1124), whatever the campaign's funnel id: a target-only
+ * campaign's one unit, or a funnel campaign moved onto its Target's Engine. Keyed on the unit's
+ * shape only.
+ */
+export function unitPipeOf(
+  c: Record<string, unknown>,
+  u: Record<string, unknown>
+): { featureSlug: string; legKey: string; targetEngine?: true } {
+  if (u.featureSlug == null && u.legKey == null && typeof c.target === "string" && c.target) {
+    return { ...targetOnlyPipe(c.target, u.workflowSlug), targetEngine: true };
+  }
   return { featureSlug: String(u.featureSlug), legKey: String(u.legKey) };
 }
 

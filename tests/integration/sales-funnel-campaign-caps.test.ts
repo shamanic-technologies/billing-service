@@ -114,7 +114,10 @@ const putCampaign = (fc: string, body: unknown, internalRoute = true) =>
     ? request(app).put(`/internal${campaignPath(fc)}`).set({ ...internal, "x-user-id": userId }).send(body as object)
     : request(app).put(`/v1${campaignPath(fc)}`).set(auth).send(body as object);
 const readCampaign = (fc: string) => request(app).get(`/internal${campaignPath(fc)}`).set(internal);
-const ONE_EMAIL = { maxBudget: null, maxVolume: { count: 1, period: "one_off" } };
+// A max volume is never stated alone since 2026-11-24 (VOL-NEEDS-USD-1124): the max budget
+// beside it is far above anything spent here, so only the volume binds.
+const NEVER_BINDS = { amountCents: 500000, period: "one_off" } as const;
+const ONE_EMAIL = { maxBudget: NEVER_BINDS, maxVolume: { count: 1, period: "one_off" } };
 
 describe("sales funnel campaign caps", () => {
   const savedEnv = { ...process.env };
@@ -154,7 +157,7 @@ describe("sales funnel campaign caps", () => {
     expect(marie.capScope).toBe("sales_funnel_campaign");
     expect(marie.salesFunnelCampaignId).toBe(FC_MARIE);
     expect(marie.funded).toBe(true);
-    expect(marie.fundedBy).toBe("max_volume");
+    expect(marie.fundedBy).toBe("both");
     expect(marie.volumeUnit).toBe("prospects_handled");
     expect(marie.pipes[0].campaignIds).toEqual([UNIT_MARIE]);
     expect(marie.maxVolume).toMatchObject({ count: 1, unit: "prospects_handled", consumed: 1, remaining: 0, reached: true, consumedUnavailableReason: null });
@@ -195,7 +198,7 @@ describe("sales funnel campaign caps", () => {
 
   it("its own cap wins over the funnel-wide one, and clearing it falls back without touching the funnel-wide row", async () => {
     mockUpstreams({});
-    await request(app).put(`/v1${funnelPath}`).set(auth).send({ maxBudget: null, maxVolume: { count: 50, period: "monthly" } });
+    await request(app).put(`/v1${funnelPath}`).set(auth).send({ maxBudget: { amountCents: 500000, period: "monthly" }, maxVolume: { count: 50, period: "monthly" } });
     await putCampaign(FC_MARIE, ONE_EMAIL, false);
     expect((await readCampaign(FC_MARIE)).body.maxVolume.count).toBe(1);
 
