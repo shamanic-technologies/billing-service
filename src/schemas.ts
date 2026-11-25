@@ -5575,7 +5575,11 @@ export const SoloPlanStateSchema = z
     current_period_end: z.string().nullable(),
     next_charge_at: z.string().nullable(),
     next_charge_cents: z.number().int().nullable(),
-    upgrade_url: z.string().nullable().openapi({ description: "The public upgrade page for the out-of-credit notice (null when not configured)." }),
+    upgrade_url: z.string().nullable().openapi({
+      description:
+        "The org's PAY LINK, no login: one click starts the trial, pays now, adds $100 or updates the card, whichever the plan needs. Safe in WhatsApp / email / MCP text (opening it never charges; the page's one button does). Lives 30 days, fresh on every read. Null only while SOLO_PLAN_PUBLIC_BASE_URL is unset.",
+    }),
+    pay_link_path: z.string().openapi({ description: "The same link without its host: /public/solo-plan/pay/<token>." }),
     next_step: z
       .object({
         action: z.enum(["start_plan", "start_paid_now", "add_layer", "update_card"]),
@@ -5727,6 +5731,7 @@ export const SoloAiGateSchema = z
     debt_cents: z.string().nullable().openapi({ description: "What the account owes on our keys now (decimal cents)." }),
     debt_limit_cents: z.number().int().nullable().openapi({ description: "200 on the free state; null otherwise." }),
     upgrade_url: z.string().nullable(),
+    pay_link_path: z.string().nullable(),
     next_step: SoloPlanStateSchema.shape.next_step,
   })
   .openapi("SoloAiGate");
@@ -5744,5 +5749,36 @@ registry.registerPath({
     200: { description: "Verdict", content: { "application/json": { schema: SoloAiGateSchema } } },
     400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
     502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/public/solo-plan/pay/{token}",
+  summary: "The solo-founder plan's pay page (public, no login)",
+  description:
+    "The org's pay link (`upgrade_url` on every solo plan read). NO API key: the signed token is the credential and pays for its own org only (30 days). " +
+    "Renders an HTML page stating what one click does (start the trial, pay now, add $100, update the card). A GET never moves money (link previews fetch it). " +
+    "The gateway must serve GET + POST of this path publicly. 404 page for a forged, expired or other-org token.",
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: "The pay page (text/html)" },
+    404: { description: "Invalid or expired link (text/html)" },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/public/solo-plan/pay/{token}",
+  summary: "The pay page's one button",
+  description:
+    "Form post (`expect` = the state the page showed). free / not enrolled -> 303 to the hosted card page when no chargeable card, else the $99 hold + trial; " +
+    "trialing -> the $99 now; active -> +$100/month charged now (new amount minus unspent credit); past_due -> 303 to the card page. " +
+    "A stale `expect` redirects to the page without charging. Refusals render a page (409) with the reason in words.",
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    303: { description: "To the hosted card page, or back to the pay page (?done=trial|paid|layer)" },
+    404: { description: "Invalid or expired link (text/html)" },
+    409: { description: "Refused, reason in words (text/html)" },
   },
 });

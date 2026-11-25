@@ -66,6 +66,7 @@ import { recordChargeSignal } from "./payment-alerts.js";
 import { nextRetryDueAt } from "./campaign-reload-sweep.js";
 import { isPermanentDecline } from "./card-usability.js";
 import { notifyOwnerBillingEvent } from "./owner-alerts.js";
+import { payLinkPath, payLinkUrl } from "./solo-pay-link.js";
 
 export const SOLO_PLAN_BASE_MONTHLY_CENTS = 9900;
 export const SOLO_PLAN_LAYER_CENTS = 10000;
@@ -255,8 +256,13 @@ export interface SoloPlanState {
   current_period_end: string | null;
   next_charge_at: string | null;
   next_charge_cents: number | null;
-  /** The public page the out-of-credit notice links to (null when not configured). */
+  /**
+   * The org's PAY LINK (no login, no dashboard): one click to start the trial, pay now,
+   * add $100 or update the card, whichever the plan needs. Null only while
+   * SOLO_PLAN_PUBLIC_BASE_URL is unset; `pay_link_path` is the same link, host-less.
+   */
   upgrade_url: string | null;
+  pay_link_path: string;
   /** The one action that gets this account more room, for the notice's link. */
   next_step: {
     action: "start_plan" | "start_paid_now" | "add_layer" | "update_card";
@@ -328,6 +334,7 @@ export function soloPlanStateOf(orgId: string, plan: SoloPlan, balanceCents: str
       status === "trialing" ? iso(plan.trialEndsAt) : status === "active" ? iso(plan.currentPeriodEnd) : null,
     next_charge_cents: status === "trialing" || status === "active" ? plan.monthlyAmountCents : null,
     upgrade_url: soloUpgradeUrl(orgId),
+    pay_link_path: payLinkPath(orgId),
     next_step: nextStep,
   };
 }
@@ -352,15 +359,15 @@ export interface SoloAiGate {
   refused_reason: SoloSpendVerdict["reason"];
   debt_cents: string | null;
   debt_limit_cents: number | null;
-  /** The public page the out-of-credit notice links to (null when not configured). */
+  /** The org's pay link for the fixed notice (see SoloPlanState). */
   upgrade_url: string | null;
+  pay_link_path: string | null;
   next_step: SoloPlanState["next_step"];
 }
 
-/** The upgrade page for the fixed notice: `SOLO_PLAN_UPGRADE_URL`, `{orgId}` substituted. */
+/** The org's pay link (lib/solo-pay-link): the fixed notice's one link, no login. */
 export function soloUpgradeUrl(orgId: string): string | null {
-  const template = process.env.SOLO_PLAN_UPGRADE_URL?.trim();
-  return template ? template.replaceAll("{orgId}", encodeURIComponent(orgId)) : null;
+  return payLinkUrl(orgId);
 }
 
 /**
@@ -380,6 +387,7 @@ export async function readSoloAiGate(orgId: string): Promise<SoloAiGate> {
       debt_cents: null,
       debt_limit_cents: null,
       upgrade_url: null,
+      pay_link_path: null,
       next_step: null,
     };
   }
@@ -393,7 +401,8 @@ export async function readSoloAiGate(orgId: string): Promise<SoloAiGate> {
     refused_reason: state.out_of_credit_reason,
     debt_cents: state.debt_cents,
     debt_limit_cents: plan.status === "free" ? SOLO_PLAN_DEBT_LIMIT_CENTS : null,
-    upgrade_url: soloUpgradeUrl(orgId),
+    upgrade_url: state.upgrade_url,
+    pay_link_path: state.pay_link_path,
     next_step: state.next_step,
   };
 }

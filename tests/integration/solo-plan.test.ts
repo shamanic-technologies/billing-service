@@ -265,7 +265,7 @@ describe("solo-founder plan", () => {
     expect(gate.body.on_solo_plan).toBe(false);
     expect(gate.body.may_use_our_keys).toBe(true);
 
-    process.env.SOLO_PLAN_UPGRADE_URL = "https://lab.distribute.you/upgrade?org={orgId}";
+    process.env.SOLO_PLAN_PUBLIC_BASE_URL = "https://api.distribute.you";
     try {
       await request(app).post("/v1/accounts/solo_plan/enroll").set(headers).send({});
       setUsage(150);
@@ -276,15 +276,16 @@ describe("solo-founder plan", () => {
         may_use_our_keys: true,
         debt_cents: "150.0000000000",
         debt_limit_cents: 200,
-        upgrade_url: `https://lab.distribute.you/upgrade?org=${orgId}`,
       });
       setUsage(200);
       gate = await request(app).get(`/internal/accounts/by-org/${orgId}/solo-plan/ai-gate`).set(headers);
       expect(gate.body.may_use_our_keys).toBe(false);
       expect(gate.body.refused_reason).toBe("debt_limit_reached");
       expect(gate.body.next_step.action).toBe("start_plan");
+      expect(gate.body.upgrade_url).toMatch(/^https:\/\/api\.distribute\.you\/public\/solo-plan\/pay\/[\w-]+\.[\w-]+$/);
+      expect(gate.body.pay_link_path).toMatch(/^\/public\/solo-plan\/pay\//);
     } finally {
-      delete process.env.SOLO_PLAN_UPGRADE_URL;
+      delete process.env.SOLO_PLAN_PUBLIC_BASE_URL;
     }
   });
 

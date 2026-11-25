@@ -25,6 +25,7 @@ import monthlyChargeLimitRoutes from "./routes/monthly_charge_limit.js";
 import topupMinimumsRoutes from "./routes/topup_minimums.js";
 import subscriptionRoutes from "./routes/subscription.js";
 import soloPlanRoutes from "./routes/solo_plan.js";
+import soloPayLinkRoutes from "./routes/solo_pay_link.js";
 import acquirerRoutes from "./routes/acquirer.js";
 import prepaidCheckoutRoutes from "./routes/prepaid_checkout.js";
 import { requireApiKey } from "./middleware/auth.js";
@@ -51,6 +52,8 @@ app.use(ownerAlertActorMiddleware);
 // Public routes
 app.use(healthRoutes);
 app.use(publicStatsRoutes);
+// The solo-founder plan's pay page: no API key, the signed link is the credential.
+app.use(soloPayLinkRoutes);
 
 // Serve OpenAPI spec (resolve relative to dist/ → ../openapi.json in Docker)
 const openapiPath = resolve(__dirname, "..", "openapi.json");
