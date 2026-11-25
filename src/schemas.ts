@@ -103,9 +103,9 @@ export const BillingAccountSchema = z
      * Where the org stands on its free-credit offer, ready-made for the payment wall
      * ("$30 is already yours, $70 more once you've paid $100"). See lib/free-credit-offer.
      */
-    free_credit_offer: z.enum(["legacy", "match_100", "agent_api", "prepaid_at_cost"]).openapi({
+    free_credit_offer: z.enum(["legacy", "match_100", "agent_api", "prepaid_at_cost", "solo_founder"]).openapi({
       description:
-        "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with auto top-up armed at checkout (the org may switch it off, owner 2026-11-18). `legacy` = every older org, unchanged.",
+        "The free-credit offer this org was created under. `solo_founder` = enrolled on the solo-founder plan (GET /v1/accounts/solo_plan): no advance, no free credit; a debt of at most $2 accepted on our keys while on its own keys, $99/month of credit on the paid plan. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with auto top-up armed at checkout (the org may switch it off, owner 2026-11-18). `legacy` = every older org, unchanged.",
     }),
     free_credit_entitlement_cents: z.number().int().openapi({
       description: "Total free credit the offer gives, every gift included (10000 for match_100).",
@@ -4037,6 +4037,10 @@ const RevenueClassReasonSchema = z.enum([
   "subscription_payment_failed",
   "subscription_ended",
   "subscription_not_started",
+  "solo_plan",
+  "solo_plan_trialing",
+  "solo_plan_free",
+  "solo_plan_payment_failed",
 ]);
 const DailyBudgetUnknownReasonSchema = z.enum([
   "campaign_service_unconfigured",
@@ -5525,5 +5529,220 @@ registry.registerPath({
   responses: {
     200: { description: "Absorbed costs", content: { "application/json": { schema: AbsorbedCostsResponseSchema } } },
     502: { description: "runs-service or stripe-service could not be read", content: { "application/json": { schema: ErrorResponseSchema } } },
+  },
+});
+
+// --- SOLO-FOUNDER plan (SOLO-PLAN-1125, lib/solo-plan) ---
+
+export const SoloPlanStartRequestSchema = z
+  .object({
+    /** Where the hosted card page returns to. Required for hosted (the default). */
+    return_url: z.string().url().optional(),
+    /** hosted (default: a link to open) or embedded (a form the page mounts). */
+    ui_mode: z.enum(["hosted", "embedded"]).optional(),
+  })
+  .openapi("SoloPlanStartRequest");
+
+const SoloPlanReasonSchema = z
+  .enum(["paid_plan_required", "debt_limit_reached", "trial_cap_reached", "credit_used_up", "payment_failed"])
+  .nullable();
+
+export const SoloPlanStateSchema = z
+  .object({
+    org_id: z.string(),
+    plan: z.enum(["free", "trialing", "active", "past_due"]).openapi({
+      description:
+        "free = on its own keys, a debt of at most $2 accepted on ours (never credit given), no campaign on our keys; " +
+        "trialing = 3-day trial behind a $99 card hold, spend capped at $10; active = paid monthly; " +
+        "past_due = the last charge was refused (retried +1d/+3d/+7d/+14d, then back to free).",
+    }),
+    monthly_amount_cents: z.number().int().openapi({ description: "$99 + $100 per layer." }),
+    balance_cents: z.string().openapi({ description: "Spendable balance (decimal cents, may be negative = debt)." }),
+    credit_left_cents: z.string().openapi({ description: "What is still spendable on our keys before the plan's limit; 0 on free." }),
+    debt_cents: z.string().openapi({ description: "What the account owes on our keys (0 when the balance is not negative). Repaid by the first payment." }),
+    debt_limit_cents: z.number().int(),
+    out_of_credit: z.boolean().openapi({ description: "True = campaigns stop and every door shows the out-of-credit notice." }),
+    out_of_credit_reason: SoloPlanReasonSchema,
+    may_launch_campaign_on_our_keys: z.boolean(),
+    campaign_launch_refused_reason: SoloPlanReasonSchema,
+    trial_started_at: z.string().nullable(),
+    trial_ends_at: z.string().nullable(),
+    trial_spend_cap_cents: z.number().int().nullable(),
+    trial_spent_cents: z.string().nullable(),
+    trial_hold_cents: z.number().int().nullable().openapi({ description: "The card hold taken at trial start (9900), while trialing." }),
+    had_trial: z.boolean(),
+    current_period_start: z.string().nullable(),
+    current_period_end: z.string().nullable(),
+    next_charge_at: z.string().nullable(),
+    next_charge_cents: z.number().int().nullable(),
+    upgrade_url: z.string().nullable().openapi({ description: "The public upgrade page for the out-of-credit notice (null when not configured)." }),
+    next_step: z
+      .object({
+        action: z.enum(["start_plan", "start_paid_now", "add_layer", "update_card"]),
+        method: z.literal("POST"),
+        path: z.string(),
+        amount_cents: z.number().int().nullable(),
+      })
+      .nullable()
+      .openapi({ description: "The one call that gives this account more room (the out-of-credit notice's link)." }),
+  })
+  .openapi("SoloPlanState");
+
+export const SoloPlanStartResponseSchema = SoloPlanStateSchema.extend({
+  card_required: z.boolean(),
+  checkout_url: z.string().nullable().openapi({ description: "The hosted card page to open (hosted mode), when a card is required." }),
+  card_setup: z.record(z.string(), z.unknown()).nullable(),
+  card_refused_reason: z.enum(["prepaid_card"]).nullable(),
+}).openapi("SoloPlanStartResponse");
+
+export const SoloPlanLayerResponseSchema = SoloPlanStateSchema.extend({
+  charged_cents: z.number().int(),
+  unspent_credit_deducted_cents: z.number().int(),
+}).openapi("SoloPlanLayerResponse");
+
+const soloRefusal = (codes: string) => ({
+  description: `Refused, with a code: ${codes}`,
+  content: { "application/json": { schema: ErrorResponseSchema } },
+});
+const soloUpstream = { description: "stripe-service or runs-service could not be read", content: { "application/json": { schema: ErrorResponseSchema } } };
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/solo_plan/enroll",
+  summary: "Put this account on the solo-founder plan (free state)",
+  description:
+    "Idempotent. Only an account that never paid, holds no subscription and is on the at-cost or agent/API offer. " +
+    "Its $5 onboarding advance goes to 0: the plan accepts a debt of at most $2 on our keys instead (never credit given).",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Plan state", content: { "application/json": { schema: SoloPlanStateSchema } } },
+    409: soloRefusal("offer_not_switchable | existing_paying_org | subscription_exists"),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/accounts/solo_plan",
+  summary: "The solo-founder plan state (settles first)",
+  description:
+    "Trial / active / out of credit, credit left, debt, cycle dates, monthly amount, may a campaign launch on our keys, " +
+    "and the next step to offer. Settles first: a requested plan whose card landed starts, a trial that ended converts " +
+    "(the $99 hold is captured, debt deducted), an ended cycle renews (unspent credit expires).",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Plan state", content: { "application/json": { schema: SoloPlanStateSchema } } },
+    404: soloRefusal("not_enrolled"),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/solo_plan/start",
+  summary: "Start the paid plan: the checkout link, or the trial at once",
+  description:
+    "Enrols the account when needed. No chargeable card on file (or a prepaid one) -> `checkout_url` (hosted card page) " +
+    "and the plan starts once the card is saved (call again, or the next read). With a debit/credit card: never had a " +
+    "trial -> a $99 authorization hold, then a 3-day trial capped at $10; had one -> the first month ($99) charged now.",
+  request: {
+    headers: protectedHeaders,
+    body: { content: { "application/json": { schema: SoloPlanStartRequestSchema } } },
+  },
+  responses: {
+    200: { description: "Card required, or started", content: { "application/json": { schema: SoloPlanStartResponseSchema } } },
+    400: { description: "return_url missing for a hosted page", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: soloRefusal(
+      "plan_exists | card_hold_refused (the bank refused the $99 hold) | card_hold_requires_action (+ client_secret: run " +
+        "3-D Secure, then call again) | first_charge_declined | offer_not_switchable | existing_paying_org | subscription_exists"
+    ),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/solo_plan/start_now",
+  summary: "End the trial now and pay the first month today",
+  description: "Trialing only. The $99 hold is captured today (else the card is charged), debt deducted, the cycle starts today.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Plan state", content: { "application/json": { schema: SoloPlanStateSchema } } },
+    404: soloRefusal("not_enrolled"),
+    409: soloRefusal("not_trialing | first_charge_declined"),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/v1/accounts/solo_plan/layers",
+  summary: "Add +$100/month to the plan, charged now",
+  description:
+    "Active plan only. Charges (new monthly amount − credit left unspent this cycle) now and restarts the cycle today " +
+    "with the new amount as its credit. Example: $99 plan, $59 unspent -> pays $140, holds $199 for a month, next charge $199.",
+  request: { headers: protectedHeaders },
+  responses: {
+    200: { description: "Raised", content: { "application/json": { schema: SoloPlanLayerResponseSchema } } },
+    404: soloRefusal("not_enrolled"),
+    409: soloRefusal("not_active | change_in_progress | layer_charge_declined"),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/solo-plan",
+  summary: "The solo-founder plan state, service read (no settle)",
+  description:
+    "Same body as GET /v1/accounts/solo_plan, read live without settling: out of credit, may launch a campaign on our keys, next step.",
+  request: { headers: internalHeaders, params: z.object({ orgId: zod3Uuid() }) },
+  responses: {
+    200: { description: "Plan state", content: { "application/json": { schema: SoloPlanStateSchema } } },
+    404: soloRefusal("not_enrolled"),
+    502: soloUpstream,
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/accounts/by-org/{orgId}/solo-plan/enroll",
+  summary: "Put an account on the solo-founder plan, service call",
+  description: "Same rules as POST /v1/accounts/solo_plan/enroll. Optional x-user-id = the person enrolling.",
+  request: { headers: internalHeaders, params: z.object({ orgId: zod3Uuid() }) },
+  responses: {
+    200: { description: "Plan state", content: { "application/json": { schema: SoloPlanStateSchema } } },
+    409: soloRefusal("offer_not_switchable | existing_paying_org | subscription_exists"),
+    502: soloUpstream,
+  },
+});
+
+export const SoloAiGateSchema = z
+  .object({
+    org_id: z.string(),
+    on_solo_plan: z.boolean().openapi({ description: "False for every org not enrolled (existing accounts): untouched, ignore the rest." }),
+    plan: z.enum(["free", "trialing", "active", "past_due"]).nullable(),
+    may_use_our_keys: z.boolean().openapi({ description: "May an AI turn run on our money now. False = debt limit reached (free), trial cap reached, credit used up, or payment failed." }),
+    refused_reason: SoloPlanReasonSchema,
+    debt_cents: z.string().nullable().openapi({ description: "What the account owes on our keys now (decimal cents)." }),
+    debt_limit_cents: z.number().int().nullable().openapi({ description: "200 on the free state; null otherwise." }),
+    upgrade_url: z.string().nullable(),
+    next_step: SoloPlanStateSchema.shape.next_step,
+  })
+  .openapi("SoloAiGate");
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/accounts/by-org/{orgId}/solo-plan/ai-gate",
+  summary: "May this org run an AI turn on our money now (one read per turn)",
+  description:
+    "For chat-service before each Distry turn. Any org answers 200: `on_solo_plan: false` for every org not on the " +
+    "solo-founder plan (one indexed read, nothing else composed). On the plan: the verdict, the debt and its limit, " +
+    "and the upgrade link for the fixed no-LLM notice. Pure read, x-api-key only.",
+  request: { headers: internalHeaders, params: z.object({ orgId: zod3Uuid() }) },
+  responses: {
+    200: { description: "Verdict", content: { "application/json": { schema: SoloAiGateSchema } } },
+    400: { description: "orgId is not a UUID", content: { "application/json": { schema: ErrorResponseSchema } } },
+    502: soloUpstream,
   },
 });

@@ -11,6 +11,7 @@ import {
   AT_COST_FREE_CREDIT_OFFER,
   AT_COST_ONBOARDING_ADVANCE_CENTS,
   LEGACY_FREE_CREDIT_OFFER,
+  SOLO_FOUNDER_OFFER,
   MATCH_FREE_CREDIT_OFFER,
   MATCH_MIN_TOPUP_CENTS,
   PLATFORM_USER_ID,
@@ -62,6 +63,7 @@ export function asFreeCreditOffer(value: string | null | undefined): FreeCreditO
   if (value === MATCH_FREE_CREDIT_OFFER) return MATCH_FREE_CREDIT_OFFER;
   if (value === AGENT_API_FREE_CREDIT_OFFER) return AGENT_API_FREE_CREDIT_OFFER;
   if (value === AT_COST_FREE_CREDIT_OFFER) return AT_COST_FREE_CREDIT_OFFER;
+  if (value === SOLO_FOUNDER_OFFER) return SOLO_FOUNDER_OFFER;
   return LEGACY_FREE_CREDIT_OFFER;
 }
 
@@ -89,7 +91,11 @@ export async function newAccountFreeCreditOffer(): Promise<FreeCreditOfferKind> 
  * product-task grant, no referral reward as a referrer. Staff grants stay possible.
  */
 export function isNoFreeCreditOffer(offer: FreeCreditOfferKind): boolean {
-  return offer === AGENT_API_FREE_CREDIT_OFFER || offer === AT_COST_FREE_CREDIT_OFFER;
+  return (
+    offer === AGENT_API_FREE_CREDIT_OFFER ||
+    offer === AT_COST_FREE_CREDIT_OFFER ||
+    offer === SOLO_FOUNDER_OFFER
+  );
 }
 
 /**
@@ -119,7 +125,9 @@ export function onboardingAdvanceCentsFor(offer: FreeCreditOfferKind, codeAmount
  * does not apply to it.
  */
 export function offerPaysNoCampaignSpend(offer: FreeCreditOfferKind): boolean {
-  return offer === AT_COST_FREE_CREDIT_OFFER;
+  // The solo-founder plan too (SOLO-PLAN-1125): « every expense (payment fees, AI
+  // conversation) billed to the account ».
+  return offer === AT_COST_FREE_CREDIT_OFFER || offer === SOLO_FOUNDER_OFFER;
 }
 
 /**

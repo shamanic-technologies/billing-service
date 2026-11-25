@@ -28,6 +28,9 @@ import {
   subscriptionCreditExpiries,
   localPromos,
   subscriptionAutoUpgrades,
+  SOLO_FOUNDER_OFFER,
+  soloPlans,
+  soloPlanCharges,
   monthlyChargeLimits,
   monthlyChargeLimitRefusals,
   ORG_CREATION_BONUS_CODE,
@@ -41,6 +44,7 @@ import {
 import { runDunningTick } from "../lib/dunning.js";
 import { getCampaignAuthorizeCost } from "../lib/campaign-costs.js";
 import { computeBalance } from "../lib/balance.js";
+import { getSoloPlanOfOrg, soloSpendVerdict } from "../lib/solo-plan.js";
 import { getOrgCash, getOrgCashByMonth } from "../lib/org-cash.js";
 import { foldCashByOrgDay } from "../lib/cash-by-org-day.js";
 import { listAllOffPlatformPayments } from "../lib/off-platform-payments.js";
@@ -207,6 +211,9 @@ async function deleteBillingStateByOrg(
     // Its auto-upgrade attempts (migration 0081) too. Its payment CONSENTS are kept:
     // they are dispute evidence that outlives the org.
     await tx.delete(subscriptionAutoUpgrades).where(eq(subscriptionAutoUpgrades.orgId, orgId));
+    // Its solo-founder plan and that plan's charges (migration 0103) describe this org only.
+    await tx.delete(soloPlanCharges).where(eq(soloPlanCharges.orgId, orgId));
+    await tx.delete(soloPlans).where(eq(soloPlans.orgId, orgId));
     // Its monthly charge limit and refusals (migration 0084) describe this org only.
     await tx.delete(monthlyChargeLimitRefusals).where(eq(monthlyChargeLimitRefusals.orgId, orgId));
     await tx.delete(monthlyChargeLimits).where(eq(monthlyChargeLimits.orgId, orgId));
@@ -372,6 +379,31 @@ router.get("/internal/campaigns/:campaignId/affordability", async (req, res) => 
   }
 
   const stored = await getCampaignAuthorizeCost(campaignId);
+
+  // An org on the SOLO-FOUNDER plan (lib/solo-plan): a campaign runs on our keys only
+  // on the paid plan (trial included) with room left, from its very first run.
+  {
+    const soloOrg = req.headers["x-org-id"];
+    const soloOrgId = typeof soloOrg === "string" && UUID_RE.test(soloOrg) ? soloOrg : stored?.orgId;
+    if (soloOrgId && (await getOrgFreeCreditOffer(soloOrgId)) === SOLO_FOUNDER_OFFER) {
+      try {
+        const plan = await getSoloPlanOfOrg(soloOrgId, SOLO_FOUNDER_OFFER);
+        const snapshot = await computeBalance(soloOrgId);
+        const required = stored?.lastAuthorizeRequiredCents ?? ZERO_CENTS;
+        const verdict = soloSpendVerdict(plan!, snapshot.balanceCents, required, true);
+        res.json({
+          affordable: verdict.allowed,
+          balanceCents: snapshot.balanceCents,
+          lastRequiredCents: stored?.lastAuthorizeRequiredCents ?? null,
+          hasHistory: !!stored,
+        });
+      } catch (err) {
+        console.error(`[billing-service] affordability: solo plan read failed for campaign ${campaignId} (org ${soloOrgId}):`, err);
+        res.status(502).json({ error: "Failed to compute balance" });
+      }
+      return;
+    }
+  }
 
   if (!stored) {
     res.json({

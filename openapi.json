@@ -194,9 +194,10 @@
               "legacy",
               "match_100",
               "agent_api",
-              "prepaid_at_cost"
+              "prepaid_at_cost",
+              "solo_founder"
             ],
-            "description": "The free-credit offer this org was created under. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with auto top-up armed at checkout (the org may switch it off, owner 2026-11-18). `legacy` = every older org, unchanged."
+            "description": "The free-credit offer this org was created under. `solo_founder` = enrolled on the solo-founder plan (GET /v1/accounts/solo_plan): no advance, no free credit; a debt of at most $2 accepted on our keys while on its own keys, $99/month of credit on the paid plan. `prepaid_at_cost` = every account created since 2026-10-29: a $5 advance at creation (repaid by the first payment, never a gift), NO other free credit (no match, no referral reward), PREPAID only with an OPTIONAL auto top-up (on by default, the org may switch it off and on), and every cost it causes is billed to it (spend with no campaign: onboarding, Copilot chat, card fees). `match_100` = 'We match your first $100' (a $30 advance at creation, repaid by the first payment, and +$100 free once $100 is paid). `agent_api` = opened by an AI agent through the API: NO free credit of any kind, prepaid with auto top-up armed at checkout (the org may switch it off, owner 2026-11-18). `legacy` = every older org, unchanged."
           },
           "free_credit_entitlement_cents": {
             "type": "integer",
@@ -3326,7 +3327,11 @@
               "subscription_paused",
               "subscription_payment_failed",
               "subscription_ended",
-              "subscription_not_started"
+              "subscription_not_started",
+              "solo_plan",
+              "solo_plan_trialing",
+              "solo_plan_free",
+              "solo_plan_payment_failed"
             ]
           },
           "chargeableCard": {
@@ -3891,7 +3896,11 @@
                     "subscription_paused",
                     "subscription_payment_failed",
                     "subscription_ended",
-                    "subscription_not_started"
+                    "subscription_not_started",
+                    "solo_plan",
+                    "solo_plan_trialing",
+                    "solo_plan_free",
+                    "solo_plan_payment_failed"
                   ]
                 },
                 "chargeableCard": {
@@ -4936,7 +4945,7 @@
           "maxVolume"
         ],
         "additionalProperties": false,
-        "description": "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. A cap restated in the same period keeps its window start (a one_off cap keeps counting)."
+        "description": "Both keys are REQUIRED: an object states the cap, null clears it; both null clears the funnel. A max volume is never stated alone: it needs a max budget beside it (400 `max_budget_required_with_max_volume`, owner 2026-11-24); a max budget alone is valid. A cap restated in the same period keeps its window start (a one_off cap keeps counting)."
       },
       "SalesFunnelCampaignCaps": {
         "allOf": [
@@ -5460,6 +5469,357 @@
           "fleetByMonth",
           "distribution",
           "customers"
+        ]
+      },
+      "SoloPlanState": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "trialing",
+              "active",
+              "past_due"
+            ],
+            "description": "free = on its own keys, a debt of at most $2 accepted on ours (never credit given), no campaign on our keys; trialing = 3-day trial behind a $99 card hold, spend capped at $10; active = paid monthly; past_due = the last charge was refused (retried +1d/+3d/+7d/+14d, then back to free)."
+          },
+          "monthly_amount_cents": {
+            "type": "integer",
+            "description": "$99 + $100 per layer."
+          },
+          "balance_cents": {
+            "type": "string",
+            "description": "Spendable balance (decimal cents, may be negative = debt)."
+          },
+          "credit_left_cents": {
+            "type": "string",
+            "description": "What is still spendable on our keys before the plan's limit; 0 on free."
+          },
+          "debt_cents": {
+            "type": "string",
+            "description": "What the account owes on our keys (0 when the balance is not negative). Repaid by the first payment."
+          },
+          "debt_limit_cents": {
+            "type": "integer"
+          },
+          "out_of_credit": {
+            "type": "boolean",
+            "description": "True = campaigns stop and every door shows the out-of-credit notice."
+          },
+          "out_of_credit_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "paid_plan_required",
+              "debt_limit_reached",
+              "trial_cap_reached",
+              "credit_used_up",
+              "payment_failed",
+              null
+            ]
+          },
+          "may_launch_campaign_on_our_keys": {
+            "type": "boolean"
+          },
+          "campaign_launch_refused_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "paid_plan_required",
+              "debt_limit_reached",
+              "trial_cap_reached",
+              "credit_used_up",
+              "payment_failed",
+              null
+            ]
+          },
+          "trial_started_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "trial_ends_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "trial_spend_cap_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "trial_spent_cents": {
+            "type": "string",
+            "nullable": true
+          },
+          "trial_hold_cents": {
+            "type": "integer",
+            "nullable": true,
+            "description": "The card hold taken at trial start (9900), while trialing."
+          },
+          "had_trial": {
+            "type": "boolean"
+          },
+          "current_period_start": {
+            "type": "string",
+            "nullable": true
+          },
+          "current_period_end": {
+            "type": "string",
+            "nullable": true
+          },
+          "next_charge_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "next_charge_cents": {
+            "type": "integer",
+            "nullable": true
+          },
+          "upgrade_url": {
+            "type": "string",
+            "nullable": true,
+            "description": "The public upgrade page for the out-of-credit notice (null when not configured)."
+          },
+          "next_step": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "start_plan",
+                  "start_paid_now",
+                  "add_layer",
+                  "update_card"
+                ]
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "POST"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "nullable": true
+              }
+            },
+            "required": [
+              "action",
+              "method",
+              "path",
+              "amount_cents"
+            ],
+            "description": "The one call that gives this account more room (the out-of-credit notice's link)."
+          }
+        },
+        "required": [
+          "org_id",
+          "plan",
+          "monthly_amount_cents",
+          "balance_cents",
+          "credit_left_cents",
+          "debt_cents",
+          "debt_limit_cents",
+          "out_of_credit",
+          "out_of_credit_reason",
+          "may_launch_campaign_on_our_keys",
+          "campaign_launch_refused_reason",
+          "trial_started_at",
+          "trial_ends_at",
+          "trial_spend_cap_cents",
+          "trial_spent_cents",
+          "trial_hold_cents",
+          "had_trial",
+          "current_period_start",
+          "current_period_end",
+          "next_charge_at",
+          "next_charge_cents",
+          "upgrade_url",
+          "next_step"
+        ]
+      },
+      "SoloPlanStartResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SoloPlanState"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "card_required": {
+                "type": "boolean"
+              },
+              "checkout_url": {
+                "type": "string",
+                "nullable": true,
+                "description": "The hosted card page to open (hosted mode), when a card is required."
+              },
+              "card_setup": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "card_refused_reason": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "prepaid_card",
+                  null
+                ]
+              }
+            },
+            "required": [
+              "card_required",
+              "checkout_url",
+              "card_setup",
+              "card_refused_reason"
+            ]
+          }
+        ]
+      },
+      "SoloPlanStartRequest": {
+        "type": "object",
+        "properties": {
+          "return_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "ui_mode": {
+            "type": "string",
+            "enum": [
+              "hosted",
+              "embedded"
+            ]
+          }
+        }
+      },
+      "SoloPlanLayerResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SoloPlanState"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "charged_cents": {
+                "type": "integer"
+              },
+              "unspent_credit_deducted_cents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "charged_cents",
+              "unspent_credit_deducted_cents"
+            ]
+          }
+        ]
+      },
+      "SoloAiGate": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "on_solo_plan": {
+            "type": "boolean",
+            "description": "False for every org not enrolled (existing accounts): untouched, ignore the rest."
+          },
+          "plan": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "free",
+              "trialing",
+              "active",
+              "past_due",
+              null
+            ]
+          },
+          "may_use_our_keys": {
+            "type": "boolean",
+            "description": "May an AI turn run on our money now. False = debt limit reached (free), trial cap reached, credit used up, or payment failed."
+          },
+          "refused_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "paid_plan_required",
+              "debt_limit_reached",
+              "trial_cap_reached",
+              "credit_used_up",
+              "payment_failed",
+              null
+            ]
+          },
+          "debt_cents": {
+            "type": "string",
+            "nullable": true,
+            "description": "What the account owes on our keys now (decimal cents)."
+          },
+          "debt_limit_cents": {
+            "type": "integer",
+            "nullable": true,
+            "description": "200 on the free state; null otherwise."
+          },
+          "upgrade_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "next_step": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "start_plan",
+                  "start_paid_now",
+                  "add_layer",
+                  "update_card"
+                ]
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "POST"
+                ]
+              },
+              "path": {
+                "type": "string"
+              },
+              "amount_cents": {
+                "type": "integer",
+                "nullable": true
+              }
+            },
+            "required": [
+              "action",
+              "method",
+              "path",
+              "amount_cents"
+            ],
+            "description": "The one call that gives this account more room (the out-of-credit notice's link)."
+          }
+        },
+        "required": [
+          "org_id",
+          "on_solo_plan",
+          "plan",
+          "may_use_our_keys",
+          "refused_reason",
+          "debt_cents",
+          "debt_limit_cents",
+          "upgrade_url",
+          "next_step"
         ]
       }
     },
@@ -17862,6 +18222,846 @@
           },
           "502": {
             "description": "runs-service or stripe-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/solo_plan/enroll": {
+      "post": {
+        "summary": "Put this account on the solo-founder plan (free state)",
+        "description": "Idempotent. Only an account that never paid, holds no subscription and is on the at-cost or agent/API offer. Its $5 onboarding advance goes to 0: the plan accepts a debt of at most $2 on our keys instead (never credit given).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanState"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused, with a code: offer_not_switchable | existing_paying_org | subscription_exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/solo_plan": {
+      "get": {
+        "summary": "The solo-founder plan state (settles first)",
+        "description": "Trial / active / out of credit, credit left, debt, cycle dates, monthly amount, may a campaign launch on our keys, and the next step to offer. Settles first: a requested plan whose card landed starts, a trial that ended converts (the $99 hold is captured, debt deducted), an ended cycle renews (unspent credit expires).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused, with a code: not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/solo_plan/start": {
+      "post": {
+        "summary": "Start the paid plan: the checkout link, or the trial at once",
+        "description": "Enrols the account when needed. No chargeable card on file (or a prepaid one) -> `checkout_url` (hosted card page) and the plan starts once the card is saved (call again, or the next read). With a debit/credit card: never had a trial -> a $99 authorization hold, then a 3-day trial capped at $10; had one -> the first month ($99) charged now.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoloPlanStartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Card required, or started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "return_url missing for a hosted page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused, with a code: plan_exists | card_hold_refused (the bank refused the $99 hold) | card_hold_requires_action (+ client_secret: run 3-D Secure, then call again) | first_charge_declined | offer_not_switchable | existing_paying_org | subscription_exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/solo_plan/start_now": {
+      "post": {
+        "summary": "End the trial now and pay the first month today",
+        "description": "Trialing only. The $99 hold is captured today (else the card is charged), debt deducted, the cycle starts today.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused, with a code: not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused, with a code: not_trialing | first_charge_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/solo_plan/layers": {
+      "post": {
+        "summary": "Add +$100/month to the plan, charged now",
+        "description": "Active plan only. Charges (new monthly amount − credit left unspent this cycle) now and restarts the cycle today with the new amount as its credit. Example: $99 plan, $59 unspent -> pays $140, holds $199 for a month, next charge $199.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-user-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-run-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Campaign ID injected by workflow-service"
+            },
+            "required": false,
+            "description": "Campaign ID injected by workflow-service",
+            "name": "x-campaign-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+              "example": "uuid1,uuid2,uuid3"
+            },
+            "required": false,
+            "description": "Brand ID(s) injected by workflow-service (comma-separated UUIDs for multi-brand campaigns)",
+            "name": "x-brand-id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Workflow slug injected by workflow-service"
+            },
+            "required": false,
+            "description": "Workflow slug injected by workflow-service",
+            "name": "x-workflow-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Feature slug for tracking"
+            },
+            "required": false,
+            "description": "Feature slug for tracking",
+            "name": "x-feature-slug",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Audience ID injected by campaign-service for per-audience cost attribution"
+            },
+            "required": false,
+            "description": "Audience ID injected by campaign-service for per-audience cost attribution",
+            "name": "x-audience-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raised",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanLayerResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused, with a code: not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused, with a code: not_active | change_in_progress | layer_charge_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/solo-plan": {
+      "get": {
+        "summary": "The solo-founder plan state, service read (no settle)",
+        "description": "Same body as GET /v1/accounts/solo_plan, read live without settling: out of credit, may launch a campaign on our keys, next step.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused, with a code: not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/solo-plan/enroll": {
+      "post": {
+        "summary": "Put an account on the solo-founder plan, service call",
+        "description": "Same rules as POST /v1/accounts/solo_plan/enroll. Optional x-user-id = the person enrolling.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloPlanState"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused, with a code: offer_not_switchable | existing_paying_org | subscription_exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/accounts/by-org/{orgId}/solo-plan/ai-gate": {
+      "get": {
+        "summary": "May this org run an AI turn on our money now (one read per turn)",
+        "description": "For chat-service before each Distry turn. Any org answers 200: `on_solo_plan: false` for every org not on the solo-founder plan (one indexed read, nothing else composed). On the plan: the verdict, the debt and its limit, and the upgrade link for the fixed no-LLM notice. Pure read, x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "orgId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoloAiGate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "orgId is not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "stripe-service or runs-service could not be read",
             "content": {
               "application/json": {
                 "schema": {
