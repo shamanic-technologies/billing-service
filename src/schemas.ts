@@ -1121,6 +1121,8 @@ export const OnDemandChargeRequestSchema = z
   .object({
     amountCents: z.number().int().positive(),
     idempotencyKey: z.string().min(1).optional(),
+    /** The consent boxes ticked before this payment. Optional; stored (context `on_demand_charge`) BEFORE the charge. */
+    consent: PaymentConsentSchema.optional(),
   })
   .openapi("OnDemandChargeRequest");
 

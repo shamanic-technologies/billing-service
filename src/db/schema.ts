@@ -1405,7 +1405,7 @@ export const paymentConsents = pgTable(
     orgId: uuid("org_id").notNull(),
     userId: uuid("user_id"),
     email: text("email"),
-    /** Where it was given: topup_checkout | subscription_checkout | subscription_start | prepaid_checkout | payment_mode_postpaid */
+    /** Where it was given: topup_checkout | subscription_checkout | subscription_start | prepaid_checkout | payment_mode_postpaid | on_demand_charge */
     context: text("context").notNull(),
     /** The statements as shown to the customer, verbatim. */
     statements: jsonb("statements").$type<string[]>().notNull(),
