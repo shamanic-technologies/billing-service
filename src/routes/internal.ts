@@ -90,7 +90,7 @@ import {
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
-import { listPaymentConsents, paymentConsentWire } from "../lib/payment-consents.js";
+import { listPaymentConsents, paymentConsentWire, recordPaymentConsent } from "../lib/payment-consents.js";
 import {
   getOrgRevenue,
   getFleetRevenue,
@@ -1180,7 +1180,7 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const { amountCents, idempotencyKey } = parsed.data;
+  const { amountCents, idempotencyKey, consent } = parsed.data;
   if (amountCents < STRIPE_MIN_CHARGE_CENTS) {
     res.status(400).json({
       error: `amountCents must be at least ${STRIPE_MIN_CHARGE_CENTS} (Stripe minimum charge)`,
@@ -1203,6 +1203,12 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
       return;
     }
     throw err;
+  }
+
+  // Consent boxes ticked on the page: on file BEFORE the card is charged, so a
+  // refused card still leaves the acceptance (same as the checkout session).
+  if (consent) {
+    await recordPaymentConsent({ orgId, req, context: "on_demand_charge", consent });
   }
 
   try {

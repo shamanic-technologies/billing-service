@@ -25,6 +25,8 @@ export type PaymentConsentContext =
   | "subscription_checkout"
   | "subscription_start"
   | "prepaid_checkout"
+  /** POST /internal/accounts/by-org/:orgId/charge: a payment on the card saved first (card-first onboarding). */
+  | "on_demand_charge"
   /** PUT /v1/accounts/payment_mode {postpaid}: the postpaid signup arm (card saved, nothing charged). */
   | "payment_mode_postpaid";
 
