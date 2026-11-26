@@ -1933,10 +1933,16 @@ export const RunwayResponseSchema = z
     payment_mode: z.enum(["prepaid", "postpaid", "subscription"]),
     state: z.enum(["days", "depleted", "no_budget", "budget_unavailable", "not_prepaid"]).openapi({
       description:
-        "days = balance > 0 and a running daily budget > 0 (days_left + runs_out_at set); " +
-        "depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running " +
-        "behind a budget (or none configured), no runway to state; budget_unavailable = " +
-        "campaign-service could not be read; not_prepaid = postpaid or subscription org.",
+        "Closed set (consumers parse it strictly). days = balance > 0, a daily budget running and measured " +
+        "spend > 0 (days_left + runs_out_at set, computed on daily_spend_cents, never on the budget); " +
+        "depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running behind a " +
+        "budget (or none configured), or a budget runs but nothing was spent in the measured window " +
+        "(no_figure_reason = no_spend); budget_unavailable = campaign-service could not be read, or the " +
+        "spend per day cannot be measured honestly (no_figure_reason = burn_unavailable); not_prepaid = " +
+        "postpaid or subscription org. Every state but days carries no figure.",
+    }),
+    no_figure_reason: z.enum(["no_spend", "burn_unavailable"]).nullable().openapi({
+      description: "Why a running org gets no figure, beyond what state says. Null otherwise.",
     }),
     balance_cents: z.string().openapi({
       description: "Spendable balance the runway is computed on (same figure as balance_cents on GET /v1/accounts).",
@@ -1950,14 +1956,20 @@ export const RunwayResponseSchema = z
     configured_daily_budget_cents: z.string().openapi({
       description: "Configured daily total, running or not (informational). \"0\" for not_prepaid.",
     }),
+    daily_spend_cents: z.string().nullable().openapi({
+      description:
+        "Measured net campaign spend per day (same figure as the payment outlook's realizedDailyBurnCents: " +
+        "up to the last 14 days, the org's age when younger, at least 1 day). The runway's divisor. " +
+        "Null when it was not measured (not_prepaid, depleted, nothing running, campaign-service or the spend unreadable).",
+    }),
     days_left: z.number().int().nullable().openapi({
       description: "Whole days the balance lasts, rounded DOWN (0 = less than a day). Null unless state = days.",
     }),
     days_left_exact: z.string().nullable().openapi({
-      description: "balance_cents / daily_budget_cents, 2 decimals rounded down. Null unless state = days.",
+      description: "balance_cents / daily_spend_cents, 2 decimals rounded down. Null unless state = days.",
     }),
     runs_out_at: z.string().nullable().openapi({
-      description: "ISO 8601 instant the balance reaches zero at the running daily budget. Null unless state = days.",
+      description: "ISO 8601 instant the balance reaches zero at the measured daily spend. Null unless state = days.",
     }),
   })
   .openapi("RunwayResponse");
@@ -1965,7 +1977,7 @@ export const RunwayResponseSchema = z
 registry.registerPath({
   method: "get",
   path: "/v1/accounts/runway",
-  summary: "How many days a prepaid org's spendable balance lasts at its running daily budgets",
+  summary: "How many days a prepaid org's spendable balance lasts at its measured daily spend",
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "Runway", content: { "application/json": { schema: RunwayResponseSchema } } },
