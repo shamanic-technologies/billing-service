@@ -401,7 +401,17 @@
               "budget_unavailable",
               "not_prepaid"
             ],
-            "description": "days = balance > 0 and a running daily budget > 0 (days_left + runs_out_at set); depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running behind a budget (or none configured), no runway to state; budget_unavailable = campaign-service could not be read; not_prepaid = postpaid or subscription org."
+            "description": "Closed set (consumers parse it strictly). days = balance > 0, a daily budget running and measured spend > 0 (days_left + runs_out_at set, computed on daily_spend_cents, never on the budget); depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running behind a budget (or none configured), or a budget runs but nothing was spent in the measured window (no_figure_reason = no_spend); budget_unavailable = campaign-service could not be read, or the spend per day cannot be measured honestly (no_figure_reason = burn_unavailable); not_prepaid = postpaid or subscription org. Every state but days carries no figure."
+          },
+          "no_figure_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "no_spend",
+              "burn_unavailable",
+              null
+            ],
+            "description": "Why a running org gets no figure, beyond what state says. Null otherwise."
           },
           "balance_cents": {
             "type": "string",
@@ -416,6 +426,11 @@
             "type": "string",
             "description": "Configured daily total, running or not (informational). \"0\" for not_prepaid."
           },
+          "daily_spend_cents": {
+            "type": "string",
+            "nullable": true,
+            "description": "Measured net campaign spend per day (same figure as the payment outlook's realizedDailyBurnCents: up to the last 14 days, the org's age when younger, at least 1 day). The runway's divisor. Null when it was not measured (not_prepaid, depleted, nothing running, campaign-service or the spend unreadable)."
+          },
           "days_left": {
             "type": "integer",
             "nullable": true,
@@ -424,21 +439,23 @@
           "days_left_exact": {
             "type": "string",
             "nullable": true,
-            "description": "balance_cents / daily_budget_cents, 2 decimals rounded down. Null unless state = days."
+            "description": "balance_cents / daily_spend_cents, 2 decimals rounded down. Null unless state = days."
           },
           "runs_out_at": {
             "type": "string",
             "nullable": true,
-            "description": "ISO 8601 instant the balance reaches zero at the running daily budget. Null unless state = days."
+            "description": "ISO 8601 instant the balance reaches zero at the measured daily spend. Null unless state = days."
           }
         },
         "required": [
           "org_id",
           "payment_mode",
           "state",
+          "no_figure_reason",
           "balance_cents",
           "daily_budget_cents",
           "configured_daily_budget_cents",
+          "daily_spend_cents",
           "days_left",
           "days_left_exact",
           "runs_out_at"
@@ -6135,7 +6152,7 @@
     },
     "/v1/accounts/runway": {
       "get": {
-        "summary": "How many days a prepaid org's spendable balance lasts at its running daily budgets",
+        "summary": "How many days a prepaid org's spendable balance lasts at its measured daily spend",
         "parameters": [
           {
             "schema": {

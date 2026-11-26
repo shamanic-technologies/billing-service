@@ -6,7 +6,7 @@ import { isRealOrgId } from "../lib/org-id.js";
 
 /**
  * GET /v1/accounts/runway — how many days a PREPAID org's spendable balance lasts
- * at its running daily budgets (lib/runway). For the dashboard sidebar balance
+ * at what it really spends a day (lib/runway). For the dashboard sidebar balance
  * card; the browser never divides money. Pure read, org headers via the gateway.
  */
 const router = Router();
@@ -23,9 +23,11 @@ router.get("/v1/accounts/runway", requireOrgHeaders, async (req, res) => {
       org_id: runway.orgId,
       payment_mode: runway.paymentMode,
       state: runway.state,
+      no_figure_reason: runway.noFigureReason,
       balance_cents: runway.balanceCents,
       daily_budget_cents: runway.dailyBudgetCents,
       configured_daily_budget_cents: runway.configuredDailyBudgetCents,
+      daily_spend_cents: runway.dailySpendCents,
       days_left: runway.daysLeft,
       days_left_exact: runway.daysLeftExact,
       runs_out_at: runway.runsOutAt,
