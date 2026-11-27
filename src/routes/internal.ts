@@ -24,6 +24,7 @@ import {
   freeCreditPromises,
   welcomeRecipients,
   staffDebits,
+  specialOfferPayments,
   subscriptions,
   subscriptionCreditExpiries,
   localPromos,
@@ -189,6 +190,11 @@ async function deleteBillingStateByOrg(
       .delete(freeCreditPromises)
       .where(eq(freeCreditPromises.orgId, orgId))
       .returning({ id: freeCreditPromises.id });
+
+    // Which of its payments counted under a special offer (migration 0104) describes
+    // this org only (its grant rows above already cascaded most of them); the offers
+    // themselves are cross-org and stay.
+    await tx.delete(specialOfferPayments).where(eq(specialOfferPayments.orgId, orgId));
 
     // Staff debits on this org (migration 0053) go with it: they only ever adjust
     // this org's own balance.

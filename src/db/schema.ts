@@ -603,6 +603,20 @@ export const SUBSCRIPTION_TRIAL_CODE = "subscription_trial";
 export const SUBSCRIPTION_TRIAL_AMOUNT_CENTS = 9900;
 
 /**
+ * Ledger key for the free credit a SPECIAL OFFER grants (migration 0104,
+ * SPECIAL-OFFER-BF-1127): a named, dated commercial offer ("Black Friday 2026") staff
+ * applies to one of an org's payments. Stacking: one row per payment, keyed
+ * `special_offer:<acquirer>:<payment id>`; the amount is per row (this code row is a 0
+ * placeholder). The offer itself and the payment it rewards live on
+ * `special_offers` / `special_offer_payments` (lib/special-offers).
+ *
+ * Owner: "not cumulative with other offers". It is NOT part of the welcome
+ * entitlement (lib/promos sumEntitlementGrantsForOrg), never a trial credit, and
+ * touches no free-credit promise.
+ */
+export const SPECIAL_OFFER_CODE = "special_offer";
+
+/**
  * Grant reasons a SERVICE may name on POST /internal/credits/grant. Closed set —
  * a caller can never supply an arbitrary reason.
  *
@@ -1111,6 +1125,59 @@ export const staffDebits = pgTable(
 );
 
 export type StaffDebit = typeof staffDebits.$inferSelect;
+
+// special_offers (migration 0104, SPECIAL-OFFER-BF-1127): a named, dated commercial
+// offer the owner runs once ("Black Friday 2026"), apart from the standing offers.
+// `bonus_ratio_bps` = the free credit a payment under it earns by default, in basis
+// points of the payment (10000 = the payment is doubled).
+export const specialOffers = pgTable("special_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique("special_offers_slug_unique"),
+  name: text("name").notNull(),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+  bonusRatioBps: integer("bonus_ratio_bps").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type SpecialOffer = typeof specialOffers.$inferSelect;
+
+// special_offer_payments: ONE payment of an org counted under ONE special offer, with
+// the free credit it granted (the local_promos row under SPECIAL_OFFER_CODE). A
+// payment counts under one offer, once: UNIQUE (payment_acquirer, payment_id).
+export const specialOfferPayments = pgTable(
+  "special_offer_payments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    specialOfferId: uuid("special_offer_id")
+      .notNull()
+      .references(() => specialOffers.id),
+    orgId: uuid("org_id").notNull(),
+    paymentAcquirer: text("payment_acquirer").notNull(),
+    paymentId: text("payment_id").notNull(),
+    /** What the client paid, net of money returned at apply time. Integer cents. */
+    paidCents: integer("paid_cents").notNull(),
+    paidAt: timestamp("paid_at", { withTimezone: true }).notNull(),
+    freeCreditCents: numeric("free_credit_cents", {
+      precision: FRACTIONAL_PRECISION,
+      scale: FRACTIONAL_SCALE,
+    }).notNull(),
+    localPromoId: uuid("local_promo_id")
+      .notNull()
+      .references(() => localPromos.id, { onDelete: "cascade" }),
+    appliedBy: text("applied_by").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("special_offer_payments_payment_unique").on(table.paymentAcquirer, table.paymentId),
+    unique("special_offer_payments_local_promo_unique").on(table.localPromoId),
+    index("idx_special_offer_payments_org").on(table.orgId),
+  ]
+);
+
+export type SpecialOfferPayment = typeof specialOfferPayments.$inferSelect;
 
 // off_platform_payments (migration 0082, owner 2026-10-11): marks ONE admin_grant
 // local_promos row as money the client PAID us off-platform (bank transfer to the

@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   ADMIN_GRANT_CODE,
+  SPECIAL_OFFER_CODE,
   AGENT_API_FREE_CREDIT_OFFER,
   billingAccounts,
   type BillingAccount,
@@ -142,7 +143,7 @@ export async function markAgentApiOrg(orgId: string): Promise<AgentApiMarkResult
       SELECT COALESCE(SUM(p.amount_cents), 0)::text AS total
         FROM local_promos p
         JOIN local_promo_codes c ON c.id = p.promo_code_id
-       WHERE p.org_id = ${orgId} AND c.code <> ${ADMIN_GRANT_CODE}
+       WHERE p.org_id = ${orgId} AND c.code NOT IN (${ADMIN_GRANT_CODE}, ${SPECIAL_OFFER_CODE})
     `)) as unknown as Array<{ total: string }>;
     const held = rows[0]?.total ?? "0";
     if (!alreadyMarked && Number(held) !== 0) {

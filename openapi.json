@@ -1717,6 +1717,300 @@
           "debits"
         ]
       },
+      "SpecialOfferCreateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyExisted": {
+            "type": "boolean"
+          },
+          "specialOffer": {
+            "$ref": "#/components/schemas/SpecialOffer"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyExisted",
+          "specialOffer"
+        ]
+      },
+      "SpecialOffer": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "endsAt": {
+            "type": "string"
+          },
+          "bonusRatioBps": {
+            "type": "integer"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "startsAt",
+          "endsAt",
+          "bonusRatioBps",
+          "createdBy",
+          "createdAt"
+        ]
+      },
+      "SpecialOfferRefusal": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ]
+      },
+      "SpecialOfferCreateRequest": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "startsAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "endsAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bonusRatioBps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "createdBy": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "startsAt",
+          "endsAt",
+          "bonusRatioBps",
+          "createdBy"
+        ],
+        "additionalProperties": false
+      },
+      "SpecialOffersListResponse": {
+        "type": "object",
+        "properties": {
+          "specialOffers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecialOffer"
+            }
+          }
+        },
+        "required": [
+          "specialOffers"
+        ]
+      },
+      "SpecialOfferApplyResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "alreadyApplied": {
+            "type": "boolean"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "specialOffer": {
+            "type": "object",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "slug",
+              "name"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/SpecialOfferPayment"
+          },
+          "newBalanceCents": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "alreadyApplied",
+          "orgId",
+          "specialOffer",
+          "payment",
+          "newBalanceCents"
+        ]
+      },
+      "SpecialOfferPayment": {
+        "type": "object",
+        "properties": {
+          "payment_id": {
+            "type": "string"
+          },
+          "acquirer": {
+            "type": "string"
+          },
+          "paid_cents": {
+            "type": "string"
+          },
+          "paid_at": {
+            "type": "string"
+          },
+          "free_credit_cents": {
+            "type": "string"
+          },
+          "grant_id": {
+            "type": "string"
+          },
+          "applied_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "payment_id",
+          "acquirer",
+          "paid_cents",
+          "paid_at",
+          "free_credit_cents",
+          "grant_id",
+          "applied_at"
+        ]
+      },
+      "SpecialOfferApplyRequest": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "paymentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "appliedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "freeCreditCents": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "orgId",
+          "paymentId",
+          "appliedBy"
+        ],
+        "additionalProperties": false
+      },
+      "OrgSpecialOffersResponse": {
+        "type": "object",
+        "properties": {
+          "org_id": {
+            "type": "string"
+          },
+          "special_offers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "starts_at": {
+                  "type": "string"
+                },
+                "ends_at": {
+                  "type": "string"
+                },
+                "paid_cents": {
+                  "type": "string"
+                },
+                "free_credit_cents": {
+                  "type": "string"
+                },
+                "payments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SpecialOfferPayment"
+                  }
+                }
+              },
+              "required": [
+                "slug",
+                "name",
+                "starts_at",
+                "ends_at",
+                "paid_cents",
+                "free_credit_cents",
+                "payments"
+              ]
+            }
+          }
+        },
+        "required": [
+          "org_id",
+          "special_offers"
+        ]
+      },
       "UsageDiscountResponse": {
         "type": "object",
         "properties": {
@@ -8938,6 +9232,230 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StaffDebitsListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/special-offers": {
+      "post": {
+        "summary": "Create a special offer (staff)",
+        "description": "A special offer is a named, dated commercial offer (e.g. Black Friday 2026) kept apart from the standing offers (welcome, referral rewards, trial, staff grants). Idempotent on the slug; the same slug with different terms is refused (409). x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpecialOfferCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Offer created, or already existing with the same terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOfferCreateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The slug already names an offer with different terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOfferRefusal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List every special offer (staff)",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "All special offers, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOffersListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/special-offers/{slug}/payments": {
+      "post": {
+        "summary": "Apply a special offer to one of an org's payments (staff)",
+        "description": "Counts the payment under the offer and grants the free credit it earns (the offer's ratio of what was paid, or freeCreditCents). The payment must be the org's own, succeeded, in USD, not fully returned and made inside the offer's window. Idempotent per payment: applied again it grants nothing and answers alreadyApplied. A payment counts under one special offer only. The credit adds to the balance like any grant, is listed in the grants ledger under reason=special_offer, and is NOT cumulative with the standing offers: it is outside the welcome entitlement and touches no free-credit promise. Sends nothing to the client. x-api-key only.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "slug",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpecialOfferApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Offer applied (or already applied to this payment)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOfferApplyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body or org id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "special_offer_not_found | payment_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOfferRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "payment_not_succeeded | payment_currency_unsupported | payment_fully_returned | payment_outside_offer_window | free_credit_zero | payment_under_other_offer | already_applied_different_amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpecialOfferRefusal"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "special_offer ledger key seed missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The org's payments could not be read (nothing applied), or the balance could not be composed after the grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/special-offers": {
+      "get": {
+        "summary": "What each special offer brought this org",
+        "description": "For the client's billing page. Per special offer the org has a payment under: its name, the payments made under it and the free credit they earned, with ready-made totals (paid_cents, free_credit_cents). Empty list when the org has none. Pure read.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "x-api-key",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "x-org-id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The org's special offers, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgSpecialOffersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid x-org-id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

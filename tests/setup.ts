@@ -373,6 +373,44 @@ beforeAll(async () => {
   `;
   await sql`CREATE INDEX IF NOT EXISTS "idx_staff_debits_org" ON "staff_debits" ("org_id")`;
 
+  // special_offers + special_offer_payments (migration 0104).
+  await sql`
+    CREATE TABLE IF NOT EXISTS "special_offers" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "slug" text NOT NULL,
+      "name" text NOT NULL,
+      "starts_at" timestamp with time zone NOT NULL,
+      "ends_at" timestamp with time zone NOT NULL,
+      "bonus_ratio_bps" integer NOT NULL,
+      "created_by" text NOT NULL,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "special_offers_slug_unique" UNIQUE ("slug"),
+      CONSTRAINT "special_offers_window" CHECK ("ends_at" > "starts_at"),
+      CONSTRAINT "special_offers_bonus_ratio" CHECK ("bonus_ratio_bps" >= 0)
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS "special_offer_payments" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "special_offer_id" uuid NOT NULL REFERENCES "special_offers" ("id"),
+      "org_id" uuid NOT NULL,
+      "payment_acquirer" text NOT NULL,
+      "payment_id" text NOT NULL,
+      "paid_cents" integer NOT NULL,
+      "paid_at" timestamp with time zone NOT NULL,
+      "free_credit_cents" numeric(16, 10) NOT NULL,
+      "local_promo_id" uuid NOT NULL REFERENCES "local_promos" ("id") ON DELETE CASCADE,
+      "applied_by" text NOT NULL,
+      "note" text,
+      "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+      CONSTRAINT "special_offer_payments_payment_unique" UNIQUE ("payment_acquirer", "payment_id"),
+      CONSTRAINT "special_offer_payments_local_promo_unique" UNIQUE ("local_promo_id"),
+      CONSTRAINT "special_offer_payments_paid_positive" CHECK ("paid_cents" > 0),
+      CONSTRAINT "special_offer_payments_credit_positive" CHECK ("free_credit_cents" > 0)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS "idx_special_offer_payments_org" ON "special_offer_payments" ("org_id")`;
+
   // Billing-owned subscriptions (migration 0056) and platform orgs (0057): replay
   // the migrations' own statements, all idempotent, so the suite and prod cannot
   // disagree on the shape (or on 0057's seed).
@@ -428,7 +466,8 @@ beforeAll(async () => {
            ('product_task_completed', 0, NULL, NULL),
            ('trial_seed', 0, NULL, NULL),
            ('org_creation_bonus', 3000, NULL, NULL),
-           ('subscription_trial', 9900, NULL, NULL)
+           ('subscription_trial', 9900, NULL, NULL),
+           ('special_offer', 0, NULL, NULL)
     ON CONFLICT ("code") DO UPDATE SET "amount_cents" = EXCLUDED."amount_cents"
   `;
 
