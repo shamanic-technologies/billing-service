@@ -85,9 +85,13 @@ describe("spendable-budget snapshots (runway)", () => {
     live.mockResolvedValue(answer(700));
     const later = () => Date.now() + REFRESH_AFTER_MS + 1;
     expect(await snapshotSpendableBudgetReader(later)(orgId, brandId)).toEqual(answer(1200.5));
-    await flush();
+    // The refresh writes behind the read: wait for the row, never a fixed delay (a
+    // 50 ms sleep lost the race on a slow CI runner, 2026-11-27, PR #911).
+    await vi.waitFor(async () => expect((await storedRow())?.body).toEqual(answer(700)), {
+      timeout: 5000,
+      interval: 25,
+    });
     expect(live).toHaveBeenCalledTimes(2);
-    expect((await storedRow())?.body).toEqual(answer(700));
     expect(await snapshotSpendableBudgetReader()(orgId, brandId)).toEqual(answer(700));
   });
 
