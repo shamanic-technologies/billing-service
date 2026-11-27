@@ -24,6 +24,7 @@ import {
   freeCreditPromises,
   welcomeRecipients,
   staffDebits,
+  specialOfferPayments,
   subscriptions,
   subscriptionCreditExpiries,
   localPromos,
@@ -90,7 +91,7 @@ import {
 import { STRIPE_MIN_CHARGE_CENTS } from "../lib/month-end-sweep.js";
 import { isPlatformOrg } from "../lib/platform-org.js";
 import { getOrgSendingStopped } from "../lib/subscription.js";
-import { listPaymentConsents, paymentConsentWire } from "../lib/payment-consents.js";
+import { listPaymentConsents, paymentConsentWire, recordPaymentConsent } from "../lib/payment-consents.js";
 import {
   getOrgRevenue,
   getFleetRevenue,
@@ -189,6 +190,11 @@ async function deleteBillingStateByOrg(
       .delete(freeCreditPromises)
       .where(eq(freeCreditPromises.orgId, orgId))
       .returning({ id: freeCreditPromises.id });
+
+    // Which of its payments counted under a special offer (migration 0104) describes
+    // this org only (its grant rows above already cascaded most of them); the offers
+    // themselves are cross-org and stay.
+    await tx.delete(specialOfferPayments).where(eq(specialOfferPayments.orgId, orgId));
 
     // Staff debits on this org (migration 0053) go with it: they only ever adjust
     // this org's own balance.
@@ -1180,7 +1186,7 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const { amountCents, idempotencyKey } = parsed.data;
+  const { amountCents, idempotencyKey, consent } = parsed.data;
   if (amountCents < STRIPE_MIN_CHARGE_CENTS) {
     res.status(400).json({
       error: `amountCents must be at least ${STRIPE_MIN_CHARGE_CENTS} (Stripe minimum charge)`,
@@ -1203,6 +1209,12 @@ router.post("/internal/accounts/by-org/:orgId/charge", async (req, res) => {
       return;
     }
     throw err;
+  }
+
+  // Consent boxes ticked on the page: on file BEFORE the card is charged, so a
+  // refused card still leaves the acceptance (same as the checkout session).
+  if (consent) {
+    await recordPaymentConsent({ orgId, req, context: "on_demand_charge", consent });
   }
 
   try {

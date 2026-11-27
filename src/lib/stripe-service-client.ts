@@ -1113,6 +1113,12 @@ export interface OrgPayment {
   status: "succeeded" | "failed" | "pending";
   /** Unix seconds. */
   created: number;
+  /**
+   * Money given back on this payment (succeeded refunds + lost disputes), minor unit.
+   * Served by stripe-service on every row; optional here only so a reader that needs
+   * it can DETECT its absence and fail loud (lib/special-offers).
+   */
+  amount_returned?: number;
 }
 
 /**

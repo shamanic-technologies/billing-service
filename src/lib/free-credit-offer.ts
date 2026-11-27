@@ -3,6 +3,7 @@ import { Decimal } from "decimal.js";
 import { db } from "../db/index.js";
 import {
   ADMIN_GRANT_CODE,
+  SPECIAL_OFFER_CODE,
   billingAccounts,
   localPromoCodes,
   localPromos,
@@ -388,7 +389,7 @@ function trialCreditSql(orgId: string) {
          JOIN local_promos t ON t.org_id = p.org_id
          JOIN local_promo_codes tc ON tc.id = t.promo_code_id AND tc.code = ${SUBSCRIPTION_TRIAL_CODE}
         WHERE p.org_id = ${orgId}
-          AND (p.id = t.id OR (p.created_at < t.created_at AND pc.code <> ${ADMIN_GRANT_CODE})))`;
+          AND (p.id = t.id OR (p.created_at < t.created_at AND pc.code NOT IN (${ADMIN_GRANT_CODE}, ${SPECIAL_OFFER_CODE}))))`;
 }
 
 /**

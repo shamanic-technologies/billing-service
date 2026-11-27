@@ -23,7 +23,8 @@ import {
   snapshotSpendableBudgetReader,
 } from "../../src/lib/spendable-budget-snapshots.js";
 import { resolveBudgets } from "../../src/lib/payment-outlook.js";
-import { getRunway } from "../../src/lib/runway.js";
+import { getRunway, __clearRunwayBurnCache } from "../../src/lib/runway.js";
+import * as realizedBurn from "../../src/lib/realized-burn.js";
 
 const orgId = "00000000-0000-4000-8000-0000000098a1";
 const brandId = "00000000-0000-4000-8000-0000000098b1";
@@ -154,13 +155,20 @@ describe("spendable-budget snapshots (runway)", () => {
       spent_cents: "0.0000000000",
       as_of: "2026-11-12T00:00:00.000Z",
     } as never);
+    // The runway divides by the MEASURED spend (RUNWAY-REAL-SPEND-1126), held 10 min.
+    __clearRunwayBurnCache();
+    const burn = vi
+      .spyOn(realizedBurn, "fetchRealizedDailyBurn")
+      .mockResolvedValue({ dailyCents: "400", unavailableReason: null, windowDays: 14 });
 
     const now = new Date("2026-11-12T12:00:00.000Z");
     const first = await getRunway(orgId, now);
     const second = await getRunway(orgId, now);
     expect(first?.state).toBe("days");
+    expect(first?.daysLeft).toBe(25);
     expect(first?.dailyBudgetCents).toBe(second?.dailyBudgetCents);
     expect(second).toEqual(first);
     expect(live).toHaveBeenCalledTimes(1);
+    expect(burn).toHaveBeenCalledTimes(1);
   });
 });

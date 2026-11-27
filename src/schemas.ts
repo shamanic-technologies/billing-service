@@ -847,6 +847,116 @@ export const StaffDebitsListResponseSchema = z
   })
   .openapi("StaffDebitsListResponse");
 
+// --- Special offers (a named, dated commercial offer; SPECIAL-OFFER-BF-1127) ---
+
+export const SpecialOfferCreateRequestSchema = z
+  .object({
+    /** Stable identifier, e.g. `black-friday-2026`. */
+    slug: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "slug must be lowercase words joined by dashes"),
+    /** The name the client reads, e.g. `Black Friday 2026`. */
+    name: z.string().trim().min(1, "name is required"),
+    /** ISO date-time. A payment counts under the offer when made in [startsAt, endsAt). */
+    startsAt: z.string().min(1),
+    endsAt: z.string().min(1),
+    /** Free credit a payment earns by default, basis points of the payment (10000 = doubled). */
+    bonusRatioBps: z.number().int().min(0).max(100000),
+    /** Staff email creating the offer. */
+    createdBy: z.string().trim().min(1, "createdBy is required"),
+  })
+  .strict()
+  .openapi("SpecialOfferCreateRequest");
+
+export const SpecialOfferSchema = z
+  .object({
+    id: z.string(),
+    slug: z.string(),
+    name: z.string(),
+    startsAt: z.string(),
+    endsAt: z.string(),
+    bonusRatioBps: z.number().int(),
+    createdBy: z.string(),
+    createdAt: z.string(),
+  })
+  .openapi("SpecialOffer");
+
+export const SpecialOfferCreateResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** True when the slug already named this exact offer: nothing was created. */
+    alreadyExisted: z.boolean(),
+    specialOffer: SpecialOfferSchema,
+  })
+  .openapi("SpecialOfferCreateResponse");
+
+export const SpecialOffersListResponseSchema = z
+  .object({ specialOffers: z.array(SpecialOfferSchema) })
+  .openapi("SpecialOffersListResponse");
+
+export const SpecialOfferApplyRequestSchema = z
+  .object({
+    orgId: z.string(),
+    /** The payment's id as stripe-service lists it (GET /internal/payments/by-org). */
+    paymentId: z.string().min(1),
+    /** Staff email applying the offer. */
+    appliedBy: z.string().trim().min(1, "appliedBy is required"),
+    /** Override of the credit, integer cents. Absent = the offer's ratio of what was paid. */
+    freeCreditCents: z.number().int().positive().optional(),
+    note: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .openapi("SpecialOfferApplyRequest");
+
+export const SpecialOfferPaymentSchema = z
+  .object({
+    payment_id: z.string(),
+    acquirer: z.string(),
+    /** What the client paid under the offer (net of money returned when applied). */
+    paid_cents: CentsStringSchema,
+    paid_at: z.string(),
+    /** The free credit this payment earned under the offer. */
+    free_credit_cents: CentsStringSchema,
+    /** The credit's row in the grants ledger (GET /v1/credits/grants, reason `special_offer`). */
+    grant_id: z.string(),
+    applied_at: z.string(),
+  })
+  .openapi("SpecialOfferPayment");
+
+export const SpecialOfferApplyResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    /** True when this payment already counted under this offer: nothing new was granted. */
+    alreadyApplied: z.boolean(),
+    orgId: z.string(),
+    specialOffer: z.object({ slug: z.string(), name: z.string() }),
+    payment: SpecialOfferPaymentSchema,
+    /** Spendable balance after the grant. */
+    newBalanceCents: CentsStringSchema,
+  })
+  .openapi("SpecialOfferApplyResponse");
+
+export const OrgSpecialOffersResponseSchema = z
+  .object({
+    org_id: z.string(),
+    special_offers: z.array(
+      z.object({
+        slug: z.string(),
+        name: z.string(),
+        starts_at: z.string(),
+        ends_at: z.string(),
+        /** Sum of this org's payments under the offer. Ready-made: never sum in the browser. */
+        paid_cents: CentsStringSchema,
+        /** Sum of the free credit the offer gave this org. */
+        free_credit_cents: CentsStringSchema,
+        payments: z.array(SpecialOfferPaymentSchema),
+      })
+    ),
+  })
+  .openapi("OrgSpecialOffersResponse");
+
+const SpecialOfferRefusalSchema = z
+  .object({ error: z.string(), code: z.string() })
+  .openapi("SpecialOfferRefusal");
+
 // --- Per-org usage discount (staff-managed, single replaceable value) ---
 
 export const SetUsageDiscountRequestSchema = z
@@ -1121,6 +1231,8 @@ export const OnDemandChargeRequestSchema = z
   .object({
     amountCents: z.number().int().positive(),
     idempotencyKey: z.string().min(1).optional(),
+    /** The consent boxes ticked before this payment. Optional; stored (context `on_demand_charge`) BEFORE the charge. */
+    consent: PaymentConsentSchema.optional(),
   })
   .openapi("OnDemandChargeRequest");
 
@@ -1931,10 +2043,16 @@ export const RunwayResponseSchema = z
     payment_mode: z.enum(["prepaid", "postpaid", "subscription"]),
     state: z.enum(["days", "depleted", "no_budget", "budget_unavailable", "not_prepaid"]).openapi({
       description:
-        "days = balance > 0 and a running daily budget > 0 (days_left + runs_out_at set); " +
-        "depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running " +
-        "behind a budget (or none configured), no runway to state; budget_unavailable = " +
-        "campaign-service could not be read; not_prepaid = postpaid or subscription org.",
+        "Closed set (consumers parse it strictly). days = balance > 0, a daily budget running and measured " +
+        "spend > 0 (days_left + runs_out_at set, computed on daily_spend_cents, never on the budget); " +
+        "depleted = spendable balance <= 0, spend stopped now; no_budget = no campaign running behind a " +
+        "budget (or none configured), or a budget runs but nothing was spent in the measured window " +
+        "(no_figure_reason = no_spend); budget_unavailable = campaign-service could not be read, or the " +
+        "spend per day cannot be measured honestly (no_figure_reason = burn_unavailable); not_prepaid = " +
+        "postpaid or subscription org. Every state but days carries no figure.",
+    }),
+    no_figure_reason: z.enum(["no_spend", "burn_unavailable"]).nullable().openapi({
+      description: "Why a running org gets no figure, beyond what state says. Null otherwise.",
     }),
     balance_cents: z.string().openapi({
       description: "Spendable balance the runway is computed on (same figure as balance_cents on GET /v1/accounts).",
@@ -1948,14 +2066,20 @@ export const RunwayResponseSchema = z
     configured_daily_budget_cents: z.string().openapi({
       description: "Configured daily total, running or not (informational). \"0\" for not_prepaid.",
     }),
+    daily_spend_cents: z.string().nullable().openapi({
+      description:
+        "Measured net campaign spend per day (same figure as the payment outlook's realizedDailyBurnCents: " +
+        "up to the last 14 days, the org's age when younger, at least 1 day). The runway's divisor. " +
+        "Null when it was not measured (not_prepaid, depleted, nothing running, campaign-service or the spend unreadable).",
+    }),
     days_left: z.number().int().nullable().openapi({
       description: "Whole days the balance lasts, rounded DOWN (0 = less than a day). Null unless state = days.",
     }),
     days_left_exact: z.string().nullable().openapi({
-      description: "balance_cents / daily_budget_cents, 2 decimals rounded down. Null unless state = days.",
+      description: "balance_cents / daily_spend_cents, 2 decimals rounded down. Null unless state = days.",
     }),
     runs_out_at: z.string().nullable().openapi({
-      description: "ISO 8601 instant the balance reaches zero at the running daily budget. Null unless state = days.",
+      description: "ISO 8601 instant the balance reaches zero at the measured daily spend. Null unless state = days.",
     }),
   })
   .openapi("RunwayResponse");
@@ -1963,7 +2087,7 @@ export const RunwayResponseSchema = z
 registry.registerPath({
   method: "get",
   path: "/v1/accounts/runway",
-  summary: "How many days a prepaid org's spendable balance lasts at its running daily budgets",
+  summary: "How many days a prepaid org's spendable balance lasts at its measured daily spend",
   request: { headers: protectedHeaders },
   responses: {
     200: { description: "Runway", content: { "application/json": { schema: RunwayResponseSchema } } },
@@ -2763,6 +2887,116 @@ registry.registerPath({
     200: {
       description: "All debits",
       content: { "application/json": { schema: StaffDebitsListResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/special-offers",
+  summary: "Create a special offer (staff)",
+  description:
+    "A special offer is a named, dated commercial offer (e.g. Black Friday 2026) kept apart " +
+    "from the standing offers (welcome, referral rewards, trial, staff grants). Idempotent on " +
+    "the slug; the same slug with different terms is refused (409). x-api-key only.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    body: { content: { "application/json": { schema: SpecialOfferCreateRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "Offer created, or already existing with the same terms",
+      content: { "application/json": { schema: SpecialOfferCreateResponseSchema } },
+    },
+    400: { description: "Invalid body", content: { "application/json": { schema: ErrorResponseSchema } } },
+    409: {
+      description: "The slug already names an offer with different terms",
+      content: { "application/json": { schema: SpecialOfferRefusalSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/internal/special-offers",
+  summary: "List every special offer (staff)",
+  request: { headers: z.object({ "x-api-key": z.string() }) },
+  responses: {
+    200: {
+      description: "All special offers, oldest first",
+      content: { "application/json": { schema: SpecialOffersListResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "post",
+  path: "/internal/special-offers/{slug}/payments",
+  summary: "Apply a special offer to one of an org's payments (staff)",
+  description:
+    "Counts the payment under the offer and grants the free credit it earns (the offer's " +
+    "ratio of what was paid, or freeCreditCents). The payment must be the org's own, " +
+    "succeeded, in USD, not fully returned and made inside the offer's window. Idempotent " +
+    "per payment: applied again it grants nothing and answers alreadyApplied. A payment " +
+    "counts under one special offer only. The credit adds to the balance like any grant, is " +
+    "listed in the grants ledger under reason=special_offer, and is NOT cumulative with the " +
+    "standing offers: it is outside the welcome entitlement and touches no free-credit " +
+    "promise. Sends nothing to the client. x-api-key only.",
+  request: {
+    headers: z.object({ "x-api-key": z.string() }),
+    params: z.object({ slug: z.string() }),
+    body: { content: { "application/json": { schema: SpecialOfferApplyRequestSchema } } },
+  },
+  responses: {
+    200: {
+      description: "Offer applied (or already applied to this payment)",
+      content: { "application/json": { schema: SpecialOfferApplyResponseSchema } },
+    },
+    400: { description: "Invalid body or org id", content: { "application/json": { schema: ErrorResponseSchema } } },
+    404: {
+      description: "special_offer_not_found | payment_not_found",
+      content: { "application/json": { schema: SpecialOfferRefusalSchema } },
+    },
+    409: {
+      description:
+        "payment_not_succeeded | payment_currency_unsupported | payment_fully_returned | " +
+        "payment_outside_offer_window | free_credit_zero | payment_under_other_offer | " +
+        "already_applied_different_amount",
+      content: { "application/json": { schema: SpecialOfferRefusalSchema } },
+    },
+    500: {
+      description: "special_offer ledger key seed missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    502: {
+      description: "The org's payments could not be read (nothing applied), or the balance could not be composed after the grant",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/v1/special-offers",
+  summary: "What each special offer brought this org",
+  description:
+    "For the client's billing page. Per special offer the org has a payment under: its " +
+    "name, the payments made under it and the free credit they earned, with ready-made " +
+    "totals (paid_cents, free_credit_cents). Empty list when the org has none. Pure read.",
+  request: {
+    headers: z.object({
+      "x-api-key": z.string(),
+      "x-org-id": zod3Uuid(),
+    }),
+  },
+  responses: {
+    200: {
+      description: "The org's special offers, oldest first",
+      content: { "application/json": { schema: OrgSpecialOffersResponseSchema } },
+    },
+    400: {
+      description: "Missing or invalid x-org-id",
+      content: { "application/json": { schema: ErrorResponseSchema } },
     },
   },
 });
