@@ -18,6 +18,7 @@ import {
   REFERRAL_REWARD_CODE,
   PRODUCT_TASK_REWARD_CODE,
   ORG_CREATION_BONUS_CODE,
+  SPECIAL_OFFER_CODE,
   PLATFORM_GRANT_REASONS,
   type PlatformGrantReason,
 } from "../db/schema.js";
@@ -145,7 +146,9 @@ export async function sumLocalPromoCreditsForOrg(orgId: string): Promise<string>
  * grant kind excluded here. The org-creation bonus is excluded too: for a legacy org
  * it is not part of the welcome offer, and for a match_100 org it is an ADVANCE on
  * the first payment, not a gift (lib/free-credit-offer), so the match is a full
- * +$100. For an org holding neither this is byte-identical to `sumLocalPromoCreditsForOrg`.
+ * +$100. A special offer's credit (lib/special-offers) is excluded as well: the owner
+ * runs it "not cumulative with other offers", so it never shrinks a welcome remainder.
+ * For an org holding none of these this is byte-identical to `sumLocalPromoCreditsForOrg`.
  */
 export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string> {
   const [row] = await db
@@ -157,7 +160,7 @@ export async function sumEntitlementGrantsForOrg(orgId: string): Promise<string>
     .where(
       and(
         eq(localPromos.orgId, orgId),
-        rawSql`${localPromoCodes.code} NOT IN (${REFERRAL_REWARD_CODE}, ${ORG_CREATION_BONUS_CODE})`
+        rawSql`${localPromoCodes.code} NOT IN (${REFERRAL_REWARD_CODE}, ${ORG_CREATION_BONUS_CODE}, ${SPECIAL_OFFER_CODE})`
       )
     );
   return row?.total ?? "0.0000000000";

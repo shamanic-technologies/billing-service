@@ -9,6 +9,7 @@ import portalRoutes from "../../src/routes/portal.js";
 import promotionCodesRoutes from "../../src/routes/promotion_codes.js";
 import internalRoutes from "../../src/routes/internal.js";
 import creditsRoutes from "../../src/routes/credits.js";
+import specialOffersRoutes from "../../src/routes/special_offers.js";
 import promoCodesRoutes from "../../src/routes/promo_codes.js";
 import brandBudgetsRoutes from "../../src/routes/brand_budgets.js";
 import salesFunnelCapsRoutes from "../../src/routes/sales_funnel_caps.js";
@@ -40,6 +41,7 @@ export function createTestApp() {
   app.use(legacyOutboundLegKeyLogMiddleware);
   app.use(internalRoutes);
   app.use(creditsRoutes);
+  app.use(specialOffersRoutes);
   app.use(promoCodesRoutes);
   app.use(brandBudgetsRoutes);
   app.use(salesFunnelCapsRoutes);

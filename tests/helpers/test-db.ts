@@ -22,6 +22,9 @@ import {
   welcomeRecipients,
   brandTransfers,
   staffDebits,
+  specialOfferPayments,
+  specialOffers,
+  SPECIAL_OFFER_CODE,
   subscriptions,
   subscriptionCharges,
   subscriptionCreditExpiries,
@@ -67,6 +70,7 @@ const SEEDED_PROMO_CODES = [
   TRIAL_SEED_CODE,
   ORG_CREATION_BONUS_CODE,
   SUBSCRIPTION_TRIAL_CODE,
+  SPECIAL_OFFER_CODE,
 ];
 
 /** The org migration 0057 seeds as a platform org (distribute.you). */
@@ -91,6 +95,8 @@ export async function cleanTestData() {
   await db.delete(freeCreditPromises);
   await db.delete(brandTransfers);
   await db.delete(staffDebits);
+  await db.delete(specialOfferPayments);
+  await db.delete(specialOffers);
   await db.delete(welcomeRecipients);
   await db.delete(creditDepletionEpisodes);
   await db.delete(campaignReloadSweepAttempts);
@@ -154,6 +160,12 @@ export async function cleanTestData() {
       target: localPromoCodes.code,
       set: { amountCents: SUBSCRIPTION_TRIAL_AMOUNT_CENTS },
     });
+  // A special offer's credit carries its amount per row too (0 placeholder); restored
+  // for the suite that exercises its fail-loud missing-seed path.
+  await db
+    .insert(localPromoCodes)
+    .values({ code: SPECIAL_OFFER_CODE, amountCents: 0, maxRedemptions: null, expiresAt: null })
+    .onConflictDoUpdate({ target: localPromoCodes.code, set: { amountCents: 0 } });
   // Product-task rewards carry their amount per row (this code row is a 0
   // placeholder), so restore it for a suite that exercised the fail-loud path.
   await db
